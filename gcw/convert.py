@@ -1,0 +1,236 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+import json
+
+import torch
+
+from gcw.checkpoint import save_checkpoint
+from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.models import build_model
+
+
+ALIASES = {
+    "llama3.1-7b": "meta-llama/Meta-Llama-3.1-8B",
+    "llama3.1-8b": "meta-llama/Meta-Llama-3.1-8B",
+    "llama3.2-1b": "meta-llama/Llama-3.2-1B",
+    "llama3.2-3b": "meta-llama/Llama-3.2-3B",
+}
+
+
+def convert_hf(
+    model_id: str,
+    out: str | Path,
+    family: str = "llama",
+    variant: str = "tf",
+    dtype: str = "bfloat16",
+) -> None:
+    try:
+        from transformers import AutoConfig, AutoModelForCausalLM
+    except ImportError as exc:
+        raise ImportError("Install the convert extra: uv sync --extra convert") from exc
+
+    model_id = ALIASES.get(model_id.lower(), model_id)
+    hf_cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=False)
+    cfg = config_from_hf(hf_cfg, family=family, variant=variant)
+    if variant in {"bt", "bgt"}:
+        cfg = replace(cfg, cache_processor=CacheProcessorConfig())
+    torch_dtype = _resolve_dtype(dtype)
+    hf = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+    model_dtype = _infer_model_dtype(hf)
+    native = build_model(cfg).to(dtype=model_dtype)
+    native.init_weights()
+    load_hf_state(native, hf.state_dict(), family=family)
+    save_checkpoint(
+        out,
+        native,
+        cfg,
+        {"source": model_id, "source_format": "hf", "family": family, "dtype": str(model_dtype).removeprefix("torch.")},
+    )
+
+
+def convert_ppt(checkpoint: str | Path, meta: str | Path, out: str | Path, dtype: str = "bfloat16") -> None:
+    checkpoint = Path(checkpoint)
+    meta = Path(meta)
+    raw_meta = json.loads(meta.read_text())
+    cfg = config_from_ppt_meta(raw_meta)
+    torch_dtype = _resolve_dtype(dtype)
+    if torch_dtype == "auto":
+        torch_dtype = torch.bfloat16
+    model = build_model(cfg).to(dtype=torch_dtype)
+    model.init_weights()
+    state = torch.load(checkpoint, map_location="cpu")
+    load_ppt_state(model, state)
+    save_checkpoint(
+        out,
+        model,
+        cfg,
+        {
+            "source": str(checkpoint),
+            "source_format": "ppt",
+            "meta": str(meta),
+            "family": "smollm",
+            "dtype": str(torch_dtype).removeprefix("torch."),
+            "step": raw_meta.get("step"),
+        },
+    )
+
+
+def _resolve_dtype(dtype: str):
+    if dtype == "auto":
+        return "auto"
+    try:
+        return getattr(torch, dtype)
+    except AttributeError as exc:
+        raise ValueError(f"unsupported dtype {dtype!r}; use auto, bfloat16, float16, or float32") from exc
+
+
+def _infer_model_dtype(model: torch.nn.Module) -> torch.dtype:
+    for param in model.parameters():
+        if param.is_floating_point():
+            return param.dtype
+    return torch.float32
+
+
+def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
+    layer_types = getattr(hf_cfg, "layer_types", None)
+    if family == "qwen3" and layer_types and any(t != "full_attention" for t in layer_types):
+        raise NotImplementedError("Qwen3 sliding attention is not implemented in gcw yet.")
+    heads = int(hf_cfg.num_attention_heads)
+    hidden = int(hf_cfg.hidden_size)
+    head_dim = int(getattr(hf_cfg, "head_dim", hidden // heads))
+    rope_theta = getattr(hf_cfg, "rope_theta", None)
+    if rope_theta is None:
+        rope_theta = getattr(hf_cfg, "rope_parameters", {}).get("rope_theta", 10000.0)
+    return ModelConfig(
+        variant=variant,
+        family=family,
+        sequence_len=int(getattr(hf_cfg, "max_position_embeddings", 2048)),
+        vocab_size=int(hf_cfg.vocab_size),
+        hidden_size=hidden,
+        intermediate_size=int(hf_cfg.intermediate_size),
+        num_layers=int(hf_cfg.num_hidden_layers),
+        num_heads=heads,
+        num_kv_heads=int(getattr(hf_cfg, "num_key_value_heads", heads)),
+        head_dim=head_dim,
+        rope_theta=float(rope_theta),
+        norm_eps=float(getattr(hf_cfg, "rms_norm_eps", 1e-5)),
+        tie_embeddings=bool(getattr(hf_cfg, "tie_word_embeddings", False)),
+        qk_norm=family == "qwen3",
+        rotary_style="llama",
+    )
+
+
+def config_from_ppt_meta(meta: dict) -> ModelConfig:
+    model_config = meta["model_config"]
+    return ModelConfig(
+        variant="tf",
+        family="smollm",
+        sequence_len=int(model_config["sequence_len"]),
+        vocab_size=int(model_config["vocab_size"]),
+        hidden_size=int(model_config["n_embd"]),
+        intermediate_size=int(model_config["intermediate_size"]),
+        num_layers=int(model_config["n_layer"]),
+        num_heads=int(model_config["n_head"]),
+        num_kv_heads=int(model_config["n_kv_head"]),
+        head_dim=int(model_config["head_dim"]),
+        rope_theta=float(model_config.get("rope_theta", 10000.0)),
+        norm_eps=float(model_config.get("norm_eps", 1e-5)),
+        tie_embeddings=bool(model_config.get("tie_embeddings", True)),
+        rotary_style="ppt",
+    )
+
+
+def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llama") -> None:
+    target = native.backbone if hasattr(native, "backbone") else native
+    state = target.state_dict()
+    mapped = {}
+    pairs = {
+        "embed_tokens.weight": "model.embed_tokens.weight",
+        "norm.weight": "model.norm.weight",
+        "lm_head.weight": "lm_head.weight",
+    }
+    for local, remote in pairs.items():
+        if local in state and remote in hf_state:
+            mapped[local] = hf_state[remote]
+    for i in range(target.config.num_layers):
+        prefix = f"layers.{i}"
+        remote = f"model.layers.{i}"
+        names = {
+            f"{prefix}.input_layernorm.weight": f"{remote}.input_layernorm.weight",
+            f"{prefix}.post_attention_layernorm.weight": f"{remote}.post_attention_layernorm.weight",
+            f"{prefix}.self_attn.q_proj.weight": f"{remote}.self_attn.q_proj.weight",
+            f"{prefix}.self_attn.k_proj.weight": f"{remote}.self_attn.k_proj.weight",
+            f"{prefix}.self_attn.v_proj.weight": f"{remote}.self_attn.v_proj.weight",
+            f"{prefix}.self_attn.o_proj.weight": f"{remote}.self_attn.o_proj.weight",
+            f"{prefix}.mlp.gate_proj.weight": f"{remote}.mlp.gate_proj.weight",
+            f"{prefix}.mlp.up_proj.weight": f"{remote}.mlp.up_proj.weight",
+            f"{prefix}.mlp.down_proj.weight": f"{remote}.mlp.down_proj.weight",
+        }
+        if family == "qwen3":
+            names[f"{prefix}.self_attn.q_norm.weight"] = f"{remote}.self_attn.q_norm.weight"
+            names[f"{prefix}.self_attn.k_norm.weight"] = f"{remote}.self_attn.k_norm.weight"
+        for local, key in names.items():
+            if local in state and key in hf_state:
+                mapped[local] = hf_state[key]
+    merged = dict(state)
+    for key, tensor in mapped.items():
+        if merged[key].shape == tensor.shape:
+            merged[key] = tensor
+        elif key in {"embed_tokens.weight", "lm_head.weight"} and merged[key].shape[1:] == tensor.shape[1:]:
+            padded = merged[key].clone()
+            padded[: tensor.shape[0]] = tensor
+            merged[key] = padded
+        else:
+            raise ValueError(f"shape mismatch for {key}: native {tuple(merged[key].shape)} vs HF {tuple(tensor.shape)}")
+    missing, unexpected = target.load_state_dict(merged, strict=False)
+    missing = [m for m in missing if not m.startswith("rotary.")]
+    if missing:
+        raise KeyError(f"missing HF weights for native keys: {missing[:8]}")
+    if unexpected:
+        raise KeyError(f"unexpected native keys: {unexpected[:8]}")
+
+
+def load_ppt_state(native, ppt_state: dict[str, torch.Tensor]) -> None:
+    target = native.backbone if hasattr(native, "backbone") else native
+    state = target.state_dict()
+    ppt_state = {k.removeprefix("_orig_mod."): v for k, v in ppt_state.items()}
+    mapped = {
+        "embed_tokens.weight": ppt_state["transformer.wte.weight"],
+        "norm.weight": ppt_state["transformer.ln_f.weight"],
+    }
+    if not target.config.tie_embeddings:
+        mapped["lm_head.weight"] = ppt_state["lm_head.weight"]
+    for i in range(target.config.num_layers):
+        prefix = f"layers.{i}"
+        remote = f"transformer.h.{i}"
+        mapped.update(
+            {
+                f"{prefix}.input_layernorm.weight": ppt_state[f"{remote}.input_layernorm.weight"],
+                f"{prefix}.post_attention_layernorm.weight": ppt_state[f"{remote}.post_attention_layernorm.weight"],
+                f"{prefix}.self_attn.q_proj.weight": ppt_state[f"{remote}.attn.q_proj.weight"],
+                f"{prefix}.self_attn.k_proj.weight": ppt_state[f"{remote}.attn.k_proj.weight"],
+                f"{prefix}.self_attn.v_proj.weight": ppt_state[f"{remote}.attn.v_proj.weight"],
+                f"{prefix}.self_attn.o_proj.weight": ppt_state[f"{remote}.attn.o_proj.weight"],
+                f"{prefix}.mlp.gate_proj.weight": ppt_state[f"{remote}.mlp.gate_proj.weight"],
+                f"{prefix}.mlp.up_proj.weight": ppt_state[f"{remote}.mlp.up_proj.weight"],
+                f"{prefix}.mlp.down_proj.weight": ppt_state[f"{remote}.mlp.down_proj.weight"],
+            }
+        )
+    missing = sorted(set(state) - set(mapped))
+    extra = sorted(set(mapped) - set(state))
+    if missing or extra:
+        raise KeyError(f"PPT mapping mismatch missing={missing[:8]} extra={extra[:8]}")
+    loadable = {}
+    for key, tensor in mapped.items():
+        tensor = tensor.to(dtype=state[key].dtype)
+        if state[key].shape == tensor.shape:
+            loadable[key] = tensor
+        elif key in {"embed_tokens.weight", "lm_head.weight"} and state[key].shape[1:] == tensor.shape[1:]:
+            padded = state[key].clone()
+            padded[: tensor.shape[0]] = tensor
+            loadable[key] = padded
+        else:
+            raise ValueError(f"shape mismatch for {key}: native {tuple(state[key].shape)} vs PPT {tuple(tensor.shape)}")
+    target.load_state_dict(loadable, strict=True)
