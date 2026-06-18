@@ -1,6 +1,7 @@
 import sys
 
 from gcw.config import DataConfig, ModelConfig, TrainConfig, WandbConfig
+from gcw.data.shards import ShardWriter
 from gcw.train import train
 
 
@@ -76,3 +77,20 @@ def test_train_logs_wandb_train_and_validation_metrics(monkeypatch, tmp_path):
     assert all("train/loss" in metrics for _, metrics in logs[1:])
     assert all("val/loss" in metrics for _, metrics in logs[1:])
     assert all("train/tokens" in metrics for _, metrics in logs[1:])
+
+
+def test_train_reads_pretrain_shards(tmp_path):
+    data_dir = tmp_path / "data"
+    writer = ShardWriter(data_dir, "train", shard_tokens=1000)
+    writer.add_tokens([i % 128 for i in range(200)])
+    writer.close()
+    cfg = tiny_train_config(tmp_path)
+    cfg.data = DataConfig(kind="fineweb", data_dir=str(data_dir))
+    cfg.wandb.enabled = False
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.max_steps = 1
+
+    train(cfg)
+
+    assert (tmp_path / "run" / "checkpoint" / "train_state.json").exists()

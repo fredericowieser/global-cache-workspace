@@ -30,12 +30,16 @@ class BT(nn.Module):
     @torch.no_grad()
     def generate(self, input_ids: torch.Tensor, max_new_tokens: int, eos_token_id: int | None = None) -> torch.Tensor:
         cp = self.config.cache_processor
+        legacy = self.config.legacy_bottleneck_generate
         return self.backbone.generate(
             input_ids,
             max_new_tokens,
             eos_token_id=eos_token_id,
             processor=self.cache_processor,
             process_every=cp.process_every,
+            process_prefill_windows=not legacy,
+            process_after_prefill=legacy,
+            relative_generation_cadence=legacy,
         )
 
     def num_parameters(self, non_embedding: bool = False) -> int:

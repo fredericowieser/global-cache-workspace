@@ -36,6 +36,17 @@ def test_tiny_models_forward_backward():
         assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
 
 
+def test_tiny_models_bf16_autocast_forward_backward():
+    for variant in ("tf", "bt", "bgt"):
+        model = build_model(tiny_config(variant))
+        model.init_weights()
+        x = torch.randint(0, 128, (2, 9))
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            loss = model(x, x)
+        loss.backward()
+        assert torch.isfinite(loss)
+
+
 def test_freeze_backbone_leaves_processor_trainable():
     model = build_model(tiny_config("bt"))
     for p in model.backbone.parameters():
@@ -73,3 +84,39 @@ def test_chunked_attention_matches_one_shot_attention():
         one_shot, _ = model.forward_windowed(x, process_every=64)
         chunked, _ = model.forward_windowed(x, process_every=4)
     assert torch.allclose(chunked, one_shot, atol=1e-5, rtol=1e-5)
+
+
+def test_generate_default_uses_windowed_prefill_cadence():
+    model = build_model(tiny_config("tf")).eval()
+    model.init_weights()
+    calls = []
+
+    def processor(cache, **kwargs):
+        calls.append((cache.seq_len, bool(kwargs.get("select_all", False))))
+        return cache
+
+    x = torch.randint(0, 128, (1, 9))
+    model.generate(x, max_new_tokens=0, processor=processor, process_every=4)
+    assert calls == [(4, False), (8, False)]
+
+
+def test_generate_legacy_bottleneck_prefill_processes_full_cache_once():
+    model = build_model(tiny_config("tf")).eval()
+    model.init_weights()
+    calls = []
+
+    def processor(cache, **kwargs):
+        calls.append((cache.seq_len, bool(kwargs.get("select_all", False))))
+        return cache
+
+    x = torch.randint(0, 128, (1, 9))
+    model.generate(
+        x,
+        max_new_tokens=5,
+        processor=processor,
+        process_every=4,
+        process_prefill_windows=False,
+        process_after_prefill=True,
+        relative_generation_cadence=True,
+    )
+    assert calls == [(9, True), (13, False)]

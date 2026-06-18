@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from gcw.convert import convert_hf, convert_ppt
+from gcw.convert import convert_bottleneck, convert_hf, convert_ppt
 from gcw.data.fineweb import prepare_fineweb
 from pathlib import Path
 
@@ -68,6 +68,13 @@ def main(argv: list[str] | None = None) -> None:
     ppt.add_argument("--meta", required=True)
     ppt.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
     ppt.add_argument("--out", required=True)
+    bottleneck = convert_sub.add_parser("bottleneck")
+    bottleneck.add_argument("--checkpoint", required=True)
+    bottleneck.add_argument("--variant", choices=["bt", "bgt"], required=True)
+    bottleneck.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="auto")
+    bottleneck.add_argument("--source", default="meta-llama/Llama-3.2-1B")
+    bottleneck.add_argument("--legacy-generate", action="store_true")
+    bottleneck.add_argument("--out", required=True)
 
     params = sub.add_parser("params")
     params_sub = params.add_subparsers(dest="action", required=True)
@@ -98,8 +105,17 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "convert":
         if args.source == "hf":
             convert_hf(args.model, args.out, family=args.family, variant=args.variant, dtype=args.dtype)
-        else:
+        elif args.source == "ppt":
             convert_ppt(args.checkpoint, args.meta, args.out, dtype=args.dtype)
+        else:
+            convert_bottleneck(
+                args.checkpoint,
+                args.out,
+                variant=args.variant,
+                dtype=args.dtype,
+                source=args.source,
+                legacy_generate=args.legacy_generate,
+            )
     elif args.cmd == "params":
         print(
             json.dumps(

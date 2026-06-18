@@ -3,6 +3,7 @@
 # Required env:
 #   SOURCE=hf MODEL=<hf-id-or-path> FAMILY=<llama|qwen3> OUT=<output-dir>
 #   SOURCE=ppt CHECKPOINT=<model_*.pt> META=<meta_*.json> OUT=<output-dir>
+#   SOURCE=bottleneck CHECKPOINT=<old-dir-or-model.safetensors> VARIANT=<bt|bgt> OUT=<output-dir>
 
 #SBATCH --job-name=gcw-convert
 #SBATCH --partition=agent-long
@@ -33,6 +34,16 @@ elif [ "$SOURCE" = "ppt" ]; then
     --meta "${META:?META is required}" \
     --dtype "$DTYPE" \
     --out "${OUT:?OUT is required}"
+elif [ "$SOURCE" = "bottleneck" ]; then
+  cmd=(uv run --extra cpu gcw convert bottleneck \
+    --checkpoint "${CHECKPOINT:?CHECKPOINT is required}" \
+    --variant "${VARIANT:?VARIANT is required}" \
+    --dtype "$DTYPE" \
+    --out "${OUT:?OUT is required}")
+  if [ "${LEGACY_GENERATE:-0}" = "1" ]; then
+    cmd+=(--legacy-generate)
+  fi
+  "${cmd[@]}"
 else
   echo "Unknown SOURCE=$SOURCE" >&2
   exit 2

@@ -24,24 +24,27 @@ distributed: ddp
 freeze_backbone: false
 loss: next_token_ce
 checkpoint_format: native_safetensors
-output_dir: runs/smollm360m_tf_20b_wandb
-batch_size: 32
+output_dir: runs/smollm360m_tf_20b_1gpu_wandb
+batch_size: 8
 sequence_len: 2048
 max_steps: 38147
+total_batch_size: 524288
 learning_rate: 0.003
 weight_decay: 0.1
 warmup_steps: 1907
+warmdown_ratio: 0.2
+final_lr_frac: 0.0
 grad_clip: 1.0
 bf16: true
 seed: 24
-save_every: 1000
+save_every: 2000
 eval_every: 250
-eval_batches: 10
+eval_batches: 320
 eval_on_start: true
 wandb:
   enabled: true
   project: global-cache-workspace
-  name: smollm360m-tf-20b
+  name: smollm360m-tf-20b-1gpu
   group: smollm360m-matched-total-20b
   mode: online
   tags:
@@ -64,3 +67,4 @@ metadata:
   total_training_tokens: 20000014336
   training_flops_per_token: 2925527040.0
   total_training_flops: 5.8510582740355645e+19
+  gpus: 1

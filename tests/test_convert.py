@@ -1,8 +1,8 @@
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM, Qwen3Config, Qwen3ForCausalLM
 
-from gcw.config import ModelConfig
-from gcw.convert import config_from_hf, config_from_ppt_meta, load_hf_state, load_ppt_state
+from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.convert import config_from_hf, config_from_ppt_meta, load_bottleneck_state, load_hf_state, load_ppt_state
 from gcw.models import build_model
 
 
@@ -105,3 +105,107 @@ def test_ppt_state_mapping_loads_native_smollm():
     load_ppt_state(model, ppt)
     assert torch.equal(model.embed_tokens.weight[:16], ppt["transformer.wte.weight"])
     assert model.config.rotary_style == "ppt"
+
+
+def test_bottleneck_bt_mapping_loads_legacy_checkpoint_keys():
+    cfg = _tiny_bottleneck_config("bt")
+    model = build_model(cfg)
+    old = _legacy_state_from_native(model.state_dict(), "bt")
+    load_bottleneck_state(model, old, variant="bt")
+    state = model.state_dict()
+    assert torch.equal(state["backbone.embed_tokens.weight"], old["backbone.model.embed_tokens.weight"])
+    assert torch.equal(
+        state["cache_processor.blocks.0.layers.0.attn.q_proj.bias"],
+        old["cache_processor.processor_blocks.0.transformer.self_attn.q_proj.bias"],
+    )
+
+
+def test_bottleneck_bgt_mapping_loads_legacy_checkpoint_keys():
+    cfg = _tiny_bottleneck_config("bgt")
+    model = build_model(cfg)
+    old = _legacy_state_from_native(model.state_dict(), "bgt")
+    load_bottleneck_state(model, old, variant="bgt")
+    state = model.state_dict()
+    assert torch.equal(state["backbone.lm_head.weight"], old["backbone.lm_head.weight"])
+    assert torch.equal(
+        state["cache_processor.block.layers.0.gate_proj.weight"],
+        old["cache_processor.unified_block.transformer.0.mlp.gate_proj.weight"],
+    )
+
+
+def _tiny_bottleneck_config(variant: str) -> ModelConfig:
+    return ModelConfig(
+        variant=variant,
+        family="llama",
+        vocab_size=16,
+        hidden_size=8,
+        intermediate_size=16,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=4,
+        sequence_len=8,
+        tie_embeddings=False,
+        rotary_style="llama",
+        cache_processor=CacheProcessorConfig(
+            hidden_size=4,
+            intermediate_size=8,
+            num_layers=1,
+            num_heads=1,
+            num_kv_heads=1,
+        ),
+    )
+
+
+def _legacy_state_from_native(native_state: dict[str, torch.Tensor], variant: str) -> dict[str, torch.Tensor]:
+    old = {}
+    for idx, (key, tensor) in enumerate(native_state.items()):
+        old_key = _legacy_key(key, variant)
+        value = torch.full(tensor.shape, (idx + 1) / 1000, dtype=tensor.dtype)
+        old[old_key] = value
+    return old
+
+
+def _legacy_key(key: str, variant: str) -> str:
+    if key.startswith("backbone.embed_tokens."):
+        return "backbone.model.embed_tokens." + key.removeprefix("backbone.embed_tokens.")
+    if key.startswith("backbone.layers."):
+        return "backbone.model.layers." + key.removeprefix("backbone.layers.")
+    if key.startswith("backbone.norm."):
+        return "backbone.model.norm." + key.removeprefix("backbone.norm.")
+    if key.startswith("backbone.lm_head."):
+        return key
+    if variant == "bt" and key.startswith("cache_processor.blocks."):
+        rest = key.removeprefix("cache_processor.blocks.")
+        layer, sub = rest.split(".", 1)
+        return f"cache_processor.processor_blocks.{layer}.{_legacy_processor_subkey(sub, 'transformer.')}"
+    if variant == "bgt" and key.startswith("cache_processor.block."):
+        sub = key.removeprefix("cache_processor.block.")
+        return "cache_processor.unified_block." + _legacy_processor_subkey(sub, "transformer.0.")
+    raise KeyError(key)
+
+
+def _legacy_processor_subkey(sub: str, transformer_prefix: str) -> str:
+    if sub == "gate":
+        return "g"
+    direct = {
+        "in_norm.": "kv_in_norm.",
+        "in_proj.": "kv_in_proj.",
+        "out_proj.": "kv_out_proj.",
+        "out_norm.": "out_norm.",
+    }
+    for new, old in direct.items():
+        if sub.startswith(new):
+            return old + sub.removeprefix(new)
+    blocks = {
+        "layers.0.input_norm.": transformer_prefix + "input_layernorm.",
+        "layers.0.post_norm.": transformer_prefix + "post_attention_layernorm.",
+        "layers.0.attn.": transformer_prefix + "self_attn.",
+        "layers.0.gate_proj.": transformer_prefix + "mlp.gate_proj.",
+        "layers.0.up_proj.": transformer_prefix + "mlp.up_proj.",
+        "layers.0.down_proj.": transformer_prefix + "mlp.down_proj.",
+    }
+    for new, old in blocks.items():
+        if sub.startswith(new):
+            return old + sub.removeprefix(new)
+    raise KeyError(sub)

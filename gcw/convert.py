@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 
 import torch
+from safetensors.torch import load_file
 
 from gcw.checkpoint import save_checkpoint
 from gcw.config import CacheProcessorConfig, ModelConfig
@@ -77,6 +78,42 @@ def convert_ppt(checkpoint: str | Path, meta: str | Path, out: str | Path, dtype
     )
 
 
+def convert_bottleneck(
+    checkpoint: str | Path,
+    out: str | Path,
+    variant: str,
+    dtype: str = "auto",
+    source: str = "meta-llama/Llama-3.2-1B",
+    legacy_generate: bool = False,
+) -> None:
+    if variant not in {"bt", "bgt"}:
+        raise ValueError("bottleneck conversion supports only bt and bgt variants")
+    checkpoint = _model_file(checkpoint)
+    old_state = load_file(str(checkpoint), device="cpu")
+    torch_dtype = _resolve_dtype(dtype)
+    if torch_dtype == "auto":
+        torch_dtype = _infer_state_dtype(old_state) or torch.bfloat16
+    cfg = config_from_bottleneck_llama1b(variant, legacy_generate=legacy_generate)
+    model = build_model(cfg).to(dtype=torch_dtype)
+    model.init_weights()
+    load_bottleneck_state(model, old_state, variant=variant)
+    save_checkpoint(
+        out,
+        model,
+        cfg,
+        {
+            "source": source,
+            "source_format": "bottleneck_llm",
+            "checkpoint": str(checkpoint),
+            "family": "llama",
+            "variant": variant,
+            "dtype": str(torch_dtype).removeprefix("torch."),
+            "step": _step_from_path(checkpoint),
+            "legacy_generate": legacy_generate,
+        },
+    )
+
+
 def _resolve_dtype(dtype: str):
     if dtype == "auto":
         return "auto"
@@ -91,6 +128,28 @@ def _infer_model_dtype(model: torch.nn.Module) -> torch.dtype:
         if param.is_floating_point():
             return param.dtype
     return torch.float32
+
+
+def _infer_state_dtype(state: dict[str, torch.Tensor]) -> torch.dtype | None:
+    for tensor in state.values():
+        if tensor.is_floating_point():
+            return tensor.dtype
+    return None
+
+
+def _model_file(path: str | Path) -> Path:
+    path = Path(path)
+    return path / "model.safetensors" if path.is_dir() else path
+
+
+def _step_from_path(path: Path) -> int | None:
+    for part in reversed(path.parts):
+        if part.startswith("checkpoint-"):
+            try:
+                return int(part.removeprefix("checkpoint-"))
+            except ValueError:
+                return None
+    return None
 
 
 def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
@@ -122,6 +181,42 @@ def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     )
 
 
+def config_from_bottleneck_llama1b(variant: str, legacy_generate: bool = False) -> ModelConfig:
+    hidden = 512 if variant == "bt" else 1536
+    intermediate = 2240 if variant == "bt" else 6272
+    return ModelConfig(
+        variant=variant,
+        family="llama",
+        sequence_len=2048,
+        vocab_size=128256,
+        hidden_size=2048,
+        intermediate_size=8192,
+        num_layers=16,
+        num_heads=32,
+        num_kv_heads=8,
+        head_dim=64,
+        rope_theta=500000.0,
+        norm_eps=1e-5,
+        tie_embeddings=False,
+        rotary_style="llama",
+        legacy_bottleneck_generate=legacy_generate,
+        cache_processor=CacheProcessorConfig(
+            process_every=64,
+            topk=32,
+            score="attn_l2",
+            hidden_size=hidden,
+            intermediate_size=intermediate,
+            num_layers=1,
+            num_heads=16,
+            num_kv_heads=16,
+            norm_eps=1e-6,
+            rope_theta=10000.0,
+            gate_init=-5.0,
+            attention_dropout=0.0,
+        ),
+    )
+
+
 def config_from_ppt_meta(meta: dict) -> ModelConfig:
     model_config = meta["model_config"]
     return ModelConfig(
@@ -140,6 +235,76 @@ def config_from_ppt_meta(meta: dict) -> ModelConfig:
         tie_embeddings=bool(model_config.get("tie_embeddings", True)),
         rotary_style="ppt",
     )
+
+
+def load_bottleneck_state(native, old_state: dict[str, torch.Tensor], variant: str) -> None:
+    target = native.state_dict()
+    mapped: dict[str, torch.Tensor] = {}
+    unmapped: list[str] = []
+    for old_key, tensor in old_state.items():
+        key = _map_bottleneck_key(old_key, variant)
+        if key is None:
+            unmapped.append(old_key)
+            continue
+        if key not in target:
+            unmapped.append(old_key)
+            continue
+        if target[key].shape != tensor.shape:
+            raise ValueError(
+                f"shape mismatch for {key}: native {tuple(target[key].shape)} "
+                f"vs bottleneck {tuple(tensor.shape)} from {old_key}"
+            )
+        mapped[key] = tensor.to(dtype=target[key].dtype)
+    missing = sorted(set(target) - set(mapped))
+    extra = sorted(set(mapped) - set(target))
+    if missing or extra or unmapped:
+        raise KeyError(
+            "bottleneck mapping mismatch "
+            f"missing={missing[:8]} extra={extra[:8]} unmapped={unmapped[:8]}"
+        )
+    native.load_state_dict(mapped, strict=True)
+
+
+def _map_bottleneck_key(key: str, variant: str) -> str | None:
+    if key.startswith("backbone.model."):
+        return "backbone." + key.removeprefix("backbone.model.")
+    if key == "backbone.lm_head.weight":
+        return key
+    if variant == "bt" and key.startswith("cache_processor.processor_blocks."):
+        rest = key.removeprefix("cache_processor.processor_blocks.")
+        layer, sub = rest.split(".", 1)
+        return "cache_processor.blocks." + layer + "." + _map_processor_subkey(sub, "transformer.")
+    if variant == "bgt" and key.startswith("cache_processor.unified_block."):
+        sub = key.removeprefix("cache_processor.unified_block.")
+        return "cache_processor.block." + _map_processor_subkey(sub, "transformer.0.")
+    return None
+
+
+def _map_processor_subkey(sub: str, transformer_prefix: str) -> str:
+    if sub == "g":
+        return "gate"
+    direct = {
+        "kv_in_norm.": "in_norm.",
+        "kv_in_proj.": "in_proj.",
+        "kv_out_proj.": "out_proj.",
+        "out_norm.": "out_norm.",
+    }
+    for old, new in direct.items():
+        if sub.startswith(old):
+            return new + sub.removeprefix(old)
+    if not sub.startswith(transformer_prefix):
+        return sub
+    inner = sub.removeprefix(transformer_prefix)
+    blocks = {
+        "input_layernorm.": "layers.0.input_norm.",
+        "post_attention_layernorm.": "layers.0.post_norm.",
+        "self_attn.": "layers.0.attn.",
+        "mlp.": "layers.0.",
+    }
+    for old, new in blocks.items():
+        if inner.startswith(old):
+            return new + inner.removeprefix(old)
+    return inner
 
 
 def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llama") -> None:

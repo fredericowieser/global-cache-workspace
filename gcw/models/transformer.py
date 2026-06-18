@@ -12,13 +12,12 @@ import torch.nn.functional as F
 from gcw.config import ModelConfig
 from gcw.models.cache_state import CacheState
 
-ProcessorFn = Callable[[CacheState], CacheState]
+ProcessorFn = Callable[..., CacheState]
 
 try:
     from torch.nn.attention import SDPBackend, sdpa_kernel
-    from torch.nn.attention.bias import CausalBias, causal_lower_right
+    from torch.nn.attention.bias import causal_lower_right
 except ImportError:  # pragma: no cover - older torch fallback
-    CausalBias = None
     SDPBackend = None
     causal_lower_right = None
     sdpa_kernel = None
@@ -107,7 +106,9 @@ class CausalSelfAttention(nn.Module):
         if self.q_norm is not None:
             q = self.q_norm(q)
             k = self.k_norm(k)
-        q, k = apply_rotary(q, *cos_sin, style=self.rotary_style), apply_rotary(k, *cos_sin, style=self.rotary_style)
+        rotary = (cos_sin[0].to(q.dtype), cos_sin[1].to(q.dtype))
+        q, k = apply_rotary(q, *rotary, style=self.rotary_style), apply_rotary(k, *rotary, style=self.rotary_style)
+        q, k = q.to(v.dtype), k.to(v.dtype)
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         past_len = 0
         if past is not None:
@@ -146,11 +147,6 @@ def flash_sdpa(
     is_causal: bool = False,
     enable_gqa: bool = False,
 ) -> torch.Tensor:
-    if enable_gqa and attn_mask is not None and CausalBias is not None and isinstance(attn_mask, CausalBias):
-        repeats = q.shape[1] // k.shape[1]
-        k = k.repeat_interleave(repeats, dim=1)
-        v = v.repeat_interleave(repeats, dim=1)
-        enable_gqa = False
     if q.is_cuda and q.dtype in {torch.float16, torch.bfloat16} and sdpa_kernel is not None:
         try:
             with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
@@ -243,12 +239,90 @@ class TF(nn.Module):
         processor: ProcessorFn | None = None,
         process_every: int = 64,
     ) -> torch.Tensor:
+        if processor is None:
+            return self.forward_full(input_ids, targets, loss_reduction)
+        if targets is not None:
+            return self.forward_windowed_loss(input_ids, targets, processor=processor, process_every=process_every, loss_reduction=loss_reduction)
         logits, _ = self.forward_windowed(input_ids, processor=processor, process_every=process_every)
-        if targets is None:
-            return logits
-        flat_targets = targets.reshape(-1).clone()
-        flat_targets[flat_targets < 0] = -100
-        return F.cross_entropy(logits.reshape(-1, logits.shape[-1]), flat_targets, ignore_index=-100, reduction=loss_reduction)
+        return logits
+
+    def forward_full(
+        self,
+        input_ids: torch.Tensor,
+        targets: torch.Tensor | None = None,
+        loss_reduction: str = "mean",
+    ) -> torch.Tensor:
+        x = self.embed_tokens(input_ids)
+        pos = torch.arange(0, input_ids.shape[1], device=input_ids.device)
+        cos_sin = self.rotary.get(pos, x.dtype)
+        for layer in self.layers:
+            x, _, _, _ = layer(x, cos_sin, None)
+        x = self.norm(x)
+        if targets is not None:
+            return self.loss_from_hidden(x, targets, loss_reduction)
+        return self.logits_from_hidden(x)
+
+    def logits_from_hidden(self, x: torch.Tensor) -> torch.Tensor:
+        if self.config.tie_embeddings:
+            logits = F.linear(x, self.embed_tokens.weight.to(x.dtype))
+        else:
+            logits = self.lm_head(x)
+        return logits[..., : self.config.vocab_size].float()
+
+    def loss_from_hidden(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
+        if loss_reduction == "none":
+            raise ValueError("chunked loss does not support reduction='none'")
+        loss_sum = x.new_zeros((), dtype=torch.float32)
+        token_count = x.new_zeros((), dtype=torch.float32)
+        for start in range(0, x.shape[1], 64):
+            end = start + 64
+            logits = self.logits_from_hidden(x[:, start:end])
+            chunk_targets = targets[:, start:end].reshape(-1).clone()
+            valid = chunk_targets >= 0
+            chunk_targets[~valid] = -100
+            loss_sum = loss_sum + F.cross_entropy(
+                logits.reshape(-1, logits.shape[-1]),
+                chunk_targets,
+                ignore_index=-100,
+                reduction="sum",
+            )
+            token_count = token_count + valid.sum().to(torch.float32)
+        if loss_reduction == "sum":
+            return loss_sum
+        return loss_sum / token_count.clamp_min(1.0)
+
+    def forward_windowed_loss(
+        self,
+        input_ids: torch.Tensor,
+        targets: torch.Tensor,
+        *,
+        processor: ProcessorFn,
+        process_every: int,
+        loss_reduction: str = "mean",
+    ) -> torch.Tensor:
+        cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+        loss_sum = input_ids.new_zeros((), dtype=torch.float32)
+        token_count = input_ids.new_zeros((), dtype=torch.float32)
+        for start in range(0, input_ids.shape[1], process_every):
+            if start > 0:
+                cache = processor(cache)
+            end = start + process_every
+            chunk_logits, cache = self.forward_chunk(input_ids[:, start:end], start, cache, logits=True)
+            chunk_targets = targets[:, start:end].reshape(-1).clone()
+            valid = chunk_targets >= 0
+            chunk_targets[~valid] = -100
+            loss_sum = loss_sum + F.cross_entropy(
+                chunk_logits.reshape(-1, chunk_logits.shape[-1]),
+                chunk_targets,
+                ignore_index=-100,
+                reduction="sum",
+            )
+            token_count = token_count + valid.sum().to(torch.float32)
+        if loss_reduction == "sum":
+            return loss_sum
+        if loss_reduction == "none":
+            raise ValueError("windowed loss does not support reduction='none'")
+        return loss_sum / token_count.clamp_min(1.0)
 
     def forward_windowed(
         self,
@@ -265,7 +339,14 @@ class TF(nn.Module):
             logits.append(chunk_logits)
         return torch.cat(logits, dim=1), cache
 
-    def forward_chunk(self, input_ids: torch.Tensor, start_pos: int, cache: CacheState | None = None) -> tuple[torch.Tensor, CacheState]:
+    def forward_chunk(
+        self,
+        input_ids: torch.Tensor,
+        start_pos: int,
+        cache: CacheState | None = None,
+        *,
+        logits: bool = True,
+    ) -> tuple[torch.Tensor, CacheState]:
         x = self.embed_tokens(input_ids)
         pos = torch.arange(start_pos, start_pos + input_ids.shape[1], device=input_ids.device)
         cos_sin = self.rotary.get(pos, x.dtype)
@@ -279,15 +360,11 @@ class TF(nn.Module):
             values.append(v)
             layer_scores.append(scores)
         x = self.norm(x)
-        if self.config.tie_embeddings:
-            logits = F.linear(x, self.embed_tokens.weight.to(x.dtype))
-        else:
-            logits = self.lm_head(x)
-        logits = logits[..., : self.config.vocab_size].float()
+        out = self.logits_from_hidden(x) if logits else x
         chunk_scores = torch.stack(layer_scores).mean(dim=0)
         old_scores = input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32) if cache is None else cache.scores
         new_scores = chunk_scores if old_scores.numel() == 0 else torch.cat([old_scores, chunk_scores], dim=1)
-        return logits, CacheState(keys, values, new_scores)
+        return out, CacheState(keys, values, new_scores)
 
     @torch.no_grad()
     def generate(
@@ -297,24 +374,36 @@ class TF(nn.Module):
         eos_token_id: int | None = None,
         processor: ProcessorFn | None = None,
         process_every: int = 64,
+        process_prefill_windows: bool = True,
+        process_after_prefill: bool = False,
+        relative_generation_cadence: bool = False,
     ) -> torch.Tensor:
         out = input_ids[:, -self.config.sequence_len :]
         cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
         logits = None
-        for start in range(0, out.shape[1], process_every):
-            if start > 0 and processor is not None:
-                cache = processor(cache)
-            logits, cache = self.forward_chunk(out[:, start : start + process_every], start, cache)
+        if process_prefill_windows:
+            for start in range(0, out.shape[1], process_every):
+                if start > 0 and processor is not None:
+                    cache = processor(cache)
+                logits, cache = self.forward_chunk(out[:, start : start + process_every], start, cache)
+        else:
+            logits, cache = self.forward_chunk(out, 0, cache)
         if logits is None:
             raise ValueError("generate requires at least one input token")
-        for _ in range(max_new_tokens):
+        for generated_idx in range(max_new_tokens):
             next_id = logits[:, -1].argmax(dim=-1, keepdim=True)
             out = torch.cat([out, next_id], dim=1)
             if eos_token_id is not None and bool((next_id == eos_token_id).all()):
                 break
             pos = out.shape[1] - 1
-            if pos > 0 and pos % process_every == 0 and processor is not None:
-                cache = processor(cache)
+            if processor is not None:
+                if relative_generation_cadence:
+                    should_process = generated_idx == 0 and process_after_prefill
+                    should_process = should_process or (generated_idx > 0 and generated_idx % process_every == 0)
+                else:
+                    should_process = pos > 0 and pos % process_every == 0
+                if should_process:
+                    cache = processor(cache, select_all=relative_generation_cadence and generated_idx == 0)
             logits, cache = self.forward_chunk(next_id, pos, cache)
         return out
 

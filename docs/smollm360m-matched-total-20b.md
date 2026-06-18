@@ -5,9 +5,11 @@ Goal: compare TF, BT, and BGT at the same 20B-token data budget, with BT/BGT tot
 Baseline target is the native SmolLM TF config in this repo:
 
 - sequence length: 2048
-- training steps: 38,147
-- local batch per GPU: 32
-- GPUs: 8
+- optimizer steps: 38,147
+- local microbatch per GPU: 8 x 2048 tokens
+- total batch per optimizer step: 524,288 tokens
+- gradient accumulation on 1 GPU: 32 microsteps
+- GPUs: 1
 - total tokens: 20,000,014,336
 - FLOP convention: PPT-style analytical forward FLOPs per token, multiplied by 3 for forward+backward
 
@@ -33,4 +35,4 @@ W&B tracking:
 - group: `smollm360m-matched-total-20b`
 - train metrics every optimizer step: loss, perplexity, LR, LR scale, tokens, FLOPs, progress, grad norm, throughput
 - validation metrics every 250 steps and at step 0: loss, perplexity, evaluated tokens
-- validation window: 10 batches per rank, matching 5,242,880 tokens on 8 GPUs
+- validation window: 320 batches on 1 GPU, matching 5,242,880 validation tokens

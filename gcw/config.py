@@ -46,6 +46,7 @@ class ModelConfig:
     qk_norm: bool = False
     rotary_style: RotaryStyle = "ppt"
     cache_processor: CacheProcessorConfig | None = None
+    legacy_bottleneck_generate: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.cache_processor, dict):
@@ -94,9 +95,12 @@ class TrainConfig:
     batch_size: int = 1
     sequence_len: int = 128
     max_steps: int = 2
+    total_batch_size: int = 0
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     warmup_steps: int = 1
+    warmdown_ratio: float = 0.2
+    final_lr_frac: float = 0.0
     grad_clip: float = 1.0
     bf16: bool = False
     seed: int = 24

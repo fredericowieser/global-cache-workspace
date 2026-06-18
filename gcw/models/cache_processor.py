@@ -34,9 +34,10 @@ class ProcessorAttention(nn.Module):
         q = self.q_proj(x).view(batch, seq, self.num_heads, self.head_dim)
         k = self.k_proj(x).view(batch, seq, self.num_kv_heads, self.head_dim)
         v = self.v_proj(x).view(batch, seq, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        cos_sin = rotary_for_indices(positions, self.head_dim, theta, x.dtype)
+        cos_sin = rotary_for_indices(positions, self.head_dim, theta, q.dtype)
         q = apply_rotary(q, *cos_sin).transpose(1, 2)
         k = apply_rotary(k, *cos_sin).transpose(1, 2)
+        q, k = q.to(v.dtype), k.to(v.dtype)
         y = flash_sdpa(
             q,
             k,
@@ -103,8 +104,8 @@ class PerLayerCacheProcessor(nn.Module):
         layer_dim = 2 * model_config.num_kv_heads * int(model_config.head_dim)
         self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.num_layers))
 
-    def forward(self, cache: CacheState) -> CacheState:
-        indices = cache.select_indices(self.config.process_every, self.config.topk)
+    def forward(self, cache: CacheState, *, select_all: bool = False) -> CacheState:
+        indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
         for layer_idx, block in enumerate(self.blocks):
             keys, values = cache.gather_layer(layer_idx, indices)
             merged = _merge_kv(keys, values)
@@ -126,8 +127,8 @@ class GlobalCacheProcessor(nn.Module):
         self.head_dim = int(model_config.head_dim)
         self.block = CacheProcessor(self.num_layers * per_layer, self.config)
 
-    def forward(self, cache: CacheState) -> CacheState:
-        indices = cache.select_indices(self.config.process_every, self.config.topk)
+    def forward(self, cache: CacheState, *, select_all: bool = False) -> CacheState:
+        indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
         parts = []
         shapes = []
         for layer_idx in range(self.num_layers):

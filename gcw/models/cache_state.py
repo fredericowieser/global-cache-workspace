@@ -33,6 +33,10 @@ class CacheState:
     def select_indices(self, process_every: int = 64, topk: int = 32) -> torch.Tensor:
         return select_l2_indices(self.scores, process_every=process_every, topk=topk)
 
+    def all_indices(self) -> torch.Tensor:
+        seq = self.scores.shape[1]
+        return torch.arange(seq, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.scores.shape[0], -1)
+
     def gather_layer(self, layer_idx: int, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         k, v = self.layer(layer_idx)
         index = _expand_cache_indices(indices, k)

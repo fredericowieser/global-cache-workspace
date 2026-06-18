@@ -182,7 +182,9 @@ def run_task_groups(
     import lm_eval
     from lm_eval.tasks import TaskManager
     model, cfg, state = load_checkpoint(checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
-    lm = GCWEvalLM(model, _tokenizer_for(cfg, state), batch_size=batch_size)
+    tokenizer = _tokenizer_for(cfg, state)
+    lm = GCWEvalLM(model, tokenizer, batch_size=batch_size)
+    apply_chat_template = bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
     task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
     merged: dict = {"results": {}, "groups": {}, "n-samples": {}, "n-shot": {}, "versions": {}, "higher_is_better": {}}
     for tasks, fewshot in runs:
@@ -196,6 +198,7 @@ def run_task_groups(
             verbosity="ERROR",
             task_manager=task_manager,
             confirm_run_unsafe_code=True,
+            apply_chat_template=apply_chat_template,
         )
         for key in merged:
             if key in out and isinstance(out[key], dict):
