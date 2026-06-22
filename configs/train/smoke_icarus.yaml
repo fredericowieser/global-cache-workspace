@@ -28,7 +28,7 @@ data:
 mode: pretrain
 distributed: none
 freeze_backbone: false
-output_dir: runs/smoke_bgt_icarus
+output_dir: runs/smoke_icarus
 batch_size: 2
 sequence_len: 16
 max_steps: 2
