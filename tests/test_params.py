@@ -1,5 +1,12 @@
 from gcw.models.transformer import estimate_non_embedding_params
-from gcw.params import fit_matched_total_backbone, fit_processor_config, processor_params, smollm360m_backbone, total_non_embedding_params
+from gcw.params import (
+    fit_matched_total_backbone,
+    fit_processor_config,
+    processor_params,
+    smollm360m_backbone,
+    total_non_embedding_params,
+    write_family_configs,
+)
 
 
 def test_smol_bt_bgt_share_backbone_and_stay_under_five_percent():
@@ -13,6 +20,20 @@ def test_smol_bt_bgt_share_backbone_and_stay_under_five_percent():
     assert processor_params(bgt) <= budget
     assert bt_meta["processor_fraction"] <= 0.05
     assert bgt_meta["processor_fraction"] <= 0.05
+
+
+def test_icarus_processor_params_are_counted():
+    backbone = smollm360m_backbone(num_layers=2, intermediate_size=256)
+    icarus, meta = fit_processor_config(backbone, "icarus", fraction=0.05)
+    assert icarus.cache_processor is not None
+    assert processor_params(icarus) > 0
+    assert meta["processor_params"] == processor_params(icarus)
+
+
+def test_generated_family_configs_include_icarus(tmp_path):
+    table = write_family_configs(tmp_path)
+    assert table["icarus"]["model"]["variant"] == "icarus"
+    assert (tmp_path / "smollm360m_icarus.yaml").exists()
 
 
 def test_matched_total_uses_one_backbone_under_tf_target():

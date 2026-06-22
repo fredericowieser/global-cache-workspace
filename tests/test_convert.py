@@ -50,6 +50,24 @@ def test_tiny_llama_logits_match_transformers():
     assert torch.allclose(native_logits, hf_logits, atol=1e-5, rtol=1e-5)
 
 
+def test_hf_config_can_build_icarus_variant():
+    hf_cfg = LlamaConfig(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        max_position_embeddings=16,
+        tie_word_embeddings=False,
+        rope_theta=10000.0,
+    )
+    cfg = config_from_hf(hf_cfg, family="llama", variant="icarus")
+    cfg.cache_processor = CacheProcessorConfig()
+    model = build_model(cfg)
+    assert model.config.variant == "icarus"
+
+
 def test_tiny_qwen3_logits_match_transformers():
     hf_cfg = Qwen3Config(
         vocab_size=32,

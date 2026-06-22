@@ -9,7 +9,7 @@ from gcw.models.transformer import estimate_non_embedding_params
 
 
 def processor_params(config: ModelConfig) -> int:
-    if config.variant in {"bt", "bgt"}:
+    if config.variant in {"bt", "bgt", "icarus"}:
         return estimate_processor_params(config)
     return 0
 
@@ -22,6 +22,8 @@ def estimate_processor_params(config: ModelConfig) -> int:
         return config.num_layers * _processor_block_params(per_layer_dim, config.cache_processor)
     if config.variant == "bgt":
         return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor)
+    if config.variant == "icarus":
+        return _processor_block_params(2 * int(config.head_dim), config.cache_processor)
     return 0
 
 
@@ -56,7 +58,11 @@ def _processor_block_params(input_dim: int, config: CacheProcessorConfig) -> int
     )
 
 
-def fit_processor_config(backbone: ModelConfig, variant: str, fraction: float = 0.05) -> tuple[ModelConfig, dict]:
+def fit_processor_config(
+    backbone: ModelConfig,
+    variant: str,
+    fraction: float = 0.05,
+) -> tuple[ModelConfig, dict]:
     target = round(estimate_non_embedding_params(backbone) * fraction)
     best: tuple[int, ModelConfig] | None = None
     heads_choices = list(range(1, 17))
@@ -179,7 +185,7 @@ def write_family_configs(
         },
     }
     dump_yaml(out / "smollm360m_tf.yaml", {"model": tf_backbone, "metadata": table["tf"]["metadata"]})
-    for variant in ("bt", "bgt"):
+    for variant in ("bt", "bgt", "icarus"):
         cfg, meta = fit_processor_config(backbone, variant, fraction=fraction)
         meta = {
             **meta,

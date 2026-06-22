@@ -35,7 +35,7 @@ def convert_hf(
     model_id = ALIASES.get(model_id.lower(), model_id)
     hf_cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=False)
     cfg = config_from_hf(hf_cfg, family=family, variant=variant)
-    if variant in {"bt", "bgt"}:
+    if variant in {"bt", "bgt", "icarus"}:
         cfg = replace(cfg, cache_processor=CacheProcessorConfig())
     torch_dtype = _resolve_dtype(dtype)
     hf = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
@@ -47,7 +47,12 @@ def convert_hf(
         out,
         native,
         cfg,
-        {"source": model_id, "source_format": "hf", "family": family, "dtype": str(model_dtype).removeprefix("torch.")},
+        {
+            "source": model_id,
+            "source_format": "hf",
+            "family": family,
+            "dtype": str(model_dtype).removeprefix("torch."),
+        },
     )
 
 

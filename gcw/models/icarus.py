@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.cache_state import CacheState
 from gcw.models.transformer import RMSNorm, apply_rotary, flash_sdpa
+from gcw.models.bgt import BGT
 
 
 def rotary_for_indices(indices: torch.Tensor, head_dim: int, theta: float, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
@@ -26,7 +27,6 @@ class ProcessorAttention(nn.Module):
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.hidden_size // config.num_heads
         self.dropout = config.attention_dropout
-        # TODO: P2 this is currently single head per kv cache head, but we could have multiple heads per kv head if we wanted to
         # TODO: P1 currently a single shared projection for all kv cache heads, but we could have separate projections for each kv head if we wanted to - not sure how to with nn.Linear
         self.q_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
         self.k_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
@@ -135,10 +135,14 @@ class GlobalCacheProcessor(nn.Module):
         selected_heads = cache.all_heads() if select_all else _select_heads_from_merged(merged, self.config.topk_heads)
         updated = self.block(merged, indices, selected_heads)  # concatenate along head dimension to process all layers at once
         for layer_idx, part in enumerate(torch.split(updated, [p.shape[1] for p in parts], dim=1)):  # TODO: P1 check this split is correct, should be along head dimension
-            num_heads, head_dim = shapes[layer_idx]
-            keys, values = _split_kv(part, num_heads, head_dim)
+            keys, values = _split_kv(part)
             cache.scatter_layer(layer_idx, indices, keys, values)
         return cache
+
+
+class Icarus(BGT):
+    processor_cls = GlobalCacheProcessor
+    variant = "icarus"
 
 
 def _merge_kv(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:

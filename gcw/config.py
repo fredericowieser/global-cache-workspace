@@ -7,7 +7,7 @@ from typing import Any, Literal
 import yaml
 
 
-Variant = Literal["tf", "bt", "bgt"]
+Variant = Literal["tf", "bt", "bgt", "icarus"]
 Family = Literal["smollm", "llama", "qwen3"]
 RotaryStyle = Literal["llama", "ppt"]
 
@@ -58,7 +58,7 @@ class ModelConfig:
             raise ValueError("head_dim must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads")
-        if self.variant in {"bt", "bgt"} and self.cache_processor is None:
+        if self.variant in {"bt", "bgt", "icarus"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
 
 

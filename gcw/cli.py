@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> None:
     hf = convert_sub.add_parser("hf")
     hf.add_argument("--family", choices=["llama", "qwen3"], required=True)
     hf.add_argument("--model", required=True)
-    hf.add_argument("--variant", choices=["tf", "bt", "bgt"], default="tf")
+    hf.add_argument("--variant", choices=["tf", "bt", "bgt", "icarus"], default="tf")
     hf.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
     hf.add_argument("--out", required=True)
     ppt = convert_sub.add_parser("ppt")
@@ -104,7 +104,13 @@ def main(argv: list[str] | None = None) -> None:
             print(text)
     elif args.cmd == "convert":
         if args.source == "hf":
-            convert_hf(args.model, args.out, family=args.family, variant=args.variant, dtype=args.dtype)
+            convert_hf(
+                args.model,
+                args.out,
+                family=args.family,
+                variant=args.variant,
+                dtype=args.dtype,
+            )
         elif args.source == "ppt":
             convert_ppt(args.checkpoint, args.meta, args.out, dtype=args.dtype)
         else:

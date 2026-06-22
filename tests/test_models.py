@@ -2,13 +2,23 @@ import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
+from gcw.models.icarus import Icarus
+from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
 from gcw.models.transformer import apply_rotary
 
 
 def tiny_config(variant="tf"):
     cp = None
-    if variant in {"bt", "bgt"}:
-        cp = CacheProcessorConfig(process_every=4, topk=2, hidden_size=8, intermediate_size=16, num_heads=1, num_kv_heads=1)
+    if variant in {"bt", "bgt", "icarus"}:
+        cp = CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=1,
+            num_kv_heads=1,
+        )
     return ModelConfig(
         variant=variant,
         vocab_size=128,
@@ -25,7 +35,7 @@ def tiny_config(variant="tf"):
 
 
 def test_tiny_models_forward_backward():
-    for variant in ("tf", "bt", "bgt"):
+    for variant in ("tf", "bt", "bgt", "icarus"):
         model = build_model(tiny_config(variant))
         model.init_weights()
         x = torch.randint(0, 128, (2, 9))
@@ -36,8 +46,20 @@ def test_tiny_models_forward_backward():
         assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
 
 
+def test_tiny_icarus_uses_icarus_processor():
+    model = build_model(tiny_config("icarus"))
+    assert isinstance(model, Icarus)
+    assert isinstance(model.cache_processor, IcarusGlobalCacheProcessor)
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in model.cache_processor.parameters())
+
+
 def test_tiny_models_bf16_autocast_forward_backward():
-    for variant in ("tf", "bt", "bgt"):
+    for variant in ("tf", "bt", "bgt", "icarus"):
         model = build_model(tiny_config(variant))
         model.init_weights()
         x = torch.randint(0, 128, (2, 9))
