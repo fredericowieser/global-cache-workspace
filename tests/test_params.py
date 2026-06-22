@@ -59,10 +59,30 @@ def test_icarus_per_cache_head_projection_params_match_model():
     assert processor_params(cfg) > processor_params(shared)
 
 
+def test_fit_processor_config_applies_cache_processor_overrides():
+    backbone = smollm360m_backbone(num_layers=2, intermediate_size=256)
+    cfg, meta = fit_processor_config(
+        backbone,
+        "icarus",
+        fraction=0.05,
+        cache_processor_overrides={"per_cache_head_projections": True},
+    )
+    assert cfg.cache_processor is not None
+    assert cfg.cache_processor.per_cache_head_projections is True
+    assert cfg.cache_processor.topk_heads == 32
+    assert meta["processor_params"] == processor_params(cfg)
+    assert meta["processor_fraction"] <= 0.05
+
+
 def test_generated_family_configs_include_icarus(tmp_path):
     table = write_family_configs(tmp_path)
     assert table["icarus"]["model"]["variant"] == "icarus"
+    assert table["icarus"]["model"]["cache_processor"]["topk_heads"] == 32
+    assert table["icarus_per_cache_head"]["model"]["variant"] == "icarus"
+    assert table["icarus_per_cache_head"]["model"]["cache_processor"]["per_cache_head_projections"] is True
+    assert table["icarus_per_cache_head"]["model"]["cache_processor"]["topk_heads"] == 32
     assert (tmp_path / "smollm360m_icarus.yaml").exists()
+    assert (tmp_path / "smollm360m_icarus_per_cache_head.yaml").exists()
 
 
 def test_matched_total_uses_one_backbone_under_tf_target():

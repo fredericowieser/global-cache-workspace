@@ -16,7 +16,7 @@ RotaryStyle = Literal["llama", "ppt"]
 class CacheProcessorConfig:
     process_every: int = 64
     topk: int = 32
-    topk_heads: int = 8
+    topk_heads: int = 32
     score: str = "attn_l2"
     hidden_size: int = 512
     intermediate_size: int = 2048
