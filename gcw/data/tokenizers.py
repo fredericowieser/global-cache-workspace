@@ -50,11 +50,33 @@ class IntTokenizer:
 
 
 def get_tokenizer(name: str = "cosmo2"):
+    if name.startswith("hf:"):
+        return TransformersTokenizer(name.removeprefix("hf:"))
     if name == "int":
         return IntTokenizer()
     if name != "cosmo2":
         raise ValueError(f"unknown tokenizer: {name}")
     return Tokenizer()
+
+
+class TransformersTokenizer:
+    def __init__(self, source: str):
+        try:
+            from transformers import AutoTokenizer
+        except ImportError as exc:
+            raise ImportError("HF tokenizers require the convert/eval extra with transformers installed") from exc
+        self.enc = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
+        self.eot_id = self.enc.eos_token_id or self.enc.pad_token_id or 0
+        self.vocab_size = len(self.enc)
+
+    def encode(self, text: str) -> list[int]:
+        return self.enc.encode(text, add_special_tokens=False)
+
+    def decode(self, ids) -> str:
+        return self.enc.decode(list(ids), skip_special_tokens=False)
+
+    def get_vocab_size(self) -> int:
+        return self.vocab_size
 
 
 def get_token_bytes(device: torch.device | str = "cpu") -> torch.Tensor:
