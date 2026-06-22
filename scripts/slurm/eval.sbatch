@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gcw-eval
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
+#SBATCH --ntasks-per-node=2
+#SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=120G
 #SBATCH --time=12:00:00
@@ -22,24 +22,29 @@ OUT="${OUT:-}"
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p slurm_out "$(dirname "${OUT:-results/tmp.json}")"
 
-cmd=(uv run --extra gpu --extra eval gcw eval "$SUITE" --checkpoint "$CHECKPOINT")
+gcw_args=(eval "$SUITE" --checkpoint "$CHECKPOINT")
 if [[ -n "$LIMIT" && "$SUITE" != "fineweb" ]]; then
-  cmd+=(--limit "$LIMIT")
+  gcw_args+=(--limit "$LIMIT")
 fi
 if [[ -n "$BATCH_SIZE" ]]; then
-  cmd+=(--batch-size "$BATCH_SIZE")
+  gcw_args+=(--batch-size "$BATCH_SIZE")
 fi
 if [[ "$SUITE" == "fineweb" && -n "$DATA_DIR" ]]; then
-  cmd+=(--data-dir "$DATA_DIR")
+  gcw_args+=(--data-dir "$DATA_DIR")
 fi
 if [[ "$SUITE" == "fineweb" && -n "$EVAL_TOKENS" ]]; then
-  cmd+=(--eval-tokens "$EVAL_TOKENS")
+  gcw_args+=(--eval-tokens "$EVAL_TOKENS")
 fi
 if [[ -n "$OUT" ]]; then
-  cmd+=(--out "$OUT")
+  gcw_args+=(--out "$OUT")
 fi
 
-"${cmd[@]}"
+NGPU="${SLURM_GPUS_ON_NODE:-1}"
+if [[ "$SUITE" != "fineweb" && "$NGPU" -gt 1 ]]; then
+  uv run --extra gpu --extra eval torchrun --standalone --nproc-per-node="$NGPU" -m gcw.cli "${gcw_args[@]}"
+else
+  uv run --extra gpu --extra eval gcw "${gcw_args[@]}"
+fi
 if [[ -n "$OUT" ]]; then
   echo "Wrote $OUT"
 else
