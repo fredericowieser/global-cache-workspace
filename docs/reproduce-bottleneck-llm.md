@@ -41,6 +41,12 @@ CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml \
 sbatch scripts/slurm/train.sbatch
 ```
 
+The convenience wrapper for that run is:
+
+```bash
+bash scripts/martin.sh
+```
+
 Inside an existing GPU allocation, run the raw training entry point directly:
 
 ```bash

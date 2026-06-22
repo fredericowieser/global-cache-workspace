@@ -85,6 +85,12 @@ sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
 ```
 
+For the standard Llama 3.2 1B frozen-backbone Icarus run on the LRC cluster:
+
+```bash
+bash scripts/martin.sh
+```
+
 Run the same configs directly inside an existing Slurm allocation:
 
 ```bash
