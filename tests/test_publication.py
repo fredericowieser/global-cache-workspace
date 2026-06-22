@@ -42,6 +42,8 @@ def test_prepare_openmath_normalizes_jsonl(tmp_path):
 def test_bottleneck_llm_training_configs_load_with_expected_modes():
     frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml")
     unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_unfrozen.yaml")
+    icarus_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml")
+    icarus_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_unfrozen.yaml")
     tf_sft = load_train_config("configs/train/bottleneck_llm/llama32_1b_tf_sft.yaml")
 
     assert frozen.freeze_backbone
@@ -49,5 +51,11 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert frozen.backbone_checkpoint.startswith("/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/")
     assert not unfrozen.freeze_backbone
     assert unfrozen.model.variant == "bgt"
+    assert icarus_frozen.freeze_backbone
+    assert icarus_frozen.model.variant == "icarus"
+    assert icarus_frozen.data.dataset == "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl"
+    assert icarus_frozen.backbone_checkpoint.startswith("/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/")
+    assert not icarus_unfrozen.freeze_backbone
+    assert icarus_unfrozen.model.variant == "icarus"
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None

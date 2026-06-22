@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from gcw.config import CacheProcessorConfig, ModelConfig, dump_yaml, to_dict
 from gcw.models.transformer import estimate_non_embedding_params
 
 
 def processor_params(config: ModelConfig) -> int:
-    if config.variant in {"bt", "bgt"}:
+    if config.variant in {"bt", "bgt", "icarus"}:
         return estimate_processor_params(config)
     return 0
 
@@ -22,6 +22,9 @@ def estimate_processor_params(config: ModelConfig) -> int:
         return config.num_layers * _processor_block_params(per_layer_dim, config.cache_processor)
     if config.variant == "bgt":
         return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor) + _salience_params(config)
+    if config.variant == "icarus":
+        projection_count = config.num_layers * config.num_kv_heads if config.cache_processor.per_cache_head_projections else 1
+        return _processor_block_params(2 * int(config.head_dim), config.cache_processor, projection_count=projection_count)
     return 0
 
 
@@ -35,7 +38,7 @@ def total_non_embedding_params(config: ModelConfig) -> int:
     return estimate_non_embedding_params(config) + processor_params(config)
 
 
-def _processor_block_params(input_dim: int, config: CacheProcessorConfig) -> int:
+def _processor_block_params(input_dim: int, config: CacheProcessorConfig, *, projection_count: int = 1) -> int:
     head_dim = config.hidden_size // config.num_heads
     q_dim = config.num_heads * head_dim
     kv_dim = config.num_kv_heads * head_dim
@@ -50,43 +53,36 @@ def _processor_block_params(input_dim: int, config: CacheProcessorConfig) -> int
     )
     mlp = 3 * config.hidden_size * config.intermediate_size
     layer = attn + mlp + 2 * config.hidden_size
-    return (
-        input_dim
-        + input_dim * config.hidden_size
-        + config.hidden_size
-        + config.num_layers * layer
-        + config.hidden_size
-        + config.hidden_size * input_dim
-        + input_dim
-        + 1
-    )
+    in_proj = projection_count * (input_dim * config.hidden_size + config.hidden_size)
+    out_proj = projection_count * (config.hidden_size * input_dim + input_dim)
+    return input_dim + in_proj + config.num_layers * layer + config.hidden_size + out_proj + 1
 
 
-def fit_processor_config(backbone: ModelConfig, variant: str, fraction: float = 0.05) -> tuple[ModelConfig, dict]:
+def fit_processor_config(
+    backbone: ModelConfig,
+    variant: str,
+    fraction: float = 0.05,
+    *,
+    cache_processor_overrides: dict[str, Any] | None = None,
+) -> tuple[ModelConfig, dict]:
+    cache_processor_overrides = cache_processor_overrides or {}
     target = round(estimate_non_embedding_params(backbone) * fraction)
     best: tuple[int, ModelConfig] | None = None
     heads_choices = list(range(1, 17))
-    hidden_choices = list(range(32, 1025, 32))
+    hidden_choices = list(range(32, 2049 if variant == "icarus" else 1025, 32))
     for hidden in hidden_choices:
         for heads in heads_choices:
             if hidden % heads:
                 continue
             if hidden // heads not in {32, 64, 128}:
                 continue
-            cp = CacheProcessorConfig(
-                hidden_size=hidden,
-                intermediate_size=hidden * 4,
-                num_heads=heads,
-                num_kv_heads=heads,
-                process_every=64,
-                topk=32,
-            )
+            cp = CacheProcessorConfig(**_processor_config_kwargs(hidden, heads, variant, cache_processor_overrides))
             cfg = replace(backbone, variant=variant, cache_processor=cp)
             params = estimate_processor_params(cfg)
             if params <= target and (best is None or params > best[0]):
                 best = (params, cfg)
     if best is None:
-        cp = CacheProcessorConfig(hidden_size=32, intermediate_size=128, num_heads=1, num_kv_heads=1)
+        cp = CacheProcessorConfig(**_processor_config_kwargs(32, 1, variant, cache_processor_overrides))
         cfg = replace(backbone, variant=variant, cache_processor=cp)
         best = (estimate_processor_params(cfg), cfg)
     params, cfg = best
@@ -100,6 +96,43 @@ def fit_processor_config(backbone: ModelConfig, variant: str, fraction: float = 
         "target_processor_params": target,
     }
     return cfg, meta
+
+
+def _processor_config_kwargs(hidden: int, heads: int, variant: str, overrides: dict[str, Any]) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "hidden_size": hidden,
+        "intermediate_size": hidden * 4,
+        "num_heads": heads,
+        "num_kv_heads": heads,
+        "process_every": 64,
+        "topk": 32,
+    }
+    if variant == "icarus":
+        kwargs["topk_heads"] = 32
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _write_variant_config(
+    out: Path,
+    table: dict,
+    *,
+    table_key: str,
+    file_variant: str,
+    cfg: ModelConfig,
+    meta: dict,
+    target_non_embedding: int,
+    regime: Literal["added_on_top", "matched_total"],
+) -> None:
+    meta = {
+        **meta,
+        "target_non_embedding_params": target_non_embedding,
+        "delta_from_target": meta["total_non_embedding_params"] - target_non_embedding,
+        "regime": regime,
+    }
+    table[table_key] = {"model": to_dict(cfg), "metadata": meta}
+    suffix = f"smollm360m_{file_variant}" if regime == "added_on_top" else f"smollm360m_matched_{file_variant}"
+    dump_yaml(out / f"{suffix}.yaml", {"model": cfg, "metadata": meta})
 
 
 def smollm360m_backbone(num_layers: int = 32, intermediate_size: int = 2560) -> ModelConfig:
@@ -185,15 +218,32 @@ def write_family_configs(
         },
     }
     dump_yaml(out / "smollm360m_tf.yaml", {"model": tf_backbone, "metadata": table["tf"]["metadata"]})
-    for variant in ("bt", "bgt"):
+    for variant in ("bt", "bgt", "icarus"):
         cfg, meta = fit_processor_config(backbone, variant, fraction=fraction)
-        meta = {
-            **meta,
-            "target_non_embedding_params": target_non_embedding,
-            "delta_from_target": meta["total_non_embedding_params"] - target_non_embedding,
-            "regime": regime,
-        }
-        table[variant] = {"model": to_dict(cfg), "metadata": meta}
-        suffix = f"smollm360m_{variant}" if regime == "added_on_top" else f"smollm360m_matched_{variant}"
-        dump_yaml(out / f"{suffix}.yaml", {"model": cfg, "metadata": meta})
+        _write_variant_config(
+            out,
+            table,
+            table_key=variant,
+            file_variant=variant,
+            cfg=cfg,
+            meta=meta,
+            target_non_embedding=target_non_embedding,
+            regime=regime,
+        )
+    cfg, meta = fit_processor_config(
+        backbone,
+        "icarus",
+        fraction=fraction,
+        cache_processor_overrides={"per_cache_head_projections": True},
+    )
+    _write_variant_config(
+        out,
+        table,
+        table_key="icarus_per_cache_head",
+        file_variant="icarus_per_cache_head",
+        cfg=cfg,
+        meta=meta,
+        target_non_embedding=target_non_embedding,
+        regime=regime,
+    )
     return table
