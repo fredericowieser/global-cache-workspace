@@ -23,7 +23,8 @@ def estimate_processor_params(config: ModelConfig) -> int:
     if config.variant == "bgt":
         return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor)
     if config.variant == "icarus":
-        return _processor_block_params(2 * int(config.head_dim), config.cache_processor)
+        projection_count = config.num_layers * config.num_kv_heads if config.cache_processor.per_cache_head_projections else 1
+        return _processor_block_params(2 * int(config.head_dim), config.cache_processor, projection_count=projection_count)
     return 0
 
 
@@ -31,7 +32,7 @@ def total_non_embedding_params(config: ModelConfig) -> int:
     return estimate_non_embedding_params(config) + processor_params(config)
 
 
-def _processor_block_params(input_dim: int, config: CacheProcessorConfig) -> int:
+def _processor_block_params(input_dim: int, config: CacheProcessorConfig, *, projection_count: int = 1) -> int:
     head_dim = config.hidden_size // config.num_heads
     q_dim = config.num_heads * head_dim
     kv_dim = config.num_kv_heads * head_dim
@@ -46,14 +47,14 @@ def _processor_block_params(input_dim: int, config: CacheProcessorConfig) -> int
     )
     mlp = 3 * config.hidden_size * config.intermediate_size
     layer = attn + mlp + 2 * config.hidden_size
+    in_proj = projection_count * (input_dim * config.hidden_size + config.hidden_size)
+    out_proj = projection_count * (config.hidden_size * input_dim + input_dim)
     return (
         input_dim
-        + input_dim * config.hidden_size
-        + config.hidden_size
+        + in_proj
         + config.num_layers * layer
         + config.hidden_size
-        + config.hidden_size * input_dim
-        + input_dim
+        + out_proj
         + 1
     )
 

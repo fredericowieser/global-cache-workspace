@@ -27,6 +27,8 @@ model:
     rope_theta: 10000.0
     gate_init: -5.0
     attention_dropout: 0.0
+    # If true: processor_params=14819329, processor_fraction=0.047100035215385944
+    per_cache_head_projections: false
 data:
   kind: fineweb
   data_dir: ~/.cache/gcw/fineweb_edu_dedup_cosmo2

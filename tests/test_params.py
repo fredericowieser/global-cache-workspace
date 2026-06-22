@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.models import build_model
 from gcw.models.transformer import estimate_non_embedding_params
 from gcw.params import (
     fit_matched_total_backbone,
@@ -28,6 +32,31 @@ def test_icarus_processor_params_are_counted():
     assert icarus.cache_processor is not None
     assert processor_params(icarus) > 0
     assert meta["processor_params"] == processor_params(icarus)
+
+
+def test_icarus_per_cache_head_projection_params_match_model():
+    cp = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        per_cache_head_projections=True,
+    )
+    cfg = ModelConfig(
+        variant="icarus",
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        cache_processor=cp,
+    )
+    shared = replace(cfg, cache_processor=replace(cp, per_cache_head_projections=False))
+    per_head = build_model(cfg)
+    assert processor_params(cfg) == sum(p.numel() for p in per_head.cache_processor.parameters())
+    assert processor_params(cfg) > processor_params(shared)
 
 
 def test_generated_family_configs_include_icarus(tmp_path):

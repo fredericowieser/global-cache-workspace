@@ -27,7 +27,6 @@ class ProcessorAttention(nn.Module):
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = config.hidden_size // config.num_heads
         self.dropout = config.attention_dropout
-        # TODO: P1 currently a single shared projection for all kv cache heads, but we could have separate projections for each kv head if we wanted to - not sure how to with nn.Linear
         self.q_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
         self.k_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
         self.v_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
@@ -80,21 +79,48 @@ class ProcessorLayer(nn.Module):
         return x + self.down_proj(F.silu(self.gate_proj(h)) * self.up_proj(h))
 
 
+class PerCacheHeadLinear(nn.Module):
+    def __init__(self, num_cache_heads: int, in_features: int, out_features: int, bias: bool = True):
+        super().__init__()
+        self.num_cache_heads = num_cache_heads
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.empty(num_cache_heads, in_features, out_features))
+        self.bias = nn.Parameter(torch.empty(num_cache_heads, out_features)) if bias else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = torch.einsum("bcsi,cio->bcso", x, self.weight)
+        if self.bias is not None:
+            y = y + self.bias[None, :, None, :]
+        return y
+
+
 class CacheProcessor(nn.Module):
-    def __init__(self, input_dim: int, config: CacheProcessorConfig):
+    def __init__(self, input_dim: int, num_cache_heads: int, config: CacheProcessorConfig):
         super().__init__()
         self.config = config
+        self.per_cache_head_projections = config.per_cache_head_projections
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
-        self.in_proj = nn.Linear(input_dim, config.hidden_size)
+        if self.per_cache_head_projections:
+            self.in_proj = PerCacheHeadLinear(num_cache_heads, input_dim, config.hidden_size)
+        else:
+            self.in_proj = nn.Linear(input_dim, config.hidden_size)
         self.layers = nn.ModuleList(ProcessorLayer(config) for _ in range(config.num_layers))
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
-        self.out_proj = nn.Linear(config.hidden_size, input_dim)
+        if self.per_cache_head_projections:
+            self.out_proj = PerCacheHeadLinear(num_cache_heads, config.hidden_size, input_dim)
+        else:
+            self.out_proj = nn.Linear(config.hidden_size, input_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
         self.init_weights()
 
     def init_weights(self, std: float = 0.02) -> None:
         for module in self.modules():
             if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, mean=0.0, std=std)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, PerCacheHeadLinear):
                 nn.init.normal_(module.weight, mean=0.0, std=std)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
@@ -119,7 +145,11 @@ class GlobalCacheProcessor(nn.Module):
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
         self.head_dim = int(model_config.head_dim)
-        self.block = CacheProcessor(2 * self.head_dim, self.config)
+        self.block = CacheProcessor(
+            2 * self.head_dim,
+            self.num_layers * self.num_kv_heads,
+            self.config,
+        )
 
     def forward(self, cache: CacheState, *, select_all: bool = False) -> CacheState:
         indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
@@ -134,7 +164,7 @@ class GlobalCacheProcessor(nn.Module):
         merged = torch.cat(parts, dim=1)
         selected_heads = cache.all_heads() if select_all else _select_heads_from_merged(merged, self.config.topk_heads)
         updated = self.block(merged, indices, selected_heads)  # concatenate along head dimension to process all layers at once
-        for layer_idx, part in enumerate(torch.split(updated, [p.shape[1] for p in parts], dim=1)):  # TODO: P1 check this split is correct, should be along head dimension
+        for layer_idx, part in enumerate(torch.split(updated, [p.shape[1] for p in parts], dim=1)):
             keys, values = _split_kv(part)
             cache.scatter_layer(layer_idx, indices, keys, values)
         return cache

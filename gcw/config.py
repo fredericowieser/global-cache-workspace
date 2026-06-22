@@ -27,6 +27,7 @@ class CacheProcessorConfig:
     rope_theta: float = 10000.0
     gate_init: float = -5.0
     attention_dropout: float = 0.0
+    per_cache_head_projections: bool = False
 
 
 @dataclass

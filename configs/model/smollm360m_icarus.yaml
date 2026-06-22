@@ -27,6 +27,8 @@ model:
     rope_theta: 10000.0
     gate_init: -5.0
     attention_dropout: 0.0
+    # If true: processor_params=14819329, processor_fraction=0.047100035215385944
+    per_cache_head_projections: false
 metadata:
   backbone_non_embedding_params: 314635200
   processor_params: 1722817
