@@ -17,11 +17,17 @@ def processor_params(config: ModelConfig) -> int:
 def estimate_processor_params(config: ModelConfig) -> int:
     if config.cache_processor is None:
         return 0
-    per_layer_dim = 2 * config.num_kv_heads * int(config.head_dim)
+    per_layer_dim = config.cache_processor.stream_factor * config.num_kv_heads * int(config.head_dim)
     if config.variant == "bt":
         return config.num_layers * _processor_block_params(per_layer_dim, config.cache_processor)
     if config.variant == "bgt":
-        return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor)
+        return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor) + _salience_params(config)
+    return 0
+
+
+def _salience_params(config: ModelConfig) -> int:
+    if config.cache_processor is not None and config.cache_processor.score == "kv_norm":
+        return 2
     return 0
 
 

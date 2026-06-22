@@ -78,3 +78,80 @@ def _expand_cache_indices(indices: torch.Tensor, cache: torch.Tensor) -> torch.T
     if indices.ndim != 2:
         raise ValueError("indices must have shape (batch, selected)")
     return indices[:, None, :, None].expand(-1, cache.shape[1], -1, cache.shape[3])
+
+
+class StaticCacheState:
+    def __init__(self, keys: list[torch.Tensor], values: list[torch.Tensor], score_storage: torch.Tensor, length: int = 0):
+        self.keys = keys
+        self.values = values
+        self.score_storage = score_storage
+        self.length = length
+
+    @classmethod
+    def allocate(
+        cls,
+        *,
+        batch_size: int,
+        num_layers: int,
+        num_kv_heads: int,
+        max_seq_len: int,
+        head_dim: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> "StaticCacheState":
+        shape = (batch_size, num_kv_heads, max_seq_len, head_dim)
+        keys = [torch.empty(shape, device=device, dtype=dtype) for _ in range(num_layers)]
+        values = [torch.empty(shape, device=device, dtype=dtype) for _ in range(num_layers)]
+        scores = torch.empty(batch_size, max_seq_len, device=device, dtype=torch.float32)
+        return cls(keys, values, scores)
+
+    @property
+    def batch_size(self) -> int:
+        return self.keys[0].shape[0]
+
+    @property
+    def seq_len(self) -> int:
+        return self.length
+
+    @property
+    def num_layers(self) -> int:
+        return len(self.keys)
+
+    @property
+    def scores(self) -> torch.Tensor:
+        return self.score_storage[:, : self.length]
+
+    def layer(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.layer_view(idx, self.length)
+
+    def layer_view(self, idx: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.keys[idx][:, :, :end, :], self.values[idx][:, :, :end, :]
+
+    def write_layer(self, idx: int, start: int, keys: torch.Tensor, values: torch.Tensor) -> None:
+        end = start + keys.shape[2]
+        self.keys[idx][:, :, start:end, :].copy_(keys.to(self.keys[idx].dtype))
+        self.values[idx][:, :, start:end, :].copy_(values.to(self.values[idx].dtype))
+
+    def write_scores(self, start: int, scores: torch.Tensor) -> None:
+        end = start + scores.shape[1]
+        self.score_storage[:, start:end].copy_(scores.float())
+        self.length = max(self.length, end)
+
+    def select_indices(self, process_every: int = 64, topk: int = 32) -> torch.Tensor:
+        return select_l2_indices(self.scores, process_every=process_every, topk=topk)
+
+    def all_indices(self) -> torch.Tensor:
+        seq = self.length
+        return torch.arange(seq, dtype=torch.long, device=self.score_storage.device).unsqueeze(0).expand(self.batch_size, -1)
+
+    def gather_layer(self, layer_idx: int, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        k, v = self.layer(layer_idx)
+        index = _expand_cache_indices(indices, k)
+        return torch.gather(k, 2, index), torch.gather(v, 2, index)
+
+    def scatter_layer(self, layer_idx: int, indices: torch.Tensor, keys: torch.Tensor, values: torch.Tensor) -> None:
+        k = self.keys[layer_idx][:, :, : self.length, :]
+        v = self.values[layer_idx][:, :, : self.length, :]
+        index = _expand_cache_indices(indices, k)
+        k.scatter_(2, index, keys.to(k.dtype))
+        v.scatter_(2, index, values.to(v.dtype))
