@@ -11,7 +11,7 @@ model:
   head_dim: 128
   rope_theta: 500000.0
   norm_eps: 1.0e-05
-  tie_embeddings: false
+  tie_embeddings: true
   qk_norm: false
   rotary_style: llama
   cache_processor:
