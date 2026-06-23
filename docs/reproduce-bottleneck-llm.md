@@ -37,7 +37,7 @@ sbatch scripts/slurm/train.sbatch
 Frozen-backbone Icarus, Llama 3.2 1B:
 
 ```bash
-CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml \
+CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml \
 sbatch scripts/slurm/train.sbatch
 ```
 
@@ -50,7 +50,7 @@ bash scripts/martin.sh
 Inside an existing GPU allocation, run the raw training entry point directly:
 
 ```bash
-uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml
+uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml
 ```
 
 Other configs follow the same naming:
@@ -68,7 +68,7 @@ The frozen configs train only the cache processor. The unfrozen configs train bo
 Launch all frozen Icarus comparisons:
 
 ```bash
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
+sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_3b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama31_8b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch

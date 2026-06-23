@@ -17,8 +17,10 @@ export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
 mkdir -p "$WANDB_DIR"
 
 NPROC="${GPUS:-${SLURM_GPUS_ON_NODE:-1}}"
+UV_EXTRAS="${UV_EXTRAS:---extra gpu}"
+read -r -a UV_EXTRA_ARGS <<< "$UV_EXTRAS"
 if [[ "$NPROC" == "1" ]]; then
-  uv run --extra gpu gcw train --config "$CONFIG"
+  uv run "${UV_EXTRA_ARGS[@]}" gcw train --config "$CONFIG"
 else
-  uv run --extra gpu torchrun --standalone --nproc_per_node="$NPROC" -m gcw.cli train --config "$CONFIG"
+  uv run "${UV_EXTRA_ARGS[@]}" torchrun --standalone --nproc_per_node="$NPROC" -m gcw.cli train --config "$CONFIG"
 fi
