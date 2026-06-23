@@ -112,6 +112,9 @@ class DataConfig:
     tokenizer_source: str | None = None
     text_field: str = "text"
     max_length: int = 2048
+    sft_skip_rows: int = 0
+    sft_take_rows: int | None = None
+    response_prefix: str = ""
 
 
 @dataclass
@@ -142,6 +145,9 @@ class TrainConfig:
     max_steps: int = 2
     total_batch_size: int = 0
     learning_rate: float = 3e-4
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.95
+    adam_eps: float = 1e-8
     weight_decay: float = 0.1
     warmup_steps: int = 1
     warmdown_ratio: float = 0.2

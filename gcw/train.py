@@ -200,14 +200,26 @@ def _loader(config: TrainConfig, device: torch.device):
             tokenizer_name = f"hf:{config.data.tokenizer_source}"
         tokenizer = get_tokenizer(tokenizer_name)
         rows = list(iter_jsonl(config.data.dataset))
+        if config.data.sft_skip_rows:
+            if config.data.sft_skip_rows >= len(rows):
+                raise ValueError(f"data.sft_skip_rows={config.data.sft_skip_rows} exceeds dataset length {len(rows)}")
+            rows = rows[config.data.sft_skip_rows :]
+        if config.data.sft_take_rows is not None:
+            rows = rows[: config.data.sft_take_rows]
         if not rows:
             raise ValueError(f"empty SFT dataset: {config.data.dataset}")
         i = 0
         while True:
             batch = [rows[(i + j) % len(rows)] for j in range(config.batch_size)]
             i += config.batch_size
-            x, y = sft_batch(batch, tokenizer, config.sequence_len, device=device)
-            yield x, y, {"kind": "sft", "row": i % len(rows)}
+            x, y = sft_batch(
+                batch,
+                tokenizer,
+                config.sequence_len,
+                device=device,
+                response_prefix=config.data.response_prefix,
+            )
+            yield x, y, {"kind": "sft", "row": (config.data.sft_skip_rows + i) % len(rows)}
     yield from data_loader(
         config.batch_size,
         config.sequence_len,
@@ -226,7 +238,12 @@ def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> t
         groups.append({"params": decay, "lr": config.learning_rate, "weight_decay": config.weight_decay, "decay": True})
     if nodecay:
         groups.append({"params": nodecay, "lr": config.learning_rate, "weight_decay": 0.0, "decay": False})
-    opt = torch.optim.AdamW(groups, lr=config.learning_rate, betas=(0.9, 0.95), eps=1e-8)
+    opt = torch.optim.AdamW(
+        groups,
+        lr=config.learning_rate,
+        betas=(config.adam_beta1, config.adam_beta2),
+        eps=config.adam_eps,
+    )
     for group in opt.param_groups:
         group["initial_lr"] = group["lr"]
     return opt

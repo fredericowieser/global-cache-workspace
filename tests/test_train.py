@@ -5,6 +5,7 @@ import torch
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, WandbConfig
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
+from gcw.data.sft import sft_batch
 from gcw.models import build_model
 from gcw.train import _checkpoint_metadata, train
 
@@ -34,6 +35,14 @@ class FakeWandb:
     def init(self, **kwargs):
         self.init_kwargs = kwargs
         return self.run
+
+
+class TinyTokenizer:
+    eot_id = 0
+
+    def encode(self, text: str) -> list[int]:
+        table = {"A": 1, "B": 2, "C": 3, "D": 4, "\n": 5}
+        return [table[ch] for ch in text]
 
 
 def tiny_train_config(tmp_path):
@@ -173,3 +182,15 @@ def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
     assert state["tokenizer_source"] == cfg.data.tokenizer_source
     assert state["tokenizer"] == "hf"
     assert state["backbone_checkpoint"] == cfg.backbone_checkpoint
+
+
+def test_sft_batch_uses_next_token_targets():
+    x, y = sft_batch(
+        [{"prompt": "AB", "answer": "CD"}],
+        TinyTokenizer(),
+        max_length=8,
+        response_prefix="\n",
+    )
+
+    assert x.tolist() == [[1, 2, 5, 3, 4, 0]]
+    assert y.tolist() == [[-100, 5, 3, 4, 0, -100]]

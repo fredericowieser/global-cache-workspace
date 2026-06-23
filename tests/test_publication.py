@@ -63,6 +63,10 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert head_mask_fair.model.cache_processor.score == "kv_norm"
     assert head_mask_fair.model.cache_processor.writer_head_fraction == 0.2
     assert head_mask_fair.model.cache_processor.out_proj_init == frozen.model.cache_processor.out_proj_init
+    assert head_mask_fair.data.sft_skip_rows == 128000
+    assert head_mask_fair.data.sft_take_rows == 128000
+    assert head_mask_fair.data.response_prefix == "\n"
+    assert head_mask_fair.adam_beta2 == 0.999
     assert not unfrozen.freeze_backbone
     assert unfrozen.model.variant == "bgt"
     assert icarus_frozen.freeze_backbone
@@ -91,6 +95,9 @@ def test_head_mask_fair_config_matches_bgt_recipe_except_masking():
     assert head_mask.max_steps == baseline.max_steps
     assert head_mask.total_batch_size == baseline.total_batch_size
     assert head_mask.learning_rate == baseline.learning_rate
+    assert head_mask.adam_beta1 == baseline.adam_beta1
+    assert head_mask.adam_beta2 == baseline.adam_beta2 == 0.999
+    assert head_mask.adam_eps == baseline.adam_eps
     assert head_mask.warmup_steps == baseline.warmup_steps
     assert head_mask.weight_decay == baseline.weight_decay
     assert head_mask.grad_clip == baseline.grad_clip

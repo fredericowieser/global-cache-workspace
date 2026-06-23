@@ -71,22 +71,29 @@ def _prompt_answer(row: dict) -> tuple[str, str]:
     return str(prompt).strip(), str(answer).strip()
 
 
-def sft_batch(rows: list[dict], tokenizer, max_length: int, device: torch.device | str = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
+def sft_batch(
+    rows: list[dict],
+    tokenizer,
+    max_length: int,
+    device: torch.device | str = "cpu",
+    response_prefix: str = "",
+) -> tuple[torch.Tensor, torch.Tensor]:
     ids = []
-    labels = []
+    targets = []
     for row in rows:
         prompt = row.get("prompt") or row.get("question") or row.get("instruction") or ""
         answer = row.get("answer") or row.get("response") or row.get("output") or ""
         prompt_ids = tokenizer.encode(prompt)
-        answer_ids = tokenizer.encode(answer) + [tokenizer.eot_id]
+        answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [tokenizer.eot_id]
         seq = (prompt_ids + answer_ids)[:max_length]
-        lab = ([-100] * len(prompt_ids) + answer_ids)[:max_length]
+        hf_labels = ([-100] * len(prompt_ids) + answer_ids)[: len(seq)]
+        target = hf_labels[1:] + [-100]
         ids.append(seq)
-        labels.append(lab)
+        targets.append(target)
     width = min(max_length, max(len(x) for x in ids))
     x = torch.zeros(len(ids), width, dtype=torch.long)
     y = torch.full((len(ids), width), -100, dtype=torch.long)
-    for i, (seq, lab) in enumerate(zip(ids, labels)):
+    for i, (seq, target) in enumerate(zip(ids, targets)):
         x[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
-        y[i, : len(lab)] = torch.tensor(lab, dtype=torch.long)
+        y[i, : len(target)] = torch.tensor(target, dtype=torch.long)
     return x.to(device), y.to(device)
