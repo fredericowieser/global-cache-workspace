@@ -64,12 +64,22 @@ def workspace_writer_values(
     temperature: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     values = gather_cache_values(cache, indices)
-    scores = kv_norm_scores(cache, score_logits)
-    score_index = indices[None, :, None, :].expand(scores.shape[0], -1, scores.shape[2], -1)
-    selected_scores = torch.gather(scores, 3, score_index)
-    writer_gate = _writer_head_gate(selected_scores, writer_head_fraction, temperature)
-    token_gate = _token_gate(selected_scores, temperature)
-    return values * writer_gate.to(values.dtype) * token_gate.to(values.dtype), values
+    selected_scores = _selected_kv_norm_scores(cache, indices, score_logits)
+    gate = _workspace_gate(selected_scores, writer_head_fraction, temperature)
+    return values * gate.to(values.dtype), values
+
+
+def workspace_writer_kv(
+    cache: CacheState | WindowedCache,
+    indices: torch.Tensor,
+    score_logits: torch.Tensor,
+    writer_head_fraction: float,
+    temperature: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    keys, values = gather_cache_layers(cache, indices)
+    selected_scores = _selected_kv_norm_scores(cache, indices, score_logits)
+    gate = _workspace_gate(selected_scores, writer_head_fraction, temperature)
+    return keys * gate.to(keys.dtype), values * gate.to(values.dtype), keys, values
 
 
 def scatter_cache_layers(
@@ -114,6 +124,24 @@ def _cache_tensors(cache: CacheState | WindowedCache) -> tuple[torch.Tensor, tor
     if isinstance(cache, WindowedCache):
         return cache.keys, cache.values
     return torch.stack(cache.keys, dim=0), torch.stack(cache.values, dim=0)
+
+
+def _selected_kv_norm_scores(
+    cache: CacheState | WindowedCache,
+    indices: torch.Tensor,
+    score_logits: torch.Tensor,
+) -> torch.Tensor:
+    scores = kv_norm_scores(cache, score_logits)
+    score_index = indices[None, :, None, :].expand(scores.shape[0], -1, scores.shape[2], -1)
+    return torch.gather(scores, 3, score_index)
+
+
+def _workspace_gate(
+    selected_scores: torch.Tensor,
+    writer_head_fraction: float,
+    temperature: float,
+) -> torch.Tensor:
+    return _writer_head_gate(selected_scores, writer_head_fraction, temperature) * _token_gate(selected_scores, temperature)
 
 
 def _writer_head_gate(
