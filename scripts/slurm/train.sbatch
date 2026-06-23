@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gcw-train
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=8
-#SBATCH --gres=gpu:8
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=24:00:00
 
@@ -15,4 +15,10 @@ export PATH="$HOME/.local/bin:$PATH"
 export GCW_STRICT_FLASH="${GCW_STRICT_FLASH:-1}"
 export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
 mkdir -p "$WANDB_DIR"
-uv run --extra gpu torchrun --nproc_per_node="${SLURM_NTASKS_PER_NODE:-8}" -m gcw.cli train --config "$CONFIG"
+
+NPROC="${GPUS:-${SLURM_GPUS_ON_NODE:-1}}"
+if [[ "$NPROC" == "1" ]]; then
+  uv run --extra gpu gcw train --config "$CONFIG"
+else
+  uv run --extra gpu torchrun --standalone --nproc_per_node="$NPROC" -m gcw.cli train --config "$CONFIG"
+fi

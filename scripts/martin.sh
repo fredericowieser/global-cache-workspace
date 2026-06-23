@@ -36,10 +36,10 @@ sbatch \
   --partition="$PARTITION" \
   --time="$TIME" \
   --nodes=1 \
-  --ntasks-per-node="$GPUS" \
+  --ntasks-per-node=1 \
   --gres="gpu:$GPUS" \
   --cpus-per-task="$CPUS_PER_TASK" \
   --mem="$MEM" \
   --output="slurm_out/llama32-1b-icarus-%j.out" \
-  --export="ALL,CONFIG=$CONFIG,WANDB_MODE=$WANDB_MODE" \
+  --export="ALL,CONFIG=$CONFIG,WANDB_MODE=$WANDB_MODE,GPUS=$GPUS" \
   scripts/slurm/train.sbatch
