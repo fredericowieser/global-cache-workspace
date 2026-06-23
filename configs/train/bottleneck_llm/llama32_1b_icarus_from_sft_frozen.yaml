@@ -34,6 +34,7 @@ data:
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
   tokenizer: hf
   tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model
+  response_prefix: "\n"
 mode: sft
 distributed: ddp
 freeze_backbone: true

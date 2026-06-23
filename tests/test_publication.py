@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from gcw.config import load_train_config
 from gcw.data.sft import prepare_openmath
@@ -122,3 +123,12 @@ def test_head_mask_fair_config_matches_bgt_recipe_except_masking():
     assert mask_cp.processor_mode == "head_mask_broadcast"
     assert mask_cp.score == "kv_norm"
     assert mask_cp.writer_head_fraction == 0.2
+
+
+def test_openmath_bottleneck_llm_sft_configs_use_response_separator():
+    dataset = "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl"
+
+    for path in Path("configs/train/bottleneck_llm").glob("*.yaml"):
+        cfg = load_train_config(path)
+        if cfg.mode == "sft" and cfg.data.dataset == dataset:
+            assert cfg.data.response_prefix == "\n", str(path)
