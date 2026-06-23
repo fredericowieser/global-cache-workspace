@@ -66,6 +66,7 @@ def train(config: TrainConfig) -> None:
         "processor_params": processor_params(config.model),
         "world_size": world_size,
     }
+    checkpoint_meta = _checkpoint_metadata(config, run_meta)
     print0(
         "training budget: "
         f"tokens={target_tokens:,} flops/token={flops_per_tok:.6e} "
@@ -148,13 +149,38 @@ def train(config: TrainConfig) -> None:
                 Path(config.output_dir) / "checkpoint",
                 _unwrap(model),
                 config.model,
-                {**run_meta, "step": step_num, "loader": last_state},
+                _checkpoint_state(checkpoint_meta, step_num, last_state),
             )
     if rank == 0:
-        save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, {**run_meta, "step": config.max_steps})
+        save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, _checkpoint_state(checkpoint_meta, config.max_steps))
         if wandb_run is not None:
             wandb_run.finish()
     cleanup_distributed()
+
+
+def _checkpoint_metadata(config: TrainConfig, run_meta: dict[str, Any]) -> dict[str, Any]:
+    state = {
+        **run_meta,
+        "data_kind": config.data.kind,
+        "tokenizer": config.data.tokenizer,
+    }
+    if config.data.dataset is not None:
+        state["dataset"] = config.data.dataset
+    if config.data.data_dir is not None:
+        state["data_dir"] = config.data.data_dir
+    if config.backbone_checkpoint is not None:
+        state["backbone_checkpoint"] = config.backbone_checkpoint
+    if config.data.tokenizer_source is not None:
+        state["source"] = config.data.tokenizer_source
+        state["tokenizer_source"] = config.data.tokenizer_source
+    return state
+
+
+def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
+    state = {**base, "step": step}
+    if loader is not None:
+        state["loader"] = loader
+    return state
 
 
 def _loader(config: TrainConfig, device: torch.device):

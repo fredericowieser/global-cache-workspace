@@ -394,13 +394,19 @@ class _NoopAccelerator:
 
 
 def _tokenizer_for(config, state):
-    if state.get("source") and config.family in {"llama", "qwen3"}:
+    source = state.get("source") or state.get("tokenizer_source")
+    if source and config.family in {"llama", "qwen3"}:
         try:
             from transformers import AutoTokenizer
         except ImportError as exc:
             raise ImportError("Converted HF checkpoints require transformers for eval tokenization.") from exc
-        tok = AutoTokenizer.from_pretrained(state["source"], trust_remote_code=False)
+        tok = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
         return _HFTokenizerAdapter(tok)
+    if config.family in {"llama", "qwen3"}:
+        raise ValueError(
+            "HF-family checkpoints require train_state.json to include 'source' "
+            "or 'tokenizer_source' so eval uses the original tokenizer."
+        )
     if config.family == "smollm" and config.vocab_size == COSMO2_VOCAB_SIZE:
         return get_tokenizer("cosmo2")
     return IntTokenizer(vocab_size=config.vocab_size, eot_id=0)

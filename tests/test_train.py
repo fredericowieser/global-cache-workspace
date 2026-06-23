@@ -6,7 +6,7 @@ from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfi
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.models import build_model
-from gcw.train import train
+from gcw.train import _checkpoint_metadata, train
 
 
 class FakeRun:
@@ -154,3 +154,22 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
 
     trained, _, _ = load_checkpoint(tmp_path / "run" / "checkpoint")
     assert torch.allclose(trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123))
+
+
+def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.mode = "sft"
+    cfg.data = DataConfig(
+        kind="sft",
+        dataset="/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl",
+        tokenizer="hf",
+        tokenizer_source="/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model",
+    )
+    cfg.backbone_checkpoint = "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf"
+
+    state = _checkpoint_metadata(cfg, {"step": 0, "world_size": 1})
+
+    assert state["source"] == cfg.data.tokenizer_source
+    assert state["tokenizer_source"] == cfg.data.tokenizer_source
+    assert state["tokenizer"] == "hf"
+    assert state["backbone_checkpoint"] == cfg.backbone_checkpoint

@@ -42,6 +42,7 @@ def test_prepare_openmath_normalizes_jsonl(tmp_path):
 def test_bottleneck_llm_training_configs_load_with_expected_modes():
     frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml")
     head_mask = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_head_mask_from_sft_frozen.yaml")
+    head_mask_fair = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_head_mask_fair_from_sft_frozen.yaml")
     unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_unfrozen.yaml")
     icarus_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml")
     icarus_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_unfrozen.yaml")
@@ -57,6 +58,11 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert head_mask.model.cache_processor.update_stream == "kv"
     assert head_mask.model.cache_processor.writer_head_fraction == 0.2
     assert head_mask.data.dataset == "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl"
+    assert head_mask_fair.model.tie_embeddings == frozen.model.tie_embeddings
+    assert head_mask_fair.model.cache_processor.processor_mode == "head_mask_broadcast"
+    assert head_mask_fair.model.cache_processor.score == "kv_norm"
+    assert head_mask_fair.model.cache_processor.writer_head_fraction == 0.2
+    assert head_mask_fair.model.cache_processor.out_proj_init == frozen.model.cache_processor.out_proj_init
     assert not unfrozen.freeze_backbone
     assert unfrozen.model.variant == "bgt"
     assert icarus_frozen.freeze_backbone
@@ -67,3 +73,45 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert icarus_unfrozen.model.variant == "icarus"
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None
+
+
+def test_head_mask_fair_config_matches_bgt_recipe_except_masking():
+    baseline = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml")
+    head_mask = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_head_mask_fair_from_sft_frozen.yaml")
+
+    assert head_mask.model.variant == baseline.model.variant == "bgt"
+    assert head_mask.model.tie_embeddings == baseline.model.tie_embeddings
+    assert head_mask.data == baseline.data
+    assert head_mask.mode == baseline.mode
+    assert head_mask.distributed == baseline.distributed
+    assert head_mask.freeze_backbone == baseline.freeze_backbone
+    assert head_mask.backbone_checkpoint == baseline.backbone_checkpoint
+    assert head_mask.batch_size == baseline.batch_size
+    assert head_mask.sequence_len == baseline.sequence_len
+    assert head_mask.max_steps == baseline.max_steps
+    assert head_mask.total_batch_size == baseline.total_batch_size
+    assert head_mask.learning_rate == baseline.learning_rate
+    assert head_mask.warmup_steps == baseline.warmup_steps
+    assert head_mask.weight_decay == baseline.weight_decay
+    assert head_mask.grad_clip == baseline.grad_clip
+    assert head_mask.bf16 == baseline.bf16
+    assert head_mask.seed == baseline.seed
+
+    base_cp = baseline.model.cache_processor
+    mask_cp = head_mask.model.cache_processor
+    assert base_cp is not None
+    assert mask_cp is not None
+    assert mask_cp.process_every == base_cp.process_every
+    assert mask_cp.topk == base_cp.topk
+    assert mask_cp.hidden_size == base_cp.hidden_size
+    assert mask_cp.intermediate_size == base_cp.intermediate_size
+    assert mask_cp.num_layers == base_cp.num_layers
+    assert mask_cp.num_heads == base_cp.num_heads
+    assert mask_cp.num_kv_heads == base_cp.num_kv_heads
+    assert mask_cp.gate_init == base_cp.gate_init
+    assert mask_cp.update_stream == base_cp.update_stream == "kv"
+    assert mask_cp.out_proj_init == base_cp.out_proj_init == "normal"
+    assert mask_cp.gate_mode == base_cp.gate_mode == "sigmoid"
+    assert mask_cp.processor_mode == "head_mask_broadcast"
+    assert mask_cp.score == "kv_norm"
+    assert mask_cp.writer_head_fraction == 0.2
