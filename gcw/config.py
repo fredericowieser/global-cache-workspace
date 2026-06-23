@@ -13,7 +13,7 @@ RotaryStyle = Literal["llama", "ppt"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
-CacheProcessorMode = Literal["standard", "workspace_broadcast"]
+CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broadcast"]
 
 
 @dataclass
@@ -52,8 +52,8 @@ class CacheProcessorConfig:
             raise ValueError("cache_processor.out_proj_init must be 'normal' or 'zero'")
         if self.gate_mode not in {"sigmoid", "direct"}:
             raise ValueError("cache_processor.gate_mode must be 'sigmoid' or 'direct'")
-        if self.processor_mode not in {"standard", "workspace_broadcast"}:
-            raise ValueError("cache_processor.processor_mode must be 'standard' or 'workspace_broadcast'")
+        if self.processor_mode not in {"standard", "workspace_broadcast", "head_mask_broadcast"}:
+            raise ValueError("cache_processor.processor_mode must be 'standard', 'workspace_broadcast', or 'head_mask_broadcast'")
         if not 0.0 < self.writer_head_fraction <= 1.0:
             raise ValueError("cache_processor.writer_head_fraction must be in (0, 1]")
         if self.salience_temperature <= 0.0:

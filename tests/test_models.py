@@ -567,6 +567,69 @@ def test_workspace_broadcast_is_bgt_only():
         build_model(tiny_config("bt", **_workspace_overrides()))
 
 
+def test_head_mask_broadcast_zero_out_starts_as_identity():
+    model = build_model(tiny_config("bgt", **_head_mask_overrides(out_proj_init="zero")))
+    cache = _random_cache(model.config)
+    actual = _clone_cache(cache)
+
+    model.cache_processor(actual, select_all=True)
+
+    _assert_cache_close(actual, cache)
+    assert "cache_processor.salience_logits" in model.state_dict()
+
+
+def test_head_mask_broadcast_processor_matches_reference_loop():
+    torch.manual_seed(14)
+    model = build_model(tiny_config("bgt", **_head_mask_overrides(out_proj_init="normal")))
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    actual = _clone_cache(cache)
+    indices = _reference_workspace_indices(model.cache_processor, cache)
+
+    _reference_head_mask_processor(model.cache_processor, expected)
+    model.cache_processor(actual)
+
+    _assert_cache_close(actual, expected)
+    _assert_unselected_unchanged(cache, actual, indices)
+
+
+def test_head_mask_broadcast_matches_windowed_cache_path():
+    torch.manual_seed(15)
+    model = build_model(tiny_config("bgt", **_head_mask_overrides(out_proj_init="normal")))
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    actual = WindowedCache.from_cache_state(_clone_cache(cache))
+
+    model.cache_processor(expected)
+    model.cache_processor(actual)
+
+    actual_state = actual.to_cache_state()
+    _assert_cache_close(actual_state, expected)
+
+
+def test_head_mask_broadcast_salience_logits_receive_gradients():
+    torch.manual_seed(16)
+    model = build_model(tiny_config("bgt", **_head_mask_overrides(out_proj_init="normal")))
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+
+    grad = model.cache_processor.salience_logits.grad
+    assert grad is not None
+    assert torch.isfinite(grad).all()
+
+
+def test_head_mask_broadcast_rejects_invalid_variants_and_streams():
+    with pytest.raises(ValueError, match="BGT-only"):
+        build_model(tiny_config("bt", **_head_mask_overrides()))
+    with pytest.raises(ValueError, match="processor_mode"):
+        build_model(tiny_config("icarus", **_head_mask_overrides()))
+    with pytest.raises(ValueError, match="update_stream='kv'"):
+        build_model(tiny_config("bgt", **_head_mask_overrides(update_stream="v")))
+    with pytest.raises(ValueError, match="score='kv_norm'"):
+        build_model(tiny_config("bgt", **_head_mask_overrides(score="attn_l2")))
+
+
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_cuda_bottleneck_forward_backward_smoke():
@@ -607,6 +670,7 @@ def test_cuda_experimental_cache_processor_smoke():
             },
         ),
         ("bgt", _workspace_overrides(out_proj_init="zero")),
+        ("bgt", _head_mask_overrides(out_proj_init="zero")),
     ]
     for variant, overrides in cases:
         torch.manual_seed(6)
@@ -642,6 +706,17 @@ def _workspace_overrides(**overrides):
         "update_stream": "v",
         "gate_mode": "direct",
         "gate_init": 1.0,
+        "writer_head_fraction": 0.5,
+    }
+    base.update(overrides)
+    return base
+
+
+def _head_mask_overrides(**overrides):
+    base = {
+        "processor_mode": "head_mask_broadcast",
+        "score": "kv_norm",
+        "update_stream": "kv",
         "writer_head_fraction": 0.5,
     }
     base.update(overrides)
@@ -711,6 +786,28 @@ def _reference_workspace_processor(processor, cache: CacheState, *, select_all: 
     broadcast = _split_global_values(delta, processor.num_layers, processor.num_kv_heads, processor.head_dim)
     for layer_idx in range(processor.num_layers):
         cache.values[layer_idx] = _scatter_values(cache.values[layer_idx], indices, selected_values[layer_idx] + broadcast[layer_idx])
+    return cache
+
+
+def _reference_head_mask_processor(processor, cache: CacheState, *, select_all: bool = False) -> CacheState:
+    indices = cache.all_indices() if select_all else _reference_workspace_indices(processor, cache)
+    keys = torch.stack(cache.keys, dim=0)
+    values = torch.stack(cache.values, dim=0)
+    scores = _reference_kv_scores(processor, cache)
+    value_index = indices[None, :, None, :, None].expand(keys.shape[0], -1, keys.shape[2], -1, keys.shape[4])
+    score_index = indices[None, :, None, :].expand(scores.shape[0], -1, scores.shape[2], -1)
+    selected_keys = torch.gather(keys, 3, value_index)
+    selected_values = torch.gather(values, 3, value_index)
+    selected_scores = torch.gather(scores, 3, score_index)
+    gate = _reference_writer_gate(processor, selected_scores) * _reference_token_gate(processor, selected_scores)
+    parts = [
+        _merge_kv(selected_keys[layer_idx] * gate[layer_idx].to(keys.dtype), selected_values[layer_idx] * gate[layer_idx].to(values.dtype))
+        for layer_idx in range(processor.num_layers)
+    ]
+    delta = processor.block.scaled_update(torch.cat(parts, dim=-1), indices)
+    for layer_idx, part in enumerate(torch.split(delta, [p.shape[-1] for p in parts], dim=-1)):
+        key_delta, value_delta = _split_kv(part, selected_keys.shape[2], selected_keys.shape[4])
+        cache.scatter_layer(layer_idx, indices, selected_keys[layer_idx] + key_delta, selected_values[layer_idx] + value_delta)
     return cache
 
 

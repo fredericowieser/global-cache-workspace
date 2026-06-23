@@ -22,6 +22,7 @@ from gcw.models.cache_processor_ops import (
     split_global_values,
     split_layer_kv,
     split_layer_values,
+    workspace_writer_kv,
     workspace_writer_values,
 )
 from gcw.models.transformer import RMSNorm, apply_rotary, flash_sdpa
@@ -134,7 +135,7 @@ class PerLayerCacheProcessor(nn.Module):
             raise ValueError("BT requires cache_processor config")
         self.config = model_config.cache_processor
         if self.config.processor_mode != "standard":
-            raise ValueError("cache_processor.processor_mode='workspace_broadcast' is currently BGT-only")
+            raise ValueError(f"cache_processor.processor_mode='{self.config.processor_mode}' is currently BGT-only")
         if self.config.score != "attn_l2":
             raise ValueError("cache_processor.score='kv_norm' is currently BGT-only")
         layer_dim = self.config.stream_factor * model_config.num_kv_heads * int(model_config.head_dim)
@@ -163,6 +164,10 @@ class GlobalCacheProcessor(nn.Module):
             raise ValueError("workspace_broadcast requires cache_processor.update_stream='v'")
         if self.config.processor_mode == "workspace_broadcast" and self.config.score != "kv_norm":
             raise ValueError("workspace_broadcast requires cache_processor.score='kv_norm'")
+        if self.config.processor_mode == "head_mask_broadcast" and self.config.update_stream != "kv":
+            raise ValueError("head_mask_broadcast requires cache_processor.update_stream='kv'")
+        if self.config.processor_mode == "head_mask_broadcast" and self.config.score != "kv_norm":
+            raise ValueError("head_mask_broadcast requires cache_processor.score='kv_norm'")
         per_layer = self.config.stream_factor * model_config.num_kv_heads * int(model_config.head_dim)
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
@@ -176,6 +181,8 @@ class GlobalCacheProcessor(nn.Module):
         indices = self._select_indices(cache, select_all)
         if self.config.processor_mode == "workspace_broadcast":
             return self._forward_workspace_broadcast(cache, indices)
+        if self.config.processor_mode == "head_mask_broadcast":
+            return self._forward_head_mask_broadcast(cache, indices)
         if self.config.update_stream == "v":
             values = gather_cache_values(cache, indices)
             updated = self.block(merge_global_values(values), indices)
@@ -204,6 +211,18 @@ class GlobalCacheProcessor(nn.Module):
         delta = self.block.scaled_update(merge_global_values(writer_values), indices)
         broadcast = split_global_values(delta, self.num_layers, self.num_kv_heads, self.head_dim)
         return scatter_cache_values(cache, indices, original_values + broadcast)
+
+    def _forward_head_mask_broadcast(self, cache: CacheLike, indices: torch.Tensor) -> CacheLike:
+        writer_keys, writer_values, original_keys, original_values = workspace_writer_kv(
+            cache,
+            indices,
+            self.salience_logits,
+            self.config.writer_head_fraction,
+            self.config.salience_temperature,
+        )
+        delta = self.block.scaled_update(merge_global_kv(writer_keys, writer_values), indices)
+        key_delta, value_delta = split_global_kv(delta, self.num_layers, self.num_kv_heads, self.head_dim)
+        return scatter_cache_layers(cache, indices, original_keys + key_delta, original_values + value_delta)
 
 
 def _merge_kv(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:

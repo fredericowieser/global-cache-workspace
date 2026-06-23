@@ -41,6 +41,7 @@ def test_prepare_openmath_normalizes_jsonl(tmp_path):
 
 def test_bottleneck_llm_training_configs_load_with_expected_modes():
     frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml")
+    head_mask = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_head_mask_from_sft_frozen.yaml")
     unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_unfrozen.yaml")
     icarus_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml")
     icarus_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_unfrozen.yaml")
@@ -49,6 +50,13 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert frozen.freeze_backbone
     assert frozen.model.variant == "bgt"
     assert frozen.backbone_checkpoint.startswith("/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/")
+    assert head_mask.freeze_backbone
+    assert head_mask.model.variant == "bgt"
+    assert head_mask.model.cache_processor.processor_mode == "head_mask_broadcast"
+    assert head_mask.model.cache_processor.score == "kv_norm"
+    assert head_mask.model.cache_processor.update_stream == "kv"
+    assert head_mask.model.cache_processor.writer_head_fraction == 0.2
+    assert head_mask.data.dataset == "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl"
     assert not unfrozen.freeze_backbone
     assert unfrozen.model.variant == "bgt"
     assert icarus_frozen.freeze_backbone
