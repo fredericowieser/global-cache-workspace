@@ -29,6 +29,7 @@ model:
     gate_init: -5.0
     attention_dropout: 0.0
     per_cache_head_projections: false
+  legacy_bottleneck_generate: true
 data:
   kind: sft
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
@@ -68,8 +69,8 @@ wandb:
     - frozen-backbone
 metadata:
   backbone_non_embedding_params: 973146112
-  processor_params: 46348033
-  total_non_embedding_params: 1019494145
-  processor_fraction: 0.04762700320997634
+  processor_params: 14998337
+  total_non_embedding_params: 988144449
+  processor_fraction: 0.015412214892556649
   target_processor_fraction: 0.05
   target_processor_params: 48657306

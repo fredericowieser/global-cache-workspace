@@ -82,7 +82,7 @@ Bottleneck LLM reproduction configs live under `configs/train/bottleneck_llm/`.
 
 ```bash
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
+sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml scripts/slurm/train.sbatch
 ```
 
 For the standard Llama 3.2 1B frozen-backbone Icarus run on the LRC cluster:
@@ -94,13 +94,13 @@ bash scripts/martin.sh
 Run the same configs directly inside an existing Slurm allocation:
 
 ```bash
-uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml
+uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml
 ```
 
 Icarus OpenMath configs are available for all shared SFT backbones:
 
 ```bash
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
+sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_3b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama31_8b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch

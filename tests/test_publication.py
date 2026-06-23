@@ -3,6 +3,7 @@ from pathlib import Path
 
 from gcw.config import load_train_config
 from gcw.data.sft import prepare_openmath
+from gcw.params import processor_params, total_non_embedding_params
 from scripts import publish_bottleneck_llm_artifacts as publish
 
 
@@ -56,6 +57,7 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     head_mask_fair = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_head_mask_fair_from_sft_frozen.yaml")
     unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_unfrozen.yaml")
     icarus_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml")
+    icarus_shared = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml")
     icarus_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_unfrozen.yaml")
     tf_sft = load_train_config("configs/train/bottleneck_llm/llama32_1b_tf_sft.yaml")
 
@@ -84,10 +86,27 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert icarus_frozen.model.variant == "icarus"
     assert icarus_frozen.data.dataset == "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl"
     assert icarus_frozen.backbone_checkpoint.startswith("/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/")
+    assert icarus_shared.freeze_backbone
+    assert icarus_shared.model.variant == "icarus"
+    assert icarus_shared.model.cache_processor.per_cache_head_projections is False
+    assert icarus_shared.model.legacy_bottleneck_generate
+    assert icarus_shared.data.sft_skip_rows == 128000
+    assert icarus_shared.data.sft_take_rows == 128000
+    assert icarus_shared.data.response_prefix == "\n"
+    assert icarus_shared.adam_beta2 == 0.999
+    assert icarus_shared.metadata["processor_params"] == processor_params(icarus_shared.model)
+    assert icarus_shared.metadata["total_non_embedding_params"] == total_non_embedding_params(icarus_shared.model)
     assert not icarus_unfrozen.freeze_backbone
     assert icarus_unfrozen.model.variant == "icarus"
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None
+
+
+def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
+    script = Path("scripts/martin.sh").read_text(encoding="utf-8")
+
+    assert 'llama32_1b_icarus_from_sft_frozen_shared.yaml' in script
+    assert 'GPUS="${GPUS:-2}"' in script
 
 
 def test_openmath_sft_configs_use_legacy_formatting_and_slices():
