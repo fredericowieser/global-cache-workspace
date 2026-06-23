@@ -5,8 +5,10 @@ import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
+from gcw.models import icarus as icarus_module
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
+from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
 from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
 from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
 from gcw.models.transformer import _matches_stop_sequence, apply_rotary
@@ -63,6 +65,37 @@ def test_tiny_icarus_uses_icarus_processor():
     loss.backward()
     assert torch.isfinite(loss)
     assert any(p.grad is not None for p in model.cache_processor.parameters())
+
+
+def test_icarus_gradient_checkpointing_is_config_gated(monkeypatch):
+    calls = []
+
+    def fake_checkpoint(fn, *args, **kwargs):
+        calls.append(kwargs)
+        return fn(*args)
+
+    def build_processor(gradient_checkpointing: bool) -> IcarusCacheProcessor:
+        config = CacheProcessorConfig(
+            topk_heads=0,
+            hidden_size=8,
+            intermediate_size=16,
+            num_layers=2,
+            num_heads=1,
+            num_kv_heads=1,
+            gradient_checkpointing=gradient_checkpointing,
+        )
+        return IcarusCacheProcessor(16, 2, config).train()
+
+    monkeypatch.setattr(icarus_module, "checkpoint", fake_checkpoint)
+    x = torch.randn(1, 2, 3, 16, requires_grad=True)
+    positions = torch.arange(3).unsqueeze(0)
+    selected_heads = torch.empty(1, 0, dtype=torch.long)
+
+    build_processor(False).compute_update(x, positions, selected_heads).sum().backward()
+    assert calls == []
+
+    build_processor(True).compute_update(x, positions, selected_heads).sum().backward()
+    assert calls == [{"use_reentrant": False}, {"use_reentrant": False}]
 
 
 def test_tiny_models_bf16_autocast_forward_backward():
@@ -408,6 +441,7 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     cp = CacheProcessorConfig()
     assert cp.topk_heads == 32
     assert cp.per_cache_head_projections is False
+    assert cp.gradient_checkpointing is False
     assert cp.update_stream == "kv"
     assert cp.out_proj_init == "normal"
     assert cp.gate_mode == "sigmoid"

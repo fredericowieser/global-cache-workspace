@@ -29,6 +29,7 @@ model:
     gate_init: -5.0
     attention_dropout: 0.0
     per_cache_head_projections: false
+    gradient_checkpointing: true
   legacy_bottleneck_generate: true
 data:
   kind: sft

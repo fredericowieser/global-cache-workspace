@@ -32,6 +32,7 @@ class CacheProcessorConfig:
     gate_init: float = -5.0
     attention_dropout: float = 0.0
     per_cache_head_projections: bool = False
+    gradient_checkpointing: bool = False
     update_stream: CacheUpdateStream = "kv"
     out_proj_init: CacheOutProjInit = "normal"
     gate_mode: CacheGateMode = "sigmoid"

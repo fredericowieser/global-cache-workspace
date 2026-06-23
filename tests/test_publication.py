@@ -89,6 +89,7 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert icarus_shared.freeze_backbone
     assert icarus_shared.model.variant == "icarus"
     assert icarus_shared.model.cache_processor.per_cache_head_projections is False
+    assert icarus_shared.model.cache_processor.gradient_checkpointing
     assert icarus_shared.model.legacy_bottleneck_generate
     assert icarus_shared.data.sft_skip_rows == 128000
     assert icarus_shared.data.sft_take_rows == 128000

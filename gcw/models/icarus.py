@@ -127,7 +127,7 @@ class CacheProcessor(nn.Module):
     def compute_update(self, x: torch.Tensor, positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
         h = self.in_proj(self.in_norm(x))
         for layer in self.layers:
-            if self.training and torch.is_grad_enabled():
+            if self.config.gradient_checkpointing and self.training and torch.is_grad_enabled():
                 h = checkpoint(layer, h, positions, selected_heads, use_reentrant=False)
             else:
                 h = layer(h, positions, selected_heads)

@@ -29,6 +29,7 @@ model:
     gate_init: -5.0
     attention_dropout: 0.0
     per_cache_head_projections: false
+    gradient_checkpointing: true
 data:
   kind: fineweb
   data_dir: /mnt/jfs-01/shared/gcw/data/fineweb_edu_dedup_cosmo2
