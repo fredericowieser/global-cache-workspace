@@ -1,8 +1,19 @@
 import json
+from pathlib import Path
 
 from gcw.config import load_train_config
 from gcw.data.sft import prepare_openmath
 from scripts import publish_bottleneck_llm_artifacts as publish
+
+
+def _openmath_sft_config_paths() -> list[Path]:
+    paths: list[Path] = []
+    for root in [Path("configs/train/bottleneck_llm"), Path("configs/train/bottleneck_compat")]:
+        for path in sorted(root.glob("*.yaml")):
+            text = path.read_text(encoding="utf-8")
+            if "kind: sft" in text and "OpenMathInstruct-2/train.jsonl" in text:
+                paths.append(path)
+    return paths
 
 
 def test_publication_spec_has_expected_artifact_counts():
@@ -77,6 +88,21 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert icarus_unfrozen.model.variant == "icarus"
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None
+
+
+def test_openmath_sft_configs_use_legacy_formatting_and_slices():
+    paths = _openmath_sft_config_paths()
+
+    assert len(paths) == 40
+    for path in paths:
+        config = load_train_config(path)
+        assert config.data.response_prefix == "\n", path
+        assert config.data.sft_take_rows == 128000, path
+        assert config.adam_beta2 == 0.999, path
+        if config.model.variant == "tf":
+            assert config.data.sft_skip_rows == 0, path
+        else:
+            assert config.data.sft_skip_rows == 128000, path
 
 
 def test_head_mask_fair_config_matches_bgt_recipe_except_masking():
