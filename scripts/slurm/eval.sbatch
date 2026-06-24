@@ -39,11 +39,14 @@ if [[ -n "$OUT" ]]; then
   gcw_args+=(--out "$OUT")
 fi
 
+UV_RUN=(uv run --locked --extra gpu --extra eval)
+"${UV_RUN[@]}" python scripts/check_cuda_env.py
+
 NGPU="${SLURM_GPUS_ON_NODE:-1}"
 if [[ "$SUITE" != "fineweb" && "$NGPU" -gt 1 ]]; then
-  uv run --extra gpu --extra eval torchrun --standalone --nproc-per-node="$NGPU" -m gcw.cli "${gcw_args[@]}"
+  "${UV_RUN[@]}" torchrun --standalone --nproc-per-node="$NGPU" -m gcw.cli "${gcw_args[@]}"
 else
-  uv run --extra gpu --extra eval gcw "${gcw_args[@]}"
+  "${UV_RUN[@]}" gcw "${gcw_args[@]}"
 fi
 if [[ -n "$OUT" ]]; then
   echo "Wrote $OUT"
