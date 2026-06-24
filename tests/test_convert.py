@@ -97,7 +97,7 @@ def test_tiny_llama_logits_match_transformers():
     assert torch.allclose(native_logits, hf_logits, atol=1e-5, rtol=1e-5)
 
 
-def test_hf_config_can_build_icarus_variant():
+def test_hf_config_can_build_cache_processor_variants():
     hf_cfg = LlamaConfig(
         vocab_size=32,
         hidden_size=16,
@@ -109,10 +109,11 @@ def test_hf_config_can_build_icarus_variant():
         tie_word_embeddings=False,
         rope_theta=10000.0,
     )
-    cfg = config_from_hf(hf_cfg, family="llama", variant="icarus")
-    cfg.cache_processor = CacheProcessorConfig()
-    model = build_model(cfg)
-    assert model.config.variant == "icarus"
+    for variant in ("icarus", "longshot"):
+        cfg = config_from_hf(hf_cfg, family="llama", variant=variant)
+        cfg.cache_processor = CacheProcessorConfig()
+        model = build_model(cfg)
+        assert model.config.variant == variant
 
 
 def test_tiny_qwen3_logits_match_transformers():

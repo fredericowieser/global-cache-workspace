@@ -44,8 +44,13 @@ def main() -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark GCW TF/BT/BGT/Icarus forward+backward throughput.")
-    parser.add_argument("--variants", nargs="+", default=["tf", "bt", "bgt", "icarus"], choices=["tf", "bt", "bgt", "icarus"])
+    parser = argparse.ArgumentParser(description="Benchmark GCW TF/BT/BGT/Icarus/Longshot forward+backward throughput.")
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        default=["tf", "bt", "bgt", "icarus", "longshot"],
+        choices=["tf", "bt", "bgt", "icarus", "longshot"],
+    )
     parser.add_argument("--train-config", default=None, help="Use one train config as a model template for --variants.")
     parser.add_argument("--train-configs", nargs="*", default=None, help="Benchmark these exact train configs.")
     parser.add_argument("--batch-size", type=int, default=None)
@@ -111,7 +116,7 @@ def model_config(args: argparse.Namespace, variant: str) -> ModelConfig:
             cp = CacheProcessorConfig()
         return replace(base, variant=variant, cache_processor=cp, sequence_len=seq_len)
     cp = None
-    if variant in {"bt", "bgt", "icarus"}:
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
         cp = CacheProcessorConfig(process_every=16, topk=8, hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)
     return ModelConfig(
         variant=variant,

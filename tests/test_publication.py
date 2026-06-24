@@ -59,6 +59,10 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     icarus_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml")
     icarus_shared = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml")
     icarus_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_unfrozen.yaml")
+    longshot_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_frozen.yaml")
+    longshot_shared = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_frozen_shared.yaml")
+    longshot_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_unfrozen.yaml")
+    longshot_linear = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_linear_from_sft_frozen.yaml")
     tf_sft = load_train_config("configs/train/bottleneck_llm/llama32_1b_tf_sft.yaml")
 
     assert frozen.freeze_backbone
@@ -104,6 +108,38 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert icarus_shared.metadata["total_non_embedding_params"] == total_non_embedding_params(icarus_shared.model)
     assert not icarus_unfrozen.freeze_backbone
     assert icarus_unfrozen.model.variant == "icarus"
+    assert longshot_frozen.freeze_backbone
+    assert longshot_frozen.model.variant == "longshot"
+    assert longshot_frozen.model.cache_processor.encoder_method == "query_attention"
+    assert longshot_frozen.model.cache_processor.per_cache_head_projections is True
+    assert longshot_frozen.data.dataset == icarus_frozen.data.dataset
+    assert longshot_frozen.backbone_checkpoint == icarus_frozen.backbone_checkpoint
+    assert longshot_shared.freeze_backbone
+    assert longshot_shared.model.variant == "longshot"
+    assert longshot_shared.model.cache_processor.encoder_method == "query_attention"
+    assert longshot_shared.model.cache_processor.per_cache_head_projections is False
+    assert longshot_shared.model.cache_processor.gradient_checkpointing
+    assert longshot_shared.model.legacy_bottleneck_generate
+    assert longshot_shared.output_dir.endswith("_shared")
+    assert longshot_shared.wandb.name.endswith("-shared")
+    assert "shared-projection" in longshot_shared.wandb.tags
+    assert longshot_shared.data.sft_skip_rows == 128000
+    assert longshot_shared.data.sft_take_rows == 128000
+    assert longshot_shared.data.response_prefix == "\n"
+    assert longshot_shared.adam_beta2 == 0.999
+    assert longshot_shared.metadata["processor_params"] == processor_params(longshot_shared.model)
+    assert longshot_shared.metadata["total_non_embedding_params"] == total_non_embedding_params(longshot_shared.model)
+    assert not longshot_unfrozen.freeze_backbone
+    assert longshot_unfrozen.model.variant == "longshot"
+    assert longshot_linear.freeze_backbone
+    assert longshot_linear.model.variant == "longshot"
+    assert longshot_linear.model.cache_processor.encoder_method == "linear"
+    assert longshot_linear.model.cache_processor.per_cache_head_projections is False
+    assert "linear-encoder" in longshot_linear.wandb.tags
+    assert "shared-projection" in longshot_linear.wandb.tags
+    assert longshot_linear.data.dataset == icarus_frozen.data.dataset
+    assert longshot_linear.metadata["processor_params"] == processor_params(longshot_linear.model)
+    assert longshot_linear.metadata["total_non_embedding_params"] == total_non_embedding_params(longshot_linear.model)
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None
 

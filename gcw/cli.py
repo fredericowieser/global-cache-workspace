@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     hf = convert_sub.add_parser("hf")
     hf.add_argument("--family", choices=["llama", "qwen3"], required=True)
     hf.add_argument("--model", required=True)
-    hf.add_argument("--variant", choices=["tf", "bt", "bgt", "icarus"], default="tf")
+    hf.add_argument("--variant", choices=["tf", "bt", "bgt", "icarus", "longshot"], default="tf")
     hf.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
     hf.add_argument("--out", required=True)
     ppt = convert_sub.add_parser("ppt")

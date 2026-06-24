@@ -7,13 +7,14 @@ from typing import Any, Literal
 import yaml
 
 
-Variant = Literal["tf", "bt", "bgt", "icarus"]
+Variant = Literal["tf", "bt", "bgt", "icarus", "longshot"]
 Family = Literal["smollm", "llama", "qwen3"]
 RotaryStyle = Literal["llama", "ppt"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
 CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broadcast"]
+CacheEncoderMethod = Literal["linear", "query_attention"]
 
 
 @dataclass
@@ -41,6 +42,8 @@ class CacheProcessorConfig:
     salience_temperature: float = 1.0
     kv_score_init_k: float = 0.25
     kv_score_init_v: float = 0.75
+    encoder_method: CacheEncoderMethod = "linear"
+    encoder_seq_len: int | None = None
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
@@ -61,6 +64,10 @@ class CacheProcessorConfig:
             raise ValueError("cache_processor.salience_temperature must be positive")
         if self.kv_score_init_k <= 0.0 or self.kv_score_init_v <= 0.0:
             raise ValueError("cache_processor.kv_score_init_k and kv_score_init_v must be positive")
+        if self.encoder_method not in {"linear", "query_attention"}:
+            raise ValueError("cache_processor.encoder_method must be 'linear' or 'query_attention'")
+        if self.encoder_seq_len is not None and self.encoder_seq_len <= 0:
+            raise ValueError("cache_processor.encoder_seq_len must be positive when set")
 
     @property
     def stream_factor(self) -> int:
@@ -100,7 +107,7 @@ class ModelConfig:
             raise ValueError("head_dim must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads")
-        if self.variant in {"bt", "bgt", "icarus"} and self.cache_processor is None:
+        if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
 
 

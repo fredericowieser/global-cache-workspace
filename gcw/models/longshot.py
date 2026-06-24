@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import warnings
-from typing import Literal
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheEncoderMethod, CacheProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.transformer import RMSNorm, flash_sdpa
@@ -17,7 +16,7 @@ from gcw.models.windowed_cache import WindowedCache
 CacheLike = CacheState | StaticCacheState | WindowedCache
 
 
-EncoderMethod = Literal["linear", "query_attention"]
+EncoderMethod = CacheEncoderMethod
 
 
 class ProcessorAttention(nn.Module):
@@ -101,7 +100,7 @@ class CacheProcessor(nn.Module):
         self.config = config
         self.input_dim = input_dim
         self.encoder_method = encoder_method
-        self.encoder_seq_len = encoder_seq_len or config.process_every + max(config.topk, 0)
+        self.encoder_seq_len = encoder_seq_len or config.encoder_seq_len or config.process_every + max(config.topk, 0)
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
         if encoder_method == "linear":
             in_features = self.encoder_seq_len * input_dim
@@ -182,7 +181,7 @@ class GlobalCacheProcessor(nn.Module):
         self,
         model_config: ModelConfig,
         *,
-        encoder_method: EncoderMethod = "linear",
+        encoder_method: EncoderMethod | None = None,
         encoder_seq_len: int | None = None,
     ):
         super().__init__()
@@ -195,6 +194,7 @@ class GlobalCacheProcessor(nn.Module):
             raise ValueError("Longshot supports only cache_processor.update_stream='kv'")
         if self.config.score != "attn_l2":
             raise ValueError("Longshot supports only cache_processor.score='attn_l2'")
+        encoder_method = encoder_method or self.config.encoder_method
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
         self.head_dim = int(model_config.head_dim)
@@ -204,7 +204,7 @@ class GlobalCacheProcessor(nn.Module):
             self.num_cache_heads,
             self.config,
             encoder_method=encoder_method,
-            encoder_seq_len=encoder_seq_len,
+            encoder_seq_len=encoder_seq_len or self.config.encoder_seq_len,
         )
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
