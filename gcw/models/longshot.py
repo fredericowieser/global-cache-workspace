@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Literal
 
 import torch
@@ -106,7 +107,7 @@ class CacheProcessor(nn.Module):
             in_features = self.encoder_seq_len * input_dim
         elif encoder_method == "query_attention":
             in_features = input_dim
-            self.query = nn.Parameter(torch.empty(input_dim))
+            self.query = nn.Parameter(torch.empty(num_cache_heads, input_dim))
         else:
             raise ValueError(f"unknown encoder_method: {encoder_method}")
         if config.per_cache_head_projections:
@@ -167,9 +168,10 @@ class CacheProcessor(nn.Module):
 
     def _encode_time(self, x: torch.Tensor) -> torch.Tensor:
         if self.encoder_method == "linear":
+            x = _fit_time_length(x, self.encoder_seq_len)
             return self.in_proj(x.flatten(start_dim=2))
         scale = self.input_dim**-0.5
-        scores = torch.einsum("bcsi,i->bcs", x, self.query.to(x.dtype)) * scale
+        scores = torch.einsum("bcsi,ci->bcs", x, self.query.to(x.dtype)) * scale
         weights = torch.softmax(scores.float(), dim=-1).to(x.dtype)
         context = torch.einsum("bcs,bcsi->bci", weights, x)
         return self.in_proj(context)
@@ -274,6 +276,22 @@ def _split_merged(
     keys = split[:, :, :, :, 0].permute(1, 0, 2, 3, 4).contiguous()
     values = split[:, :, :, :, 1].permute(1, 0, 2, 3, 4).contiguous()
     return keys, values
+
+
+def _fit_time_length(x: torch.Tensor, seq_len: int) -> torch.Tensor:
+    current = x.shape[2]
+    if current == seq_len:
+        return x
+    warnings.warn(
+        f"Longshot linear encoder expected {seq_len} selected positions but got {current}; "
+        "padding/truncating the selected cache history.",
+        stacklevel=2,
+    )
+    if current > seq_len:
+        return x[:, :, -seq_len:, :]
+    out = x.new_zeros(x.shape[0], x.shape[1], seq_len, x.shape[3])
+    out[:, :, :current, :] = x
+    return out
 
 
 def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
