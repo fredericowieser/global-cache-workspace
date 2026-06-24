@@ -86,11 +86,16 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert icarus_frozen.model.variant == "icarus"
     assert icarus_frozen.data.dataset == "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl"
     assert icarus_frozen.backbone_checkpoint.startswith("/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/")
+    assert icarus_frozen.output_dir != icarus_shared.output_dir
+    assert icarus_frozen.wandb.name != icarus_shared.wandb.name
     assert icarus_shared.freeze_backbone
     assert icarus_shared.model.variant == "icarus"
     assert icarus_shared.model.cache_processor.per_cache_head_projections is False
     assert icarus_shared.model.cache_processor.gradient_checkpointing
     assert icarus_shared.model.legacy_bottleneck_generate
+    assert icarus_shared.output_dir.endswith("_shared")
+    assert icarus_shared.wandb.name.endswith("-shared")
+    assert "shared-projection" in icarus_shared.wandb.tags
     assert icarus_shared.data.sft_skip_rows == 128000
     assert icarus_shared.data.sft_take_rows == 128000
     assert icarus_shared.data.response_prefix == "\n"

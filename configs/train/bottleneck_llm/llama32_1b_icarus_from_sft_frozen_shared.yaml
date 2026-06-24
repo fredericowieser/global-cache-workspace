@@ -43,7 +43,7 @@ mode: sft
 distributed: ddp
 freeze_backbone: true
 backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf
-output_dir: runs/bottleneck_llm/llama32_1b_icarus_from_sft_frozen
+output_dir: runs/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared
 batch_size: 16
 sequence_len: 512
 max_steps: 1000
@@ -60,7 +60,7 @@ save_every: 100
 wandb:
   enabled: true
   project: global-cache-workspace
-  name: llama32-1b-icarus-from-sft-frozen
+  name: llama32-1b-icarus-from-sft-frozen-shared
   group: bottleneck-llm-reproduction
   tags:
     - bottleneck-llm
@@ -68,6 +68,7 @@ wandb:
     - llama-3.2-1b
     - openmath
     - frozen-backbone
+    - shared-projection
 metadata:
   backbone_non_embedding_params: 973146112
   processor_params: 14998337
