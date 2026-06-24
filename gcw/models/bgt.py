@@ -17,9 +17,7 @@ class BGT(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = replace(config, variant=self.variant)
-        self.backbone = TF(self.config)
-        if self.config.cache_processor is None:
-            raise ValueError(f"{self.variant.upper()} requires cache_processor config")
+        self.backbone = TF(config)
         self.cache_processor = self.processor_cls(self.config)
 
     def init_weights(self) -> None:
@@ -45,6 +43,30 @@ class BGT(nn.Module):
             process_prefill_windows=not legacy,
             process_after_prefill=legacy,
             relative_generation_cadence=legacy,
+        )
+
+    @torch.no_grad()
+    def generate_fast(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int,
+        eos_token_id: int | None = None,
+        stop_sequences: list[list[int]] | None = None,
+        pad_token_id: int | None = None,
+    ) -> torch.Tensor:
+        cp = self.config.cache_processor
+        legacy = self.config.legacy_bottleneck_generate
+        return self.backbone.generate_fast(
+            input_ids,
+            max_new_tokens,
+            eos_token_id=eos_token_id,
+            processor=self.cache_processor,
+            process_every=cp.process_every,
+            process_prefill_windows=not legacy,
+            process_after_prefill=legacy,
+            relative_generation_cadence=legacy,
+            stop_sequences=stop_sequences,
+            pad_token_id=pad_token_id,
         )
 
     def num_parameters(self, non_embedding: bool = False) -> int:

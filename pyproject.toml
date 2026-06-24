@@ -5,7 +5,6 @@ description = "Minimal CE-only workspace for TF, BT, and BGT cache-processor exp
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.7",
     "numpy>=1.26",
     "pyyaml>=6.0",
     "safetensors>=0.4",
@@ -29,7 +28,7 @@ gcw = "gcw.cli:main"
 cpu = ["torch>=2.7"]
 gpu = ["torch>=2.7"]
 rocm = ["torch>=2.7", "pytorch-triton-rocm"]
-eval = ["lm-eval>=0.4", "transformers>=4.40", "pillow>=10.0"]
+eval = ["lm-eval>=0.4", "transformers>=4.40", "pillow>=10.0", "accelerate>=1.0"]
 convert = ["transformers>=4.40"]
 
 [dependency-groups]
@@ -38,10 +37,27 @@ dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
 [tool.uv]
 default-groups = []
 conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "rocm" }]]
+constraint-dependencies = [
+    "nvidia-cublas<0",
+    "nvidia-cufft<0",
+    "nvidia-cufile<0",
+    "nvidia-curand<0",
+    "nvidia-cuda-cupti<0",
+    "nvidia-cuda-nvrtc<0",
+    "nvidia-cuda-runtime<0",
+    "nvidia-cudnn-cu13<0",
+    "nvidia-cusolver<0",
+    "nvidia-cusparse<0",
+    "nvidia-cusparselt-cu13<0",
+    "nvidia-nccl-cu13<0",
+    "nvidia-nvjitlink<0",
+    "nvidia-nvshmem-cu13<0",
+    "nvidia-nvtx<0",
+]
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", marker = "extra != 'gpu' and extra != 'rocm'" },
     { index = "pytorch-cu128", extra = "gpu" },
     { index = "pytorch-rocm", extra = "rocm" },
 ]
@@ -66,6 +82,7 @@ explicit = true
 testpaths = ["tests"]
 markers = [
     "slow: network- or download-dependent tests",
+    "gpu: requires a CUDA GPU",
 ]
 
 [tool.ruff]

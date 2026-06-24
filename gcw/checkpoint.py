@@ -43,6 +43,34 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
     return model, cfg, train_state
 
 
+def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
+    path = Path(path)
+    weights = load_file(path / "model.safetensors", device="cpu")
+    target = model.backbone if hasattr(model, "backbone") else model
+    target_state = target.state_dict()
+    loadable = {}
+    missing = []
+    for key, expected in target_state.items():
+        source_key = key if key in weights else f"backbone.{key}"
+        if source_key not in weights and key == "lm_head.weight" and "embed_tokens.weight" in weights:
+            source_key = "embed_tokens.weight"
+        if source_key not in weights and key == "lm_head.weight" and "backbone.embed_tokens.weight" in weights:
+            source_key = "backbone.embed_tokens.weight"
+        if source_key not in weights:
+            missing.append(key)
+            continue
+        tensor = weights[source_key]
+        if tensor.shape != expected.shape:
+            raise ValueError(
+                f"shape mismatch for backbone key {key}: target {tuple(expected.shape)} "
+                f"vs checkpoint {tuple(tensor.shape)} from {source_key}"
+            )
+        loadable[key] = tensor.to(device=expected.device, dtype=expected.dtype)
+    if missing:
+        raise KeyError(f"missing backbone checkpoint keys: {missing[:8]}")
+    target.load_state_dict(loadable, strict=True)
+
+
 def _infer_floating_dtype(state: dict[str, torch.Tensor]) -> torch.dtype | None:
     for tensor in state.values():
         if tensor.is_floating_point():

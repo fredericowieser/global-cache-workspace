@@ -23,8 +23,8 @@ model:
     num_heads: 1
     num_kv_heads: 1
     gate_init: -5.0
-    # If true: processor_params=1825, processor_fraction=0.0981604991394148
     per_cache_head_projections: false
+    gradient_checkpointing: true
 data:
   kind: random
 mode: pretrain

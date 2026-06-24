@@ -28,11 +28,11 @@ model:
     rope_theta: 10000.0
     gate_init: -5.0
     attention_dropout: 0.0
-    # If true: processor_params=13995649, processor_fraction=0.04744761307704742
-    per_cache_head_projections: false
+    per_cache_head_projections: true
+    gradient_checkpointing: true
 data:
   kind: fineweb
-  data_dir: /mnt/jfs-00/team-agent/home/f50056118/ppt-cache/fineweb_edu_dedup_cosmo2
+  data_dir: /mnt/jfs-01/shared/gcw/data/fineweb_edu_dedup_cosmo2
   max_length: 2048
 mode: pretrain
 distributed: ddp
@@ -74,12 +74,10 @@ metadata:
   baseline: smollm360m_tf_20b
   baseline_non_embedding_params: 314635200
   backbone_non_embedding_params: 294970560
-  processor_params: 1722817
-  total_non_embedding_params: 296693377
-  delta_from_baseline_non_embedding: -17941823
-  processor_fraction: 0.005840640503242086
+  processor_params: 13995649
+  total_non_embedding_params: 308966209
+  delta_from_baseline_non_embedding: -5668991
+  processor_fraction: 0.04744761307704742
   target_processor_fraction: 0.05
   total_training_tokens: 20000014336
-  training_flops_per_token: 5617336320.0
-  total_training_flops: 1.1234680693013348e+20
   gpus: 1

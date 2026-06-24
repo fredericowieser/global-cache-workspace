@@ -17,14 +17,20 @@ def processor_params(config: ModelConfig) -> int:
 def estimate_processor_params(config: ModelConfig) -> int:
     if config.cache_processor is None:
         return 0
-    per_layer_dim = 2 * config.num_kv_heads * int(config.head_dim)
+    per_layer_dim = config.cache_processor.stream_factor * config.num_kv_heads * int(config.head_dim)
     if config.variant == "bt":
         return config.num_layers * _processor_block_params(per_layer_dim, config.cache_processor)
     if config.variant == "bgt":
-        return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor)
+        return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor) + _salience_params(config)
     if config.variant == "icarus":
         projection_count = config.num_layers * config.num_kv_heads if config.cache_processor.per_cache_head_projections else 1
         return _processor_block_params(2 * int(config.head_dim), config.cache_processor, projection_count=projection_count)
+    return 0
+
+
+def _salience_params(config: ModelConfig) -> int:
+    if config.cache_processor is not None and config.cache_processor.score == "kv_norm":
+        return 2
     return 0
 
 
@@ -49,14 +55,7 @@ def _processor_block_params(input_dim: int, config: CacheProcessorConfig, *, pro
     layer = attn + mlp + 2 * config.hidden_size
     in_proj = projection_count * (input_dim * config.hidden_size + config.hidden_size)
     out_proj = projection_count * (config.hidden_size * input_dim + input_dim)
-    return (
-        input_dim
-        + in_proj
-        + config.num_layers * layer
-        + config.hidden_size
-        + out_proj
-        + 1
-    )
+    return input_dim + in_proj + config.num_layers * layer + config.hidden_size + out_proj + 1
 
 
 def fit_processor_config(
@@ -70,22 +69,20 @@ def fit_processor_config(
     target = round(estimate_non_embedding_params(backbone) * fraction)
     best: tuple[int, ModelConfig] | None = None
     heads_choices = list(range(1, 17))
-    hidden_choices = list(range(32, 1025, 32))
+    hidden_choices = list(range(32, 2049 if variant == "icarus" else 1025, 32))
     for hidden in hidden_choices:
         for heads in heads_choices:
             if hidden % heads:
                 continue
             if hidden // heads not in {32, 64, 128}:
                 continue
-            cp_kwargs = _processor_config_kwargs(hidden, heads, variant, cache_processor_overrides)
-            cp = CacheProcessorConfig(**cp_kwargs)
+            cp = CacheProcessorConfig(**_processor_config_kwargs(hidden, heads, variant, cache_processor_overrides))
             cfg = replace(backbone, variant=variant, cache_processor=cp)
             params = estimate_processor_params(cfg)
             if params <= target and (best is None or params > best[0]):
                 best = (params, cfg)
     if best is None:
-        cp_kwargs = _processor_config_kwargs(32, 1, variant, cache_processor_overrides)
-        cp = CacheProcessorConfig(**cp_kwargs)
+        cp = CacheProcessorConfig(**_processor_config_kwargs(32, 1, variant, cache_processor_overrides))
         cfg = replace(backbone, variant=variant, cache_processor=cp)
         best = (estimate_processor_params(cfg), cfg)
     params, cfg = best

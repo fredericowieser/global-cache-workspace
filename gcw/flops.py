@@ -64,7 +64,7 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
     cp = config.cache_processor
     if config.variant == "tf" or cp is None:
         return 0.0
-    per_layer_dim = 2 * config.num_kv_heads * int(config.head_dim)
+    per_layer_dim = cp.stream_factor * config.num_kv_heads * int(config.head_dim)
     total = 0.0
     for start in range(cp.process_every, seq_len, cp.process_every):
         selected = _selected_count(start, cp.process_every, cp.topk)

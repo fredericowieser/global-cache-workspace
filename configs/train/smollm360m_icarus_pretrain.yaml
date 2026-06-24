@@ -13,25 +13,26 @@ model:
   norm_eps: 1.0e-05
   tie_embeddings: true
   qk_norm: false
+  rotary_style: ppt
   cache_processor:
     process_every: 64
     topk: 32
     topk_heads: 32
     score: attn_l2
-    hidden_size: 320
-    intermediate_size: 1280
+    hidden_size: 960
+    intermediate_size: 3840
     num_layers: 1
-    num_heads: 5
-    num_kv_heads: 5
+    num_heads: 15
+    num_kv_heads: 15
     norm_eps: 1.0e-06
     rope_theta: 10000.0
     gate_init: -5.0
     attention_dropout: 0.0
-    # If true: processor_params=14819329, processor_fraction=0.047100035215385944
     per_cache_head_projections: false
+    gradient_checkpointing: true
 data:
   kind: fineweb
-  data_dir: ~/.cache/gcw/fineweb_edu_dedup_cosmo2
+  data_dir: /mnt/jfs-01/shared/gcw/data/fineweb_edu_dedup_cosmo2
   max_length: 2048
 mode: pretrain
 distributed: ddp
@@ -39,20 +40,36 @@ freeze_backbone: false
 loss: next_token_ce
 checkpoint_format: native_safetensors
 output_dir: runs/smollm360m_icarus_pretrain
-batch_size: 32
+batch_size: 8
 sequence_len: 2048
-max_steps: 38147
+max_steps: 10000
+total_batch_size: 524288
 learning_rate: 0.003
 weight_decay: 0.1
-warmup_steps: 1907
+warmup_steps: 500
+warmdown_ratio: 0.2
+final_lr_frac: 0.0
 grad_clip: 1.0
 bf16: true
 seed: 24
-save_every: 1000
+save_every: 2000
 eval_every: 250
+eval_batches: 320
+eval_on_start: true
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: smollm360m-icarus-pretrain
+  group: smollm360m-added-on-top
+  mode: online
+  tags:
+    - smollm360m
+    - icarus
+    - pretrain
+  log_every: 1
 metadata:
+  regime: added_on_top
   backbone_non_embedding_params: 314635200
-  processor_params: 1722817
-  processor_fraction: 0.005475601585582287
-  target_processor_fraction: 0.05
-  target_processor_params: 15731760
+  processor_params: 14998337
+  total_non_embedding_params: 329633537
+  processor_fraction: 0.04766897346514312
