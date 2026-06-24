@@ -36,12 +36,12 @@ class ProcessorAttention(nn.Module):
         if selected_heads.shape[-1] == 0:
             return torch.zeros_like(x)
         q = self.q_proj(x).view(batch, cache_heads, seq, self.num_heads, self.head_dim)
-        k = self.k_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
-        v = self.v_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
+        selected_x = _gather_cache_heads(x, selected_heads)
+        k = self.k_proj(selected_x).view(batch, selected_heads.shape[-1], seq, self.num_kv_heads, self.head_dim)
+        v = self.v_proj(selected_x).view(batch, selected_heads.shape[-1], seq, self.num_kv_heads, self.head_dim)
         cos, sin = rotary_for_indices(positions, self.head_dim, theta, q.dtype)
         q = apply_rotary(q, cos.unsqueeze(1), sin.unsqueeze(1))
         k = apply_rotary(k, cos.unsqueeze(1), sin.unsqueeze(1))
-        k, v = (_gather_cache_heads(t, selected_heads) for t in (k, v))
         q = q.permute(0, 3, 1, 2, 4).reshape(batch, self.num_heads, cache_heads * seq, self.head_dim)
         k, v = (
             t.permute(0, 3, 1, 2, 4).reshape(batch, self.num_kv_heads, selected_heads.shape[-1] * seq, self.head_dim)
@@ -241,7 +241,9 @@ def _split_merged(
 def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
     if selected_heads.ndim != 2:
         raise ValueError("selected_heads must have shape (batch, selected_heads)")
-    index = selected_heads[:, :, None, None, None].expand(-1, -1, x.shape[2], x.shape[3], x.shape[4])
+    if x.ndim != 4:
+        raise ValueError("x must have shape (batch, cache_heads, seq, hidden)")
+    index = selected_heads[:, :, None, None].expand(-1, -1, x.shape[2], x.shape[3])
     return torch.gather(x, dim=1, index=index)
 
 

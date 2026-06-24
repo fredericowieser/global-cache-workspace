@@ -291,7 +291,7 @@ def test_icarus_selects_top_heads_from_gathered_kv_norms():
 
 
 def test_icarus_gathers_cache_heads_per_batch():
-    x = torch.arange(2 * 4 * 3 * 2 * 2).view(2, 4, 3, 2, 2)
+    x = torch.arange(2 * 4 * 3 * 8).view(2, 4, 3, 8)
     selected = torch.tensor([[1, 3], [0, 2]])
 
     gathered = _gather_cache_heads(x, selected)
