@@ -175,6 +175,12 @@ def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
 
     assert 'llama32_1b_icarus_from_sft_frozen_shared.yaml' in script
     assert 'GPUS="${GPUS:-2}"' in script
+    assert 'EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-1}"' in script
+    assert 'EVAL_SUITE="${EVAL_SUITE:-paper7}"' in script
+    assert 'GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"' in script
+    assert '--dependency="afterok:$train_job"' in script
+    assert 'CHECKPOINT="${CHECKPOINT:-$OUTPUT_DIR/checkpoint}"' in script
+    assert "scripts/slurm/eval.sbatch" in script
 
 
 def test_openmath_sft_configs_use_legacy_formatting_and_slices():
