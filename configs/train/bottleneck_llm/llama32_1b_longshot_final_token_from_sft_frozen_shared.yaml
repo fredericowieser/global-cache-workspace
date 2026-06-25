@@ -32,6 +32,7 @@ model:
     gradient_checkpointing: true
     encoder_method: query_attention
     encoder_query_source: final_token
+    unrope_keys: false
   legacy_bottleneck_generate: true
 data:
   kind: sft

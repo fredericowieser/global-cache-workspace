@@ -495,6 +495,7 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.score == "attn_l2"
     assert cp.writer_head_fraction == 1.0
     assert cp.salience_temperature == 1.0
+    assert cp.unrope_keys is False
     assert cp.stream_factor == 2
 
 
@@ -513,6 +514,26 @@ def test_cache_processor_forward_is_residual_scaled_update():
 def test_zero_out_direct_gate_starts_as_identity():
     for variant in ("bt", "bgt"):
         model = build_model(tiny_config(variant, out_proj_init="zero", gate_mode="direct", gate_init=1.0))
+        cache = _random_cache(model.config)
+        actual = _clone_cache(cache)
+
+        model.cache_processor(actual, select_all=True)
+
+        _assert_cache_close(actual, cache)
+
+
+def test_unrope_global_processors_preserve_rope_space_with_zero_update():
+    for variant in ("icarus", "longshot"):
+        model = build_model(
+            tiny_config(
+                variant,
+                out_proj_init="zero",
+                gate_mode="direct",
+                gate_init=1.0,
+                encoder_seq_len=7,
+                unrope_keys=True,
+            )
+        )
         cache = _random_cache(model.config)
         actual = _clone_cache(cache)
 

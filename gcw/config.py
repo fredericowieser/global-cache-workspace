@@ -46,6 +46,7 @@ class CacheProcessorConfig:
     encoder_method: CacheEncoderMethod = "linear"
     encoder_seq_len: int | None = None
     encoder_query_source: CacheEncoderQuerySource = "learned"
+    unrope_keys: bool = False
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:

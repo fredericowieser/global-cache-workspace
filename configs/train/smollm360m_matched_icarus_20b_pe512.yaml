@@ -30,6 +30,7 @@ model:
     attention_dropout: 0.0
     per_cache_head_projections: true
     gradient_checkpointing: true
+    unrope_keys: false
 data:
   kind: fineweb
   data_dir: /mnt/jfs-01/shared/gcw/data/fineweb_edu_dedup_cosmo2

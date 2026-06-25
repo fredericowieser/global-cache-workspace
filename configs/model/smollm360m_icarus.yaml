@@ -29,6 +29,7 @@ model:
     gate_init: -5.0
     attention_dropout: 0.0
     per_cache_head_projections: false
+    unrope_keys: false
 metadata:
   backbone_non_embedding_params: 314635200
   processor_params: 14998337

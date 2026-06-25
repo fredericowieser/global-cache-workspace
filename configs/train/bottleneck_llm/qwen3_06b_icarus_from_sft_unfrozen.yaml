@@ -30,6 +30,7 @@ model:
     attention_dropout: 0.0
     per_cache_head_projections: false
     gradient_checkpointing: true
+    unrope_keys: false
 data:
   kind: sft
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl

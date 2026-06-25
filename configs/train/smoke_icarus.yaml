@@ -25,6 +25,7 @@ model:
     gate_init: -5.0
     per_cache_head_projections: false
     gradient_checkpointing: true
+    unrope_keys: false
 data:
   kind: random
 mode: pretrain
