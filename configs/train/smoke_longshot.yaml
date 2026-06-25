@@ -26,6 +26,7 @@ model:
     per_cache_head_projections: false
     gradient_checkpointing: true
     encoder_method: linear
+    encoder_query_source: learned
     encoder_seq_len: 6
 data:
   kind: random

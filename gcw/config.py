@@ -15,6 +15,7 @@ CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
 CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broadcast"]
 CacheEncoderMethod = Literal["linear", "query_attention"]
+CacheEncoderQuerySource = Literal["learned", "final_token"]
 
 
 @dataclass
@@ -44,6 +45,7 @@ class CacheProcessorConfig:
     kv_score_init_v: float = 0.75
     encoder_method: CacheEncoderMethod = "linear"
     encoder_seq_len: int | None = None
+    encoder_query_source: CacheEncoderQuerySource = "learned"
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
@@ -68,6 +70,8 @@ class CacheProcessorConfig:
             raise ValueError("cache_processor.encoder_method must be 'linear' or 'query_attention'")
         if self.encoder_seq_len is not None and self.encoder_seq_len <= 0:
             raise ValueError("cache_processor.encoder_seq_len must be positive when set")
+        if self.encoder_query_source not in {"learned", "final_token"}:
+            raise ValueError("cache_processor.encoder_query_source must be 'learned' or 'final_token'")
 
     @property
     def stream_factor(self) -> int:

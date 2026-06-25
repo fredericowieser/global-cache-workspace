@@ -70,7 +70,17 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
         num_kv_heads=1,
         encoder_seq_len=6,
     )
-    for cp in (base_cp, replace(base_cp, encoder_method="query_attention")):
+    for cp in (
+        base_cp,
+        replace(base_cp, encoder_method="query_attention"),
+        replace(base_cp, encoder_method="query_attention", encoder_query_source="final_token"),
+        replace(
+            base_cp,
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            per_cache_head_projections=True,
+        ),
+    ):
         cfg = ModelConfig(
             variant="longshot",
             vocab_size=128,

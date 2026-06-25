@@ -85,7 +85,7 @@ def _longshot_processor_params(config: ModelConfig) -> int:
     cache_heads = config.num_layers * config.num_kv_heads
     projection_count = cache_heads if cp.per_cache_head_projections else 1
     in_proj_dim = input_dim if cp.encoder_method == "query_attention" else input_dim * _longshot_encoder_seq_len(cp)
-    query = cache_heads * input_dim if cp.encoder_method == "query_attention" else 0
+    query = _longshot_query_params(input_dim, cache_heads, cp)
     return query + _processor_block_params_with_dims(
         input_norm_dim=input_dim,
         in_proj_dim=in_proj_dim,
@@ -93,6 +93,17 @@ def _longshot_processor_params(config: ModelConfig) -> int:
         config=cp,
         projection_count=projection_count,
     )
+
+
+def _longshot_query_params(input_dim: int, cache_heads: int, config: CacheProcessorConfig) -> int:
+    if config.encoder_method != "query_attention":
+        return 0
+    if config.encoder_query_source == "learned":
+        return cache_heads * input_dim
+    if config.encoder_query_source == "final_token":
+        projection_count = cache_heads if config.per_cache_head_projections else 1
+        return projection_count * (input_dim * input_dim + input_dim)
+    raise ValueError(f"unsupported cache_processor.encoder_query_source: {config.encoder_query_source}")
 
 
 def _longshot_encoder_seq_len(config: CacheProcessorConfig) -> int:

@@ -31,6 +31,7 @@ model:
     per_cache_head_projections: true
     gradient_checkpointing: true
     encoder_method: query_attention
+    encoder_query_source: learned
 data:
   kind: sft
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl

@@ -63,6 +63,12 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     longshot_shared = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_frozen_shared.yaml")
     longshot_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_unfrozen.yaml")
     longshot_linear = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_linear_from_sft_frozen.yaml")
+    longshot_final_token = load_train_config(
+        "configs/train/bottleneck_llm/llama32_1b_longshot_final_token_from_sft_frozen.yaml"
+    )
+    longshot_final_token_shared = load_train_config(
+        "configs/train/bottleneck_llm/llama32_1b_longshot_final_token_from_sft_frozen_shared.yaml"
+    )
     tf_sft = load_train_config("configs/train/bottleneck_llm/llama32_1b_tf_sft.yaml")
 
     assert frozen.freeze_backbone
@@ -140,6 +146,26 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert longshot_linear.data.dataset == icarus_frozen.data.dataset
     assert longshot_linear.metadata["processor_params"] == processor_params(longshot_linear.model)
     assert longshot_linear.metadata["total_non_embedding_params"] == total_non_embedding_params(longshot_linear.model)
+    assert longshot_final_token.freeze_backbone
+    assert longshot_final_token.model.variant == "longshot"
+    assert longshot_final_token.model.cache_processor.encoder_method == "query_attention"
+    assert longshot_final_token.model.cache_processor.encoder_query_source == "final_token"
+    assert longshot_final_token.model.cache_processor.per_cache_head_projections is True
+    assert "final-token-query" in longshot_final_token.wandb.tags
+    assert longshot_final_token.metadata["processor_params"] == processor_params(longshot_final_token.model)
+    assert longshot_final_token.metadata["total_non_embedding_params"] == total_non_embedding_params(longshot_final_token.model)
+    assert longshot_final_token_shared.freeze_backbone
+    assert longshot_final_token_shared.model.variant == "longshot"
+    assert longshot_final_token_shared.model.cache_processor.encoder_method == "query_attention"
+    assert longshot_final_token_shared.model.cache_processor.encoder_query_source == "final_token"
+    assert longshot_final_token_shared.model.cache_processor.per_cache_head_projections is False
+    assert longshot_final_token_shared.model.legacy_bottleneck_generate
+    assert "final-token-query" in longshot_final_token_shared.wandb.tags
+    assert "shared-projection" in longshot_final_token_shared.wandb.tags
+    assert longshot_final_token_shared.metadata["processor_params"] == processor_params(longshot_final_token_shared.model)
+    assert longshot_final_token_shared.metadata["total_non_embedding_params"] == total_non_embedding_params(
+        longshot_final_token_shared.model
+    )
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None
 

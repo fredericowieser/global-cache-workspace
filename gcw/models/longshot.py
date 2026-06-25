@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from gcw.config import CacheEncoderMethod, CacheProcessorConfig, ModelConfig
+from gcw.config import CacheEncoderMethod, CacheEncoderQuerySource, CacheProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.transformer import RMSNorm, flash_sdpa
@@ -17,6 +17,7 @@ CacheLike = CacheState | StaticCacheState | WindowedCache
 
 
 EncoderMethod = CacheEncoderMethod
+EncoderQuerySource = CacheEncoderQuerySource
 
 
 class ProcessorAttention(nn.Module):
@@ -86,6 +87,36 @@ class PerCacheHeadLinear(nn.Module):
         return y
 
 
+class QueryAttentionTimeEncoder(nn.Module):
+    def __init__(self, input_dim: int, num_cache_heads: int, config: CacheProcessorConfig):
+        super().__init__()
+        self.input_dim = input_dim
+        self.encoder_query_source = config.encoder_query_source
+        if self.encoder_query_source == "learned":
+            self.query = nn.Parameter(torch.empty(num_cache_heads, input_dim))
+        elif self.encoder_query_source == "final_token":
+            if config.per_cache_head_projections:
+                self.query_proj = PerCacheHeadLinear(num_cache_heads, input_dim, input_dim)
+            else:
+                self.query_proj = nn.Linear(input_dim, input_dim)
+        else:
+            raise ValueError(f"unknown encoder_query_source: {self.encoder_query_source}")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        query = self._query(x)
+        scale = self.input_dim**-0.5
+        scores = torch.einsum("bcsi,bci->bcs", x, query.to(x.dtype)) * scale
+        weights = torch.softmax(scores.float(), dim=-1).to(x.dtype)
+        return torch.einsum("bcs,bcsi->bci", weights, x)
+
+    def _query(self, x: torch.Tensor) -> torch.Tensor:
+        if self.encoder_query_source == "learned":
+            return self.query[None, :, :].expand(x.shape[0], -1, -1)
+        if self.encoder_query_source == "final_token":
+            return self.query_proj(x[:, :, -1, :])
+        raise ValueError(f"unsupported encoder_query_source: {self.encoder_query_source}")
+
+
 class CacheProcessor(nn.Module):
     def __init__(
         self,
@@ -100,13 +131,14 @@ class CacheProcessor(nn.Module):
         self.config = config
         self.input_dim = input_dim
         self.encoder_method = encoder_method
+        self.encoder_query_source = config.encoder_query_source
         self.encoder_seq_len = encoder_seq_len or config.encoder_seq_len or config.process_every + max(config.topk, 0)
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
         if encoder_method == "linear":
             in_features = self.encoder_seq_len * input_dim
         elif encoder_method == "query_attention":
             in_features = input_dim
-            self.query = nn.Parameter(torch.empty(num_cache_heads, input_dim))
+            self.time_encoder = QueryAttentionTimeEncoder(input_dim, num_cache_heads, config)
         else:
             raise ValueError(f"unknown encoder_method: {encoder_method}")
         if config.per_cache_head_projections:
@@ -134,8 +166,8 @@ class CacheProcessor(nn.Module):
                     nn.init.zeros_(module.bias)
             elif isinstance(module, RMSNorm):
                 nn.init.ones_(module.weight)
-        if hasattr(self, "query"):
-            nn.init.normal_(self.query, mean=0.0, std=std)
+            elif isinstance(module, QueryAttentionTimeEncoder) and hasattr(module, "query"):
+                nn.init.normal_(module.query, mean=0.0, std=std)
         nn.init.constant_(self.gate, self.config.gate_init)
         if self.config.out_proj_init == "zero":
             _zero_projection(self.out_proj)
@@ -169,11 +201,9 @@ class CacheProcessor(nn.Module):
         if self.encoder_method == "linear":
             x = _fit_time_length(x, self.encoder_seq_len)
             return self.in_proj(x.flatten(start_dim=2))
-        scale = self.input_dim**-0.5
-        scores = torch.einsum("bcsi,ci->bcs", x, self.query.to(x.dtype)) * scale
-        weights = torch.softmax(scores.float(), dim=-1).to(x.dtype)
-        context = torch.einsum("bcs,bcsi->bci", weights, x)
-        return self.in_proj(context)
+        if self.encoder_method == "query_attention":
+            return self.in_proj(self.time_encoder(x))
+        raise ValueError(f"unknown encoder_method: {self.encoder_method}")
 
 
 class GlobalCacheProcessor(nn.Module):

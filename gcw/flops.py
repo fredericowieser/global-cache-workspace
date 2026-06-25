@@ -110,6 +110,8 @@ def _longshot_processor_block_flops_per_call(
     encode_extra = 0
     if config.encoder_method == "query_attention":
         encode_extra = 4 * cache_heads * selected * input_dim
+        if config.encoder_query_source == "final_token":
+            encode_extra += 2 * cache_heads * input_dim * input_dim
     matmul = 2 * cache_heads * (in_out + config.num_layers * _processor_layer_matmul_params(config))
     head_dim = config.hidden_size // config.num_heads
     attn = config.num_layers * 4 * config.num_heads * head_dim * cache_heads * selected_heads

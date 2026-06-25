@@ -12,6 +12,7 @@ from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
 from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
 from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
 from gcw.models.longshot import GlobalCacheProcessor as LongshotGlobalCacheProcessor
+from gcw.models.longshot import QueryAttentionTimeEncoder
 from gcw.models.longshot import Longshot
 from gcw.models.transformer import _matches_stop_sequence, apply_rotary
 from gcw.models.windowed_cache import WindowedCache
@@ -81,13 +82,28 @@ def test_tiny_longshot_uses_longshot_processor_and_configured_encoder():
 
     query = build_model(tiny_config("longshot", encoder_method="query_attention"))
     assert query.cache_processor.block.encoder_method == "query_attention"
-    assert query.cache_processor.block.query.shape == (4, 16)
+    assert query.cache_processor.block.encoder_query_source == "learned"
+    assert isinstance(query.cache_processor.block.time_encoder, QueryAttentionTimeEncoder)
+    assert query.cache_processor.block.time_encoder.query.shape == (4, 16)
     query.init_weights()
     tokens = torch.randint(0, 128, (2, 9))
     loss = query(tokens, tokens)
     loss.backward()
     assert torch.isfinite(loss)
     assert any(p.grad is not None for p in query.cache_processor.parameters())
+
+    final_query = build_model(
+        tiny_config("longshot", encoder_method="query_attention", encoder_query_source="final_token")
+    )
+    assert final_query.cache_processor.block.encoder_query_source == "final_token"
+    assert isinstance(final_query.cache_processor.block.time_encoder, QueryAttentionTimeEncoder)
+    assert hasattr(final_query.cache_processor.block.time_encoder, "query_proj")
+    assert not hasattr(final_query.cache_processor.block.time_encoder, "query")
+    final_query.init_weights()
+    loss = final_query(tokens, tokens)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in final_query.cache_processor.parameters())
 
 
 def test_icarus_gradient_checkpointing_is_config_gated(monkeypatch):

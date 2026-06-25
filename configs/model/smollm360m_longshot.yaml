@@ -39,6 +39,7 @@ model:
     kv_score_init_k: 0.25
     kv_score_init_v: 0.75
     encoder_method: linear
+    encoder_query_source: learned
     encoder_seq_len: null
   legacy_bottleneck_generate: false
 metadata:
