@@ -208,8 +208,19 @@ def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
     assert 'EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-1}"' in script
     assert 'EVAL_SUITE="${EVAL_SUITE:-paper7}"' in script
     assert 'GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"' in script
+    assert 'KEEP_STEP_CHECKPOINTS="${KEEP_STEP_CHECKPOINTS:-auto}"' in script
+    assert 'KEEP_STEP_CHECKPOINT_EVERY="${KEEP_STEP_CHECKPOINT_EVERY:-1000}"' in script
+    assert 'MAX_STEPS="$(awk' in script
+    assert 'if [[ "$KEEP_STEP_CHECKPOINTS" == "auto" ]]; then' in script
+    assert '[[ "$MAX_STEPS" -gt "$KEEP_STEP_CHECKPOINT_EVERY" ]]' in script
+    assert "GCW_KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS" in script
+    assert "GCW_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY" in script
     assert '--dependency="afterok:$train_job"' in script
-    assert 'CHECKPOINT="${CHECKPOINT:-$OUTPUT_DIR/checkpoint}"' in script
+    assert "submit_eval()" in script
+    assert 'for ((step = KEEP_STEP_CHECKPOINT_EVERY; step <= MAX_STEPS; step += KEEP_STEP_CHECKPOINT_EVERY)); do' in script
+    assert 'submit_eval "$OUTPUT_DIR/checkpoint-$step" "step${step}"' in script
+    assert 'submit_eval "$OUTPUT_DIR/checkpoint" "final"' in script
+    assert 'submit_eval "${CHECKPOINT:-$OUTPUT_DIR/checkpoint}" "${OUT_SUFFIX:-final}" "${OUT:-}"' in script
     assert "scripts/slurm/eval.sbatch" in script
 
 

@@ -43,7 +43,7 @@ checkpoint_format: native_safetensors
 output_dir: runs/smollm360m_matched_icarus_20b_pe512_1gpu
 batch_size: 8
 sequence_len: 2048
-max_steps: 38147
+max_steps: 3000
 total_batch_size: 524288
 learning_rate: 0.003
 weight_decay: 0.1
