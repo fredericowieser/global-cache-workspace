@@ -202,6 +202,7 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
 
 def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
     script = Path("scripts/martin.sh").read_text(encoding="utf-8")
+    eval_script = Path("scripts/slurm/eval.sbatch").read_text(encoding="utf-8")
 
     assert 'llama32_1b_icarus_from_sft_frozen_shared.yaml' in script
     assert 'GPUS="${GPUS:-2}"' in script
@@ -217,11 +218,16 @@ def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
     assert "GCW_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY" in script
     assert '--dependency="afterok:$train_job"' in script
     assert "submit_eval()" in script
+    assert "submit_eval_manifest()" in script
     assert 'for ((step = KEEP_STEP_CHECKPOINT_EVERY; step <= MAX_STEPS; step += KEEP_STEP_CHECKPOINT_EVERY)); do' in script
-    assert 'submit_eval "$OUTPUT_DIR/checkpoint-$step" "step${step}"' in script
+    assert 'printf "%s\\t%s\\n" "$OUTPUT_DIR/checkpoint-$step" "$out" >> "$manifest"' in script
+    assert 'submit_eval_manifest "$manifest" "steps"' in script
     assert 'submit_eval "$OUTPUT_DIR/checkpoint" "final"' in script
     assert 'submit_eval "${CHECKPOINT:-$OUTPUT_DIR/checkpoint}" "${OUT_SUFFIX:-final}" "${OUT:-}"' in script
     assert "scripts/slurm/eval.sbatch" in script
+    assert 'EVAL_MANIFEST="${EVAL_MANIFEST:-}"' in eval_script
+    assert 'if [[ -n "$EVAL_MANIFEST" ]]; then' in eval_script
+    assert 'done < "$EVAL_MANIFEST"' in eval_script
 
 
 def test_openmath_sft_configs_use_legacy_formatting_and_slices():

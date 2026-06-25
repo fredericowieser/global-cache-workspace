@@ -113,13 +113,41 @@ submit_eval() {
   echo "Eval output: $out"
 }
 
+submit_eval_manifest() {
+  local manifest="$1"
+  local suffix="$2"
+  local eval_job
+  eval_job="$(
+    sbatch \
+      --parsable \
+      --dependency="afterok:$train_job" \
+      --job-name="${JOB_NAME}-eval-${suffix}" \
+      --partition="$PARTITION" \
+      --time="$EVAL_TIME" \
+      --nodes=1 \
+      --ntasks-per-node="$EVAL_GPUS" \
+      --gres="gpu:$EVAL_GPUS" \
+      --cpus-per-task="$EVAL_CPUS_PER_TASK" \
+      --mem="$EVAL_MEM" \
+      --output="slurm_out/${RUN_NAME}-${suffix}-${EVAL_SUITE}-%j.out" \
+      --export="ALL,EVAL_MANIFEST=$manifest,SUITE=$EVAL_SUITE,BATCH_SIZE=$EVAL_BATCH_SIZE,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS" \
+      scripts/slurm/eval.sbatch
+  )"
+  echo "Submitted eval job $eval_job after training job $train_job"
+  echo "Eval manifest: $manifest"
+}
+
 if [[ "$EVAL_AFTER_TRAIN" == "1" ]]; then
   if [[ -n "${CHECKPOINT:-}" || -n "${OUT:-}" ]]; then
     submit_eval "${CHECKPOINT:-$OUTPUT_DIR/checkpoint}" "${OUT_SUFFIX:-final}" "${OUT:-}"
   elif [[ "$KEEP_STEP_CHECKPOINTS" == "1" ]]; then
+    manifest="${EVAL_MANIFEST:-slurm_out/${RUN_NAME}_${EVAL_SUITE}_checkpoints.tsv}"
+    : > "$manifest"
     for ((step = KEEP_STEP_CHECKPOINT_EVERY; step <= MAX_STEPS; step += KEEP_STEP_CHECKPOINT_EVERY)); do
-      submit_eval "$OUTPUT_DIR/checkpoint-$step" "step${step}"
+      out="${OUT_DIR:-results}/${RUN_NAME}_step${step}_${EVAL_SUITE}.json"
+      printf "%s\t%s\n" "$OUTPUT_DIR/checkpoint-$step" "$out" >> "$manifest"
     done
+    submit_eval_manifest "$manifest" "steps"
   else
     submit_eval "$OUTPUT_DIR/checkpoint" "final"
   fi
