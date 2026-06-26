@@ -1,0 +1,38 @@
+{
+  "started_at": "2026-06-25T23:41:06Z",
+  "root": "/mnt/jfs-01/shared/gcw",
+  "family": "llama31_8b",
+  "tasks": [
+    "gsm8k_openmath",
+    "svamp",
+    "gsm8k_hard",
+    "logiqa",
+    "agieval_gaokao_mathqa"
+  ],
+  "checkpoints": [
+    {
+      "family": "llama31_8b",
+      "variant": "sft",
+      "path": "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama31_8b/tf"
+    },
+    {
+      "family": "llama31_8b",
+      "variant": "bt",
+      "path": "/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/llama31_8b/bt/final"
+    },
+    {
+      "family": "llama31_8b",
+      "variant": "bgt",
+      "path": "/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/llama31_8b/bgt/final"
+    }
+  ],
+  "settings": {
+    "num_splits": 64,
+    "group_fraction": 0.5,
+    "max_length": 2048,
+    "max_target_tokens": 512,
+    "seed": 42,
+    "num_calibration": 512,
+    "device": "cuda"
+  }
+}

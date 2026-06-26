@@ -1,0 +1,65 @@
+{
+  "started_at": "2026-06-25T23:42:37Z",
+  "root": "/mnt/jfs-01/shared/gcw",
+  "tasks": [
+    "gsm8k_openmath",
+    "svamp",
+    "gsm8k_hard",
+    "logiqa",
+    "agieval_gaokao_mathqa"
+  ],
+  "families": [
+    "qwen3_06b"
+  ],
+  "variants": [
+    "sft",
+    "bt",
+    "bgt"
+  ],
+  "checkpoints": [
+    {
+      "family": "qwen3_06b",
+      "variant": "sft",
+      "path": "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/qwen3_06b/tf"
+    },
+    {
+      "family": "qwen3_06b",
+      "variant": "bt",
+      "path": "/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/qwen3_06b/bt/final"
+    },
+    {
+      "family": "qwen3_06b",
+      "variant": "bgt",
+      "path": "/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/qwen3_06b/bgt/final"
+    }
+  ],
+  "settings": {
+    "root": "/mnt/jfs-01/shared/gcw",
+    "out_dir": "/mnt/jfs-01/shared/gcw/results/head_loss_dump/20260625-233745",
+    "tasks": [
+      "gsm8k_openmath",
+      "svamp",
+      "gsm8k_hard",
+      "logiqa",
+      "agieval_gaokao_mathqa"
+    ],
+    "families": [
+      "qwen3_06b"
+    ],
+    "variants": [
+      "sft",
+      "bt",
+      "bgt"
+    ],
+    "num_examples": 256,
+    "num_calibration": 512,
+    "num_splits": 64,
+    "group_fraction": 0.5,
+    "max_length": 2048,
+    "max_target_tokens": 512,
+    "seed": 42,
+    "device": "cuda",
+    "limit_checkpoints": null,
+    "examples_jsonl": null
+  }
+}

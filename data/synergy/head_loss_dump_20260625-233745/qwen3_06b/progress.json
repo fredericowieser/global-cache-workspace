@@ -1,0 +1,8 @@
+{
+  "status": "completed",
+  "family": "qwen3_06b",
+  "variant": "bgt",
+  "checkpoint": "/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/qwen3_06b/bgt/final",
+  "task": null,
+  "updated_at": "2026-06-26T01:51:59Z"
+}

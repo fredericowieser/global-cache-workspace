@@ -1,0 +1,8 @@
+{
+  "status": "completed",
+  "family": "llama32_3b",
+  "variant": "bgt",
+  "checkpoint": "/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/llama32_3b/bgt/final",
+  "task": null,
+  "updated_at": "2026-06-26T01:38:14Z"
+}
