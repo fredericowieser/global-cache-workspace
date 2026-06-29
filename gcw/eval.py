@@ -362,7 +362,7 @@ def _legacy_bottleneck_cache_eval(model) -> bool:
     config = getattr(model, "config", None)
     return bool(
         getattr(config, "legacy_bottleneck_generate", False)
-        and getattr(config, "variant", None) in {"bt", "bgt"}
+        and getattr(config, "variant", None) in {"bt", "bgt", "longshot"}
         and hasattr(model, "backbone")
         and hasattr(model, "cache_processor")
     )

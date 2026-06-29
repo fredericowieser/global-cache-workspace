@@ -47,7 +47,7 @@ def tiny_config(variant="tf", **processor_overrides):
 
 
 def test_tiny_models_forward_backward():
-    for variant in ("tf", "bt", "bgt", "icarus"):
+    for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         model = build_model(tiny_config(variant))
         model.init_weights()
         x = torch.randint(0, 128, (2, 9))
@@ -138,7 +138,7 @@ def test_icarus_gradient_checkpointing_is_config_gated(monkeypatch):
 
 
 def test_tiny_models_bf16_autocast_forward_backward():
-    for variant in ("tf", "bt", "bgt", "icarus"):
+    for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         model = build_model(tiny_config(variant))
         model.init_weights()
         x = torch.randint(0, 128, (2, 9))
@@ -149,7 +149,7 @@ def test_tiny_models_bf16_autocast_forward_backward():
 
 
 def test_freeze_backbone_leaves_processor_trainable():
-    for variant in ("bt", "icarus"):
+    for variant in ("bt", "icarus", "longshot"):
         model = build_model(tiny_config(variant))
         for p in model.backbone.parameters():
             p.requires_grad_(False)
@@ -225,7 +225,7 @@ def test_generate_legacy_bottleneck_prefill_processes_full_cache_once():
 
 
 def test_generate_fast_matches_reference_generate():
-    for variant in ("tf", "bt", "bgt", "icarus"):
+    for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         torch.manual_seed(3)
         model = build_model(tiny_config(variant)).eval()
         model.init_weights()

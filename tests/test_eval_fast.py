@@ -47,12 +47,13 @@ def test_non_legacy_generation_prompts_do_not_add_special_tokens():
 
 
 def test_legacy_bottleneck_loglikelihood_uses_boundary_path_only_for_cp_models():
-    model = SimpleNamespace(
-        config=SimpleNamespace(legacy_bottleneck_generate=True, variant="bgt"),
-        backbone=object(),
-        cache_processor=object(),
-    )
-    assert _legacy_bottleneck_cache_eval(model)
+    for variant in ("bt", "bgt", "longshot"):
+        model = SimpleNamespace(
+            config=SimpleNamespace(legacy_bottleneck_generate=True, variant=variant),
+            backbone=object(),
+            cache_processor=object(),
+        )
+        assert _legacy_bottleneck_cache_eval(model)
     assert not _legacy_bottleneck_cache_eval(SimpleNamespace(config=SimpleNamespace(legacy_bottleneck_generate=True, variant="tf")))
 
 
