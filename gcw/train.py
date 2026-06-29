@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -80,6 +81,7 @@ def train(config: TrainConfig) -> None:
         if rank == 0:
             print0(f"step 0/{config.max_steps} val_loss={val['val/loss']:.4f}")
             _wandb_log(wandb_run, {"train/step": 0, **val}, step=0)
+    retained_checkpoint_every = _retained_checkpoint_every()
     model.train()
     smooth_loss = 0.0
     last_state: dict[str, Any] = {"kind": "uninitialized"}
@@ -145,12 +147,20 @@ def train(config: TrainConfig) -> None:
             if config.wandb.enabled and step_num % max(1, config.wandb.log_every) == 0:
                 _wandb_log(wandb_run, _compact_metrics(train_metrics), step=step_num)
         if config.save_every and step_num % config.save_every == 0 and rank == 0:
+            checkpoint_state = _checkpoint_state(checkpoint_meta, step_num, last_state)
             save_checkpoint(
                 Path(config.output_dir) / "checkpoint",
                 _unwrap(model),
                 config.model,
-                _checkpoint_state(checkpoint_meta, step_num, last_state),
+                checkpoint_state,
             )
+            if retained_checkpoint_every is not None and step_num % retained_checkpoint_every == 0:
+                save_checkpoint(
+                    Path(config.output_dir) / f"checkpoint-{step_num}",
+                    _unwrap(model),
+                    config.model,
+                    checkpoint_state,
+                )
     if rank == 0:
         save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, _checkpoint_state(checkpoint_meta, config.max_steps))
         if wandb_run is not None:
@@ -181,6 +191,20 @@ def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | 
     if loader is not None:
         state["loader"] = loader
     return state
+
+
+def _retained_checkpoint_every() -> int | None:
+    keep = os.environ.get("GCW_KEEP_STEP_CHECKPOINTS", "0").lower()
+    if keep not in {"1", "true", "yes", "on"}:
+        return None
+    raw = os.environ.get("GCW_STEP_CHECKPOINT_EVERY", "1000")
+    try:
+        every = int(raw)
+    except ValueError as exc:
+        raise ValueError("GCW_STEP_CHECKPOINT_EVERY must be an integer") from exc
+    if every <= 0:
+        raise ValueError("GCW_STEP_CHECKPOINT_EVERY must be positive")
+    return every
 
 
 def _loader(config: TrainConfig, device: torch.device):

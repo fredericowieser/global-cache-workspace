@@ -15,6 +15,7 @@ model:
   qk_norm: false
   rotary_style: ppt
   cache_processor: null
+  legacy_bottleneck_generate: false
 metadata:
   backbone_non_embedding_params: 314635200
   total_non_embedding_params: 314635200

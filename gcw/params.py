@@ -9,7 +9,7 @@ from gcw.models.transformer import estimate_non_embedding_params
 
 
 def processor_params(config: ModelConfig) -> int:
-    if config.variant in {"bt", "bgt", "icarus"}:
+    if config.variant in {"bt", "bgt", "icarus", "longshot"}:
         return estimate_processor_params(config)
     return 0
 
@@ -25,6 +25,8 @@ def estimate_processor_params(config: ModelConfig) -> int:
     if config.variant == "icarus":
         projection_count = config.num_layers * config.num_kv_heads if config.cache_processor.per_cache_head_projections else 1
         return _processor_block_params(2 * int(config.head_dim), config.cache_processor, projection_count=projection_count)
+    if config.variant == "longshot":
+        return _longshot_processor_params(config)
     return 0
 
 
@@ -39,6 +41,23 @@ def total_non_embedding_params(config: ModelConfig) -> int:
 
 
 def _processor_block_params(input_dim: int, config: CacheProcessorConfig, *, projection_count: int = 1) -> int:
+    return _processor_block_params_with_dims(
+        input_norm_dim=input_dim,
+        in_proj_dim=input_dim,
+        out_proj_dim=input_dim,
+        config=config,
+        projection_count=projection_count,
+    )
+
+
+def _processor_block_params_with_dims(
+    *,
+    input_norm_dim: int,
+    in_proj_dim: int,
+    out_proj_dim: int,
+    config: CacheProcessorConfig,
+    projection_count: int = 1,
+) -> int:
     head_dim = config.hidden_size // config.num_heads
     q_dim = config.num_heads * head_dim
     kv_dim = config.num_kv_heads * head_dim
@@ -53,9 +72,42 @@ def _processor_block_params(input_dim: int, config: CacheProcessorConfig, *, pro
     )
     mlp = 3 * config.hidden_size * config.intermediate_size
     layer = attn + mlp + 2 * config.hidden_size
-    in_proj = projection_count * (input_dim * config.hidden_size + config.hidden_size)
-    out_proj = projection_count * (config.hidden_size * input_dim + input_dim)
-    return input_dim + in_proj + config.num_layers * layer + config.hidden_size + out_proj + 1
+    in_proj = projection_count * (in_proj_dim * config.hidden_size + config.hidden_size)
+    out_proj = projection_count * (config.hidden_size * out_proj_dim + out_proj_dim)
+    return input_norm_dim + in_proj + config.num_layers * layer + config.hidden_size + out_proj + 1
+
+
+def _longshot_processor_params(config: ModelConfig) -> int:
+    cp = config.cache_processor
+    if cp is None:
+        return 0
+    input_dim = 2 * int(config.head_dim)
+    cache_heads = config.num_layers * config.num_kv_heads
+    projection_count = cache_heads if cp.per_cache_head_projections else 1
+    in_proj_dim = input_dim if cp.encoder_method == "query_attention" else input_dim * _longshot_encoder_seq_len(cp)
+    query = _longshot_query_params(input_dim, cache_heads, cp)
+    return query + _processor_block_params_with_dims(
+        input_norm_dim=input_dim,
+        in_proj_dim=in_proj_dim,
+        out_proj_dim=input_dim,
+        config=cp,
+        projection_count=projection_count,
+    )
+
+
+def _longshot_query_params(input_dim: int, cache_heads: int, config: CacheProcessorConfig) -> int:
+    if config.encoder_method != "query_attention":
+        return 0
+    if config.encoder_query_source == "learned":
+        return cache_heads * input_dim
+    if config.encoder_query_source == "final_token":
+        projection_count = cache_heads if config.per_cache_head_projections else 1
+        return projection_count * (input_dim * input_dim + input_dim)
+    raise ValueError(f"unsupported cache_processor.encoder_query_source: {config.encoder_query_source}")
+
+
+def _longshot_encoder_seq_len(config: CacheProcessorConfig) -> int:
+    return config.encoder_seq_len or config.process_every + max(config.topk, 0)
 
 
 def fit_processor_config(
@@ -69,7 +121,7 @@ def fit_processor_config(
     target = round(estimate_non_embedding_params(backbone) * fraction)
     best: tuple[int, ModelConfig] | None = None
     heads_choices = list(range(1, 17))
-    hidden_choices = list(range(32, 2049 if variant == "icarus" else 1025, 32))
+    hidden_choices = list(range(32, 2049 if variant in {"icarus", "longshot"} else 1025, 32))
     for hidden in hidden_choices:
         for heads in heads_choices:
             if hidden % heads:
@@ -107,7 +159,7 @@ def _processor_config_kwargs(hidden: int, heads: int, variant: str, overrides: d
         "process_every": 64,
         "topk": 32,
     }
-    if variant == "icarus":
+    if variant in {"icarus", "longshot"}:
         kwargs["topk_heads"] = 32
     kwargs.update(overrides)
     return kwargs
@@ -218,7 +270,7 @@ def write_family_configs(
         },
     }
     dump_yaml(out / "smollm360m_tf.yaml", {"model": tf_backbone, "metadata": table["tf"]["metadata"]})
-    for variant in ("bt", "bgt", "icarus"):
+    for variant in ("bt", "bgt", "icarus", "longshot"):
         cfg, meta = fit_processor_config(backbone, variant, fraction=fraction)
         _write_variant_config(
             out,
@@ -241,6 +293,38 @@ def write_family_configs(
         table,
         table_key="icarus_per_cache_head",
         file_variant="icarus_per_cache_head",
+        cfg=cfg,
+        meta=meta,
+        target_non_embedding=target_non_embedding,
+        regime=regime,
+    )
+    cfg, meta = fit_processor_config(
+        backbone,
+        "longshot",
+        fraction=fraction,
+        cache_processor_overrides={"encoder_method": "query_attention"},
+    )
+    _write_variant_config(
+        out,
+        table,
+        table_key="longshot_query_attention",
+        file_variant="longshot_query_attention",
+        cfg=cfg,
+        meta=meta,
+        target_non_embedding=target_non_embedding,
+        regime=regime,
+    )
+    cfg, meta = fit_processor_config(
+        backbone,
+        "longshot",
+        fraction=fraction,
+        cache_processor_overrides={"encoder_method": "query_attention", "per_cache_head_projections": True},
+    )
+    _write_variant_config(
+        out,
+        table,
+        table_key="longshot_query_attention_per_cache_head",
+        file_variant="longshot_query_attention_per_cache_head",
         cfg=cfg,
         meta=meta,
         target_non_embedding=target_non_embedding,

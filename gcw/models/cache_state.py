@@ -20,6 +20,10 @@ class CacheState:
         return self.keys[0].shape[2]
 
     @property
+    def device(self) -> torch.device:
+        return self.keys[0].device if self.keys else self.scores.device
+
+    @property
     def num_layers(self) -> int:
         return len(self.keys)
 

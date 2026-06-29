@@ -11,13 +11,16 @@ from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
 from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
 from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
 from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
+from gcw.models.longshot import GlobalCacheProcessor as LongshotGlobalCacheProcessor
+from gcw.models.longshot import QueryAttentionTimeEncoder
+from gcw.models.longshot import Longshot
 from gcw.models.transformer import _matches_stop_sequence, apply_rotary
 from gcw.models.windowed_cache import WindowedCache
 
 
 def tiny_config(variant="tf", **processor_overrides):
     cp = None
-    if variant in {"bt", "bgt", "icarus"}:
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
         cp = CacheProcessorConfig(
             process_every=4,
             topk=2,
@@ -65,6 +68,42 @@ def test_tiny_icarus_uses_icarus_processor():
     loss.backward()
     assert torch.isfinite(loss)
     assert any(p.grad is not None for p in model.cache_processor.parameters())
+
+
+def test_tiny_longshot_uses_longshot_processor_and_configured_encoder():
+    linear = build_model(tiny_config("longshot", encoder_seq_len=6))
+    assert isinstance(linear, Longshot)
+    assert isinstance(linear.cache_processor, LongshotGlobalCacheProcessor)
+    assert linear.cache_processor.block.encoder_method == "linear"
+    x = torch.randn(2, 4, 6, 16)
+    selected_heads = torch.tensor([[0, 2], [1, 3]])
+    out = linear.cache_processor.block(x, selected_heads)
+    assert out.shape == (2, 4, 16)
+
+    query = build_model(tiny_config("longshot", encoder_method="query_attention"))
+    assert query.cache_processor.block.encoder_method == "query_attention"
+    assert query.cache_processor.block.encoder_query_source == "learned"
+    assert isinstance(query.cache_processor.block.time_encoder, QueryAttentionTimeEncoder)
+    assert query.cache_processor.block.time_encoder.query.shape == (4, 16)
+    query.init_weights()
+    tokens = torch.randint(0, 128, (2, 9))
+    loss = query(tokens, tokens)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in query.cache_processor.parameters())
+
+    final_query = build_model(
+        tiny_config("longshot", encoder_method="query_attention", encoder_query_source="final_token")
+    )
+    assert final_query.cache_processor.block.encoder_query_source == "final_token"
+    assert isinstance(final_query.cache_processor.block.time_encoder, QueryAttentionTimeEncoder)
+    assert hasattr(final_query.cache_processor.block.time_encoder, "query_proj")
+    assert not hasattr(final_query.cache_processor.block.time_encoder, "query")
+    final_query.init_weights()
+    loss = final_query(tokens, tokens)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in final_query.cache_processor.parameters())
 
 
 def test_icarus_gradient_checkpointing_is_config_gated(monkeypatch):
@@ -353,6 +392,13 @@ def test_icarus_rejects_unsupported_cache_processor_modes():
         build_model(tiny_config("icarus", processor_mode="workspace_broadcast"))
 
 
+def test_longshot_rejects_unsupported_cache_processor_modes():
+    with pytest.raises(ValueError, match="update_stream"):
+        build_model(tiny_config("longshot", update_stream="v"))
+    with pytest.raises(ValueError, match="processor_mode"):
+        build_model(tiny_config("longshot", processor_mode="workspace_broadcast"))
+
+
 def test_bottleneck_gradients_match_reference_loop():
     for variant in ("bt", "bgt"):
         torch.manual_seed(4)
@@ -449,6 +495,7 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.score == "attn_l2"
     assert cp.writer_head_fraction == 1.0
     assert cp.salience_temperature == 1.0
+    assert cp.unrope_keys is False
     assert cp.stream_factor == 2
 
 
@@ -467,6 +514,26 @@ def test_cache_processor_forward_is_residual_scaled_update():
 def test_zero_out_direct_gate_starts_as_identity():
     for variant in ("bt", "bgt"):
         model = build_model(tiny_config(variant, out_proj_init="zero", gate_mode="direct", gate_init=1.0))
+        cache = _random_cache(model.config)
+        actual = _clone_cache(cache)
+
+        model.cache_processor(actual, select_all=True)
+
+        _assert_cache_close(actual, cache)
+
+
+def test_unrope_global_processors_preserve_rope_space_with_zero_update():
+    for variant in ("icarus", "longshot"):
+        model = build_model(
+            tiny_config(
+                variant,
+                out_proj_init="zero",
+                gate_mode="direct",
+                gate_init=1.0,
+                encoder_seq_len=7,
+                unrope_keys=True,
+            )
+        )
         cache = _random_cache(model.config)
         actual = _clone_cache(cache)
 

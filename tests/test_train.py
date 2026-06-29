@@ -1,3 +1,4 @@
+import json
 import sys
 
 import torch
@@ -107,6 +108,24 @@ def test_train_reads_pretrain_shards(tmp_path):
     train(cfg)
 
     assert (tmp_path / "run" / "checkpoint" / "train_state.json").exists()
+
+
+def test_train_can_retain_numbered_step_checkpoints(monkeypatch, tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.wandb.enabled = False
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.save_every = 1
+    monkeypatch.setenv("GCW_KEEP_STEP_CHECKPOINTS", "1")
+    monkeypatch.setenv("GCW_STEP_CHECKPOINT_EVERY", "2")
+
+    train(cfg)
+
+    assert (tmp_path / "run" / "checkpoint" / "train_state.json").exists()
+    assert not (tmp_path / "run" / "checkpoint-1").exists()
+    retained = tmp_path / "run" / "checkpoint-2" / "train_state.json"
+    assert retained.exists()
+    assert json.loads(retained.read_text(encoding="utf-8"))["step"] == 2
 
 
 def test_train_loads_native_backbone_checkpoint(tmp_path):

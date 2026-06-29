@@ -76,6 +76,10 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
             cache_heads = config.num_layers * config.num_kv_heads
             selected_heads = min(max(cp.topk_heads, 0), cache_heads)
             total += _icarus_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
+        elif config.variant == "longshot":
+            cache_heads = config.num_layers * config.num_kv_heads
+            selected_heads = min(max(cp.topk_heads, 0), cache_heads)
+            total += _longshot_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
     return total
 
 
@@ -91,6 +95,27 @@ def _icarus_processor_block_flops_per_call(
     head_dim = config.hidden_size // config.num_heads
     attn = config.num_layers * 4 * config.num_heads * head_dim * (cache_heads * selected) * (selected_heads * selected)
     return float(matmul + attn)
+
+
+def _longshot_processor_block_flops_per_call(
+    input_dim: int,
+    config: CacheProcessorConfig,
+    selected: int,
+    cache_heads: int,
+    selected_heads: int,
+) -> float:
+    encoder_len = config.encoder_seq_len or config.process_every + max(config.topk, 0)
+    encoder_in = input_dim if config.encoder_method == "query_attention" else input_dim * encoder_len
+    in_out = encoder_in * config.hidden_size + config.hidden_size * input_dim
+    encode_extra = 0
+    if config.encoder_method == "query_attention":
+        encode_extra = 4 * cache_heads * selected * input_dim
+        if config.encoder_query_source == "final_token":
+            encode_extra += 2 * cache_heads * input_dim * input_dim
+    matmul = 2 * cache_heads * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+    head_dim = config.hidden_size // config.num_heads
+    attn = config.num_layers * 4 * config.num_heads * head_dim * cache_heads * selected_heads
+    return float(matmul + encode_extra + attn)
 
 
 def flops_per_token(config: ModelConfig, seq_len: int) -> float:
