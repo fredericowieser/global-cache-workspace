@@ -129,13 +129,3 @@ uv run --extra eval python scripts/extract_paper_table.py \
   --out results/llama32_1b_bgt_paper7.md \
   --csv results/llama32_1b_bgt_paper7.csv
 ```
-
-Verified no-TheoremQA Llama 3.2 1B BGT result after the BOS and loglikelihood-boundary compatibility fixes:
-
-| Model | GSM8K | SVAMP | GSM-Hd | ThmQA | LogiQA | Gaokao | AVG |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| GCW BGT | 35.33 | 45.33 | 8.11 |  | 29.03 | 25.64 | 28.69 |
-| Target BGT | 35.60 | 46.70 | 7.70 | 9.20 | 29.50 | 25.40 | 28.98 |
-| Delta | -0.27 | -1.37 | +0.41 |  | -0.47 | +0.24 | -0.29 |
-
-TheoremQA was omitted in the fast verification run above; AVG is computed over the present tasks.
