@@ -20,7 +20,7 @@ backbone_checkpoint: null
 freeze_backbone: false
 ```
 
-For `variant: tf`, this trains a normal transformer from random initialization. For `variant: bt`, `variant: bgt`, or `variant: icarus`, this trains the backbone and cache processor together from random initialization.
+For `variant: tf`, this trains a normal transformer from random initialization. For `variant: bt` or `variant: bgt`, this trains the backbone and cache processor together from random initialization.
 
 ## SFT Or Continued SFT
 
@@ -59,7 +59,7 @@ backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b
 freeze_backbone: false
 ```
 
-For BT/BGT/Icarus, this trains the backbone and cache processor together. For TF, it continues finetuning the transformer.
+For BT/BGT, this trains the backbone and cache processor together. For TF, it continues finetuning the transformer.
 
 ## No Cache Processor
 

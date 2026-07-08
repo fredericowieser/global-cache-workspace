@@ -37,10 +37,6 @@ class CacheState:
         seq = self.scores.shape[1]
         return torch.arange(seq, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.scores.shape[0], -1)
 
-    def all_heads(self) -> torch.Tensor:
-        heads = self.num_layers * self.keys[0].shape[1]
-        return torch.arange(heads, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.batch_size, -1)
-
     def gather_layer(self, layer_idx: int, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         k, v = self.layer(layer_idx)
         index = _expand_cache_indices(indices, k)
@@ -147,10 +143,6 @@ class StaticCacheState:
     def all_indices(self) -> torch.Tensor:
         seq = self.length
         return torch.arange(seq, dtype=torch.long, device=self.score_storage.device).unsqueeze(0).expand(self.batch_size, -1)
-
-    def all_heads(self) -> torch.Tensor:
-        heads = self.num_layers * self.keys[0].shape[1]
-        return torch.arange(heads, dtype=torch.long, device=self.score_storage.device).unsqueeze(0).expand(self.batch_size, -1)
 
     def gather_layer(self, layer_idx: int, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         k, v = self.layer(layer_idx)

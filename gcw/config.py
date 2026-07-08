@@ -7,20 +7,19 @@ from typing import Any, Literal
 import yaml
 
 
-Variant = Literal["tf", "bt", "bgt", "icarus"]
+Variant = Literal["tf", "bt", "bgt"]
 Family = Literal["smollm", "llama", "qwen3"]
 RotaryStyle = Literal["llama", "ppt"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
-CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broadcast"]
+CacheProcessorMode = Literal["standard", "workspace_broadcast"]
 
 
 @dataclass
 class CacheProcessorConfig:
     process_every: int = 64
     topk: int = 32
-    topk_heads: int = 32
     score: str = "attn_l2"
     hidden_size: int = 512
     intermediate_size: int = 2048
@@ -31,8 +30,6 @@ class CacheProcessorConfig:
     rope_theta: float = 10000.0
     gate_init: float = -5.0
     attention_dropout: float = 0.0
-    per_cache_head_projections: bool = False
-    gradient_checkpointing: bool = False
     update_stream: CacheUpdateStream = "kv"
     out_proj_init: CacheOutProjInit = "normal"
     gate_mode: CacheGateMode = "sigmoid"
@@ -45,16 +42,14 @@ class CacheProcessorConfig:
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("cache_processor.score must be 'attn_l2' or 'kv_norm'")
-        if self.topk_heads < 0:
-            raise ValueError("cache_processor.topk_heads must be non-negative")
         if self.update_stream not in {"kv", "v"}:
             raise ValueError("cache_processor.update_stream must be 'kv' or 'v'")
         if self.out_proj_init not in {"normal", "zero"}:
             raise ValueError("cache_processor.out_proj_init must be 'normal' or 'zero'")
         if self.gate_mode not in {"sigmoid", "direct"}:
             raise ValueError("cache_processor.gate_mode must be 'sigmoid' or 'direct'")
-        if self.processor_mode not in {"standard", "workspace_broadcast", "head_mask_broadcast"}:
-            raise ValueError("cache_processor.processor_mode must be 'standard', 'workspace_broadcast', or 'head_mask_broadcast'")
+        if self.processor_mode not in {"standard", "workspace_broadcast"}:
+            raise ValueError("cache_processor.processor_mode must be 'standard' or 'workspace_broadcast'")
         if not 0.0 < self.writer_head_fraction <= 1.0:
             raise ValueError("cache_processor.writer_head_fraction must be in (0, 1]")
         if self.salience_temperature <= 0.0:
@@ -100,7 +95,7 @@ class ModelConfig:
             raise ValueError("head_dim must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads")
-        if self.variant in {"bt", "bgt", "icarus"} and self.cache_processor is None:
+        if self.variant in {"bt", "bgt"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
 
 
@@ -113,9 +108,6 @@ class DataConfig:
     tokenizer_source: str | None = None
     text_field: str = "text"
     max_length: int = 2048
-    sft_skip_rows: int = 0
-    sft_take_rows: int | None = None
-    response_prefix: str = ""
 
 
 @dataclass
@@ -123,8 +115,6 @@ class WandbConfig:
     enabled: bool = False
     project: str = "global-cache-workspace"
     entity: str | None = None
-    id: str | None = None
-    resume: str = "allow"
     name: str | None = None
     group: str | None = None
     mode: str | None = None
@@ -140,8 +130,6 @@ class TrainConfig:
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     freeze_backbone: bool = False
     backbone_checkpoint: str | None = None
-    resume_from_checkpoint: str | None = None
-    resume_optimizer: bool = True
     loss: str = "next_token_ce"
     checkpoint_format: str = "native_safetensors"
     output_dir: str = "runs/smoke"
@@ -150,9 +138,6 @@ class TrainConfig:
     max_steps: int = 2
     total_batch_size: int = 0
     learning_rate: float = 3e-4
-    adam_beta1: float = 0.9
-    adam_beta2: float = 0.95
-    adam_eps: float = 1e-8
     weight_decay: float = 0.1
     warmup_steps: int = 1
     warmdown_ratio: float = 0.2

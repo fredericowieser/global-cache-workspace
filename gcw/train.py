@@ -11,7 +11,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from gcw.checkpoint import load_backbone_checkpoint, load_model_weights, load_trainer_state, save_checkpoint
+from gcw.checkpoint import load_backbone_checkpoint, save_checkpoint
 from gcw.common import cleanup_distributed, dist_info, init_distributed, print0
 from gcw.compile import maybe_compile
 from gcw.config import TrainConfig, load_train_config, to_dict
@@ -38,12 +38,6 @@ def train(config: TrainConfig) -> None:
     if config.freeze_backbone and hasattr(model, "backbone"):
         for p in model.backbone.parameters():
             p.requires_grad_(False)
-    resume_state: dict[str, Any] = {}
-    start_step = 0
-    if config.resume_from_checkpoint:
-        resume_state = load_model_weights(model, config.resume_from_checkpoint)
-        start_step = int(resume_state.get("step", 0))
-        print0(f"resuming model from {config.resume_from_checkpoint} at step {start_step}")
     model = maybe_compile(model)
     if config.distributed == "ddp" and torch.distributed.is_initialized():
         model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
@@ -52,27 +46,16 @@ def train(config: TrainConfig) -> None:
 
     params = [p for p in model.parameters() if p.requires_grad]
     opt = _build_optimizer(params, config)
+    loader = _loader(config, device)
     micro_tokens = config.batch_size * config.sequence_len * world_size
     tokens_per_step = config.total_batch_size or micro_tokens
     if tokens_per_step % micro_tokens != 0:
         raise ValueError(f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}")
     grad_accum_steps = tokens_per_step // micro_tokens
-    if resume_state:
-        _validate_resume_state(config, resume_state, world_size, micro_tokens, tokens_per_step)
-    trainer_resume_state: dict[str, Any] | None = None
-    if config.resume_from_checkpoint and config.resume_optimizer:
-        trainer_resume_state = load_trainer_state(config.resume_from_checkpoint, device=device)
-        if trainer_resume_state is None:
-            print0(f"resume checkpoint {config.resume_from_checkpoint} has no trainer_state.pt; optimizer and RNG state restart")
-        else:
-            opt.load_state_dict(trainer_resume_state["optimizer"])
-            _restore_rng_state(trainer_resume_state, device)
-            print0(f"resumed optimizer and RNG state from {config.resume_from_checkpoint}")
-    loader = _loader(config, device, start_state=resume_state.get("loader") if resume_state else None)
     target_tokens = tokens_per_step * config.max_steps
     flops_per_tok = training_flops_per_token(config.model, config.sequence_len)
     run_meta = {
-        "step": start_step,
+        "step": 0,
         "micro_tokens_per_step": micro_tokens,
         "grad_accum_steps": grad_accum_steps,
         "tokens_per_step": tokens_per_step,
@@ -83,7 +66,6 @@ def train(config: TrainConfig) -> None:
         "processor_params": processor_params(config.model),
         "world_size": world_size,
     }
-    checkpoint_meta = _checkpoint_metadata(config, run_meta)
     print0(
         "training budget: "
         f"tokens={target_tokens:,} flops/token={flops_per_tok:.6e} "
@@ -92,17 +74,15 @@ def train(config: TrainConfig) -> None:
         f"micro_tokens={micro_tokens:,} grad_accum={grad_accum_steps}"
     )
     wandb_run = _init_wandb(config, run_meta) if rank == 0 else None
-    if start_step == 0 and config.eval_on_start and config.eval_every:
+    if config.eval_on_start and config.eval_every:
         val = _eval_loss(model, config, device)
         if rank == 0:
             print0(f"step 0/{config.max_steps} val_loss={val['val/loss']:.4f}")
             _wandb_log(wandb_run, {"train/step": 0, **val}, step=0)
     model.train()
-    smooth_loss: float | None = (trainer_resume_state or {}).get("smooth_loss")
-    if smooth_loss is not None:
-        smooth_loss = float(smooth_loss)
+    smooth_loss = 0.0
     last_state: dict[str, Any] = {"kind": "uninitialized"}
-    for step in range(start_step, config.max_steps):
+    for step in range(config.max_steps):
         step_start = time.perf_counter()
         opt.zero_grad(set_to_none=True)
         loss_total = 0.0
@@ -129,12 +109,8 @@ def train(config: TrainConfig) -> None:
         tokens_seen = tokens_per_step * step_num
         flops_seen = flops_per_tok * tokens_seen
         train_loss = loss_total / grad_accum_steps
-        if smooth_loss is None:
-            smooth_loss = train_loss
-            debiased_loss = train_loss
-        else:
-            smooth_loss = 0.9 * smooth_loss + 0.1 * train_loss
-            debiased_loss = smooth_loss if start_step > 0 and trainer_resume_state is None else smooth_loss / (1.0 - 0.9**step_num)
+        smooth_loss = 0.9 * smooth_loss + 0.1 * train_loss
+        debiased_loss = smooth_loss / (1.0 - 0.9**step_num)
         train_metrics = {
             "train/step": step_num,
             "train/loss": train_loss,
@@ -166,60 +142,22 @@ def train(config: TrainConfig) -> None:
                 msg += f" val_loss={train_metrics['val/loss']:.4f}"
             print0(msg)
             if config.wandb.enabled and step_num % max(1, config.wandb.log_every) == 0:
-                _wandb_log(
-                    wandb_run,
-                    _compact_metrics(train_metrics),
-                    step=step_num,
-                    explicit_step=config.resume_from_checkpoint is None,
-                )
+                _wandb_log(wandb_run, _compact_metrics(train_metrics), step=step_num)
         if config.save_every and step_num % config.save_every == 0 and rank == 0:
             save_checkpoint(
                 Path(config.output_dir) / "checkpoint",
                 _unwrap(model),
                 config.model,
-                _checkpoint_state(checkpoint_meta, step_num, last_state),
-                _trainer_state(opt, float(smooth_loss or 0.0), device),
+                {**run_meta, "step": step_num, "loader": last_state},
             )
     if rank == 0:
-        final_step = max(start_step, config.max_steps)
-        save_checkpoint(
-            Path(config.output_dir) / "checkpoint",
-            _unwrap(model),
-            config.model,
-            _checkpoint_state(checkpoint_meta, final_step, last_state if last_state.get("kind") != "uninitialized" else resume_state.get("loader")),
-            _trainer_state(opt, float(smooth_loss or 0.0), device),
-        )
+        save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, {**run_meta, "step": config.max_steps})
         if wandb_run is not None:
             wandb_run.finish()
     cleanup_distributed()
 
 
-def _checkpoint_metadata(config: TrainConfig, run_meta: dict[str, Any]) -> dict[str, Any]:
-    state = {
-        **run_meta,
-        "data_kind": config.data.kind,
-        "tokenizer": config.data.tokenizer,
-    }
-    if config.data.dataset is not None:
-        state["dataset"] = config.data.dataset
-    if config.data.data_dir is not None:
-        state["data_dir"] = config.data.data_dir
-    if config.backbone_checkpoint is not None:
-        state["backbone_checkpoint"] = config.backbone_checkpoint
-    if config.data.tokenizer_source is not None:
-        state["source"] = config.data.tokenizer_source
-        state["tokenizer_source"] = config.data.tokenizer_source
-    return state
-
-
-def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
-    state = {**base, "step": step}
-    if loader is not None:
-        state["loader"] = loader
-    return state
-
-
-def _loader(config: TrainConfig, device: torch.device, start_state: dict[str, Any] | None = None):
+def _loader(config: TrainConfig, device: torch.device):
     if config.data.kind == "random":
         vocab = config.model.vocab_size
         while True:
@@ -236,26 +174,14 @@ def _loader(config: TrainConfig, device: torch.device, start_state: dict[str, An
             tokenizer_name = f"hf:{config.data.tokenizer_source}"
         tokenizer = get_tokenizer(tokenizer_name)
         rows = list(iter_jsonl(config.data.dataset))
-        if config.data.sft_skip_rows:
-            if config.data.sft_skip_rows >= len(rows):
-                raise ValueError(f"data.sft_skip_rows={config.data.sft_skip_rows} exceeds dataset length {len(rows)}")
-            rows = rows[config.data.sft_skip_rows :]
-        if config.data.sft_take_rows is not None:
-            rows = rows[: config.data.sft_take_rows]
         if not rows:
             raise ValueError(f"empty SFT dataset: {config.data.dataset}")
         i = 0
         while True:
             batch = [rows[(i + j) % len(rows)] for j in range(config.batch_size)]
             i += config.batch_size
-            x, y = sft_batch(
-                batch,
-                tokenizer,
-                config.sequence_len,
-                device=device,
-                response_prefix=config.data.response_prefix,
-            )
-            yield x, y, {"kind": "sft", "row": (config.data.sft_skip_rows + i) % len(rows)}
+            x, y = sft_batch(batch, tokenizer, config.sequence_len, device=device)
+            yield x, y, {"kind": "sft", "row": i % len(rows)}
     yield from data_loader(
         config.batch_size,
         config.sequence_len,
@@ -263,7 +189,6 @@ def _loader(config: TrainConfig, device: torch.device, start_state: dict[str, An
         device=device,
         data_dir=config.data.data_dir,
         infinite=True,
-        start_state=start_state,
     )
 
 
@@ -275,12 +200,7 @@ def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> t
         groups.append({"params": decay, "lr": config.learning_rate, "weight_decay": config.weight_decay, "decay": True})
     if nodecay:
         groups.append({"params": nodecay, "lr": config.learning_rate, "weight_decay": 0.0, "decay": False})
-    opt = torch.optim.AdamW(
-        groups,
-        lr=config.learning_rate,
-        betas=(config.adam_beta1, config.adam_beta2),
-        eps=config.adam_eps,
-    )
+    opt = torch.optim.AdamW(groups, lr=config.learning_rate, betas=(0.9, 0.95), eps=1e-8)
     for group in opt.param_groups:
         group["initial_lr"] = group["lr"]
     return opt
@@ -369,12 +289,10 @@ def _init_wandb(config: TrainConfig, run_meta: dict[str, Any]):
             **to_dict(config),
             "run_budget": run_meta,
         },
-        "resume": config.wandb.resume,
+        "resume": "allow",
     }
     if config.wandb.entity:
         init_kwargs["entity"] = config.wandb.entity
-    if config.wandb.id:
-        init_kwargs["id"] = config.wandb.id
     if config.wandb.mode:
         init_kwargs["mode"] = config.wandb.mode
     run = wandb.init(**init_kwargs)
@@ -388,12 +306,9 @@ def _init_wandb(config: TrainConfig, run_meta: dict[str, Any]):
     return run
 
 
-def _wandb_log(run, metrics: dict[str, Any], step: int, *, explicit_step: bool = True) -> None:
+def _wandb_log(run, metrics: dict[str, Any], step: int) -> None:
     if run is not None:
-        if explicit_step:
-            run.log(metrics, step=step)
-        else:
-            run.log(metrics)
+        run.log(metrics, step=step)
 
 
 def _compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -406,42 +321,3 @@ def _maybe_float(value: Any) -> float | None:
     if isinstance(value, torch.Tensor):
         return float(value.detach().cpu())
     return float(value)
-
-
-def _trainer_state(opt: torch.optim.Optimizer, smooth_loss: float, device: torch.device) -> dict[str, Any]:
-    state: dict[str, Any] = {
-        "optimizer": opt.state_dict(),
-        "smooth_loss": smooth_loss,
-        "torch_rng_state": torch.get_rng_state(),
-    }
-    if device.type == "cuda":
-        state["cuda_rng_state_all"] = torch.cuda.get_rng_state_all()
-    return state
-
-
-def _restore_rng_state(state: dict[str, Any], device: torch.device) -> None:
-    if "torch_rng_state" in state:
-        torch.set_rng_state(state["torch_rng_state"].cpu())
-    if device.type == "cuda" and "cuda_rng_state_all" in state:
-        torch.cuda.set_rng_state_all(state["cuda_rng_state_all"])
-
-
-def _validate_resume_state(
-    config: TrainConfig,
-    state: dict[str, Any],
-    world_size: int,
-    micro_tokens: int,
-    tokens_per_step: int,
-) -> None:
-    step = int(state.get("step", 0))
-    if step > config.max_steps:
-        raise ValueError(f"resume checkpoint step {step} exceeds max_steps {config.max_steps}")
-    expected = {
-        "world_size": world_size,
-        "micro_tokens_per_step": micro_tokens,
-        "tokens_per_step": tokens_per_step,
-    }
-    for key, value in expected.items():
-        saved = state.get(key)
-        if saved is not None and int(saved) != int(value):
-            raise ValueError(f"resume checkpoint {key}={saved} does not match current {value}")

@@ -5,13 +5,12 @@ GCW is a PyTorch workspace for training, converting, and evaluating transformer 
 - `TF`: a standard causal transformer.
 - `BT`: a bottlenecked transformer with one cache processor per backbone layer.
 - `BGT`: a bottlenecked global transformer with one shared cache processor across layers.
-- `Icarus`: a global cache-head processor that reads selected cache tokens and rewrites the latest selected cache position.
 
 The repo supports three workflows:
 
 1. Scratch pretraining on FineWeb-Edu shards.
 2. SFT or continued SFT on OpenMathInstruct-style JSONL.
-3. Frozen or unfrozen BT/BGT/Icarus cache-processor finetuning from shared Llama/Qwen SFT backbones.
+3. Frozen or unfrozen BT/BGT cache-processor finetuning from shared Llama/Qwen SFT backbones.
 
 HF checkpoints are converted into native GCW `safetensors`; training and eval do not use HF model wrappers.
 
@@ -75,35 +74,12 @@ Scratch SmolLM 360M pretraining:
 sbatch --export=ALL,CONFIG=configs/train/smollm360m_tf_20b_wandb.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/smollm360m_matched_bt_20b.yaml scripts/slurm/train.sbatch
 sbatch --export=ALL,CONFIG=configs/train/smollm360m_matched_bgt_20b.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/smollm360m_matched_icarus_20b.yaml scripts/slurm/train.sbatch
 ```
 
 Bottleneck LLM reproduction configs live under `configs/train/bottleneck_llm/`.
 
 ```bash
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml scripts/slurm/train.sbatch
-```
-
-For the standard Llama 3.2 1B frozen-backbone Icarus run on the LRC cluster:
-
-```bash
-bash scripts/martin.sh
-```
-
-Run the same configs directly inside an existing Slurm allocation:
-
-```bash
-uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml
-```
-
-Icarus OpenMath configs are available for all shared SFT backbones:
-
-```bash
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_3b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama31_8b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
 ```
 
 See [docs/training-modes.md](docs/training-modes.md) and [docs/reproduce-bottleneck-llm.md](docs/reproduce-bottleneck-llm.md).

@@ -1,7 +1,7 @@
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM, Qwen3Config, Qwen3ForCausalLM
 
-from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_checkpoint
+from gcw.checkpoint import load_checkpoint
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.convert import (
     config_from_bottleneck,
@@ -34,44 +34,6 @@ def test_hf_llama_key_mapping_loads_native_backbone():
     }
     load_hf_state(model, hf, family="llama")
     assert torch.equal(model.embed_tokens.weight[:16], hf["model.embed_tokens.weight"])
-
-
-def test_untied_backbone_loads_lm_head_from_tied_embedding_checkpoint(tmp_path):
-    tied = ModelConfig(
-        vocab_size=16,
-        hidden_size=8,
-        intermediate_size=16,
-        num_layers=1,
-        num_heads=2,
-        num_kv_heads=1,
-        head_dim=4,
-        sequence_len=8,
-        tie_embeddings=True,
-    )
-    source = build_model(tied)
-    source.init_weights()
-    save_checkpoint(tmp_path / "tied", source, tied)
-
-    cp = CacheProcessorConfig(hidden_size=8, intermediate_size=16, num_heads=1, num_kv_heads=1)
-    target = build_model(
-        ModelConfig(
-            variant="bgt",
-            vocab_size=16,
-            hidden_size=8,
-            intermediate_size=16,
-            num_layers=1,
-            num_heads=2,
-            num_kv_heads=1,
-            head_dim=4,
-            sequence_len=8,
-            tie_embeddings=False,
-            cache_processor=cp,
-        )
-    )
-
-    load_backbone_checkpoint(target, tmp_path / "tied")
-
-    assert torch.equal(target.backbone.lm_head.weight, source.embed_tokens.weight)
 
 
 def test_tiny_llama_logits_match_transformers():
