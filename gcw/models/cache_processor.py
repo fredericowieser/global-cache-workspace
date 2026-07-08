@@ -6,29 +6,13 @@ import torch.nn.functional as F
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.cache_state import CacheState
-from gcw.models.cache_processor_ops import (
-    gather_cache_layers,
-    gather_cache_values,
-    merge_global_kv,
-    merge_global_values,
-    merge_layer_kv,
-    merge_layer_values,
-    rotary_for_indices,
-    run_batched_cache_processors,
-    scatter_cache_layers,
-    scatter_cache_values,
-    select_kv_norm_indices,
-    split_global_kv,
-    split_global_values,
-    split_layer_kv,
-    split_layer_values,
-    workspace_writer_kv,
-    workspace_writer_values,
-)
 from gcw.models.transformer import RMSNorm, apply_rotary, flash_sdpa
-from gcw.models.windowed_cache import WindowedCache
 
-CacheLike = CacheState | WindowedCache
+
+def rotary_for_indices(indices: torch.Tensor, head_dim: int, theta: float, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2, device=indices.device, dtype=torch.float32) / head_dim))
+    freqs = indices.float().unsqueeze(-1) * inv
+    return freqs.cos().unsqueeze(2).to(dtype), freqs.sin().unsqueeze(2).to(dtype)
 
 
 class ProcessorAttention(nn.Module):
@@ -102,30 +86,13 @@ class CacheProcessor(nn.Module):
             elif isinstance(module, RMSNorm):
                 nn.init.ones_(module.weight)
         nn.init.constant_(self.gate, self.config.gate_init)
-        if self.config.out_proj_init == "zero":
-            nn.init.zeros_(self.out_proj.weight)
-            if self.out_proj.bias is not None:
-                nn.init.zeros_(self.out_proj.bias)
 
-    def compute_update(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+        residual = x
         h = self.in_proj(self.in_norm(x))
         for layer in self.layers:
             h = layer(h, positions)
-        return self.out_proj(self.out_norm(h))
-
-    def scaled_update(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        delta = self.compute_update(x, positions)
-        return delta * self._gate_scale(delta.dtype)
-
-    def forward(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
-        return x + self.scaled_update(x, positions)
-
-    def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
-        if self.config.gate_mode == "sigmoid":
-            return torch.sigmoid(self.gate).to(dtype)
-        if self.config.gate_mode == "direct":
-            return self.gate.to(dtype)
-        raise ValueError(f"unsupported cache processor gate_mode: {self.config.gate_mode}")
+        return residual + self.out_proj(self.out_norm(h)) * torch.sigmoid(self.gate)
 
 
 class PerLayerCacheProcessor(nn.Module):
@@ -134,24 +101,18 @@ class PerLayerCacheProcessor(nn.Module):
         if model_config.cache_processor is None:
             raise ValueError("BT requires cache_processor config")
         self.config = model_config.cache_processor
-        if self.config.processor_mode != "standard":
-            raise ValueError(f"cache_processor.processor_mode='{self.config.processor_mode}' is currently BGT-only")
-        if self.config.score != "attn_l2":
-            raise ValueError("cache_processor.score='kv_norm' is currently BGT-only")
-        layer_dim = self.config.stream_factor * model_config.num_kv_heads * int(model_config.head_dim)
+        layer_dim = 2 * model_config.num_kv_heads * int(model_config.head_dim)
         self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.num_layers))
 
-    def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
+    def forward(self, cache: CacheState, *, select_all: bool = False) -> CacheState:
         indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
-        if self.config.update_stream == "v":
-            values = gather_cache_values(cache, indices)
-            updated = run_batched_cache_processors(self.blocks, merge_layer_values(values), indices)
-            new_values = split_layer_values(updated, values.shape[2], values.shape[4])
-            return scatter_cache_values(cache, indices, new_values)
-        keys, values = gather_cache_layers(cache, indices)
-        updated = run_batched_cache_processors(self.blocks, merge_layer_kv(keys, values), indices)
-        new_keys, new_values = split_layer_kv(updated, keys.shape[2], keys.shape[4])
-        return scatter_cache_layers(cache, indices, new_keys, new_values)
+        for layer_idx, block in enumerate(self.blocks):
+            keys, values = cache.gather_layer(layer_idx, indices)
+            merged = _merge_kv(keys, values)
+            updated = block(merged, indices)
+            new_keys, new_values = _split_kv(updated, keys.shape[1], keys.shape[3])
+            cache.scatter_layer(layer_idx, indices, new_keys, new_values)
+        return cache
 
 
 class GlobalCacheProcessor(nn.Module):
@@ -160,69 +121,26 @@ class GlobalCacheProcessor(nn.Module):
         if model_config.cache_processor is None:
             raise ValueError("BGT requires cache_processor config")
         self.config = model_config.cache_processor
-        if self.config.processor_mode == "workspace_broadcast" and self.config.update_stream != "v":
-            raise ValueError("workspace_broadcast requires cache_processor.update_stream='v'")
-        if self.config.processor_mode == "workspace_broadcast" and self.config.score != "kv_norm":
-            raise ValueError("workspace_broadcast requires cache_processor.score='kv_norm'")
-        if self.config.processor_mode == "head_mask_broadcast" and self.config.update_stream != "kv":
-            raise ValueError("head_mask_broadcast requires cache_processor.update_stream='kv'")
-        if self.config.processor_mode == "head_mask_broadcast" and self.config.score != "kv_norm":
-            raise ValueError("head_mask_broadcast requires cache_processor.score='kv_norm'")
-        per_layer = self.config.stream_factor * model_config.num_kv_heads * int(model_config.head_dim)
+        per_layer = 2 * model_config.num_kv_heads * int(model_config.head_dim)
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
         self.head_dim = int(model_config.head_dim)
         self.block = CacheProcessor(self.num_layers * per_layer, self.config)
-        if self.config.score == "kv_norm":
-            init = torch.tensor([self.config.kv_score_init_k, self.config.kv_score_init_v], dtype=torch.float32)
-            self.salience_logits = nn.Parameter(init.clamp_min(1e-8).log())
 
-    def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
-        indices = self._select_indices(cache, select_all)
-        if self.config.processor_mode == "workspace_broadcast":
-            return self._forward_workspace_broadcast(cache, indices)
-        if self.config.processor_mode == "head_mask_broadcast":
-            return self._forward_head_mask_broadcast(cache, indices)
-        if self.config.update_stream == "v":
-            values = gather_cache_values(cache, indices)
-            updated = self.block(merge_global_values(values), indices)
-            new_values = split_global_values(updated, self.num_layers, self.num_kv_heads, self.head_dim)
-            return scatter_cache_values(cache, indices, new_values)
-        keys, values = gather_cache_layers(cache, indices)
-        updated = self.block(merge_global_kv(keys, values), indices)
-        new_keys, new_values = split_global_kv(updated, self.num_layers, self.num_kv_heads, self.head_dim)
-        return scatter_cache_layers(cache, indices, new_keys, new_values)
-
-    def _select_indices(self, cache: CacheLike, select_all: bool) -> torch.Tensor:
-        if select_all:
-            return cache.all_indices()
-        if self.config.score == "kv_norm":
-            return select_kv_norm_indices(cache, self.salience_logits, self.config.process_every, self.config.topk)
-        return cache.select_indices(self.config.process_every, self.config.topk)
-
-    def _forward_workspace_broadcast(self, cache: CacheLike, indices: torch.Tensor) -> CacheLike:
-        writer_values, original_values = workspace_writer_values(
-            cache,
-            indices,
-            self.salience_logits,
-            self.config.writer_head_fraction,
-            self.config.salience_temperature,
-        )
-        delta = self.block.scaled_update(merge_global_values(writer_values), indices)
-        broadcast = split_global_values(delta, self.num_layers, self.num_kv_heads, self.head_dim)
-        return scatter_cache_values(cache, indices, original_values + broadcast)
-
-    def _forward_head_mask_broadcast(self, cache: CacheLike, indices: torch.Tensor) -> CacheLike:
-        writer_keys, writer_values, original_keys, original_values = workspace_writer_kv(
-            cache,
-            indices,
-            self.salience_logits,
-            self.config.writer_head_fraction,
-            self.config.salience_temperature,
-        )
-        delta = self.block.scaled_update(merge_global_kv(writer_keys, writer_values), indices)
-        key_delta, value_delta = split_global_kv(delta, self.num_layers, self.num_kv_heads, self.head_dim)
-        return scatter_cache_layers(cache, indices, original_keys + key_delta, original_values + value_delta)
+    def forward(self, cache: CacheState, *, select_all: bool = False) -> CacheState:
+        indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
+        parts = []
+        shapes = []
+        for layer_idx in range(self.num_layers):
+            keys, values = cache.gather_layer(layer_idx, indices)
+            shapes.append((keys.shape[1], keys.shape[3]))
+            parts.append(_merge_kv(keys, values))
+        updated = self.block(torch.cat(parts, dim=-1), indices)
+        for layer_idx, part in enumerate(torch.split(updated, [p.shape[-1] for p in parts], dim=-1)):
+            num_heads, head_dim = shapes[layer_idx]
+            keys, values = _split_kv(part, num_heads, head_dim)
+            cache.scatter_layer(layer_idx, indices, keys, values)
+        return cache
 
 
 def _merge_kv(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:

@@ -13,7 +13,6 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from gcw.checkpoint import load_backbone_checkpoint, save_checkpoint
 from gcw.common import cleanup_distributed, dist_info, init_distributed, print0
-from gcw.compile import maybe_compile
 from gcw.config import TrainConfig, load_train_config, to_dict
 from gcw.data.shards import data_loader
 from gcw.data.sft import iter_jsonl, sft_batch
@@ -38,7 +37,6 @@ def train(config: TrainConfig) -> None:
     if config.freeze_backbone and hasattr(model, "backbone"):
         for p in model.backbone.parameters():
             p.requires_grad_(False)
-    model = maybe_compile(model)
     if config.distributed == "ddp" and torch.distributed.is_initialized():
         model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
     elif config.distributed == "fsdp" and torch.distributed.is_initialized():
@@ -66,7 +64,6 @@ def train(config: TrainConfig) -> None:
         "processor_params": processor_params(config.model),
         "world_size": world_size,
     }
-    checkpoint_meta = _checkpoint_metadata(config, run_meta)
     print0(
         "training budget: "
         f"tokens={target_tokens:,} flops/token={flops_per_tok:.6e} "
@@ -149,38 +146,13 @@ def train(config: TrainConfig) -> None:
                 Path(config.output_dir) / "checkpoint",
                 _unwrap(model),
                 config.model,
-                _checkpoint_state(checkpoint_meta, step_num, last_state),
+                {**run_meta, "step": step_num, "loader": last_state},
             )
     if rank == 0:
-        save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, _checkpoint_state(checkpoint_meta, config.max_steps))
+        save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, {**run_meta, "step": config.max_steps})
         if wandb_run is not None:
             wandb_run.finish()
     cleanup_distributed()
-
-
-def _checkpoint_metadata(config: TrainConfig, run_meta: dict[str, Any]) -> dict[str, Any]:
-    state = {
-        **run_meta,
-        "data_kind": config.data.kind,
-        "tokenizer": config.data.tokenizer,
-    }
-    if config.data.dataset is not None:
-        state["dataset"] = config.data.dataset
-    if config.data.data_dir is not None:
-        state["data_dir"] = config.data.data_dir
-    if config.backbone_checkpoint is not None:
-        state["backbone_checkpoint"] = config.backbone_checkpoint
-    if config.data.tokenizer_source is not None:
-        state["source"] = config.data.tokenizer_source
-        state["tokenizer_source"] = config.data.tokenizer_source
-    return state
-
-
-def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
-    state = {**base, "step": step}
-    if loader is not None:
-        state["loader"] = loader
-    return state
 
 
 def _loader(config: TrainConfig, device: torch.device):
@@ -200,26 +172,14 @@ def _loader(config: TrainConfig, device: torch.device):
             tokenizer_name = f"hf:{config.data.tokenizer_source}"
         tokenizer = get_tokenizer(tokenizer_name)
         rows = list(iter_jsonl(config.data.dataset))
-        if config.data.sft_skip_rows:
-            if config.data.sft_skip_rows >= len(rows):
-                raise ValueError(f"data.sft_skip_rows={config.data.sft_skip_rows} exceeds dataset length {len(rows)}")
-            rows = rows[config.data.sft_skip_rows :]
-        if config.data.sft_take_rows is not None:
-            rows = rows[: config.data.sft_take_rows]
         if not rows:
             raise ValueError(f"empty SFT dataset: {config.data.dataset}")
         i = 0
         while True:
             batch = [rows[(i + j) % len(rows)] for j in range(config.batch_size)]
             i += config.batch_size
-            x, y = sft_batch(
-                batch,
-                tokenizer,
-                config.sequence_len,
-                device=device,
-                response_prefix=config.data.response_prefix,
-            )
-            yield x, y, {"kind": "sft", "row": (config.data.sft_skip_rows + i) % len(rows)}
+            x, y = sft_batch(batch, tokenizer, config.sequence_len, device=device)
+            yield x, y, {"kind": "sft", "row": i % len(rows)}
     yield from data_loader(
         config.batch_size,
         config.sequence_len,
@@ -238,12 +198,7 @@ def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> t
         groups.append({"params": decay, "lr": config.learning_rate, "weight_decay": config.weight_decay, "decay": True})
     if nodecay:
         groups.append({"params": nodecay, "lr": config.learning_rate, "weight_decay": 0.0, "decay": False})
-    opt = torch.optim.AdamW(
-        groups,
-        lr=config.learning_rate,
-        betas=(config.adam_beta1, config.adam_beta2),
-        eps=config.adam_eps,
-    )
+    opt = torch.optim.AdamW(groups, lr=config.learning_rate, betas=(0.9, 0.95), eps=1e-8)
     for group in opt.param_groups:
         group["initial_lr"] = group["lr"]
     return opt

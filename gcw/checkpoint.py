@@ -52,10 +52,6 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     missing = []
     for key, expected in target_state.items():
         source_key = key if key in weights else f"backbone.{key}"
-        if source_key not in weights and key == "lm_head.weight" and "embed_tokens.weight" in weights:
-            source_key = "embed_tokens.weight"
-        if source_key not in weights and key == "lm_head.weight" and "backbone.embed_tokens.weight" in weights:
-            source_key = "backbone.embed_tokens.weight"
         if source_key not in weights:
             missing.append(key)
             continue

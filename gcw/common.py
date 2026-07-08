@@ -33,8 +33,7 @@ def dist_info() -> tuple[bool, int, int, int]:
 
 
 def init_distributed(kind: str) -> torch.device:
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    if kind in {"ddp", "fsdp"} and world_size > 1 and "RANK" in os.environ and not dist.is_initialized():
+    if kind in {"ddp", "fsdp"} and "RANK" in os.environ and not dist.is_initialized():
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         dist.init_process_group(backend=backend)
     _, _, local_rank, _ = dist_info()
