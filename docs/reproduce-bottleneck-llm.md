@@ -34,15 +34,39 @@ CONFIG=configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml \
 sbatch scripts/slurm/train.sbatch
 ```
 
+Frozen-backbone Icarus, Llama 3.2 1B:
+
+```bash
+CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml \
+sbatch scripts/slurm/train.sbatch
+```
+
+Inside an existing GPU allocation, run the raw training entry point directly:
+
+```bash
+uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml
+```
+
 Other configs follow the same naming:
 
 ```text
 configs/train/bottleneck_llm/{llama32_1b,llama32_3b,llama31_8b,qwen3_06b}_tf_sft.yaml
 configs/train/bottleneck_llm/{llama32_1b,llama32_3b,llama31_8b,qwen3_06b}_{bt,bgt}_from_sft_frozen.yaml
 configs/train/bottleneck_llm/{llama32_1b,llama32_3b,llama31_8b,qwen3_06b}_{bt,bgt}_from_sft_unfrozen.yaml
+configs/train/bottleneck_llm/{llama32_1b,llama32_3b,llama31_8b,qwen3_06b}_icarus_from_sft_frozen.yaml
+configs/train/bottleneck_llm/{llama32_1b,llama32_3b,llama31_8b,qwen3_06b}_icarus_from_sft_unfrozen.yaml
 ```
 
-The frozen configs train only the cache processor. The unfrozen configs train both backbone and cache processor.
+The frozen configs train only the cache processor. The unfrozen configs train both backbone and cache processor. Icarus uses the same shared OpenMathInstruct JSONL and the same native GCW SFT backbone checkpoints as BT/BGT.
+
+Launch all frozen Icarus comparisons:
+
+```bash
+sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
+sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_3b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
+sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama31_8b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
+sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
+```
 
 ## 4. Evaluate A Published Final Checkpoint
 

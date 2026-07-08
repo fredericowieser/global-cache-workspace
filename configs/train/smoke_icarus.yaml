@@ -24,7 +24,6 @@ model:
     num_kv_heads: 1
     gate_init: -5.0
     per_cache_head_projections: false
-    gradient_checkpointing: true
 data:
   kind: random
 mode: pretrain

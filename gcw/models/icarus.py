@@ -3,7 +3,6 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
@@ -127,10 +126,7 @@ class CacheProcessor(nn.Module):
     def compute_update(self, x: torch.Tensor, positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
         h = self.in_proj(self.in_norm(x))
         for layer in self.layers:
-            if self.config.gradient_checkpointing and self.training and torch.is_grad_enabled():
-                h = checkpoint(layer, h, positions, selected_heads, use_reentrant=False)
-            else:
-                h = layer(h, positions, selected_heads)
+            h = layer(h, positions, selected_heads)
         return self.out_proj(self.out_norm(h))
 
     def scaled_update(self, x: torch.Tensor, positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:

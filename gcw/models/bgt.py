@@ -11,11 +11,14 @@ from gcw.models.transformer import TF
 
 
 class BGT(nn.Module):
+    processor_cls = GlobalCacheProcessor
+    variant = "bgt"
+
     def __init__(self, config: ModelConfig):
         super().__init__()
-        self.config = replace(config, variant="bgt")
+        self.config = replace(config, variant=self.variant)
         self.backbone = TF(config)
-        self.cache_processor = GlobalCacheProcessor(self.config)
+        self.cache_processor = self.processor_cls(self.config)
 
     def init_weights(self) -> None:
         self.backbone.init_weights()
