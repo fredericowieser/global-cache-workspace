@@ -1,0 +1,10 @@
+iteration,example_id,target,prediction,correct,generation
+0,3,540,540,True,"
+James runs 3 sprints 3 times a week.
+So he runs 3 * 3 = 9 sprints per week.
+Since he runs 60 meters each sprint, he runs 9 * 60 = 540 meters per week.
+Thus, James runs \boxed{540} meters a week."
+1,3,540,180,False,"
+James runs 3 sprints 3 times a week.
+So he runs 3 * 60 = 180 meters per week.
+Thus, James runs \boxed{180} meters a week."

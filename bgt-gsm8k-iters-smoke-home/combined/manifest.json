@@ -1,0 +1,11 @@
+{
+  "merged_at": "2026-06-29T14:09:18Z",
+  "shards": [
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-smoke-home/shard_0",
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-smoke-home/shard_1",
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-smoke-home/shard_2",
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-smoke-home/shard_3"
+  ],
+  "bootstrap_samples": 10,
+  "seed": 42
+}

@@ -1,0 +1,32 @@
+{
+  "started_at": "2026-06-29T15:15:19Z",
+  "protocol": "GSM8K prefix prefill, repeated Longshot cache-processor iterations, final prompt token as trigger.",
+  "settings": {
+    "checkpoint": "/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/llama32_1b/bgt/final",
+    "out_dir": "/home/f50056118/gcw-results/bgt-gsm8k-old-protocol-20260629-151454/shard_3",
+    "num_examples": 200,
+    "num_calibration": 256,
+    "num_splits": 8,
+    "max_iterations": 10,
+    "iteration_list": "0,1,2,4,8,16,32",
+    "bootstrap_samples": 500,
+    "group_fraction": 0.5,
+    "max_length": 8192,
+    "max_prompt_tokens": 384,
+    "max_target_tokens": 128,
+    "max_gen_toks": 256,
+    "target_prefix": "",
+    "seed": 42,
+    "sample_mode": "random",
+    "sample_seed": 0,
+    "prompt_style": "legacy",
+    "prefill_mode": "old_full_prompt",
+    "old_bottleneck_protocol": true,
+    "flush_every": 8,
+    "device": "cuda",
+    "num_shards": 4,
+    "shard_index": 3,
+    "merge_shards": null,
+    "merge_out_dir": ""
+  }
+}

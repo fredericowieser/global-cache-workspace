@@ -1,0 +1,16 @@
+iteration,example_id,target,prediction,correct,generation
+0,0,18,72,False,"
+Let's break down Janet's daily earnings:
+* She lays 16 eggs per day.
+* She eats 3 eggs for breakfast every morning, so she eats 3 x 16 = 48 eggs per day.
+* She bakes muffins for her friends every day, so she bakes 48 / 4 = 12 muffins per day.
+* She sells the remainder (48 - 12 = 36 eggs) at the farmers' market daily for $2 per fresh egg, so she makes 36 x $2 = $72 per day.
+Thus, Janet makes \boxed{72} dollars every day at the farmers' market."
+1,0,18,33,False,"
+Let's break down Janet's daily earnings:
+* She eats 3 ducks for breakfast every morning, so she earns $3 per day from breakfast.
+* She bakes muffins for her friends every day, so she earns $4 per day from muffins.
+* She sells the remainder of the 16 eggs at the farmers' market daily, which is 16 - 3 = 13 eggs.
+* She sells each egg for $2, so she earns 13 x $2 = $26 from selling the eggs.
+* In total, Janet earns $3 + $4 + $26 = $33 per day.
+Thus, Janet makes \boxed{33} dollars every day at the farmers' market."

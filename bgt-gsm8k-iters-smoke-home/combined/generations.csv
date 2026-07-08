@@ -1,0 +1,52 @@
+iteration,example_id,target,prediction,correct,generation
+0,0,18,72,False,"
+Let's break down Janet's daily earnings:
+* She lays 16 eggs per day.
+* She eats 3 eggs for breakfast every morning, so she eats 3 x 16 = 48 eggs per day.
+* She bakes muffins for her friends every day, so she bakes 48 / 4 = 12 muffins per day.
+* She sells the remainder (48 - 12 = 36 eggs) at the farmers' market daily for $2 per fresh egg, so she makes 36 x $2 = $72 per day.
+Thus, Janet makes \boxed{72} dollars every day at the farmers' market."
+1,0,18,33,False,"
+Let's break down Janet's daily earnings:
+* She eats 3 ducks for breakfast every morning, so she earns $3 per day from breakfast.
+* She bakes muffins for her friends every day, so she earns $4 per day from muffins.
+* She sells the remainder of the 16 eggs at the farmers' market daily, which is 16 - 3 = 13 eggs.
+* She sells each egg for $2, so she earns 13 x $2 = $26 from selling the eggs.
+* In total, Janet earns $3 + $4 + $26 = $33 per day.
+Thus, Janet makes \boxed{33} dollars every day at the farmers' market."
+0,1,3,3,True,"
+Let's break down the problem:
+The robe takes 2 bolts of blue fiber.
+The robe also takes half that much white fiber, which is 2/2 = 1 bolt.
+So, the total number of bolts is 2 (blue fiber) + 1 (white fiber) = 3.
+Thus, it takes \boxed{3} bolts in total."
+1,1,3,3,True,"
+Let's break down the problem:
+The robe takes 2 bolts of blue fiber.
+The robe also takes half that amount of white fiber, which is 2 / 2 = 1 bolt.
+So, the total number of bolts is 2 (blue fiber) + 1 (white fiber) = 3.
+Thus, it takes \boxed{3} bolts of blue fiber and white fiber in total."
+0,2,70000,40000,False,"
+Let's break it down:
+The original value of the house is $80,000.
+The value of the house after putting in $50,000 in repairs is 150% of the original value, which is:
+$80,000 x 1.5 = $120,000
+So, the total value of the house after repairs is $120,000.
+The profit is the difference between the total value of the house and the original value:
+$120,000 - $80,000 = $40,000
+Therefore, Josh made a profit of \boxed{40000} dollars."
+1,2,70000,40000,False,"
+Let's break it down:
+The original price of the house is $80,000.
+The value of the house after putting in repairs is 150% of the original price, which is $80,000 x 1.5 = $120,000.
+So, the profit is the difference between the new price and the original price, which is $120,000 - $80,000 = $40,000.
+Thus, Josh made a profit of \boxed{40000} dollars."
+0,3,540,540,True,"
+James runs 3 sprints 3 times a week.
+So he runs 3 * 3 = 9 sprints per week.
+Since he runs 60 meters each sprint, he runs 9 * 60 = 540 meters per week.
+Thus, James runs \boxed{540} meters a week."
+1,3,540,180,False,"
+James runs 3 sprints 3 times a week.
+So he runs 3 * 60 = 180 meters per week.
+Thus, James runs \boxed{180} meters a week."
