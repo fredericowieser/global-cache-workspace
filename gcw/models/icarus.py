@@ -7,7 +7,7 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
-from gcw.models.cache_processor_ops import rotary_for_indices, rotate_cache_keys
+from gcw.models.cache_processor_ops import rotary_for_indices
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.transformer import RMSNorm, apply_rotary, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
@@ -36,12 +36,12 @@ class ProcessorAttention(nn.Module):
         if selected_heads.shape[-1] == 0:
             return torch.zeros_like(x)
         q = self.q_proj(x).view(batch, cache_heads, seq, self.num_heads, self.head_dim)
-        selected_x = _gather_cache_heads(x, selected_heads)
-        k = self.k_proj(selected_x).view(batch, selected_heads.shape[-1], seq, self.num_kv_heads, self.head_dim)
-        v = self.v_proj(selected_x).view(batch, selected_heads.shape[-1], seq, self.num_kv_heads, self.head_dim)
+        k = self.k_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
+        v = self.v_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
         cos, sin = rotary_for_indices(positions, self.head_dim, theta, q.dtype)
         q = apply_rotary(q, cos.unsqueeze(1), sin.unsqueeze(1))
         k = apply_rotary(k, cos.unsqueeze(1), sin.unsqueeze(1))
+        k, v = (_gather_cache_heads(t, selected_heads) for t in (k, v))
         q = q.permute(0, 3, 1, 2, 4).reshape(batch, self.num_heads, cache_heads * seq, self.head_dim)
         k, v = (
             t.permute(0, 3, 1, 2, 4).reshape(batch, self.num_kv_heads, selected_heads.shape[-1] * seq, self.head_dim)
@@ -163,8 +163,6 @@ class GlobalCacheProcessor(nn.Module):
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
         self.head_dim = int(model_config.head_dim)
-        self.rope_theta = model_config.rope_theta
-        self.rotary_style = model_config.rotary_style
         self.num_cache_heads = self.num_layers * self.num_kv_heads
         self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config)
 
@@ -172,20 +170,12 @@ class GlobalCacheProcessor(nn.Module):
         indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
         if indices.shape[-1] == 0:
             return cache
-        merged = _gather_merged(
-            cache,
-            indices,
-            unrope_keys=self.config.unrope_keys,
-            rope_theta=self.rope_theta,
-            rotary_style=self.rotary_style,
-        )
+        merged = _gather_merged(cache, indices)
         selected_heads = cache.all_heads() if select_all else _select_heads_from_merged(merged, self.config.topk_heads)
         updated = self.block(merged, indices, selected_heads)
         latest = indices[:, -1:]
         latest_update = updated[:, :, -1:].contiguous()
         keys, values = _split_merged(latest_update, self.num_layers, self.num_kv_heads, self.head_dim)
-        if self.config.unrope_keys:
-            keys = rotate_cache_keys(keys, latest, theta=self.rope_theta, rotary_style=self.rotary_style)
         return _scatter_latest(cache, latest, keys, values)
 
 
@@ -210,20 +200,11 @@ def _cache_tensors(cache: CacheLike) -> tuple[torch.Tensor, torch.Tensor]:
     return torch.stack(cache.keys, dim=0), torch.stack(cache.values, dim=0)
 
 
-def _gather_merged(
-    cache: CacheLike,
-    indices: torch.Tensor,
-    *,
-    unrope_keys: bool = False,
-    rope_theta: float = 10000.0,
-    rotary_style: str = "llama",
-) -> torch.Tensor:
+def _gather_merged(cache: CacheLike, indices: torch.Tensor) -> torch.Tensor:
     keys, values = _cache_tensors(cache)
     index = indices[None, :, None, :, None].expand(keys.shape[0], -1, keys.shape[2], -1, keys.shape[4])
     keys = torch.gather(keys, 3, index)
     values = torch.gather(values, 3, index)
-    if unrope_keys:
-        keys = rotate_cache_keys(keys, indices, theta=rope_theta, rotary_style=rotary_style, inverse=True)
     return torch.cat([keys, values], dim=-1).permute(1, 0, 2, 3, 4).reshape(
         keys.shape[1], keys.shape[0] * keys.shape[2], keys.shape[3], 2 * keys.shape[4]
     )
@@ -260,9 +241,7 @@ def _split_merged(
 def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
     if selected_heads.ndim != 2:
         raise ValueError("selected_heads must have shape (batch, selected_heads)")
-    if x.ndim != 4:
-        raise ValueError("x must have shape (batch, cache_heads, seq, hidden)")
-    index = selected_heads[:, :, None, None].expand(-1, -1, x.shape[2], x.shape[3])
+    index = selected_heads[:, :, None, None, None].expand(-1, -1, x.shape[2], x.shape[3], x.shape[4])
     return torch.gather(x, dim=1, index=index)
 
 

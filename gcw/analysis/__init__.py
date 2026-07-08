@@ -1,2 +1,2 @@
-"""Analysis entrypoints for GCW checkpoints."""
+"""Analysis tools for GCW checkpoints."""
 

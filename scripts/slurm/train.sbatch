@@ -19,10 +19,8 @@ mkdir -p "$WANDB_DIR"
 NPROC="${GPUS:-${SLURM_GPUS_ON_NODE:-1}}"
 UV_EXTRAS="${UV_EXTRAS:---extra gpu}"
 read -r -a UV_EXTRA_ARGS <<< "$UV_EXTRAS"
-UV_RUN=(uv run --locked "${UV_EXTRA_ARGS[@]}")
-"${UV_RUN[@]}" python scripts/check_cuda_env.py
 if [[ "$NPROC" == "1" ]]; then
-  "${UV_RUN[@]}" gcw train --config "$CONFIG"
+  uv run "${UV_EXTRA_ARGS[@]}" gcw train --config "$CONFIG"
 else
-  "${UV_RUN[@]}" torchrun --standalone --nproc_per_node="$NPROC" -m gcw.cli train --config "$CONFIG"
+  uv run "${UV_EXTRA_ARGS[@]}" torchrun --standalone --nproc_per_node="$NPROC" -m gcw.cli train --config "$CONFIG"
 fi

@@ -30,7 +30,6 @@ model:
     attention_dropout: 0.0
     per_cache_head_projections: false
     gradient_checkpointing: true
-    unrope_keys: false
 data:
   kind: sft
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
@@ -46,7 +45,7 @@ backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/qwen3_06b/
 output_dir: runs/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen
 batch_size: 16
 sequence_len: 512
-max_steps: 3000
+max_steps: 1000
 total_batch_size: 65536
 learning_rate: 0.0001
 adam_beta2: 0.999

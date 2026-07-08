@@ -7,15 +7,13 @@ from typing import Any, Literal
 import yaml
 
 
-Variant = Literal["tf", "bt", "bgt", "icarus", "longshot"]
+Variant = Literal["tf", "bt", "bgt", "icarus"]
 Family = Literal["smollm", "llama", "qwen3"]
 RotaryStyle = Literal["llama", "ppt"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
 CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broadcast"]
-CacheEncoderMethod = Literal["linear", "query_attention"]
-CacheEncoderQuerySource = Literal["learned", "final_token"]
 
 
 @dataclass
@@ -43,10 +41,6 @@ class CacheProcessorConfig:
     salience_temperature: float = 1.0
     kv_score_init_k: float = 0.25
     kv_score_init_v: float = 0.75
-    encoder_method: CacheEncoderMethod = "linear"
-    encoder_seq_len: int | None = None
-    encoder_query_source: CacheEncoderQuerySource = "learned"
-    unrope_keys: bool = False
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
@@ -67,12 +61,6 @@ class CacheProcessorConfig:
             raise ValueError("cache_processor.salience_temperature must be positive")
         if self.kv_score_init_k <= 0.0 or self.kv_score_init_v <= 0.0:
             raise ValueError("cache_processor.kv_score_init_k and kv_score_init_v must be positive")
-        if self.encoder_method not in {"linear", "query_attention"}:
-            raise ValueError("cache_processor.encoder_method must be 'linear' or 'query_attention'")
-        if self.encoder_seq_len is not None and self.encoder_seq_len <= 0:
-            raise ValueError("cache_processor.encoder_seq_len must be positive when set")
-        if self.encoder_query_source not in {"learned", "final_token"}:
-            raise ValueError("cache_processor.encoder_query_source must be 'learned' or 'final_token'")
 
     @property
     def stream_factor(self) -> int:
@@ -112,7 +100,7 @@ class ModelConfig:
             raise ValueError("head_dim must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads")
-        if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
+        if self.variant in {"bt", "bgt", "icarus"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
 
 
@@ -135,6 +123,8 @@ class WandbConfig:
     enabled: bool = False
     project: str = "global-cache-workspace"
     entity: str | None = None
+    id: str | None = None
+    resume: str = "allow"
     name: str | None = None
     group: str | None = None
     mode: str | None = None
@@ -150,6 +140,8 @@ class TrainConfig:
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     freeze_backbone: bool = False
     backbone_checkpoint: str | None = None
+    resume_from_checkpoint: str | None = None
+    resume_optimizer: bool = True
     loss: str = "next_token_ce"
     checkpoint_format: str = "native_safetensors"
     output_dir: str = "runs/smoke"

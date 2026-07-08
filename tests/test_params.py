@@ -26,44 +26,6 @@ def test_smol_bt_bgt_share_backbone_and_stay_under_five_percent():
     assert bgt_meta["processor_fraction"] <= 0.05
 
 
-def test_longshot_processor_params_match_model_for_encoder_methods():
-    base_cp = CacheProcessorConfig(
-        process_every=4,
-        topk=2,
-        topk_heads=2,
-        hidden_size=8,
-        intermediate_size=16,
-        num_heads=1,
-        num_kv_heads=1,
-        encoder_seq_len=6,
-    )
-    for cp in (
-        base_cp,
-        replace(base_cp, encoder_method="query_attention"),
-        replace(base_cp, encoder_method="query_attention", encoder_query_source="final_token"),
-        replace(
-            base_cp,
-            encoder_method="query_attention",
-            encoder_query_source="final_token",
-            per_cache_head_projections=True,
-        ),
-    ):
-        cfg = ModelConfig(
-            variant="longshot",
-            vocab_size=128,
-            hidden_size=32,
-            intermediate_size=64,
-            num_layers=2,
-            num_heads=4,
-            num_kv_heads=2,
-            head_dim=8,
-            cache_processor=cp,
-        )
-        model = build_model(cfg)
-
-        assert processor_params(cfg) == sum(p.numel() for p in model.cache_processor.parameters())
-
-
 def test_matched_total_uses_one_backbone_under_tf_target():
     target = estimate_non_embedding_params(smollm360m_backbone())
     backbone, _ = fit_matched_total_backbone(target, fraction=0.05)
@@ -134,18 +96,8 @@ def test_generated_family_configs_include_icarus(tmp_path):
     assert table["icarus_per_cache_head"]["model"]["variant"] == "icarus"
     assert table["icarus_per_cache_head"]["model"]["cache_processor"]["per_cache_head_projections"] is True
     assert table["icarus_per_cache_head"]["model"]["cache_processor"]["topk_heads"] == 32
-    assert table["longshot"]["model"]["variant"] == "longshot"
-    assert table["longshot"]["model"]["cache_processor"]["topk_heads"] == 32
-    assert table["longshot_query_attention"]["model"]["variant"] == "longshot"
-    assert table["longshot_query_attention"]["model"]["cache_processor"]["encoder_method"] == "query_attention"
-    assert table["longshot_query_attention_per_cache_head"]["model"]["variant"] == "longshot"
-    assert table["longshot_query_attention_per_cache_head"]["model"]["cache_processor"]["encoder_method"] == "query_attention"
-    assert table["longshot_query_attention_per_cache_head"]["model"]["cache_processor"]["per_cache_head_projections"] is True
     assert (tmp_path / "smollm360m_icarus.yaml").exists()
     assert (tmp_path / "smollm360m_icarus_per_cache_head.yaml").exists()
-    assert (tmp_path / "smollm360m_longshot.yaml").exists()
-    assert (tmp_path / "smollm360m_longshot_query_attention.yaml").exists()
-    assert (tmp_path / "smollm360m_longshot_query_attention_per_cache_head.yaml").exists()
 
 
 def test_value_only_processor_params_use_smaller_cache_stream():

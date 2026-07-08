@@ -13,11 +13,9 @@ model:
   norm_eps: 1.0e-05
   tie_embeddings: true
   qk_norm: false
-  rotary_style: ppt
   cache_processor:
     process_every: 64
     topk: 32
-    topk_heads: 32
     score: attn_l2
     hidden_size: 128
     intermediate_size: 512
@@ -28,15 +26,9 @@ model:
     rope_theta: 10000.0
     gate_init: -5.0
     attention_dropout: 0.0
-    per_cache_head_projections: false
-  legacy_bottleneck_generate: false
 metadata:
   backbone_non_embedding_params: 314635200
   processor_params: 13701152
-  total_non_embedding_params: 328336352
   processor_fraction: 0.04354615122529202
   target_processor_fraction: 0.05
   target_processor_params: 15731760
-  target_non_embedding_params: 314635200
-  delta_from_target: 13701152
-  regime: added_on_top

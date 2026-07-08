@@ -30,7 +30,6 @@ runs/
 checkpoints/
 outputs/
 slurm_out/
-results/
 wandb/
 
 # Large model and dataset artifacts

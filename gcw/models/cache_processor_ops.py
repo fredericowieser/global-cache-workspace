@@ -21,23 +21,6 @@ def rotary_for_indices(
     return freqs.cos().unsqueeze(2).to(dtype), freqs.sin().unsqueeze(2).to(dtype)
 
 
-def rotate_cache_keys(
-    keys: torch.Tensor,
-    indices: torch.Tensor,
-    *,
-    theta: float,
-    rotary_style: str,
-    inverse: bool = False,
-) -> torch.Tensor:
-    """Apply or undo the backbone RoPE transform on cache keys."""
-    cos, sin = rotary_for_indices(indices, keys.shape[-1], theta, keys.dtype)
-    cos = cos.permute(0, 2, 1, 3).unsqueeze(0)
-    sin = sin.permute(0, 2, 1, 3).unsqueeze(0)
-    if inverse:
-        sin = -sin
-    return apply_rotary(keys, cos, sin, style=rotary_style)
-
-
 def gather_cache_layers(cache: CacheState | WindowedCache, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     if isinstance(cache, WindowedCache):
         keys, values = cache.keys, cache.values

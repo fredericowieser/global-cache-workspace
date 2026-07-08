@@ -1,11 +1,10 @@
-import json
 import sys
 
 import torch
 
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, WandbConfig
-from gcw.checkpoint import load_checkpoint, save_checkpoint
-from gcw.data.shards import ShardWriter
+from gcw.checkpoint import load_checkpoint, load_trainer_state, save_checkpoint
+from gcw.data.shards import ShardWriter, data_loader
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
 from gcw.train import _checkpoint_metadata, train
@@ -93,6 +92,46 @@ def test_train_logs_wandb_train_and_validation_metrics(monkeypatch, tmp_path):
     assert all("train/tokens" in metrics for _, metrics in logs[1:])
 
 
+def test_train_passes_wandb_resume_id(monkeypatch, tmp_path):
+    fake = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    cfg = tiny_train_config(tmp_path)
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.max_steps = 1
+    cfg.wandb.id = "existing-run"
+    cfg.wandb.resume = "must"
+
+    train(cfg)
+
+    assert fake.init_kwargs["id"] == "existing-run"
+    assert fake.init_kwargs["resume"] == "must"
+
+
+def test_resumed_train_logs_wandb_without_explicit_internal_step(monkeypatch, tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.wandb.enabled = False
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.max_steps = 1
+    train(cfg)
+
+    fake = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    resume = tiny_train_config(tmp_path)
+    resume.eval_every = 0
+    resume.eval_on_start = False
+    resume.max_steps = 2
+    resume.resume_from_checkpoint = str(tmp_path / "run" / "checkpoint")
+    resume.wandb.id = "existing-run"
+    resume.wandb.resume = "must"
+
+    train(resume)
+
+    assert fake.run.logs[-1][0] is None
+    assert fake.run.logs[-1][1]["train/step"] == 2
+
+
 def test_train_reads_pretrain_shards(tmp_path):
     data_dir = tmp_path / "data"
     writer = ShardWriter(data_dir, "train", shard_tokens=1000)
@@ -110,22 +149,63 @@ def test_train_reads_pretrain_shards(tmp_path):
     assert (tmp_path / "run" / "checkpoint" / "train_state.json").exists()
 
 
-def test_train_can_retain_numbered_step_checkpoints(monkeypatch, tmp_path):
+def test_fineweb_loader_resumes_after_saved_step(tmp_path):
+    data_dir = tmp_path / "data"
+    writer = ShardWriter(data_dir, "train", shard_tokens=1000)
+    writer.add_tokens(list(range(40)))
+    writer.close()
+    shard = data_dir / "train_000000.bin"
+
+    loader = data_loader(
+        batch_size=1,
+        sequence_len=4,
+        data_dir=data_dir,
+        start_state={"epoch": 0, "shard": str(shard), "step_in_shard": 2},
+    )
+    x, y, state = next(loader)
+
+    assert x.tolist() == [[8, 9, 10, 11]]
+    assert y.tolist() == [[9, 10, 11, 12]]
+    assert state["step_in_shard"] == 3
+
+
+def test_train_resumes_legacy_checkpoint_without_trainer_state(tmp_path):
     cfg = tiny_train_config(tmp_path)
     cfg.wandb.enabled = False
     cfg.eval_every = 0
     cfg.eval_on_start = False
-    cfg.save_every = 1
-    monkeypatch.setenv("GCW_KEEP_STEP_CHECKPOINTS", "1")
-    monkeypatch.setenv("GCW_STEP_CHECKPOINT_EVERY", "2")
+    cfg.max_steps = 1
+    train(cfg)
+    checkpoint = tmp_path / "run" / "checkpoint"
+    (checkpoint / "trainer_state.pt").unlink()
+
+    resume = tiny_train_config(tmp_path)
+    resume.wandb.enabled = False
+    resume.eval_every = 0
+    resume.eval_on_start = False
+    resume.max_steps = 2
+    resume.resume_from_checkpoint = str(checkpoint)
+
+    train(resume)
+
+    _, _, state = load_checkpoint(checkpoint)
+    assert state["step"] == 2
+    assert (checkpoint / "trainer_state.pt").exists()
+
+
+def test_train_writes_reloadable_trainer_state(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.wandb.enabled = False
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.max_steps = 1
 
     train(cfg)
 
-    assert (tmp_path / "run" / "checkpoint" / "train_state.json").exists()
-    assert not (tmp_path / "run" / "checkpoint-1").exists()
-    retained = tmp_path / "run" / "checkpoint-2" / "train_state.json"
-    assert retained.exists()
-    assert json.loads(retained.read_text(encoding="utf-8"))["step"] == 2
+    trainer_state = load_trainer_state(tmp_path / "run" / "checkpoint")
+    assert trainer_state is not None
+    assert "optimizer" in trainer_state
+    assert "torch_rng_state" in trainer_state
 
 
 def test_train_loads_native_backbone_checkpoint(tmp_path):

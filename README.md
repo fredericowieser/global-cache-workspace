@@ -115,7 +115,6 @@ Evaluate the verified Llama 3.2 1B BGT checkpoint from shared storage:
 ```bash
 CHECKPOINT=/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/llama32_1b/bgt/final \
 SUITE=paper7 \
-GCW_EVAL_SKIP_TASKS=theoremqa \
 BATCH_SIZE=16 \
 OUT=results/llama32_1b_bgt_paper7.json \
 sbatch scripts/slurm/eval.sbatch
