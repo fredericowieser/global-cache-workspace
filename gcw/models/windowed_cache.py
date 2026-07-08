@@ -48,10 +48,6 @@ class WindowedCache:
         seq = self.scores.shape[1]
         return torch.arange(seq, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.scores.shape[0], -1)
 
-    def all_heads(self) -> torch.Tensor:
-        heads = self.keys.shape[0] * self.keys.shape[2]
-        return torch.arange(heads, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.batch_size, -1)
-
     def gather_layer(self, layer_idx: int, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         k, v = self.layer(layer_idx)
         index = indices[:, None, :, None].expand(-1, k.shape[1], -1, k.shape[3])

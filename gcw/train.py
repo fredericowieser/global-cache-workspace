@@ -11,7 +11,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from gcw.checkpoint import load_backbone_checkpoint, save_checkpoint
+from gcw.checkpoint import save_checkpoint
 from gcw.common import cleanup_distributed, dist_info, init_distributed, print0
 from gcw.compile import maybe_compile
 from gcw.config import TrainConfig, load_train_config, to_dict
@@ -33,8 +33,6 @@ def train(config: TrainConfig) -> None:
     _, rank, _, world_size = dist_info()
     model = build_model(config.model).to(device)
     model.init_weights()
-    if config.backbone_checkpoint:
-        load_backbone_checkpoint(model, config.backbone_checkpoint)
     if config.freeze_backbone and hasattr(model, "backbone"):
         for p in model.backbone.parameters():
             p.requires_grad_(False)
@@ -167,12 +165,7 @@ def _loader(config: TrainConfig, device: torch.device):
     if config.mode == "sft":
         if config.data.dataset is None:
             raise ValueError("SFT mode requires data.dataset JSONL path")
-        tokenizer_name = config.data.tokenizer
-        if tokenizer_name == "hf":
-            if config.data.tokenizer_source is None:
-                raise ValueError("data.tokenizer_source is required when data.tokenizer='hf'")
-            tokenizer_name = f"hf:{config.data.tokenizer_source}"
-        tokenizer = get_tokenizer(tokenizer_name)
+        tokenizer = get_tokenizer("cosmo2")
         rows = list(iter_jsonl(config.data.dataset))
         if not rows:
             raise ValueError(f"empty SFT dataset: {config.data.dataset}")

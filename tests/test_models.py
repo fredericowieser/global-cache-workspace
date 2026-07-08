@@ -5,21 +5,18 @@ import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
-from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.cache_state import CacheState
 from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
-from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
-from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
-from gcw.models.transformer import _matches_stop_sequence, apply_rotary
+from gcw.models.transformer import apply_rotary
 from gcw.models.windowed_cache import WindowedCache
 
 
 def tiny_config(variant="tf", **processor_overrides):
     cp = None
-    if variant in {"bt", "bgt", "icarus"}:
+    if variant in {"bt", "bgt"}:
         cp = CacheProcessorConfig(
             process_every=4,
             topk=2,
-            topk_heads=2,
             hidden_size=8,
             intermediate_size=16,
             num_heads=1,
@@ -42,7 +39,7 @@ def tiny_config(variant="tf", **processor_overrides):
 
 
 def test_tiny_models_forward_backward():
-    for variant in ("tf", "bt", "bgt", "icarus"):
+    for variant in ("tf", "bt", "bgt"):
         model = build_model(tiny_config(variant))
         model.init_weights()
         x = torch.randint(0, 128, (2, 9))
@@ -53,20 +50,8 @@ def test_tiny_models_forward_backward():
         assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
 
 
-def test_tiny_icarus_uses_icarus_processor():
-    model = build_model(tiny_config("icarus"))
-    assert isinstance(model, Icarus)
-    assert isinstance(model.cache_processor, IcarusGlobalCacheProcessor)
-    model.init_weights()
-    x = torch.randint(0, 128, (2, 9))
-    loss = model(x, x)
-    loss.backward()
-    assert torch.isfinite(loss)
-    assert any(p.grad is not None for p in model.cache_processor.parameters())
-
-
 def test_tiny_models_bf16_autocast_forward_backward():
-    for variant in ("tf", "bt", "bgt", "icarus"):
+    for variant in ("tf", "bt", "bgt"):
         model = build_model(tiny_config(variant))
         model.init_weights()
         x = torch.randint(0, 128, (2, 9))
@@ -77,15 +62,14 @@ def test_tiny_models_bf16_autocast_forward_backward():
 
 
 def test_freeze_backbone_leaves_processor_trainable():
-    for variant in ("bt", "icarus"):
-        model = build_model(tiny_config(variant))
-        for p in model.backbone.parameters():
-            p.requires_grad_(False)
-        x = torch.randint(0, 128, (2, 9))
-        loss = model(x, x)
-        loss.backward()
-        assert not any(p.grad is not None for p in model.backbone.parameters())
-        assert any(p.grad is not None for p in model.cache_processor.parameters())
+    model = build_model(tiny_config("bt"))
+    for p in model.backbone.parameters():
+        p.requires_grad_(False)
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+    assert not any(p.grad is not None for p in model.backbone.parameters())
+    assert any(p.grad is not None for p in model.cache_processor.parameters())
 
 
 def test_bt_bgt_share_backbone_shape():
@@ -152,46 +136,6 @@ def test_generate_legacy_bottleneck_prefill_processes_full_cache_once():
     assert calls == [(9, True), (13, False)]
 
 
-def test_generate_fast_matches_reference_generate():
-    for variant in ("tf", "bt", "bgt", "icarus"):
-        torch.manual_seed(3)
-        model = build_model(tiny_config(variant)).eval()
-        model.init_weights()
-        x = torch.randint(0, 128, (2, 9))
-        with torch.no_grad():
-            reference = model.generate(x, max_new_tokens=6)
-            fast = model.generate_fast(x, max_new_tokens=6)
-        assert torch.equal(fast, reference)
-
-
-def test_generate_fast_legacy_bottleneck_cadence_matches_reference():
-    model = build_model(tiny_config("tf")).eval()
-    model.init_weights()
-    calls = []
-
-    def processor(cache, **kwargs):
-        calls.append((cache.seq_len, bool(kwargs.get("select_all", False))))
-        return cache
-
-    x = torch.randint(0, 128, (1, 9))
-    model.generate_fast(
-        x,
-        max_new_tokens=5,
-        processor=processor,
-        process_every=4,
-        process_prefill_windows=False,
-        process_after_prefill=True,
-        relative_generation_cadence=True,
-    )
-    assert calls == [(9, True), (13, False)]
-
-
-def test_stop_sequence_suffix_matching():
-    tokens = torch.tensor([[1, 2, 3], [1, 2, 4]])
-    matched = _matches_stop_sequence(tokens, [[2, 3]])
-    assert matched.tolist() == [True, False]
-
-
 def test_per_layer_cache_processor_matches_reference_loop():
     model = build_model(tiny_config("bt"))
     model.init_weights()
@@ -246,78 +190,6 @@ def test_global_cache_processor_matches_windowed_cache_path():
 
     _assert_cache_close(actual.to_cache_state(), expected)
     _assert_unselected_unchanged(cache, actual.to_cache_state(), cache.select_indices(4, 2))
-
-
-def test_icarus_selects_top_heads_from_gathered_kv_norms():
-    parts = [torch.zeros(1, 3, 2, 4) for _ in range(2)]
-    parts[0][0, 2] = 10.0
-    parts[1][0, 1] = 9.0
-    merged = torch.cat(parts, dim=1)
-
-    assert _select_heads_from_merged(merged, topk=2).tolist() == [[2, 4]]
-
-
-def test_icarus_gathers_cache_heads_per_batch():
-    x = torch.arange(2 * 4 * 3 * 2 * 2).view(2, 4, 3, 2, 2)
-    selected = torch.tensor([[1, 3], [0, 2]])
-
-    gathered = _gather_cache_heads(x, selected)
-
-    assert torch.equal(gathered[0], x[0, [1, 3]])
-    assert torch.equal(gathered[1], x[1, [0, 2]])
-
-
-def test_icarus_cache_processor_matches_windowed_cache_path_and_updates_latest_only():
-    model = build_model(tiny_config("icarus"))
-    model.init_weights()
-    cache = _random_cache(model.config)
-    expected = _clone_cache(cache)
-    actual = WindowedCache.from_cache_state(_clone_cache(cache))
-    selected = cache.select_indices(4, 2)
-
-    model.cache_processor(expected)
-    model.cache_processor(actual)
-
-    actual_state = actual.to_cache_state()
-    _assert_cache_close(actual_state, expected)
-    _assert_cache_positions_unchanged(cache, actual_state, _not_latest_mask(cache, selected))
-
-
-def test_icarus_cache_processor_matches_static_cache_path():
-    model = build_model(tiny_config("icarus"))
-    model.init_weights()
-    cache = _random_cache(model.config)
-    expected = _clone_cache(cache)
-    static = _static_cache_from_state(cache)
-
-    model.cache_processor(expected)
-    model.cache_processor(static)
-
-    _assert_cache_close(_cache_state_from_static(static), expected)
-
-
-def test_icarus_select_all_uses_all_indices_and_heads():
-    model = build_model(tiny_config("icarus"))
-    cache = _random_cache(model.config)
-    calls = []
-
-    def forward(self, x, positions, selected_heads):
-        calls.append((positions.clone(), selected_heads.clone()))
-        return x
-
-    model.cache_processor.block.forward = types.MethodType(forward, model.cache_processor.block)
-    model.cache_processor(cache, select_all=True)
-
-    assert len(calls) == 1
-    assert torch.equal(calls[0][0], cache.all_indices())
-    assert torch.equal(calls[0][1], cache.all_heads())
-
-
-def test_icarus_rejects_unsupported_cache_processor_modes():
-    with pytest.raises(ValueError, match="update_stream"):
-        build_model(tiny_config("icarus", update_stream="v"))
-    with pytest.raises(ValueError, match="processor_mode"):
-        build_model(tiny_config("icarus", processor_mode="workspace_broadcast"))
 
 
 def test_bottleneck_gradients_match_reference_loop():
@@ -406,8 +278,6 @@ def test_bottleneck_state_dict_keys_stay_compatible():
 
 def test_cache_processor_experimental_defaults_preserve_current_behavior():
     cp = CacheProcessorConfig()
-    assert cp.topk_heads == 32
-    assert cp.per_cache_head_projections is False
     assert cp.update_stream == "kv"
     assert cp.out_proj_init == "normal"
     assert cp.gate_mode == "sigmoid"
@@ -570,7 +440,7 @@ def test_workspace_broadcast_is_bgt_only():
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
 def test_cuda_bottleneck_forward_backward_smoke():
-    for variant in ("bt", "bgt", "icarus"):
+    for variant in ("bt", "bgt"):
         torch.manual_seed(5)
         model = build_model(tiny_config(variant)).cuda()
         model.init_weights()
@@ -650,16 +520,6 @@ def _workspace_overrides(**overrides):
 
 def _clone_cache(cache: CacheState) -> CacheState:
     return CacheState([k.clone() for k in cache.keys], [v.clone() for v in cache.values], cache.scores.clone())
-
-
-def _static_cache_from_state(cache: CacheState) -> StaticCacheState:
-    return StaticCacheState([k.clone() for k in cache.keys], [v.clone() for v in cache.values], cache.scores.clone(), cache.seq_len)
-
-
-def _cache_state_from_static(cache: StaticCacheState) -> CacheState:
-    keys = [cache.layer_view(i, cache.length)[0].clone() for i in range(cache.num_layers)]
-    values = [cache.layer_view(i, cache.length)[1].clone() for i in range(cache.num_layers)]
-    return CacheState(keys, values, cache.scores.clone())
 
 
 def _reference_per_layer_processor(processor, cache: CacheState, *, select_all: bool = False) -> CacheState:
@@ -842,16 +702,6 @@ def _assert_keys_unchanged(original: CacheState, actual: CacheState) -> None:
 def _assert_unselected_unchanged(original: CacheState, actual: CacheState, indices: torch.Tensor) -> None:
     mask = torch.ones(original.scores.shape, dtype=torch.bool)
     mask.scatter_(1, indices.cpu(), False)
-    _assert_cache_positions_unchanged(original, actual, mask)
-
-
-def _not_latest_mask(cache: CacheState, indices: torch.Tensor) -> torch.Tensor:
-    mask = torch.ones(cache.scores.shape, dtype=torch.bool)
-    mask.scatter_(1, indices[:, -1:].cpu(), False)
-    return mask
-
-
-def _assert_cache_positions_unchanged(original: CacheState, actual: CacheState, mask: torch.Tensor) -> None:
     for old_key, new_key, old_value, new_value in zip(original.keys, actual.keys, original.values, actual.values):
         for batch_idx in range(mask.shape[0]):
             assert torch.equal(old_key[batch_idx, :, mask[batch_idx], :], new_key[batch_idx, :, mask[batch_idx], :])

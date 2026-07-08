@@ -10,11 +10,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from gcw.config import ModelConfig
-from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.cache_state import CacheState
 from gcw.models.windowed_cache import WindowedCache
 
 CacheLike = CacheState | WindowedCache
-ProcessorFn = Callable[..., CacheLike | StaticCacheState]
+ProcessorFn = Callable[..., CacheLike]
 
 try:
     from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -137,33 +137,6 @@ class CausalSelfAttention(nn.Module):
         attn_out = self.o_proj(y)
         return attn_out, k, v, attn_out.float().norm(dim=-1)
 
-    def forward_static(
-        self,
-        x: torch.Tensor,
-        cos_sin: tuple[torch.Tensor, torch.Tensor],
-        cache: StaticCacheState,
-        start_pos: int,
-        end_pos: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        batch, steps, _ = x.shape
-        q = self.q_proj(x).view(batch, steps, self.num_heads, self.head_dim)
-        k = self.k_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
-        v = self.v_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
-        if self.q_norm is not None:
-            q = self.q_norm(q)
-            k = self.k_norm(k)
-        rotary = (cos_sin[0].to(q.dtype), cos_sin[1].to(q.dtype))
-        q, k = apply_rotary(q, *rotary, style=self.rotary_style), apply_rotary(k, *rotary, style=self.rotary_style)
-        q, k = q.to(v.dtype), k.to(v.dtype)
-        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-        cache.write_layer(self.layer_idx, start_pos, k, v)
-        keys, values = cache.layer_view(self.layer_idx, end_pos)
-        mask, is_causal = _causal_chunk_bias(steps, start_pos, x.device)
-        y = flash_sdpa(q, keys, values, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads)
-        y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
-        attn_out = self.o_proj(y)
-        return attn_out, attn_out.float().norm(dim=-1)
-
 
 def _causal_chunk_bias(steps: int, past_len: int, device: torch.device) -> tuple[torch.Tensor | None, bool]:
     if past_len == 0:
@@ -177,18 +150,6 @@ def _causal_chunk_mask(steps: int, past_len: int, device: torch.device) -> torch
     q = torch.arange(steps, device=device)[:, None]
     kv = torch.arange(past_len + steps, device=device)[None, :]
     return kv <= (past_len + q)
-
-
-def _matches_stop_sequence(tokens: torch.Tensor, stop_sequences: list[list[int]] | None) -> torch.Tensor:
-    matched = torch.zeros(tokens.shape[0], dtype=torch.bool, device=tokens.device)
-    if not stop_sequences:
-        return matched
-    for stop in stop_sequences:
-        if not stop or len(stop) > tokens.shape[1]:
-            continue
-        suffix = torch.tensor(stop, dtype=tokens.dtype, device=tokens.device)
-        matched = matched | (tokens[:, -len(stop) :] == suffix).all(dim=1)
-    return matched
 
 
 def flash_sdpa(
@@ -256,19 +217,6 @@ class Block(nn.Module):
         x = x + attn_out
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x, keys, values, scores
-
-    def forward_static(
-        self,
-        x: torch.Tensor,
-        cos_sin: tuple[torch.Tensor, torch.Tensor],
-        cache: StaticCacheState,
-        start_pos: int,
-        end_pos: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        attn_out, scores = self.self_attn.forward_static(self.input_layernorm(x), cos_sin, cache, start_pos, end_pos)
-        x = x + attn_out
-        x = x + self.mlp(self.post_attention_layernorm(x))
-        return x, scores
 
 
 class TF(nn.Module):
@@ -427,27 +375,6 @@ class TF(nn.Module):
             return out, WindowedCache.from_lists(keys, values, new_scores)
         return out, CacheState(keys, values, new_scores)
 
-    def forward_chunk_static(
-        self,
-        input_ids: torch.Tensor,
-        start_pos: int,
-        cache: StaticCacheState,
-        *,
-        logits: bool = True,
-    ) -> tuple[torch.Tensor, StaticCacheState]:
-        x = self.embed_tokens(input_ids)
-        end_pos = start_pos + input_ids.shape[1]
-        pos = torch.arange(start_pos, end_pos, device=input_ids.device)
-        cos_sin = self.rotary.get(pos, x.dtype)
-        layer_scores: list[torch.Tensor] = []
-        for layer in self.layers:
-            x, scores = layer.forward_static(x, cos_sin, cache, start_pos, end_pos)
-            layer_scores.append(scores)
-        x = self.norm(x)
-        out = self.logits_from_hidden(x) if logits else x
-        cache.write_scores(start_pos, torch.stack(layer_scores).mean(dim=0))
-        return out, cache
-
     @torch.no_grad()
     def generate(
         self,
@@ -487,70 +414,6 @@ class TF(nn.Module):
                 if should_process:
                     cache = processor(cache, select_all=relative_generation_cadence and generated_idx == 0)
             logits, cache = self.forward_chunk(next_id, pos, cache)
-        return out
-
-    @torch.no_grad()
-    def generate_fast(
-        self,
-        input_ids: torch.Tensor,
-        max_new_tokens: int,
-        eos_token_id: int | None = None,
-        processor: ProcessorFn | None = None,
-        process_every: int = 64,
-        process_prefill_windows: bool = True,
-        process_after_prefill: bool = False,
-        relative_generation_cadence: bool = False,
-        stop_sequences: list[list[int]] | None = None,
-        pad_token_id: int | None = None,
-    ) -> torch.Tensor:
-        out = input_ids[:, -self.config.sequence_len :]
-        if out.shape[1] == 0:
-            raise ValueError("generate requires at least one input token")
-        cache = StaticCacheState.allocate(
-            batch_size=out.shape[0],
-            num_layers=len(self.layers),
-            num_kv_heads=self.config.num_kv_heads,
-            max_seq_len=out.shape[1] + max_new_tokens,
-            head_dim=int(self.config.head_dim),
-            device=out.device,
-            dtype=self.embed_tokens.weight.dtype,
-        )
-        logits = None
-        if process_prefill_windows:
-            for start in range(0, out.shape[1], process_every):
-                if start > 0 and processor is not None:
-                    cache = processor(cache)
-                logits, cache = self.forward_chunk_static(out[:, start : start + process_every], start, cache)
-        else:
-            logits, cache = self.forward_chunk_static(out, 0, cache)
-        if logits is None:
-            raise ValueError("generate requires at least one input token")
-
-        finished = torch.zeros(out.shape[0], dtype=torch.bool, device=out.device)
-        fill_id = eos_token_id if pad_token_id is None else pad_token_id
-        if fill_id is None:
-            fill_id = 0
-        fill = torch.full((out.shape[0], 1), int(fill_id), dtype=input_ids.dtype, device=out.device)
-        for generated_idx in range(max_new_tokens):
-            next_id = logits[:, -1].argmax(dim=-1, keepdim=True)
-            if bool(finished.any()):
-                next_id = torch.where(finished[:, None], fill, next_id)
-            out = torch.cat([out, next_id], dim=1)
-            if eos_token_id is not None:
-                finished = finished | (next_id.squeeze(1) == eos_token_id)
-            finished = finished | _matches_stop_sequence(out, stop_sequences)
-            if bool(finished.all()):
-                break
-            pos = out.shape[1] - 1
-            if processor is not None:
-                if relative_generation_cadence:
-                    should_process = generated_idx == 0 and process_after_prefill
-                    should_process = should_process or (generated_idx > 0 and generated_idx % process_every == 0)
-                else:
-                    should_process = pos > 0 and pos % process_every == 0
-                if should_process:
-                    cache = processor(cache, select_all=relative_generation_cadence and generated_idx == 0)
-            logits, cache = self.forward_chunk_static(next_id, pos, cache)
         return out
 
     def num_parameters(self, non_embedding: bool = False) -> int:

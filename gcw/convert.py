@@ -7,7 +7,6 @@ import json
 import torch
 from safetensors.torch import load_file
 
-from gcw.bottleneck_specs import BottleneckSpec, bottleneck_spec
 from gcw.checkpoint import save_checkpoint
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
@@ -36,7 +35,7 @@ def convert_hf(
     model_id = ALIASES.get(model_id.lower(), model_id)
     hf_cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=False)
     cfg = config_from_hf(hf_cfg, family=family, variant=variant)
-    if variant in {"bt", "bgt", "icarus"}:
+    if variant in {"bt", "bgt"}:
         cfg = replace(cfg, cache_processor=CacheProcessorConfig())
     torch_dtype = _resolve_dtype(dtype)
     hf = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
@@ -84,50 +83,33 @@ def convert_bottleneck(
     out: str | Path,
     variant: str,
     dtype: str = "auto",
-    source: str | None = None,
-    tokenizer_source: str | None = None,
-    backbone: str = "llama-3.2-1b",
-    sequence_len: int = 8192,
+    source: str = "meta-llama/Llama-3.2-1B",
     legacy_generate: bool = False,
 ) -> None:
     if variant not in {"bt", "bgt"}:
         raise ValueError("bottleneck conversion supports only bt and bgt variants")
-    if sequence_len <= 0:
-        raise ValueError("sequence_len must be positive")
     checkpoint = _model_file(checkpoint)
     old_state = load_file(str(checkpoint), device="cpu")
     torch_dtype = _resolve_dtype(dtype)
     if torch_dtype == "auto":
         torch_dtype = _infer_state_dtype(old_state) or torch.bfloat16
-    cfg = config_from_bottleneck(
-        backbone,
-        variant,
-        sequence_len=sequence_len,
-        legacy_generate=legacy_generate,
-        legacy_vocab=True,
-    )
+    cfg = config_from_bottleneck_llama1b(variant, legacy_generate=legacy_generate)
     model = build_model(cfg).to(dtype=torch_dtype)
     model.init_weights()
     load_bottleneck_state(model, old_state, variant=variant)
-    spec = _bottleneck_spec(backbone)
-    source = source or spec.source
-    tokenizer_source = tokenizer_source or (str(checkpoint.parent) if (checkpoint.parent / "tokenizer.json").exists() else source)
     save_checkpoint(
         out,
         model,
         cfg,
         {
-            "source": tokenizer_source,
-            "backbone_source": source,
-            "backbone": backbone,
+            "source": source,
             "source_format": "bottleneck_llm",
             "checkpoint": str(checkpoint),
-            "family": spec.family,
+            "family": "llama",
             "variant": variant,
             "dtype": str(torch_dtype).removeprefix("torch."),
             "step": _step_from_path(checkpoint),
             "legacy_generate": legacy_generate,
-            "sequence_len": sequence_len,
         },
     )
 
@@ -199,34 +181,23 @@ def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     )
 
 
-def config_from_bottleneck(
-    backbone: str,
-    variant: str,
-    sequence_len: int = 8192,
-    legacy_generate: bool = False,
-    legacy_vocab: bool = False,
-) -> ModelConfig:
-    if variant not in {"bt", "bgt"}:
-        raise ValueError("bottleneck configs support only bt and bgt variants")
-    spec = _bottleneck_spec(backbone)
-    vocab_size = spec.legacy_vocab_size if legacy_vocab and spec.legacy_vocab_size is not None else spec.vocab_size
-    hidden = spec.bt_hidden_size if variant == "bt" else spec.bgt_hidden_size
-    intermediate = spec.bt_intermediate_size if variant == "bt" else spec.bgt_intermediate_size
+def config_from_bottleneck_llama1b(variant: str, legacy_generate: bool = False) -> ModelConfig:
+    hidden = 512 if variant == "bt" else 1536
+    intermediate = 2240 if variant == "bt" else 6272
     return ModelConfig(
         variant=variant,
-        family=spec.family,
-        sequence_len=sequence_len,
-        vocab_size=vocab_size,
-        hidden_size=spec.hidden_size,
-        intermediate_size=spec.intermediate_size,
-        num_layers=spec.num_layers,
-        num_heads=spec.num_heads,
-        num_kv_heads=spec.num_kv_heads,
-        head_dim=spec.head_dim,
-        rope_theta=spec.rope_theta,
-        norm_eps=spec.norm_eps,
-        tie_embeddings=spec.tie_embeddings,
-        qk_norm=spec.qk_norm,
+        family="llama",
+        sequence_len=2048,
+        vocab_size=128256,
+        hidden_size=2048,
+        intermediate_size=8192,
+        num_layers=16,
+        num_heads=32,
+        num_kv_heads=8,
+        head_dim=64,
+        rope_theta=500000.0,
+        norm_eps=1e-5,
+        tie_embeddings=False,
         rotary_style="llama",
         legacy_bottleneck_generate=legacy_generate,
         cache_processor=CacheProcessorConfig(
@@ -244,23 +215,6 @@ def config_from_bottleneck(
             attention_dropout=0.0,
         ),
     )
-
-
-def config_from_bottleneck_llama1b(
-    variant: str,
-    sequence_len: int = 8192,
-    legacy_generate: bool = False,
-) -> ModelConfig:
-    return config_from_bottleneck(
-        "llama-3.2-1b",
-        variant,
-        sequence_len=sequence_len,
-        legacy_generate=legacy_generate,
-    )
-
-
-def _bottleneck_spec(backbone: str) -> BottleneckSpec:
-    return bottleneck_spec(backbone)
 
 
 def config_from_ppt_meta(meta: dict) -> ModelConfig:
@@ -293,15 +247,9 @@ def load_bottleneck_state(native, old_state: dict[str, torch.Tensor], variant: s
             unmapped.append(old_key)
             continue
         if key not in target:
-            if key == "backbone.lm_head.weight":
-                continue
             unmapped.append(old_key)
             continue
         if target[key].shape != tensor.shape:
-            padded = _pad_vocab_tensor(key, target[key], tensor)
-            if padded is not None:
-                mapped[key] = padded
-                continue
             raise ValueError(
                 f"shape mismatch for {key}: native {tuple(target[key].shape)} "
                 f"vs bottleneck {tuple(tensor.shape)} from {old_key}"
@@ -315,18 +263,6 @@ def load_bottleneck_state(native, old_state: dict[str, torch.Tensor], variant: s
             f"missing={missing[:8]} extra={extra[:8]} unmapped={unmapped[:8]}"
         )
     native.load_state_dict(mapped, strict=True)
-
-
-def _pad_vocab_tensor(key: str, expected: torch.Tensor, tensor: torch.Tensor) -> torch.Tensor | None:
-    if key not in {"backbone.embed_tokens.weight", "backbone.lm_head.weight"}:
-        return None
-    if expected.ndim != tensor.ndim or expected.ndim != 2:
-        return None
-    if expected.shape[0] < tensor.shape[0] or expected.shape[1:] != tensor.shape[1:]:
-        return None
-    padded = expected.clone()
-    padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
-    return padded
 
 
 def _map_bottleneck_key(key: str, variant: str) -> str | None:
