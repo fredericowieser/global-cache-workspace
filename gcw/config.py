@@ -7,15 +7,20 @@ from typing import Any, Literal
 import yaml
 
 
-Variant = Literal["tf", "bt", "bgt"]
+Variant = Literal["tf", "bt", "bgt", "icarus"]
 Family = Literal["smollm", "llama", "qwen3"]
 RotaryStyle = Literal["llama", "ppt"]
+CacheUpdateStream = Literal["kv", "v"]
+CacheOutProjInit = Literal["normal", "zero"]
+CacheGateMode = Literal["sigmoid", "direct"]
+CacheProcessorMode = Literal["standard", "workspace_broadcast"]
 
 
 @dataclass
 class CacheProcessorConfig:
     process_every: int = 64
     topk: int = 32
+    topk_heads: int = 32
     score: str = "attn_l2"
     hidden_size: int = 512
     intermediate_size: int = 2048
@@ -26,6 +31,43 @@ class CacheProcessorConfig:
     rope_theta: float = 10000.0
     gate_init: float = -5.0
     attention_dropout: float = 0.0
+    per_cache_head_projections: bool = False
+    update_stream: CacheUpdateStream = "kv"
+    out_proj_init: CacheOutProjInit = "normal"
+    gate_mode: CacheGateMode = "sigmoid"
+    processor_mode: CacheProcessorMode = "standard"
+    writer_head_fraction: float = 1.0
+    salience_temperature: float = 1.0
+    kv_score_init_k: float = 0.25
+    kv_score_init_v: float = 0.75
+
+    def __post_init__(self) -> None:
+        if self.score not in {"attn_l2", "kv_norm"}:
+            raise ValueError("cache_processor.score must be 'attn_l2' or 'kv_norm'")
+        if self.topk_heads < 0:
+            raise ValueError("cache_processor.topk_heads must be non-negative")
+        if self.update_stream not in {"kv", "v"}:
+            raise ValueError("cache_processor.update_stream must be 'kv' or 'v'")
+        if self.out_proj_init not in {"normal", "zero"}:
+            raise ValueError("cache_processor.out_proj_init must be 'normal' or 'zero'")
+        if self.gate_mode not in {"sigmoid", "direct"}:
+            raise ValueError("cache_processor.gate_mode must be 'sigmoid' or 'direct'")
+        if self.processor_mode not in {"standard", "workspace_broadcast"}:
+            raise ValueError("cache_processor.processor_mode must be 'standard' or 'workspace_broadcast'")
+        if not 0.0 < self.writer_head_fraction <= 1.0:
+            raise ValueError("cache_processor.writer_head_fraction must be in (0, 1]")
+        if self.salience_temperature <= 0.0:
+            raise ValueError("cache_processor.salience_temperature must be positive")
+        if self.kv_score_init_k <= 0.0 or self.kv_score_init_v <= 0.0:
+            raise ValueError("cache_processor.kv_score_init_k and kv_score_init_v must be positive")
+
+    @property
+    def stream_factor(self) -> int:
+        if self.update_stream == "kv":
+            return 2
+        if self.update_stream == "v":
+            return 1
+        raise ValueError(f"unsupported cache_processor.update_stream: {self.update_stream}")
 
 
 @dataclass
@@ -57,7 +99,7 @@ class ModelConfig:
             raise ValueError("head_dim must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads")
-        if self.variant in {"bt", "bgt"} and self.cache_processor is None:
+        if self.variant in {"bt", "bgt", "icarus"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
 
 
@@ -66,6 +108,8 @@ class DataConfig:
     kind: str = "fineweb"
     data_dir: str | None = None
     dataset: str | None = None
+    tokenizer: str = "cosmo2"
+    tokenizer_source: str | None = None
     text_field: str = "text"
     max_length: int = 2048
 
@@ -89,6 +133,7 @@ class TrainConfig:
     mode: Literal["pretrain", "sft"] = "pretrain"
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     freeze_backbone: bool = False
+    backbone_checkpoint: str | None = None
     loss: str = "next_token_ce"
     checkpoint_format: str = "native_safetensors"
     output_dir: str = "runs/smoke"
