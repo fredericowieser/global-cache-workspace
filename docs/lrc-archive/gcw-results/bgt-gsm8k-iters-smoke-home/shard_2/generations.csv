@@ -1,0 +1,16 @@
+iteration,example_id,target,prediction,correct,generation
+0,2,70000,40000,False,"
+Let's break it down:
+The original value of the house is $80,000.
+The value of the house after putting in $50,000 in repairs is 150% of the original value, which is:
+$80,000 x 1.5 = $120,000
+So, the total value of the house after repairs is $120,000.
+The profit is the difference between the total value of the house and the original value:
+$120,000 - $80,000 = $40,000
+Therefore, Josh made a profit of \boxed{40000} dollars."
+1,2,70000,40000,False,"
+Let's break it down:
+The original price of the house is $80,000.
+The value of the house after putting in repairs is 150% of the original price, which is $80,000 x 1.5 = $120,000.
+So, the profit is the difference between the new price and the original price, which is $120,000 - $80,000 = $40,000.
+Thus, Josh made a profit of \boxed{40000} dollars."

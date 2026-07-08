@@ -1,0 +1,11 @@
+{
+  "merged_at": "2026-06-29T14:37:57Z",
+  "shards": [
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-4gpu-20260629/shard_0",
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-4gpu-20260629/shard_1",
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-4gpu-20260629/shard_2",
+    "/home/f50056118/gcw-results/bgt-gsm8k-iters-4gpu-20260629/shard_3"
+  ],
+  "bootstrap_samples": 500,
+  "seed": 42
+}

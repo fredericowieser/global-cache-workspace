@@ -1,0 +1,32 @@
+{
+  "started_at": "2026-06-29T15:40:40Z",
+  "protocol": "GSM8K prefix prefill, repeated Longshot cache-processor iterations, final prompt token as trigger.",
+  "settings": {
+    "checkpoint": "/mnt/jfs-01/shared/gcw-best_longshot",
+    "out_dir": "/home/f50056118/gcw-results/longshot-gsm8k-old-protocol-dense-20260629-154027/shard_1",
+    "num_examples": 200,
+    "num_calibration": 256,
+    "num_splits": 8,
+    "max_iterations": 10,
+    "iteration_list": "0,1,2,3,4,5,6,7,8,9,10",
+    "bootstrap_samples": 500,
+    "group_fraction": 0.5,
+    "max_length": 8192,
+    "max_prompt_tokens": 384,
+    "max_target_tokens": 128,
+    "max_gen_toks": 256,
+    "target_prefix": "",
+    "seed": 42,
+    "sample_mode": "random",
+    "sample_seed": 0,
+    "prompt_style": "legacy",
+    "prefill_mode": "old_full_prompt",
+    "old_bottleneck_protocol": true,
+    "flush_every": 8,
+    "device": "cuda",
+    "num_shards": 4,
+    "shard_index": 1,
+    "merge_shards": null,
+    "merge_out_dir": ""
+  }
+}

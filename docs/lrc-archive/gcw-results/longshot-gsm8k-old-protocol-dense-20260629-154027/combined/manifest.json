@@ -1,0 +1,11 @@
+{
+  "merged_at": "2026-06-29T15:58:09Z",
+  "shards": [
+    "/home/f50056118/gcw-results/longshot-gsm8k-old-protocol-dense-20260629-154027/shard_0",
+    "/home/f50056118/gcw-results/longshot-gsm8k-old-protocol-dense-20260629-154027/shard_1",
+    "/home/f50056118/gcw-results/longshot-gsm8k-old-protocol-dense-20260629-154027/shard_2",
+    "/home/f50056118/gcw-results/longshot-gsm8k-old-protocol-dense-20260629-154027/shard_3"
+  ],
+  "bootstrap_samples": 500,
+  "seed": 42
+}

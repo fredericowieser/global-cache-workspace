@@ -1,0 +1,8567 @@
+iteration,example_id,target,prediction,correct,generation
+0,120,240,8,False," Miguel uses 2 pads of paper a week for his drawing.
+Since there are 4 weeks in a month, the total number of sheets of paper he uses per month is: 2 pads/week * 4 weeks/month = 8 sheets/month.
+So, Miguel uses \boxed{8} sheets of paper every month."
+1,120,240,240,True," 2 pads of paper per week * 30 sheets per pad = 60 sheets per week.
+Since there are 4 weeks in a month, the total number of sheets of paper Miguel uses every month is 60 * 4 = 240 sheets.
+So, the answer is \boxed{240}."
+2,120,240,240,True," 30 sheets of paper per pad * 2 pads per week = 60 sheets of paper per week.
+Since there are 4 weeks in a month, the total sheets of paper used per month is 60 * 4 = 240 sheets.
+So, Miguel uses \boxed{240} sheets of paper every month."
+4,120,240,1800,False," 30 sheets of paper per pad of paper
+Since Miguel uses 2 pads of paper per week, the number of sheets of paper used per week is 2.
+Since there are 30 sheets of paper per pad, the number of sheets of paper used per week is 30 * 2 = 60.
+Since there are 30 sheets of paper per week, the number of sheets of paper used per month is 60 * 30 = 1800.
+Thus, Miguel uses \boxed{1800} sheets of paper every month."
+8,120,240,30,False," 30 sheets of paper on a pad of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on a pad of paper are 30 sheets of paper.
+The sheets of paper on"
+16,120,240,,False,"
+
+
+
+, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,120,240,,False,"
+
+
+
+,, the the,, the,,, the,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,1020,22,22,True," John has 4 + 6 + 3*4 = 10 + 3*4 = 10 + 12 = 22 bananas.
+So, John has \boxed{22} bananas."
+1,1020,22,22,True," John picks 4 bananas on Wednesday, 6 bananas on Thursday, and 3 times as many bananas as he picked on Wednesday on Friday.
+So, John picks 4 + 6 + 3*4 = 10 + 3*4 = 10 + 12 = 22 bananas.
+The answer is: \boxed{22}"
+2,1020,22,13,False," John picks 4 bananas on Wednesday, 6 bananas on Thursday, and 3 bananas on Friday.
+To find the total number of bananas John has, we add the number of bananas he picked on each day.
+Total bananas = 4 + 6 + 3 = 10 + 3 = 13
+So, John has \boxed{13} bananas."
+4,1020,22,22,True," John picks 4 bananas on Wednesday, then 6 bananas on Thursday, and on Friday, he picks triple the number of bananas he picked on Wednesday, which is 3 * 4 = 12 bananas.
+So, the total number of bananas John picked is 4 + 6 + 12 = 10 + 12 = 22 bananas.
+The answer is: \boxed{22}"
+8,1020,22,4,False," John picks 4 bananas on Wednesday and on Thursday.
+The number of bananas he picks on Wednesday is 4.
+The number of bananas he picks on Thursday is 6.
+The number of bananas he picks on Friday is 3.
+The number of bananas he picks on Friday is 4.
+The number of bananas he picks on Wednesday is 4.
+The number of bananas he picks on Thursday is 6.
+The number of bananas he picks on Friday is 3.
+The number of bananas he picks on Wednesday is 4.
+The number of bananas he picks on Thursday is 6.
+The number of bananas he picks on Friday is 4.
+The number of bananas he picks on Wednesday is 4.
+The number of bananas he picks on Thursday is 6.
+The number of bananas he picks on Friday is 4.
+The number of bananas he picks on Wednesday is 4.
+The number of bananas he picks on Thursday is 6.
+The number of bananas he picks on Friday is 4.
+The number of bananas he picks on Wednesday is 4.
+The number of bananas he picks on Thursday is 6.
+The number of bananas he picks on Friday is 4.
+The number of bananas he picks on Wednesday is 4.
+The number of bananas he"
+16,1020,22,,False,"
+
+
+
+ \"
+32,1020,22,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1062,482,1000,False," $200 + $300 + $4 + $6 = $1000
+The answer is: $\boxed{1000}$"
+1,1062,482,850,False," $200 + $300 + $4 + $6 = $850
+The answer is: $\boxed{850}$"
+2,1062,482,500,False," $200 + $300 + $4 + $6 = $500
+The answer is: \boxed{500}"
+4,1062,482,700,False," $200 + $300 + $4 + $6 = $700
+The total cost of the doctor's visit is $700.
+The answer is: \boxed{700}"
+8,1062,482,30,False," $300
+The doctor charges the cost of the cast of the doctor, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit, which is the cost of the 30-minute visit"
+16,1062,482,,False,"
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the"
+32,1062,482,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1234,12,12,True," Regina wrote 9 novels last year, which is 3 quarters of the number of novels she has written this year.
+Let's denote the number of novels Regina has written this year as x.
+Then, 3/4 * x = 9.
+To solve for x, we can multiply both sides by 4/3, which gives us x = 9 * 4/3 = 36/3 = 12
+So, Regina has written \boxed{12} novels this year."
+1,1234,12,12,True," Regina wrote 9 novels last year, which is 3 quarters of the number of novels she has written this year.
+Let's denote the number of novels she has written this year as x.
+Then, 3/4 * x = 9.
+To solve for x, we can multiply both sides by 4/3, which gives us x = 9 * 4/3 = 36/3 = 12
+So, Regina has written \boxed{12} novels this year."
+2,1234,12,4,False," Regina has written 9 novels last year and this year she has written 3 quarters of 9 novels.
+3 quarters of 9 is 3 * 9 / 4 = 27 / 4 = 6.75.
+Since Regina cannot write a fraction of a novel, we round down to 6.75, but since the problem states that this is 3 quarters of the number of novels she has written this year, we can assume that the problem is asking for the number of novels she has written this year, which is 6.75, but since the problem states that this is 3 quarters of the number of novels she has written this year, we can assume that the problem is asking for the number of novels she has written this year, which is 3 quarters of 9, which is 3 * 9 / 4 = 27 / 4 = 6.75.
+So Regina has written 6.75, but since the problem states that this is 3 quarters of the number of novels she has written this year, we can assume that the problem is asking for the number of novels she has written this year, which is 3 quarters of 9, which is 3 * 9 / 4"
+4,1234,12,6,False," 
+If this is 3 quarters of the number of novels she has written this year, then the number of novels she has written this year is 3/4 * 9 = 0.75 * 9 = 6.75
+Since the number of novels must be a whole number, we round down to the nearest whole number.
+So the number of novels she has written this year is \boxed{6}."
+8,1234,12,3,False," 3
+The number of novels written this year is 3 quarters of the number of novels written this year.
+Let's assume the number of novels written this year is $x$.
+Then the number of novels written this year is $3x$.
+Since the number of novels written this year is 3 quarters of the number of novels written this year, we can write the number of novels written this year as $3x$.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year is 3 quarters of the number of novels written this year.
+The number of novels written this year"
+16,1234,12,,False,"
+
+
+
+                                                                                                                                                                                                                                                            "
+32,1234,12,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,265,9500,50000,False," $350,000 - $400,000 = $50,000
+The total price of the house is $50,000.
+The answer is:
+\[ \boxed{50000} \]"
+1,265,9500,000,False," $350 000 - $400 000 = $50 000
+The answer is:
+\[ \boxed{50 000} \]"
+2,265,9500,420,False," 
+The selling price of the house is $350 000 and the brokerage fee is 5% of this price which is $350 000 * 5 / 100 = 17500 / 100 = 175$.
+The selling price of the house is $350 000 and the transfer fee is 12% of this price which is $350 000 * 12 / 100 = 42000 / 100 = 420$.
+The total price of the house is $350 000 + 175 + 420 = 350 000 + 420 = 350 420$.
+The budget is $400 000.
+The total price of the house is $350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - 400 000 = 350 420 - "
+4,265,9500,000,False," The selling price of the house is $350 000, and the brokerage fee is 5% of this price, which is $350 000 * 5 / 100 = $175 000. The selling price of the house is $350 000, and the transfer fee is 12% of this price, which is $350 000 * 12 / 100 = $420 000. The total price of the house is $350 000 + $175 000 + $420 000 = $107 000. The budget is $400 000, and the total price of the house is $107 000 - $400 000 = $107 000. The total price of the house is $107 000, and the budget is $400 000. The total price of the house is $107 000 - $400 000 = $107 000. The total price of the house is $107 000, and the budget is $400 000. The total price of the house is $107 000 - $400 000 = $107 000. The total price of the house is $107 000, and the budget is $400 000. The total price of the house is"
+8,265,9500,350,False," The selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350 000, and the selling price of the property is $350"
+16,265,9500,,False,"
+
+
+
+                                                                                                                                                                                                                                                            "
+32,265,9500,,False,"
+
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,, \,,,,,,,,,,,,,,,,,, \,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,625,160,16,False," 4/5 * 20 = 0.8 * 20 = 16
+So, the answer is:
+\[ \boxed{16} \]"
+1,625,160,5,False, \boxed{4/5}
+2,625,160,160,True," Arianna has 10 rows of flowers with 20 flowers in each row. So the total number of flowers is 10 * 20 = 200.
+Since only 4/5 of the flowers have bloomed, the number of flowers that have bloomed is 4/5 * 200 = 0.8 * 200 = 160
+So the number of flowers that have bloomed is \boxed{160}."
+4,625,160,160,True," Arianna has 10 rows of flowers with 20 flowers in each row, so the total number of flowers is 10 * 20 = 200 flowers.
+Since only 4/5 of the flowers have bloomed, the number of flowers that have bloomed is 4/5 * 200 = 0.8 * 200 = 160 flowers.
+So, the number of flowers that have bloomed is \boxed{160}."
+8,625,160,20,False," Arianna plants the flowers with 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers in the 20 flowers in each row, and the flowers"
+16,625,160,,False,"
+
+
+
+
+                                                                                                                                                                                                                                                           "
+32,625,160,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,789,4,78,False," Carson needs to burn 45 + 33 = 78 logs to prevent the pipes from freezing.
+Answer: \boxed{78}"
+1,789,4,78,False," Carson needs to burn 45 + 33 = 78 logs to prevent the pipes from freezing.
+So, Carson needs to burn \boxed{78} logs to prevent the pipes from freezing."
+2,789,4,12,False," Carson needs to burn 45 - 33 = 12 logs of wood to prevent the pipes from freezing.
+The answer is: \boxed{12}"
+4,789,4,10,False," 
+The temperature inside the house is 45 degrees during the day, and it's 33 degrees colder during the night, so the total temperature inside the house is 45 + 33 = 78 degrees.
+Since the pipes will freeze if the temperature inside the house falls below 32 degrees, Carson needs to burn 78 - 32 = 46 degrees.
+Since every log of wood burns 5 degrees, Carson needs to burn 46 / 5 = 9.2 logs.
+Since Carson can't burn a fraction of a log, he needs to burn 10 logs to ensure the pipes don't freeze.
+The answer is \boxed{10}."
+8,789,4,45,False," 45
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees, and the temperature of the house is 45 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and the temperature of the house is 33 degrees.
+The temperature of the house is 45 degrees, and"
+16,789,4,45,False,"
+
+
+
+
+
+
+
+  45,                                                                                                                                                                                                                                                    "
+32,789,4,,False,"
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,1137,68,29,False," 33 - 4 = 29
+So, the answer is:
+\[ \boxed{29} \]"
+1,1137,68,33,False," 40
+Donny can only drink water if it's at least 40 degrees. He has two mugs of water. One mug is 33 degrees. The other is an unknown temperature. If he pours 4 ounces of water from the 33-degree mug into his water bottle and one ounce from the other bottle, he is now able to drink the water.  At least how many degrees is the second bottle?
+Answer: 40
+Donny can only drink water if it's at least 40 degrees. He has two mugs of water. One mug is 33 degrees. The other is an unknown temperature. If he pours 4 ounces of water from the 33-degree mug into his water bottle and one ounce from the other bottle, he is now able to drink the water.  At least how many degrees is the second bottle?
+Answer: 40
+Donny can only drink water if it's at least 40 degrees. He has two mugs of water. One mug is 33 degrees. The other is an unknown temperature. If he pours 4 ounces of water from the 33-degree mug into his water bottle and one ounce from the other bottle, he is now able to drink the water.  At least how many"
+2,1137,68,3,False," 40
+Let's analyze the problem step by step.
+Donny can only drink water if it's at least 40 degrees. He has two mugs of water, one 33 degrees and the other unknown temperature.
+The first mug is 33 degrees, so the unknown temperature is 40 - 33 = 7 degrees.
+Donny pours 4 ounces of water from the 33-degree mug into his water bottle. The amount of water poured is 4 ounces, and the unknown temperature in the second mug is 7 degrees.
+The amount of water poured from the 33-degree mug is 4 ounces, and the unknown temperature in the second mug is 7 degrees.
+Since the second mug is 7 degrees, the unknown temperature in the second mug is 7 - 4 = 3 degrees.
+So, the second bottle is \boxed{3} degrees."
+4,1137,68,33,False," 40
+Let's analyze the problem step by step.
+The first mug is 33 degrees, and the second mug is unknown, so let's call the unknown mug $x$.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first mug is 33 degrees, and the second mug is $x$ degrees.
+The first"
+8,1137,68,40,False," 40
+The second degree of the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water, and the water is the temperature of the water,"
+16,1137,68,40,False,"
+
+
+
+
+
+ \27, 40,  40,  40,   40,                                                                                                                                                                                                                                       "
+32,1137,68,,False,"adeade,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,),,,,,,,,,,,,,,,,
+,,,
+,,
+,,
+,
+,,
+,
+,
+, \, \, \, \, \
+, \, \ \, \, \ \, \ \, \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \"
+0,867,7,2,False," 2 times the weight of the sweet potatoes is 2*2=4 pounds.
+So the weight of the sweet potatoes is 4-3=1 pound.
+Thus, the weight of the carrots is 3-1=2 pounds.
+So, the total weight of the carrots is \boxed{2} pounds."
+1,867,7,7,True," 
+The sweet potatoes weigh 2 times as much as the potatoes, so they weigh 5 * 2 = 10 pounds.
+The carrots weigh 3 pounds fewer than the sweet potatoes, so they weigh 10 - 3 = 7 pounds.
+Thus, the total weight of carrots that Daisy bought is \boxed{7} pounds."
+2,867,7,7,True," 
+The sweet potatoes weigh 2 times as much as the potatoes, so they weigh 5 * 2 = 10 pounds.
+The carrots weigh 3 pounds fewer than the sweet potatoes, so they weigh 10 - 3 = 7 pounds.
+Thus, the total weight of carrots is \boxed{7} pounds."
+4,867,7,5,False," The sweet potatoes weigh 2 times as much as the potatoes, so the sweet potatoes weigh 2 * 5 = 10 pounds.
+The carrots weigh 3 pounds fewer than the sweet potatoes, so the carrots weigh 10 - 3 = 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the sweet potatoes is 10 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight of the carrots is 7 pounds.
+The total weight of the potatoes is 5 pounds.
+The total weight"
+8,867,7,2,False," The weight of the potatoes is 5 pounds, and the weight of the sweet potatoes is 2 times the weight of the potatoes, and the weight of the carrots is 3 pounds.
+The weight of the potatoes is 5 pounds, and the weight of the sweet potatoes is 2 times the weight of the potatoes, which is 2 times the weight of the potatoes, and the weight of the carrots is 3 pounds.
+The weight of the potatoes is 5 pounds, and the weight of the sweet potatoes is 2 times the weight of the potatoes, which is 2 times the weight of the potatoes, and the weight of the carrots is 3 pounds.
+The weight of the potatoes is 5 pounds, and the weight of the sweet potatoes is 2 times the weight of the potatoes, which is 2 times the weight of the potatoes, and the weight of the carrots is 3 pounds.
+The weight of the potatoes is 5 pounds, and the weight of the sweet potatoes is 2 times the weight of the potatoes, which is 2 times the weight of the potatoes, and the weight of the carrots is 3 pounds.
+The weight of the potatoes is 5 pounds, and the weight of the sweet potatoes is 2 times the"
+16,867,7,,False,"
+
+
+
+
+
+, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the"
+32,867,7,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+, the the the the the the the the the the the the
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,543,6,03,False," $0.8 - 0.5 = 0.3$
+So, Jairus will get $0.3 more than Jenny.
+Answer:
+\boxed{0.3}"
+1,543,6,03,False," $0.8 - 0.5 = 0.3$
+So, Jairus will get $0.3 more than Jenny.
+The answer is:
+\[ \boxed{0.3} \]"
+2,543,6,310,False," 
+Since each task is worth $0.8 * 20 = 16$ dollars, 
+Jairus will get $16 * 20 = 320$ dollars.
+Jenny will get $0.5 * 20 = 10$ dollars.
+So, Jairus will get $320 - 10 = 310$ dollars more than Jenny.
+Thus, Jairus will get \boxed{310} dollars more than Jenny."
+4,543,6,6,True," 
+Let's calculate the amount of money each person gets from the tasks.
+Jairus gets $0.8 * 20 = 16$ dollars.
+Jenny gets $0.5 * 20 = 10$ dollars.
+The difference in the amount of money that Jairus and Jenny get is $16 - 10 = 6$ dollars.
+Thus, Jairus will get \boxed{6} dollars more than Jenny."
+8,543,6,08,False," $0.8
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the small task is $0.5$.
+The task of the small task is $0.8$ and the task of the"
+16,543,6,0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,False,"0
+0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
+32,543,6,0,False,"
+
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+0
+
+0
+0
+0
+0
+0
+0
+0
+0
+0
+
+0
+0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1048,7400,,False," The price of the car depreciates at a constant rate of 21% per year. The initial price of the car is $20000. The price of the car depreciates by 21% each year. We can calculate the price of the car in the year 2010 by adding the depreciation from the year 2007 to the initial price.
+Let's denote the initial price of the car as $P$.
+The depreciation from the year 2007 is $P - P = 0$.
+The depreciation from the year 2008 is $P - P - 0.21P = -0.21P$.
+The depreciation from the year 2009 is $P - (-0.21P) = 0.79P$.
+The depreciation from the year 2010 is $P - (0.79P - 0.21P) = 0.79P - 0.79P = 0$.
+The price of the car in the year 2010 is $P - 0 = P$.
+So, the price of the car in the year 2010 is $\boxed{20000}$."
+1,1048,7400,0000000000,False," The price of the car depreciates at a constant rate of 21% per year.
+Let's denote the price of the car in 2007 as $P$.
+Since the price of the car depreciates at a constant rate of 21% per year, the price of the car in 2010 will be:
+\[ P - (P \times 0.21)^5 = P - P \times 0.21^5 \]
+\[ P - P \times 0.21^5 = P(1 - 0.21^5) \]
+\[ P(1 - 0.21^5) = P(1 - 0.00000000000000021^5) \]
+\[ P(1 - 0.00000000000000021^5) = P(0.00000000000000021^5) \]
+\[ P(1 - 0.00000000000000021^5) = 0.00000000000000021^5 \]
+\[ P(1 - 0.00000000000000021^5) = 0.00000000000000021^5 \]
+\[ P(1 - 0.000000000"
+2,1048,7400,13100,False," The price of the car depreciates at a constant rate of 21% per year.
+Let's denote the price of the car in 2010 as $P$.
+The price of the car in 2007 was $20000.
+The price of the car in 2007 depreciates at a rate of 21% per year.
+The price of the car in 2007 was $20000 - (20000 * 21 / 100) = $20000 - $4200 = $17900.
+The price of the car in 2007 depreciates at a rate of 21% per year.
+The price of the car in 2010 will be $17900 - (17900 * 21 / 100) = $17900 - $3780 = $13100.
+So, the price of the car in the year 2010 is \boxed{13100} dollars."
+4,1048,7400,100,False," The price of the car depreciates at a constant rate of 21% per year.
+Let's calculate the price of the car in 2010.
+The price of the car in 2007 is $20000.
+The price of the car in 2010 is $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $20000 * 21 / 100 = $"
+8,1048,7400,20000,False," 21% of the price of the car
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is $20000.
+The price of the car is"
+16,1048,7400,,False,"
+
+The, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,1048,7400,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,544,80,400,False," Jeff gets 4 times as much as Brad, so Jeff gets 4 * 100 = 400 dollars.
+The answer is: \boxed{400}"
+1,544,80,80,True," Jeff gets 4 times as much as Brad.
+Let's denote the amount of money Brad gets as $x$.
+Since Jeff gets 4 times as much as Brad, Jeff gets $4x$ dollars.
+The total amount of money they have together is $x + 4x = 5x$ dollars.
+Since they are trying to divide 100 dollars between them, we can set up the equation $5x = 100$.
+Solving for $x$, we get $x = 20$.
+So, Jeff gets $4x = 4(20) = 80$ dollars.
+Thus, Jeff gets \boxed{80} dollars."
+2,544,80,400,False," Jeff gets 4 times as much as Brad, so Jeff gets 4 * 100 = 400 dollars.
+The answer is: \boxed{400}"
+4,544,80,400,False," Jeff gets 4 times as much as Brad, so Jeff gets 4 * 100 = 400 dollars.
+The answer is: \boxed{400}"
+8,544,80,4,False," Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4 times as much as Brad.
+Let's assume that Jeff gets 4"
+16,544,80,,False,"
+
+
+ Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff, Jeff"
+32,544,80,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+         "
+0,465,30,5,False," Miss Maria has 50 cards and gives away 10 cards each to her students. So the total number of students is 50/10 = 5.
+The answer is: \boxed{5}"
+1,465,30,5,False," 50 cards / 10 cards per student = 5 students.
+So, Miss Maria has \boxed{5} students."
+2,465,30,50,False, 25 + 40 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 50 + 
+4,465,30,150,False," 50 cards
+Let's break down the problem step by step.
+First, we need to find out how many cards Miss Maria has in total.
+She has 6 decks with 25 cards in each deck, so she has 6 * 25 = 150 cards in total.
+Next, we need to find out how many cards she keeps.
+She keeps 50 cards.
+Now, we need to find out how many cards she gives away.
+She gives away 10 cards to each student, so she gives away 150 * 10 = 1500 cards.
+Finally, we need to find out how many students she has.
+She has 150 cards, and she gives away 1500 cards, so she has 150 / 1500 = 0.1 students.
+Since she has 0.1 students, we can round down to the nearest whole number, but since the problem states that she has 6 decks with 25 cards in each deck, we can round down to 6 * 25 = 150 cards.
+So, Miss Maria has 150 cards.
+The answer is: \boxed{150}"
+8,465,30,50,False," 50
+The answer is 50, but the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the answer is 50, and the"
+16,465,30,,False,"
+
+
+
+The, the the sports, the the sports, the the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the sports, the"
+32,465,30,,False,"
+
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,467,1200,80,False," 
+Each room has 2 sheets, 1 comforter, 2 pillow cases, and 2 towels.
+So each room has 2 + 1 + 2 + 2 = 3 + 2 + 2 = 5 + 2 = 7 pieces of laundry.
+Since there are 80 rooms, the total number of pieces of laundry is 80 * 7 = 560.
+Thus, there are \boxed{560} pieces of laundry in 80 rooms."
+1,467,1200,80,False," 
+Let's break down the problem step by step.
+Each room has 2 sheets, 1 comforter, twice as many pillow cases as sheets, and twice as many towels as pillow cases.
+So, the total number of pieces of laundry in each room is:
+2 sheets + 1 comforter + 2 pillow cases + 2 towels = 5 pieces of laundry per room.
+Since there are 80 rooms, the total number of pieces of laundry is:
+80 rooms x 5 pieces per room = 400 pieces of laundry.
+Thus, there are \boxed{400} pieces of laundry in 80 rooms."
+2,467,1200,80,False," 
+Let's break down the problem step by step.
+Each room has two sheets, one comforter, twice as many pillow cases as sheets, and twice as many towels as pillow cases.
+So, the total number of sheets in each room is 2 + 1 = 3.
+The total number of pillow cases in each room is 2 * 3 = 6.
+The total number of towels in each room is 2 * 6 = 12.
+Since there are 80 rooms, the total number of pieces of laundry is 80 * 3 * 6 * 12 = 240 * 6 * 12 = 1440 * 12 = 17280
+Thus, there are \boxed{17280} pieces of laundry in 80 rooms."
+4,467,1200,640,False," 
+Let's break down the problem step by step.
+Each room has two sheets of comforter, so there are 2 sheets of comforter in each room.
+Each room has twice as many pillow cases as sheets, so there are 2 * 2 = 4 pillow cases in each room.
+Each room has twice as many towels as pillow cases, so there are 2 * 4 = 8 towels in each room.
+Since there are 80 rooms, the total number of sheets of comforter is 80 * 2 = 160.
+The total number of pillow cases is 80 * 4 = 320.
+The total number of towels is 80 * 8 = 640.
+The total number of sheets of comforter and pillow cases is 160 + 320 = 480.
+The total number of sheets of comforter and towels is 80 * 8 = 640.
+The total number of sheets of comforter and pillow cases is 80 * 2 = 160.
+The total number of sheets of comforter and pillow cases is 80 * 4 = 320.
+The total number of sheets of comforter and pillow cases is 80 * 8 = 640.
+The total number of sheets of comforter"
+8,467,1200,,False," The room has two sheets of pillow cases, and the room has twice as many pillow cases as the room has pillow cases.
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+Let's break down the problem:
+"
+16,467,1200,,False,"
+
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the,"
+32,467,1200,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1050,655,1720,False," 1955 - 325 = 1720
+So, the answer is:
+\[ \boxed{1720} \]"
+1,1050,655,1230,False," 1955 - 325 = 1230
+So, the answer is:
+\[ \boxed{1230} \]"
+2,1050,655,1920,False," 1955 - 325 = 1920
+So, the answer is:
+\[ \boxed{1920} \]"
+4,1050,655,1920,False," 1955 - 325 = 1920
+The answer is \boxed{1920}."
+8,1050,655,1955,False," 1955 kilometers
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers.
+The distance between the two cities is 1955 kilometers"
+16,1050,655,,False,"
+
+
+), the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,1050,655,,False,"
+
+
+
+
+,,, the,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,611,1450000,150000,False," John's research cost is $100,000 + $100,000 * 10 * 50/100 = $100,000 + $50,000 = $150,000
+The answer is:
+\[ \boxed{150,000} \]"
+1,611,1450000,150000,False," John's research cost is $100,000 + $100,000 * 10 * 50% = $100,000 + $50,000 = $150,000.
+The answer is: $\boxed{150,000}$"
+2,611,1450000,100000,False," $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $100,000 + $"
+4,611,1450000,10,False," 10 times the amount of funding for the first 5 months of research is $100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 = 100,000 * 10 ="
+8,611,1450000,100000,False," 10
+The initial funding for the first 5 months of research is $100,000.
+The initial funding for the first 5 months of research is $100,000.
+The research ends up taking 10 times the amount of funding for the first 5 months of research.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+The amount of funding for the first 5 months of research is $100,000.
+"
+16,611,1450000,,False,"
+
+
+                                                                                                                                                                                                                                                             "
+32,611,1450000,,False,"
+
+
+
+
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,476,5,5,True," Sarah spent $300 on the books, and each book costs $15, so she bought $300 / $15 = 20 books.
+Since she gave an equal number of books to her 4 kids, each child got 20 / 4 = 5 books.
+So, each child got \boxed{5} books."
+1,476,5,5,True," Sarah spent $300 on the books and each book costs $15, so she bought $300 / $15 = 20 books.
+Since she gave an equal number of books to her 4 kids, each kid gets 20 / 4 = 5 books.
+So each child got \boxed{5} books."
+2,476,5,5,True," Sarah spent $300 on the books and each book costs $15, so she bought $300 / $15 = 20 books.
+Since she gave an equal number of books to her 4 kids, each kid gets 20 / 4 = 5 books.
+So each child got \boxed{5} books."
+4,476,5,5,True," Sarah spent $300 on the books and each book costs $15.
+To find out how many books she bought, we divide the total amount she spent by the cost per book: $300 / $15 = 20 books.
+Since she gave an equal number of books to her 4 kids, we divide the total number of books by 4: 20 / 4 = 5 books per kid.
+So each child got \boxed{5} books."
+8,476,5,15,False," 15
+The problem is that the books are $15, and the problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and the problem is that the books are $15.
+The problem is that the books are $15, and"
+16,476,5,,False,"
+
+
+
+ \, \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \"
+32,476,5,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,550,27,2450,False," $1.50 + $0.25 + $12 + $10 = $24.50
+The answer is: $\boxed{24.50}$"
+1,550,27,2050,False," $1.50 + $0.25 + $12 + $10 = $20.50
+The answer is: $\boxed{20.50}$"
+2,550,27,1688,False," $1.50 + $0.25 + $12 + $10 = $18.75
+The total cost of the items Daniel wants to buy is $18.75.
+The shop gives a 10% discount on all the purchased items.
+The discount is 10% of $18.75, which is $18.75 * 10 / 100 = $1.875.
+The total cost after discount is $18.75 - $1.875 = $16.875.
+So, Daniel has to spend \boxed{16.88} dollars on all the items he wants to buy."
+4,550,27,1600,False," $1.50 + $0.25 + $12 + $10 = $17.75
+The total cost of the items is $17.75.
+The shop gives a 10% discount on all the items.
+The discount is $17.75 * 10 / 100 = $1.75.
+The cost of the items after discount is $17.75 - $1.75 = $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00.
+The cost of the items after discount is $16.00"
+8,550,27,1,False," $0. The cost of the notebooks is $1. The cost of the pens is $0. The cost of the calculator is $12. The cost of the geometry set is $10.
+The cost of the notebooks is $1. The cost of the pens is $0. The cost of the geometry set is $10.
+The cost of the notebooks is $1. The cost of the pens is $0. The cost of the notebooks is $1. The cost of the pens is $0. The cost of the notebooks is $1. The cost of the pens is $0. The cost of the notebooks is $1. The cost of the pens is $0. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1. The cost of the notebooks is $1"
+16,550,27,,False,"
+
+
+
+
+ \, \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \ \, \"
+32,550,27,,False,"
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,420,17000,17000,True," Mr. Josue initially had $5000 in capital. The first bank gave him $4000, and the second company gave him twice as much as the first bank, which is $4000 * 2 = 8000$. So, the total amount of money Mr. Josue received is $4000 + 8000 = 12000$. Therefore, Mr. Josue has $5000 + 12000 = 17000$ in capital now.
+The answer is: $\boxed{17000}$"
+1,420,17000,17000,True," Mr. Josue initially had $5000 in capital. The first bank gave him $4000, and the second company gave him twice as much as the first bank, which is $4000 * 2 = 8000$. So, the total amount of money Mr. Josue received is $4000 + 8000 = 12000$. Thus, Mr. Josue has $5000 + 12000 = 17000$ dollars in capital now.
+The answer is: $\boxed{17000}$"
+2,420,17000,17000,True," 
+The first bank gave him $4000.
+The second bank gave him twice as much as the first bank, so it gave him $4000 * 2 = 8000$.
+Thus, the total amount of money he received is $4000 + 8000 = 12000$.
+So, the amount of money he has now is $5000 + 12000 = 17000$.
+Thus, the amount of money he has now is \boxed{17000} dollars."
+4,420,17000,17000,True," 
+The first bank gave him $4000.
+The second bank gave him twice as much as the first bank, so it gave him $4000 * 2 = 8000.
+The total amount of money he received is $4000 + 8000 = 12000.
+The initial amount of money he had was $5000.
+So the amount of money he has now is $5000 + 12000 = 17000.
+Thus, the amount of money he has now is \boxed{17000}."
+8,420,17000,5000,False," The second bank gives him $4000, and the first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $4000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank gives him $5000.
+The first bank gives him $5000.
+The second bank"
+16,420,17000,,False,"
+
+
+The, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,420,17000,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1263,500,680,False," 
+On the first day, Conor found 50 people at the beach.
+On the second day, 20 more people were present than on the first day, so 50 + 20 = 70 people were there.
+On the third day, the total number of people increased to twice the number that were there on the second day, so 2 * 70 = 140 people were there.
+On the fourth day, the total number of people increased to 3 * 140 = 420 people.
+So, the total number of people Conor saw at the beach that week is 50 + 70 + 140 + 420 = 120 + 140 + 420 = 260 + 420 = 680
+Answer: \boxed{680}"
+1,1263,500,1120,False," 
+On the first day, Conor found 50 people at the beach.
+On the second day, 20 more people were present than on the first day, so 50 + 20 = 70 people were present.
+On the third day, the total number of people increased to twice the number that were there on the second day, so 2 * 70 = 140 people were present.
+On the fourth day, the total number of people increased to twice the number that were there on the third day, so 2 * 140 = 280 people were present.
+On the fifth day, the total number of people increased to twice the number that were there on the fourth day, so 2 * 280 = 560 people were present.
+On the sixth day, the total number of people increased to twice the number that were there on the fifth day, so 2 * 560 = 1120 people were present.
+Thus, the total number of people Conor saw at the beach that week is \boxed{1120}."
+2,1263,500,2240,False," 
+On the first day, Conor found 50 people at the beach.
+On the second day, 20 more people were present than on the first day, so 50 + 20 = 70 people were present.
+On the third day, the total number of people increased to twice the number that were there on the second day, so 70 * 2 = 140 people were present.
+On the fourth day, the total number of people increased to twice the number that were there on the third day, so 140 * 2 = 280 people were present.
+On the fifth day, the total number of people increased to twice the number that were there on the fourth day, so 280 * 2 = 560 people were present.
+On the sixth day, the total number of people increased to twice the number that were there on the fifth day, so 560 * 2 = 1120 people were present.
+On the seventh day, the total number of people increased to twice the number that were there on the sixth day, so 1120 * 2 = 2240 people were present.
+On the eighth day, the total number of people increased to twice the number that were there on the seventh day, so 2240 *"
+4,1263,500,320,False," 
+On the first day, Conor found 50 people at the beach.
+On the second day, Conor found 20 more people than the first day, so he found 50 + 20 = 70 people.
+On the third day, the total number of people is twice the number of people on the second day, so he found 70 * 2 = 140 people.
+The total number of people Conor saw at the beach that week is 50 + 70 + 140 = 180 + 140 = 320
+The answer is: 
+\boxed{320}"
+8,1263,500,20,False," 
+The number of people on the first day is 50, and the number of people on the second day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number of people on the third day is 20.
+The number"
+16,1263,500,,False,"
+
+
+
+
+ \), \), \ \), \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \"
+32,1263,500,,False,"
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,, \,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,272,5,0,False," $20 - $20 = $0
+The mother spent a total of $4.20 + $9.45 + $1.35 = $15.70.
+So the change the mother gets is $0.
+The answer is:
+\[ \boxed{0} \]"
+1,272,5,0,False," $20 - $20 = $0
+The mother spent $20 on a total of $4.20 + $9.45 + $1.35 = $25.70.
+So the change the mother gets is $0.
+The answer is: \boxed{0}"
+2,272,5,20,False," $20 - $4.20 - $9.45 - $1.35 = $20 - $14.70 = $5.30
+The mother pays $20 for the items she bought.
+The total cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is $20.
+The cost of the items is"
+4,272,5,4,False," $20.00
+The total cost of the items the mother bought is $4.20 + $9.45 + $1.35 = $16.00.
+The mother pays $20.00, so the change she gives back is $20.00 - $16.00 = $4.00.
+The answer is: \boxed{4}"
+8,272,5,135,False," $9.45
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35.
+The amount of money the mother spent on the package of pasta is $1.35"
+16,272,5,,False,"
+
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the,"
+32,272,5,,False,"
+
+
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,1289,101,101,True," 11 small shirts * 3 square feet/small shirt = 33 square feet
+8 medium shirts * 4 square feet/medium shirt = 32 square feet
+6 large shirts * 6 square feet/large shirt = 36 square feet
+Total square feet = 33 + 32 + 36 = 65 + 36 = 101 square feet
+So, the quilt is \boxed{101} square feet."
+1,1289,101,101,True," 11 small shirts * 3 square feet/small shirt = 33 square feet
+8 medium shirts * 4 square feet/medium shirt = 32 square feet
+6 large shirts * 6 square feet/large shirt = 36 square feet
+Total square feet = 33 + 32 + 36 = 65 + 36 = 101 square feet
+So, the quilt is \boxed{101} square feet."
+2,1289,101,121,False," 3 * 11 + 4 * 8 + 6 * 6 = 33 + 32 + 36 = 121
+The answer is: \boxed{121}"
+4,1289,101,121,False," 3 * 11 + 8 * 4 + 6 * 6
+\[ 3 * 11 + 8 * 4 + 6 * 6 = 33 + 32 + 36 = 121 \]
+The answer is:
+\[ \boxed{121} \]"
+8,1289,101,11,False," 11
+The octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the octavia is the largest of the square feet of the fabric, the"
+16,1289,101,,False,"
+
+
+
+
+
+                                                                                                                                                                                                                                                          "
+32,1289,101,,False,"
+
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,423,8,22,False," $28 - 6 = 22
+Since the tattered jeans cost $28 and jogger jeans cost $6 less than the tattered jeans, jogger jeans cost $28 - 6 = 22.
+So jogger jeans originally cost \boxed{22} dollars more than the tattered jeans."
+1,423,8,6,False," $28 - 6 = 22
+Since the jeans were on sale, the jogger jeans cost $6 less than the tattered jeans, which is $28 - 6 = 22.
+So jogger jeans originally cost $22.
+The tattered jeans originally cost $28.
+Thus, jogger jeans originally cost $22 - 28 = -6.
+However, the question asks for the difference in cost between jogger jeans and tattered jeans.
+So the answer is \boxed{6}."
+2,423,8,28,False," $28 - $6 = $22
+Let's denote the original price of the jogger jeans as $x$.
+Since the jogger jeans cost $6 less than the tattered jeans, the tattered jeans cost $x + 6$.
+The total savings from the jogger jeans is $x + 6$.
+The total savings from the tattered jeans is $28 - (x + 6) = 22$.
+The problem states that the tattered jeans cost $28 while the jogger jeans cost $6 less than the tattered jeans, so we can write the equation $28 - (x + 6) = 22$.
+Solving for $x$, we get $28 - 22 = x + 6$, which simplifies to $6 = x + 6$.
+Subtracting 6 from both sides, we get $x = 0$.
+So the jogger jeans originally cost $x = 0$ dollars.
+The tattered jeans originally cost $28.
+The difference in the cost of the jogger jeans and the tattered jeans is $28 - 0 = 28$ dollars.
+So jogger jeans originally cost \boxed{28} dollars more than the tattered jeans"
+4,423,8,22,False," The jogger jeans cost $6 less than the tattered jeans, so the jogger jeans cost $28 - 6 = 22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $28, so the jogger jeans cost $22.
+The tattered jeans cost $"
+8,423,8,6,False," The jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $28 and the jeans cost $6, the jeans cost $"
+16,423,8,,False,"
+
+
+
+
+
+
+ \"
+32,423,8,,False,"
+
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,470,3,5,False," Theo spent $2 + 1 = 3$ dollars on a pen and a piece of paper that cost $3 - 1 = 2$ dollars. So the total amount she spent is $3 + 2 = 5$ dollars. Since she gave the cashier $10, the amount of change she received is $10 - 5 = 5$ dollars.
+The final answer is: $\boxed{5}$"
+1,470,3,3,True," The cost of the pen is $2. Three times the price of the pen is $2 * 3 = 6. The cost of the piece of paper is $1 less than three times the price of the pen, so it is $6 - 1 = 5. The total cost of the pen and the piece of paper is $2 + 5 = 7. Theo paid $10, so the amount of change she received is $10 - 7 = 3.
+The answer is:
+\[ \boxed{3} \]"
+2,470,3,3,True," The cost of the pen is $2. Three times the price of the pen is $2 * 3 = 6. The cost of the paper is $1 less than three times the price of the pen, so it is $6 - 1 = 5. The total cost of the pen and the paper is $2 + 5 = 7. The amount of change Theo received is $10 - 7 = 3.
+The answer is:
+\[ \boxed{3} \]"
+4,470,3,2,False," The price of the pen is $2.
+The price of the pen is $2.
+Three times the price of the pen is $2 * 3 = 6.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen is $2.
+The price of the pen"
+8,470,3,1,False," The price of the pen is $2, and the price of the paper is $1, and the price of the pen is $2.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1.
+The price of the pen is $2, and the price of the paper is $1"
+16,470,3,,False,"
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the"
+32,470,3,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,68,36,65,False," There are 60 girls and 5 students to every teacher, so the total number of teachers is 60 + 5 = 65.
+The answer is: \boxed{65}"
+1,68,36,65,False," There are 60 girls and 5 students to every teacher, so the total number of teachers is 60 + 5 = 65.
+The answer is: \boxed{65}"
+2,68,36,25,False," There are 60 girls and 5 students to every teacher.
+Since there are twice as many boys as girls, the number of boys is 2 * 60 = 120.
+The total number of students is 5 (students) + 120 (boys) = 125.
+The total number of teachers is 125 / 5 = 25.
+So, there are \boxed{25} teachers."
+4,68,36,120,False," There are 60 girls and 5 students to every teacher.
+Since there are twice as many boys as girls, the number of boys is 2 * 60 = 120.
+The total number of students is 5 * 120 = 600.
+The total number of teachers is 600 / 5 = 120.
+So, there are \boxed{120} teachers."
+8,68,36,5,False," There are 60 girls and 5 students, the number of teachers is 5.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is 60.
+The number of teachers is 5.
+The number of girls is "
+16,68,36,,False,"
+
+The, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,68,36,,False,"
+
+
+
+
+
+, the the the the the the the the the the the the the the the the
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      "
+0,557,70,21,False," 7 buttons had 2 holes each, and 21 - 7 = 14 buttons had 4 holes each.
+So, the total number of holes is 7 + 14 = 21.
+The answer is:
+\[ \boxed{21} \]"
+1,557,70,11,False," 7 buttons had two holes and the rest had four holes.
+So the number of holes in all the buttons is 7 + 4 = 11.
+The answer is \boxed{11}."
+2,557,70,56,False," 7 buttons had two holes and the rest had four holes.
+There are 21 buttons in total.
+Seven buttons had two holes.
+So the number of holes in the 7 buttons is 7 * 2 = 14.
+The rest of the buttons had 4 holes.
+So the number of holes in the 14 buttons is 14 * 4 = 56.
+Thus, the total number of holes in all the buttons is \boxed{56}."
+4,557,70,21,False," 7 buttons had two holes and the rest had four holes.
+The number of holes in the 7 buttons with two holes is 7 * 2 = 14.
+The number of holes in the rest of the buttons is 21 - 14 = 7.
+So the total number of holes is 14 + 7 = 21.
+The answer is \boxed{21}."
+8,557,70,4,False," The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+The buttons have 7 holes, and the remaining buttons have 4 holes.
+"
+16,557,70,,False,"
+
+
+
+, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons, the the buttons"
+32,557,70,,False,"
+
+
+, the the the the the the the the the the the the the the the the the the the the
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,444,20,75,False," Movie A is 1.25 hours, which is 75 minutes.
+So, the answer is:
+\[ \boxed{75} \]"
+1,444,20,75,False," Movie A is 1.25 hours, which is 75 minutes.
+Movie A was 1.25 hours long.
+Answer: \boxed{75}"
+2,444,20,80,False," 
+Movie A is 1/4 of Movie B, which is 5 minutes longer than Movie C. 
+Movie C is 1.25 hours, which is 75 minutes. 
+So Movie A is 5 minutes longer than Movie C, which is 75 + 5 = 80 minutes.
+Thus, Movie A is \boxed{80} minutes long."
+4,444,20,175,False," Movie A is 1.25 hours, and Movie C is 1.25 hours. Movie B is 5 minutes longer than Movie C, so Movie B is 1.25 hours + 5 minutes = 1.25 hours + 0.25 hours = 1.5 hours. Movie A is 1.25 hours, and Movie A is 1.25 hours + 0.25 hours = 1.5 hours + 0.25 hours = 1.75 hours. Movie A is 1.75 hours, and Movie A is 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours + 0.25 hours = 1.75 hours +"
+8,444,20,,False, Movie A is the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the length of the
+16,444,20,,False,"
+
+
+Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie, Movie"
+32,444,20,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1211,448,56,False," 14 mL + 3 times 14 mL = 14 mL + 42 mL = 56 mL
+So, the answer is:
+\[ \boxed{56} \]"
+1,1211,448,56,False," 14 mL + 3 times 14 mL = 14 mL + 42 mL = 56 mL
+So, the answer is:
+\[ \boxed{56} \]"
+2,1211,448,448,True," 14 mL + 3 times 14 mL = 14 + 42 = 56 mL
+Since Saanvi had to combine 14 mL of one medicine with 3 times that amount of the second medicine, the total amount of medicine in 8 doses is 8 times the amount of medicine in 8 doses.
+So, the total amount of medicine in 8 doses is 8 * 56 = 448 mL.
+Thus, the total amount of medicine in 8 doses is \boxed{448} mL."
+4,1211,448,14,False," 14 mL of the first medicine + 3 times the amount of the second medicine
+To find the amount of the second medicine, we can divide the amount of the second medicine by 3 times the amount of the first medicine.
+Let's denote the amount of the first medicine as $x$.
+Then, the amount of the second medicine is $3x$.
+The total amount of the first medicine is $14$ mL.
+The total amount of the second medicine is $3x$.
+The total amount of the first medicine and the second medicine is $14 + 3x$.
+The amount of the second medicine is $3x$.
+The amount of the first medicine and the second medicine is $14$ mL.
+The amount of the first medicine and the second medicine is $14$ mL.
+The amount of the second medicine is $3x$.
+The amount of the first medicine and the second medicine is $14$ mL.
+The amount of the first medicine and the second medicine is $14$ mL.
+The amount of the second medicine is $3x$.
+The amount of the first medicine and the second medicine is $14$ mL.
+The amount of the first medicine and the second medicine is $14$ mL.
+The amount of"
+8,1211,448,3,False," 3 times the amount of the second medicine, the amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is 3 times the amount of the second medicine.
+The amount of the second medicine is "
+16,1211,448,,False,"
+
+
+The, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,1211,448,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1301,23,11,False," Randy has 9 oatmeal cookies, 4 chocolate chip cookies, and 5 sugar cookies. He ate 3 cookies for an early day snack, one of each flavor. He ate 2 oatmeal cookies for lunch. He gives 2 sugar cookies to his friends. Then, he bakes 4 of each flavor for dinner.
+Randy started with 9 oatmeal cookies, 4 chocolate chip cookies, and 5 sugar cookies.
+He ate 3 oatmeal cookies for an early day snack, so he had 9 - 3 = 6 oatmeal cookies left.
+He ate 2 oatmeal cookies for lunch, so he had 6 - 2 = 4 oatmeal cookies left.
+He gave 2 sugar cookies to his friends, so he had 5 - 2 = 3 sugar cookies left.
+Then, he bakes 4 of each flavor for dinner, so he had 3 + 4 + 4 = 7 + 4 = 11 cookies left.
+Thus, Randy has \boxed{11} cookies now."
+1,1301,23,18,False," 9 oatmeal cookies + 4 chocolate chip cookies + 5 sugar cookies - 3 oatmeal cookies - 2 oatmeal cookies - 2 sugar cookies = 9 oatmeal cookies + 4 chocolate chip cookies + 5 sugar cookies = 9 + 4 + 5 = 13 + 5 = 18
+Randy has 18 cookies now.
+Answer: \boxed{18}"
+2,1301,23,18,False," 9 oatmeal cookies + 4 chocolate chip cookies + 5 sugar cookies = 18 cookies
+Randy ate 3 oatmeal cookies for an early day snack, 2 oatmeal cookies for lunch, and 2 sugar cookies for his friends.
+So, the total number of oatmeal cookies he ate is 3 + 2 + 2 = 5 + 2 = 7 oatmeal cookies.
+Randy also ate 2 oatmeal cookies for lunch.
+So, the total number of oatmeal cookies he ate is 7 + 2 = 9 oatmeal cookies.
+Randy also ate 5 sugar cookies for his friends.
+So, the total number of sugar cookies he ate is 5.
+Randy also ate 4 oatmeal cookies for dinner.
+So, the total number of oatmeal cookies he ate is 9 + 5 + 4 = 14 + 4 = 18 oatmeal cookies.
+Thus, Randy has \boxed{18} cookies now."
+4,1301,23,8,False," 9 oatmeal cookies + 4 chocolate chip cookies + 5 sugar cookies = 18 cookies
+Randy ate 3 oatmeal cookies for an early day snack, so he has 9 - 3 = 6 oatmeal cookies left.
+Randy ate 2 oatmeal cookies for lunch, so he has 6 - 2 = 4 oatmeal cookies left.
+Randy gave 2 sugar cookies to his friends, so he has 4 - 2 = 2 sugar cookies left.
+Randy bakes 4 oatmeal cookies for dinner, so he has 2 - 4 = -2 oatmeal cookies left.
+Randy has 18 cookies in total, so he has 18 - 2 = 16 oatmeal cookies left.
+Randy has 16 oatmeal cookies left, so he has 16 - 2 = 14 sugar cookies left.
+Randy has 14 sugar cookies left, so he has 14 - 2 = 12 oatmeal cookies left.
+Randy has 12 oatmeal cookies left, so he has 12 - 2 = 10 sugar cookies left.
+Randy has 10 sugar cookies left, so he has 10 - 2 = 8 oatmeal cookies left"
+8,1301,23,3,False," 9 oatmeal cookies
+The oatmeal cookies are 9 oatmeal cookies, the oatmeal cookies are 4 oatmeal cookies, the oatmeal cookies are 5 sugar cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal cookies, the oatmeal cookies are 3 oatmeal"
+16,1301,23,,False,"
+
+
+
+
+                                                                                                                                                                                                                                                           "
+32,1301,23,,False,"
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,595,13,3,False," Jerry is twice as old as he was 5 years ago, so Jerry is $2 \cdot 5 = 10$ years old now.
+To find Jerry's age in 3 years, add 3 years to his current age:
+\[ 10 + 3 = 13 \]
+So, Jerry will be $\boxed{13}$ years old in 3 years."
+1,595,13,3,False," Jerry is twice as old as he was 5 years ago, so Jerry is $2 \cdot 5 = 10$ years old now.
+To find Jerry's age in 3 years, we add 3 years to his current age:
+\[ 10 + 3 = 13 \]
+So, Jerry will be $\boxed{13}$ years old in 3 years."
+2,595,13,3,False," Jerry is twice as old as he was 5 years ago, so Jerry is $2 \times 5 = 10$ years old now.
+In 3 years, Jerry will be $10 + 3 = 13$ years old.
+So, Jerry will be \boxed{13} years old in 3 years."
+4,595,13,3,False," Jerry is twice as old as he was 5 years ago, so he is $2 \times 5 = 10$ years old now.
+In 3 years, Jerry will be $10 + 3 = 13$ years old.
+So, Jerry will be \boxed{13} years old in 3 years."
+8,595,13,3,False," Jerry is twice as old as he was 5 years old, so he will be 5 years old in 3 years.
+Let's solve this problem.
+Since Jerry is twice as old as he was 5 years old, he will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+Since Jerry is twice as old as he was 5 years old, he will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will be 5 years old in 3 years.
+So, Jerry will"
+16,595,13,,False,"
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the"
+32,595,13,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                   "
+0,628,4,24,False," Adam's height is 40 inches and he grows 2 inches a year. So, he will be 40 + 2 = 42 inches tall. To ride the roller coaster, he needs to be 4 feet tall. Since there are 12 inches in a foot, he needs to be 4 * 12 = 48 inches tall. So, Adam will be 42 inches tall and he needs to be 48 inches tall to ride the roller coaster. 
+To find the number of years until he is tall enough to ride the roller coaster, we need to divide the height he needs to be by the growth rate per year. 
+Number of years = Height he needs to be / Growth rate per year = 48 / 2 = 24.
+So, Adam will be tall enough to ride the roller coaster in \boxed{24} years."
+1,628,4,4,True," Adam's height is 40 inches and he grows 2 inches a year. So, he will be 40 + 2 = 42 inches tall when he is 42 inches tall.
+Since Adam has to be 4 feet tall to ride the roller coaster, we need to convert his height to feet. There are 12 inches in a foot, so 42 inches is 42 / 12 = 3.5 feet.
+Since Adam has to be 4 feet tall to ride the roller coaster, he will be 4 feet tall when he is 3.5 feet tall.
+So, Adam will be 3.5 - 4 = -0.5 feet tall when he is 3.5 feet tall.
+Since Adam has to be 4 feet tall to ride the roller coaster, he will be 4 feet tall when he is 3.5 feet tall.
+So, Adam will be 3.5 - 4 = -0.5 feet tall when he is 3.5 feet tall.
+Since Adam has to be 4 feet tall to ride the roller coaster, he will be 4 feet tall when he is 3.5 feet tall.
+So, Adam will be 3.5 - 4 ="
+2,628,4,42,False," Adam's height is 40 inches and he grows 2 inches a year. So, he will be 40 + 2 = 42 inches tall when he is 4 feet tall.
+Since Adam's height is 40 inches and he grows 2 inches a year, he will be 42 inches tall when he is 4 feet tall.
+So, the answer is: \boxed{42}"
+4,628,4,20,False," 
+To find the number of years until Adam is tall enough to ride the roller coaster, we need to calculate how many inches of height he needs to ride the roller coaster and then divide that by the height he needs to grow.
+Adam's height is 40 inches and he grows 2 inches a year.
+So, the number of years he needs to ride the roller coaster is 40 / 2 = 20 years.
+Thus, Adam needs to ride the roller coaster for \boxed{20} years."
+8,628,4,,False," 
+The height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height of the roller, and the height of the roller is the height"
+16,628,4,,False,"
+
+
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the"
+32,628,4,,False,"
+
+
+
+
+,, the the,, the the, the the, the the, the the, the, the, the, the, the, the,"
+0,618,36,36,True," 
+The total number of seats in the auditorium is 4 * 18 = 72.
+One-fourth of the seats were occupied by administrators, which is 72 / 4 = 18 seats.
+So the number of remaining seats is 72 - 18 = 54.
+One-third of the remaining seats were occupied by parents, which is 54 / 3 = 18 seats.
+So the number of students is 54 - 18 = 36.
+Thus, there were \boxed{36} students in the school auditorium."
+1,618,36,36,True," 
+The total number of seats in the auditorium is 4 * 18 = 72.
+One-fourth of the seats were occupied by administrators, which is 72 / 4 = 18 seats.
+So the remaining seats are 72 - 18 = 54.
+One-third of the remaining seats were occupied by parents, which is 54 / 3 = 18 seats.
+So the remaining seats are 54 - 18 = 36.
+Thus, there were \boxed{36} students in the school auditorium."
+2,618,36,0,False," 
+The total number of seats in the auditorium is 18 * 4 = 72.
+One-fourth of the seats were occupied by administrators, which is 72 * 1/4 = 72/4 = 18
+So the number of seats occupied by administrators is 18.
+One-third of the remaining seats were occupied by parents, which is 72 - 18 = 54.
+So the number of seats occupied by parents is 54.
+The number of seats occupied by students is 72 - 18 - 54 = 54 - 54 = 0
+So there are \boxed{0} students in the school auditorium."
+4,618,36,10,False," 18 seats in each row, and one-fourth of the seats were occupied by administrators. This means that the number of administrators is 18 / 4 = 4.5. Since we can't have a fraction of a seat, we'll round down to 4 administrators (because we can't have a fraction of a seat).
+Now, the remaining seats are 18 - 4 = 14 seats.
+One-third of the remaining seats are occupied by the parents, which is 14 / 3 = 4.67. Again, we'll round down to 4 parents (because we can't have a fraction of a seat).
+The remaining seats are 14 - 4 = 10 seats.
+The total number of students is the sum of the administrators and the parents, which is 4 administrators + 4 parents = 10.
+So, the answer is \boxed{10}."
+8,618,36,,False," The administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators, the administrators are occupied by the administrators,"
+16,618,36,,False,"
+
+
+
+ administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators,"
+32,618,36,,False,"
+
+
+,,, the the,, the the,, the the,, the, administrators, administrators, administrators, administrators, administrators, administrators, administrators, administrators, The, The, The, The, The Administr, The Administr, Administr, The Administr, The Administr, The Administr, The The Administr, The Administr, The Administr, The Administr, The The The The Administr
+ The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The
+ The The The The The The The
+ The The The The The The The The The The The The The The The The The The The
+ The The The The The The The The The The The The The The The The The The The The The The The
+ The The
+ The The
+ The The The The
+ The The The
+ The The
+ The The"
+0,702,2800,12800,False," 800 + 1000 + 11000 = 1800 + 11000 = 12800
+Gary's truck can carry \boxed{12800} pounds of gravel."
+1,702,2800,15600,False," 800 + 4000 + 11000 = 4800 + 11000 = 15600
+The answer is: \boxed{15600}"
+2,702,2800,4000,False," 800 + 4,000 = 4,000
+The answer is: \boxed{4000}"
+4,702,2800,800,False," 800 + 4,000 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 = 4,000 + 800 ="
+8,702,2800,11600,False," 800
+The truck can haul 4,000 pounds of gravel, and the truck can haul 800 pounds of gravel, and the truck can haul 11,600 pounds of gravel.
+The truck can haul 4,000 pounds of gravel, and the truck can haul 800 pounds of gravel, and the truck can haul 11,600 pounds of gravel.
+The truck can haul 4,000 pounds of gravel, and the truck can haul 800 pounds of gravel, and the truck can haul 11,600 pounds of gravel.
+The truck can haul 4,000 pounds of gravel, and the truck can haul 800 pounds of gravel, and the truck can haul 11,600 pounds of gravel.
+The truck can haul 4,000 pounds of gravel, and the truck can haul 800 pounds of gravel, and the truck can haul 11,600 pounds of gravel.
+The truck can haul 4,000 pounds of gravel, and the truck can haul 800 pounds of gravel, and the truck can haul 11,600 pounds of gravel.
+The truck can haul 4,000 pounds of gravel, and the truck can haul 800 pounds of gravel, and the truck can haul 11,600 pounds of gravel.
+The"
+16,702,2800,,False,"
+
+
+
+                                                                                                                                                                                                                                                            "
+32,702,2800,,False,"
+
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,, , ,,,,,, , , , , ,  ,, , ,  , ,  ,  ,  ,  ,   ,  ,  ,      ,                                                                                                                                           \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \"
+0,706,9,1400,False," 6300 - 2100 = 4200
+Since the firefighters have already raised $2100 in 3 hours, they need to raise $4200 in 3 hours to reach their goal.
+To find the number of hours they need to raise, we can divide the amount they need to raise by the number of hours they have already raised:
+4200 ÷ 3 = 1400
+So, the firefighters need to raise for \boxed{1400} hours to reach their goal."
+1,706,9,467,False," 
+The firefighters have raised $2100 in 3 hours. 
+To raise $6300, they need to raise $6300 - $2100 = $4200.
+Since they have 3 hours to raise this amount, we can calculate the amount they need to raise per hour as follows:
+$4200 / 3 hours = $1400 per hour.
+Since they need to raise an equal amount in every hour, we can calculate the number of hours they need to raise as follows:
+$1400 per hour / $3 hours = 466.67 hours.
+Since they can't raise a fraction of an hour, we can round up to the nearest whole number. 
+So, the firefighters need to raise \boxed{467} hours in total to reach their goal."
+2,706,9,1400,False," 
+The firefighters have raised $2100 in 3 hours. 
+To raise $6300, they need to raise $6300 - $2100 = $4200.
+Since they have 3 hours to raise this amount, we can calculate the amount they need to raise per hour as follows:
+$4200 / 3 hours = $1400 per hour.
+Since they need to raise $4200, they need to raise $1400 per hour for 3 hours.
+Thus, the firefighters need to raise \boxed{1400} hours to reach their goal."
+4,706,9,2,False," 
+The goal is to raise $6300, and they have raised $2100 in 3 hours. 
+To find the amount they need to raise in the remaining 3 hours, we can divide the goal by the amount raised in the first 3 hours.
+$6300 / $2100 = 3 hours.
+So, the firefighters need to raise $6300 - $2100 = $4200 in the remaining 3 hours.
+To find the amount they need to raise in the remaining 3 hours, we can divide the amount they need to raise in the remaining 3 hours by the amount raised in the first 3 hours.
+$4200 / $2100 = 2 hours.
+So, the firefighters need to raise $4200 - $2100 = $2100 in the remaining 3 hours.
+The answer is: 
+\boxed{2}"
+8,706,9,3,False," 3 hours
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours.
+The goal is to raise $2100, which is the amount of money raised in the first 3 hours"
+16,706,9,,False,"
+
+
+The, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,706,9,,False,"
+
+
+
+
+,,, the,, the,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,, \,,, \,,, \,,, \,, \,, \,, \,, \,, \,, \, \,, \, \, \, \,, \,, \,, \,, \,, \, \, \, \, \, \, \, \, \, \, \, \, \, \, \, \, \, \, \, \ \, \ \, \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \"
+0,171,1210,173,False," 80 + 90 + 3 = 170 + 3 = 173
+So, Jake sees a total of \boxed{173} legs."
+1,171,1210,173,False," Jake sees 80 + 90 + 3 = 170 + 3 = 173 legs.
+The answer is: \boxed{173}"
+2,171,1210,173,False," Jake sees 80 spider legs, 90 insect legs, and 3 rare mutant legs.
+Total legs seen by Jake is: 80 + 90 + 3 = 170 + 3 = 173
+So, Jake sees \boxed{173} legs total."
+4,171,1210,173,False," 80 + 90 + 3 = 170 + 3 = 173
+The answer is: \boxed{173}"
+8,171,1210,80,False," 80 spider
+The spider is the only spider, and the spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the only spider, and the spider is the only spider.
+The spider is the"
+16,171,1210,,False,"
+
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the,"
+32,171,1210,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,882,5,44,False," Kelly has $65 - 10 - 4 - 7 = 55 - 4 - 7 = 51 - 7 = 44
+So Kelly has \boxed{44} dollars left in her budget."
+1,882,5,44,False," Kelly has $65 - 10 - 4 - 7 = 55 - 4 - 7 = 51 - 7 = 44
+So, Kelly has \boxed{44} dollars left in her budget."
+2,882,5,70,False," 
+Kelly has 65 dollars in her budget.
+She has 5 packs of bacon for $10.
+She has 6 packets of chicken for $10 * 2 = 20.
+She has 3 packs of strawberries for $4 * 3 = 12.
+She has 7 packs of apples for $4 * 7 = 28.
+So in total, she has $10 + 20 + 12 + 28 = 30 + 12 + 28 = 42 + 28 = 70 dollars.
+Thus, Kelly has \boxed{70} dollars left in her budget."
+4,882,5,35,False," 
+Let's break down the costs of the items in Kelly's cart:
+- 5 packs of bacon cost $10.
+- 6 packets of chicken cost twice as much as a pack of bacon, so 6 * $10 = $60.
+- 3 packs of strawberries cost $4.
+- 7 packs of apples cost $4 * 7 = $28.
+Adding up the costs of all items in her cart:
+$10 + $60 + $4 + $28 = $94.
+Kelly's budget is $65, so she has $65 - $94 = -$30.
+Since Kelly has a budget of $65, and she has -$30 left, she has $65 - $30 = $35.
+Thus, Kelly has \boxed{35} dollars left in her budget."
+8,882,5,5,True," 
+The cost of the 5 packs of bacon is $10, and the cost of the 6 packets of chicken is $6.
+The cost of the 3 packs of strawberries is $4.
+The cost of the 7 packs of apples is $4.
+The cost of the 6 packets of chicken is $6.
+The cost of the 5 packs of bacon is $10.
+The cost of the 3 packs of strawberries is $4.
+The cost of the 6 packets of chicken is $6.
+The cost of the 5 packs of bacon is $10.
+The cost of the 6 packets of chicken is $6.
+The cost of the 3 packs of strawberries is $4.
+The cost of the 5 packs of bacon is $10.
+The cost of the 6 packets of chicken is $6.
+The cost of the 5 packs of bacon is $10.
+The cost of the 6 packets of chicken is $6.
+The cost of the 5 packs of bacon is $10.
+The cost of the 6 packets of chicken is $6.
+The cost of the 5 packs of bacon is $10.
+The cost of the 6 packets of chicken is $6.
+The cost of the 5 packs"
+16,882,5,,False,"
+
+
+
+
+, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $, $,"
+32,882,5,,False,"
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,526,21,0,False," $1.50 - $1.50 = $0.00
+The difference in electric consumption between Ada and the new device is \boxed{0} dollars."
+1,526,21,050,False," $1.50 - 2 = -0.50
+Since the problem states that the new device will consume 2 kilowatts per hour, the difference between Ada's weekly electric bill before and after she adds the new device is \boxed{0.50} dollars."
+2,526,21,-050,False," $1.50 - 2 = -0.50
+The difference between Ada's weekly electric bill before and after she adds the new device is \boxed{-0.50} dollars."
+4,526,21,24,False," 12 kilowatts per hour * 2 kilowatts per hour = 24 kilowatts per hour
+The new device will consume 2 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per hour.
+The new device will consume 24 kilowatts per"
+8,526,21,12,False," 12
+The new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12 kilowatts per hour, and the new device is 12"
+16,526,21,,False,"
+
+
+
+
+
+, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the"
+32,526,21,,False,"
+
+
+
+
+
+,,, the the,, the the, the the,, the the, the, the, the, the, the the, the, The, The, The, The, The, The, The, The, The, The, The, The, The, The, The, The, The, The, The
+"
+0,601,104,3,False," Steve starts with 5 games for his birthday. Each year he gets 1 game per month for a year, so that's 12 games per year. For the first year, he gets 1 game per month for 12 months, so that's 12 games. For the second year, he gets 2 games per month for 12 months, so that's 24 games. For the third year, he gets 4 games per month for 12 months, so that's 48 games. For the fourth year, he gets 5 games for Christmas every year, so that's 5 games.
+Answer: Steve has 5 + 12 + 24 + 48 + 5 = 17 + 24 + 48 + 5 = 41 + 48 + 5 = 89 + 5 = 94 games.
+Answer: Steve has \boxed{94} games after 3 years."
+1,601,104,5,False," Steve starts with 5 games for his birthday and 5 games for Christmas, so he has 5 + 5 = 10 games for his birthday and Christmas. Steve saves up enough money to buy 1 game per month for a year, so he buys 1 game per month for 12 months. Steve buys 1 game per month for 3 years, so he buys 1 * 12 * 3 = 12 * 3 = 36 games. Steve also buys 2 games a month for a year, so he buys 2 * 12 = 24 games. Steve also buys 5 games for Christmas every year, so he buys 5 * 12 = 60 games. Steve also buys 4 games a month for a year, so he buys 4 * 12 = 48 games. Steve also buys 5 games for Christmas every year, so he buys 5 * 12 = 60 games. Steve also buys 5 games for Christmas every year, so he buys 5 * 12 = 60 games. Steve also buys 5 games for Christmas every year, so he buys 5 * 12 = 60 games. Steve also buys 5 games for Christmas every year, so he"
+2,601,104,3,False," Steve has 5 games for Christmas every year.
+Since Steve has 3 years, he has 3 * 5 = 15 games for Christmas.
+He also has 5 games for each year, so he has 5 * 3 = 15 games for the first year.
+He also has 5 games for each month, so he has 5 * 12 = 60 games for the first year.
+He also has 5 games for each month, so he has 5 * 12 = 60 games for the second year.
+He also has 5 games for each month, so he has 5 * 12 = 60 games for the third year.
+So Steve has 15 + 60 + 60 + 60 = 75 + 60 + 60 = 135 + 60 = 195 games.
+Thus Steve has \boxed{195} games after 3 years."
+4,601,104,3,False," Steve saves up money to buy 1 game per month for a year, so he saves up money to buy 1 game per month for 3 years, which is 3 * 1 = 3 games.
+He also saves up money to buy 1 game per month for a year, so he saves up money to buy 1 game per month for 3 years, which is 3 * 1 = 3 games.
+He also saves up money to buy 2 games a month for a year, so he saves up money to buy 2 games per month for 3 years, which is 3 * 2 = 6 games.
+He also saves up money to get 5 games for Christmas every year, so he saves up money to get 5 games for 3 years, which is 3 * 5 = 15 games.
+So Steve has 3 + 6 + 15 = 9 + 15 = 24 games.
+The answer is: Steve has \boxed{24} games after 3 years."
+8,601,104,1,False," 1
+The problem is that Steve saves up money to buy the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of the games of"
+16,601,104,,False,"
+
+
+
+                                                                                                                                                                                                                                                            "
+32,601,104,,False,"
+
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,81,17,17,True," Charlie started with 10 stickers and bought 21, so he had 10 + 21 = 31 stickers. Then he got 23 for his birthday, so he had 31 + 23 = 54 stickers. Finally, he gave 9 to his sister and used 28 to decorate a greeting card, so he had 54 - 9 - 28 = 45 - 28 = 17 stickers left.
+The answer is: \boxed{17}"
+1,81,17,31,False," Charlie had 10 stickers initially, then bought 21 stickers, got 23 stickers for his birthday, then gave away 9 stickers to his sister and used 28 stickers to decorate a greeting card. So, Charlie has 10 - 21 + 23 - 9 + 28 = (-11) + 23 - 9 + 28 = 12 - 9 + 28 = 3 + 28 = 31 stickers left.
+The answer is: \boxed{31}"
+2,81,17,31,False," Charlie had 10 stickers initially, then bought 21 stickers, got 23 stickers for his birthday, then gave away 9 stickers to his sister and used 28 stickers to decorate a greeting card. So, Charlie has 10 - 21 + 23 - 9 + 28 = 10 - 21 + 23 - 9 + 28 = (-11) + 23 - 9 + 28 = 12 - 9 + 28 = 3 + 28 = 31
+The answer is: \boxed{31}"
+4,81,17,17,True," Charlie had 10 stickers and bought 21 stickers, so he had 10 + 21 = 31 stickers.
+He got 23 stickers for his birthday, so he had 31 + 23 = 54 stickers.
+He gave 9 stickers to his sister, so he had 54 - 9 = 45 stickers.
+He used 28 stickers to decorate a greeting card, so he had 45 - 28 = 17 stickers.
+Thus, Charlie has \boxed{17} stickers left."
+8,81,17,23,False," 23
+The stickers are 23 stickers, and the stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23 stickers, and the stickers are 23 stickers.
+The stickers are 23"
+16,81,17,,False,"
+
+
+
+
+                                                                                                                                                                                                                                                           "
+32,81,17,,False,"
+
+
+
+
+
+
+,, the the,, the the,, the, the,, the,, the,, were,,,,,"
+0,558,3,3,True," Peter's locker is 1/4 as big as Zack's locker.
+Since Zack's locker is half as big as Timothy's locker, we can calculate the size of Zack's locker as follows:
+Zack's locker is half as big as Timothy's locker, so:
+Zack's locker = Timothy's locker / 2
+Zack's locker = 24 / 2
+Zack's locker = 12
+Now, we can calculate the size of Peter's locker as follows:
+Peter's locker = Zack's locker / 4
+Peter's locker = 12 / 4
+Peter's locker = 3
+So, Peter's locker is \boxed{3} cubic inches."
+1,558,3,3,True," 
+Since Timothy's locker is 24 cubic inches, and Zack's locker is half as big as Timothy's locker, Zack's locker is 24/2 = 12 cubic inches.
+Since Peter's locker is 1/4 as big as Zack's locker, Peter's locker is 12/4 = 3 cubic inches.
+Thus, Peter's locker is \boxed{3} cubic inches."
+2,558,3,3,True," 
+Since Timothy's locker is 24 cubic inches, and Zack's locker is half as big as Timothy's locker, then Zack's locker is 24/2 = 12 cubic inches.
+Since Peter's locker is 1/4 as big as Zack's locker, then Peter's locker is 12/4 = 3 cubic inches.
+Thus, Peter's locker is \boxed{3} cubic inches."
+4,558,3,3,True," 
+Since Timothy's locker is 24 cubic inches, and Zack's locker is half as big as Timothy's locker, then Zack's locker is 24/2 = 12 cubic inches.
+Since Peter's locker is 1/4 as big as Zack's locker, then Peter's locker is 12/4 = 3 cubic inches.
+Thus, Peter's locker is \boxed{3} cubic inches."
+8,558,3,24,False," 24
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24, and the problem is 24.
+The problem is 24,"
+16,558,3,,False,"
+
+
+
+The, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,558,3,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,921,4,4,True," Abby can eat 2 slices a day, and Josh can eat twice as much as Abby, so Josh can eat 4 slices a day.
+Let's denote the number of days the loaf of bread will last as $x$.
+Since Abby eats 2 slices a day and Josh eats 4 slices a day, the total number of slices they eat per day is $2 + 4 = 6$.
+The total number of slices in the loaf of bread is 24.
+So, the number of days the loaf of bread will last is:
+\[ \frac{24}{6} = 4 \]
+Therefore, the loaf of bread will last for $\boxed{4}$ days."
+1,921,4,12,False," 24 slices / 2 slices per day = 12 days
+So, the loaf of bread will last for \boxed{12} days."
+2,921,4,12,False," 24 slices / 2 slices per day = 12 days
+So, the loaf of bread will last for \boxed{12} days."
+4,921,4,6,False," 24 slices of bread can be eaten by Abby in 24 days.
+If Josh can eat twice as much as Abby, then Josh can eat 2 * 2 = 4 slices of bread per day.
+So, the loaf of bread will last for 24 / 4 = 6 days.
+Thus, the loaf of bread will last for \boxed{6} days."
+8,921,4,24,False," 24 slices of the loaf of the bread
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the bread has 24 slices of the bread.
+The problem is that the loaf of the"
+16,921,4,,False,"
+
+
+
+ the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,921,4,,False,"
+
+
+
+
+
+, the the the the the the the the the the the the the the the the
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1262,12,10,False," John's new speed is 2.5 times his starting speed, so his new speed is 2.5 * 150 = 375 WPM.
+To find the time it would take John to speak 10 pages, we need to divide the total number of words by his new speed.
+Time = Total words / New speed
+Time = 10 pages * 450 words per page
+Time = 4500 words
+So, it would take John \boxed{4500} minutes to speak 10 pages."
+1,1262,12,10,False," John's speed is 2.5 times faster than his starting speed, so his new speed is 2.5 * 150 = 375 WPM.
+To find the time it would take John to speak 10 pages, we need to divide the total number of words by his new speed.
+Time = Total words / New speed
+Time = 10 pages * 450 words per page
+Time = 4500 words
+Time = 4500 / 375
+Time = 12 hours
+So, it would take John \boxed{12} hours to speak 10 pages."
+2,1262,12,375,False," 2.5 * 150 = 375
+The answer is: \boxed{375}"
+4,1262,12,25,False," 2.5 times faster than his starting speed is 2.5 * 150 = 3750.
+The speed of John's speed is 150 WPM. After training, his speed is 2.5 times faster than his starting speed, so his speed is 2.5 * 150 = 3750 WPM.
+The speed of John's speed is 3750 WPM. The speed of John's speed is 2.5 times faster than his starting speed, so his speed is 2.5 * 150 = 3750 WPM.
+The speed of John's speed is 3750 WPM. The speed of John's speed is 2.5 times faster than his starting speed, so his speed is 2.5 * 150 = 3750 WPM.
+The speed of John's speed is 3750 WPM. The speed of John's speed is 2.5 times faster than his starting speed, so his speed is 2.5 * 150 = 3750 WPM.
+The speed of John's speed is 3750 WPM. The speed of John's speed is 2.5 times faster than his starting speed, so his speed is 2.5"
+8,1262,12,2,False, 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 
+16,1262,12,2,False,"
+
+
+2, 2,  2,   2,                                                                                                                                                                                                                                               "
+32,1262,12,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,985,63,63,True," Edgar eats 18 pretzels a day. If his brother eats 1/2 as many, then his brother eats 18 * 1/2 = 18/2 = 9 pretzels a day.
+Since there are 7 days in a week, Edgar's brother eats 9 * 7 = 63 pretzels in a week.
+So, Edgar's brother eats \boxed{63} pretzels in a week."
+1,985,63,63,True," Edgar eats 18 pretzels a day.
+If his brother eats 1/2 as many, then he eats 18 * 1/2 = 18/2 = 9 pretzels a day.
+Since there are 7 days in a week, then his brother eats 9 * 7 = 63 pretzels in a week.
+So, Edgar's brother eats \boxed{63} pretzels in a week."
+2,985,63,63,True," Edgar eats 18 pretzels a day.
+If his brother eats 1/2 as many, then he eats 18 * 1/2 = 18/2 = 9 pretzels a day.
+Since there are 7 days in a week, then his brother eats 9 * 7 = 63 pretzels in a week.
+So, Edgar's brother eats \boxed{63} pretzels in a week."
+4,985,63,18,False," Edgar eats 18 pretzels a day.
+If his brother eats 1/2 as many as Edgar, then he eats 18 * 1/2 = 18/2 = 9 pretzels a day.
+Since Edgar eats 18 pretzels a day, then his brother eats 9 * 2 = 18 pretzels a week.
+So, Edgar's brother eats \boxed{18} pretzels a week."
+8,985,63,2,False," Edgar eats 18 pretzels a day, and his brother eats 1/2 of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of the amount of"
+16,985,63,,False,"
+
+
+
+
+ \"
+32,985,63,,False,"
+
+
+
+
+
+, the the the the the the the the the the the the the the the the the
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+"
+0,134,720,720,True," Tom gets 4 car washes a month. So in a year, he gets 4 * 12 = 48 car washes. Each car wash costs $15. So the total cost is 48 * 15 = 720 dollars.
+The answer is: \boxed{720}"
+1,134,720,720,True," 4 car washes/month * $15/car wash = $60/month.
+Since there are 12 months in a year, the total amount Tom pays in a year is: $60/month * 12 months/year = $720.
+So, Tom pays \boxed{720} dollars in a year."
+2,134,720,720,True," 
+Tom gets 4 car washes a month.
+There are 12 months in a year.
+So, Tom gets 4 * 12 = 48 car washes a year.
+Each car wash costs $15.
+So, the total cost of car washes in a year is 48 * 15 = 720.
+Thus, Tom pays \boxed{720} dollars in a year."
+4,134,720,720,True," 
+Tom gets 4 car washes a month.
+There are 12 months in a year.
+So, the total number of car washes in a year is 4 * 12 = 48.
+Each car wash costs $15.
+So, the total amount Tom pays in a year is 48 * 15 = 720.
+Thus, Tom pays \boxed{720} dollars in a year."
+8,134,720,15,False," 15
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+The cost of the car washs is $15.
+"
+16,134,720,,False,"
+
+
+                                                                                                                                                                                                                                                             "
+32,134,720,4,False,"
+
+
+,, the the the the the the the the the the the the the the the
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+ 
+
+ 4
+
+
+
+"
+0,498,40,3,False," Brianne and Ashley can make 3 pies together.
+
+Let's break down the problem step by step.
+Ashley brought 5 boxes with 10 oranges in each box, so she brought a total of 5 x 10 = 50 oranges.
+Brianne brought 20 more oranges than Ashley, so she brought 50 + 20 = 70 oranges.
+One greek orange pie needs 3 oranges, so Brianne and Ashley can make 3 pies together.
+Answer: \boxed{3}"
+1,498,40,1667,False," 
+Ashley brought 5 boxes with 10 oranges in each box, so she brought a total of 5*10 = 50 oranges.
+Brianne brought 20 more oranges than Ashley, so she brought 50 + 20 = 70 oranges.
+Since one greek orange pie needs 3 oranges, the total number of greek orange pies they can make is 50 / 3 = 16.67.
+Since you can't make a fraction of a pie, we'll round down to the nearest whole number, but since the problem doesn't specify that, we'll keep the answer as a decimal.
+So, the answer is \boxed{16.67}."
+2,498,40,1667,False," 
+Ashley brought 5 boxes with 10 oranges in each box, so she brought a total of 5*10 = 50 oranges.
+Brianne brought 20 more oranges than Ashley, so she brought 50 + 20 = 70 oranges.
+One greek orange pie needs 3 oranges, so the total number of greek orange pies they can make is 50 / 3 = 16.67.
+Since you can't make a fraction of a pie, we'll round down to the nearest whole number, but since the problem doesn't specify that we should round down, we'll keep the answer as a decimal.
+So, the answer is \boxed{16.67}."
+4,498,40,23,False," 
+Ashley brought 5 boxes with 10 oranges in each box, so she brought a total of $5 * 10 = 50$ oranges.
+Brianne brought 20 more oranges than Ashley, so she brought $50 + 20 = 70$ oranges.
+Since one greek orange pie needs 3 oranges, the number of greek orange pies they can make is $70 / 3 = 23.33$.
+Since they can't make a fraction of a pie, we round down to the nearest whole number, so they can make \boxed{23} greek orange pies."
+8,498,40,20,False," 
+Ashley brought 5 boxes of oranges, each box contains 10 oranges.
+Ashley brought 5 boxes of oranges, each box contains 10 oranges.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought 20 more oranges than Ashley.
+Ashley brought"
+16,498,40,,False,"
+
+
+
+The, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the, the,"
+32,498,40,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,757,75,42,False," 11 + 2*11 + 4 - 1 + 6 = 11 + 22 + 4 - 1 + 6 = 33 + 4 - 1 + 6 = 37 - 1 + 6 = 36 + 6 = 42
+So, Krissa ordered \boxed{42} shirts."
+1,757,75,36,False," 11 + 2*11 + 4 - 1 = 11 + 22 + 4 - 1 = 33 + 4 - 1 = 37 - 1 = 36
+So, Krissa ordered \boxed{36} shirts."
+2,757,75,36,False," 11 + 2*11 + 4 - 1 = 11 + 22 + 4 - 1 = 33 + 4 - 1 = 37 - 1 = 36
+So, Krissa ordered \boxed{36} shirts."
+4,757,75,2,False," 11 students need size extra-small, and 2 students need size small. 4 students need size medium. 2 students need size large. 6 students need size extra-large. 4 students need size large. 2 students need size small. 11 students need size extra-small. 2 students need size small. 4 students need size medium. 2 students need size large. 6 students need size extra-large. 4 students need size large. 2 students need size small. 11 students need size extra-small. 2 students need size small. 4 students need size medium. 2 students need size large. 6 students need size extra-large. 4 students need size large. 2 students need size small. 11 students need size extra-small. 2 students need size small. 4 students need size medium. 2 students need size large. 6 students need size extra-large. 4 students need size large. 2 students need size small. 11 students need size extra-small. 2 students need size small. 4 students need size medium. 2 students need size large. 6 students need size extra-large. 4 students need size large. 2 students need size small."
+8,757,75,11,False," 11 students need size of the student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student's student, the student needs to order the student"
+16,757,75,,False,"
+
+
+
+                                                                                                                                                                                                                                                            "
+32,757,75,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1312,180,24,False," Tom's restaurant makes $6 * 2 = 12$ per day.
+Since they are open 2 days a week, they make $12 * 2 = 24$ per week.
+Thus, Tom's restaurant makes \boxed{24} dollars a week."
+1,1312,180,60,False," 6 reservations * 2 meals * 5 dollars per meal = 6 * 2 * 5 = 12 * 5 = 60 dollars.
+Tom's restaurant makes 60 dollars a week.
+The answer is: \boxed{60}"
+2,1312,180,130,False," 6 reservations * 2 meals = 12 meals
+Since the meals cost $5 each, the total cost of meals is 12 * 5 = 60 dollars.
+The total cost of the bottle of wine is 5 dollars.
+So the total cost of the restaurant is 60 + 5 = 65 dollars.
+Since the restaurant is open 2 days a week, the total amount of money the restaurant makes in a week is 65 * 2 = 130 dollars.
+Thus, the restaurant makes \boxed{130} dollars a week."
+4,1312,180,2,False, 6 reservations * 2 days = 12 reservations * 2 days = 24 reservations * 2 days = 48 reservations * 2 days = 96 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days = 192 reservations * 2 days =
+8,1312,180,5,False," 6
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the wine is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost of the meals is $5.
+The total amount of the cost"
+16,1312,180,,False,"
+
+
+                                                                                                                                                                                                                                                             "
+32,1312,180,,False,"
+
+,,,, the,, the,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
+0,453,6400,6000,False," Jenna starts with 8 sapphires and trades 3 for 2 rubies. So she gets 8 - 3 = 5 rubies. Each rubie is worth $1200. So 5 rubies are worth 5 * $1200 = $6000.
+Answer: \boxed{6000}"
+1,453,6400,6000,False," Jenna starts with 8 sapphires and trades 3 for 2 rubies. So she gets 8 - 3 = 5 rubies. Each rubie is worth $1200. So 5 rubies are worth 5 * $1200 = $6000.
+The answer is: \boxed{6000}"
+2,453,6400,6400,True," Jenna starts with 8 sapphires and trades 3 sapphires for 2 rubies. So she gets 8 - 3 = 5 sapphires in exchange for 2 rubies.
+The value of the sapphires is 5 * $800 = $4000.
+The value of the rubies is 2 * $1200 = $2400.
+The total value of all her jewels is $4000 + $2400 = $6400.
+So all her jewels are worth \boxed{6400} dollars."
+4,453,6400,8800,False," Jenna starts with 8 sapphires and trades 3 sapphires for 2 rubies.
+The value of the sapphires is 8 * $800 = $6400.
+The value of the rubies is 2 * $1200 = $2400.
+The total value of all her jewels is $6400 + $2400 = $8800.
+So, the total value of all her jewels is \boxed{8800} dollars."
+8,453,6400,800,False," 3 sapphires
+The value of the sapphires is $800.
+The value of the rubies is $1200.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $800.
+The value of the sapphires is $"
+16,453,6400,,False,"
+
+
+
+
+                                                                                                                                                                                                                                                           "
+32,453,6400,,False,"
+
+
+
+
+
+
+,, the the,, the, the, the, the, The, The, The, The, The, The, The, The, The, The, The
+ The, The
+ The, The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The The
+ The The
+ The The The The The The
+ The The
+ The The
+ The The
+ The The
+ The The
+ The
+ The
+ The
+ The
+ The The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ The
+ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \"
+0,19,6,4,False, \boxed{4}
+1,19,6,4,False, \boxed{4}
+2,19,6,6,True," 4
+To find the speed she needs to walk the remaining distance, we need to calculate the total distance she has already walked and subtract that from the total distance she wants to walk.
+Marissa has already walked 4 miles in the first part of the trail and 2 miles in the second part of the trail.
+So, the total distance she has already walked is 4 + 2 = 6 miles.
+She wants to walk a total distance of 12 miles.
+To find the speed she needs to walk the remaining distance, we subtract the distance she has already walked from the total distance she wants to walk:
+12 - 6 = 6 miles.
+So, Marissa needs to walk \boxed{6} miles to reach her goal."
+4,19,6,2,False," 12 - 4 = 8 miles
+To find the speed she needs to walk the remaining distance, we need to calculate the total distance she needs to walk and subtract the distance she has already walked.
+The total distance she needs to walk is 12 miles.
+She has already walked 4 miles in the first 4 miles and 2 miles in the next 2 miles.
+So, the total distance she has already walked is 4 + 2 = 6 miles.
+To find the speed she needs to walk the remaining distance, we subtract the distance she has already walked from the total distance she needs to walk:
+Speed = Total Distance - Distance Already Walked = 8 miles - 6 miles = 2 miles.
+So, Marissa needs to walk \boxed{2} miles to reach the remaining distance."
+8,19,6,4,False," 1
+The speed of the first 4 miles of the trail is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4 miles is 4 miles, and the speed of the next 2 miles is 2 miles.
+The speed of the first 4"
+16,19,6,,False,"
+
+
+
+
+ \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,   \,  \,   \,  \,  \,  \,  \,  \,  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \, \  \,"
+32,19,6,,False,"
+
+
+
+,, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the
+ The
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
+0,1105,40,12,False," Lauren needs to work for 20 - 40/100 * 20 = 20 - 0.4 * 20 = 20 - 8 = 12 more years.
+Answer: \boxed{12}"
+1,1105,40,4,False," Lauren needs to save for 20 years, and she needs to save 20% of her current salary. So, she needs to save 20 * 20 / 100 = 400 / 100 = 4 more years.
+Answer: \boxed{4}"
+2,1105,40,4,False," Lauren needs to save for 20 years, and she needs to save 20% of her current salary. So, she needs to save 20 * 20 / 100 = 400 / 100 = 4 more years.
+Answer: \boxed{4}"
+4,1105,40,20,False," 
+To find out how many years Lauren needs to work, we first need to calculate the amount of money she needs to save for the retirement period of 20 years.
+She needs to save 20% of her current salary, which is $100,000. 
+20% of $100,000 is $100,000 * 20 / 100 = $20,000.
+She needs to save for 20 years, so she needs to save $20,000 * 20 = $400,000.
+She needs to save for 40% of her current salary, which is $100,000 * 40 / 100 = $40,000.
+She needs to save for 20 years, so she needs to save $40,000 * 20 = $800,000.
+She needs to save for 20 years, so she needs to save $800,000 * 20 = $16,000.
+She needs to save for 20 years, so she needs to save $16,000 * 20 = $320,000.
+She needs to save for 20 years, so she needs to save $320,000 * 20 = $64,000.
+She needs to save for 20 years, so she needs"
+8,1105,40,20,False," 20
+To find the amount of money Lauren needs to save, we need to calculate the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is 20% of the amount of money she needs to save.
+The amount of money Lauren needs to save is"
+16,1105,40,,False,"
+
+
+The, the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the the"
+32,1105,40,,False,"
+
+
+
+
+
+
+
+
+
+
+
+
+
+, the the the the the the the the the the
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"
