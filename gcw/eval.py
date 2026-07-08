@@ -233,7 +233,6 @@ def run_fineweb(
 ) -> dict:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, cfg, state = load_checkpoint(checkpoint, device=device)
-    _apply_eval_cache_processor_overrides(model)
     if cfg.family != "smollm" or cfg.vocab_size != COSMO2_VOCAB_SIZE:
         raise ValueError("FineWeb NLL/BPB eval currently expects a cosmo2 SmolLM checkpoint")
     steps = max(1, eval_tokens // (batch_size * cfg.sequence_len))
@@ -270,7 +269,6 @@ def run_task_groups(
     dist_state, local_rank, world_size = _distributed_eval_state()
     device = _eval_device(local_rank)
     model, cfg, state = load_checkpoint(checkpoint, device=device)
-    _apply_eval_cache_processor_overrides(model)
     tokenizer = _tokenizer_for(cfg, state)
     lm = GCWEvalLM(model, tokenizer, batch_size=batch_size)
     apply_chat_template = bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
@@ -322,67 +320,6 @@ def _filter_skipped_tasks(runs: list[tuple[list[str], int]]) -> list[tuple[list[
         if kept:
             filtered.append((kept, fewshot))
     return filtered
-
-
-def _apply_eval_cache_processor_overrides(model) -> None:
-    _apply_eval_process_every_override(model)
-    _apply_eval_cache_processor_passes(model)
-
-
-def _apply_eval_process_every_override(model) -> None:
-    process_every = _eval_process_every_override()
-    if process_every is None or not hasattr(model, "cache_processor"):
-        return
-    config = getattr(model, "config", None)
-    if getattr(config, "cache_processor", None) is not None:
-        config.cache_processor.process_every = process_every
-    processor_config = getattr(model.cache_processor, "config", None)
-    if processor_config is not None:
-        processor_config.process_every = process_every
-
-
-def _eval_process_every_override() -> int | None:
-    raw = os.environ.get("GCW_EVAL_PROCESS_EVERY")
-    if raw is None or raw == "":
-        return None
-    try:
-        process_every = int(raw)
-    except ValueError as exc:
-        raise ValueError("GCW_EVAL_PROCESS_EVERY must be an integer") from exc
-    if process_every < 1:
-        raise ValueError("GCW_EVAL_PROCESS_EVERY must be >= 1")
-    return process_every
-
-
-def _apply_eval_cache_processor_passes(model) -> None:
-    passes = _eval_cache_processor_passes()
-    if passes == 1 or not hasattr(model, "cache_processor"):
-        return
-    model.cache_processor = _RepeatedCacheProcessor(model.cache_processor, passes)
-
-
-def _eval_cache_processor_passes() -> int:
-    raw = os.environ.get("GCW_EVAL_CACHE_PROCESSOR_PASSES", "1")
-    try:
-        passes = int(raw)
-    except ValueError as exc:
-        raise ValueError("GCW_EVAL_CACHE_PROCESSOR_PASSES must be an integer") from exc
-    if passes < 1:
-        raise ValueError("GCW_EVAL_CACHE_PROCESSOR_PASSES must be >= 1")
-    return passes
-
-
-class _RepeatedCacheProcessor(torch.nn.Module):
-    def __init__(self, processor: torch.nn.Module, passes: int):
-        super().__init__()
-        self.processor = processor
-        self.passes = passes
-        self.config = processor.config
-
-    def forward(self, cache, **kwargs):
-        for _ in range(self.passes):
-            cache = self.processor(cache, **kwargs)
-        return cache
 
 
 def is_main_process() -> bool:

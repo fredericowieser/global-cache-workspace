@@ -423,10 +423,7 @@ def _restore_rng_state(state: dict[str, Any], device: torch.device) -> None:
     if "torch_rng_state" in state:
         torch.set_rng_state(state["torch_rng_state"].cpu())
     if device.type == "cuda" and "cuda_rng_state_all" in state:
-        states = state["cuda_rng_state_all"]
-        if states:
-            index = min(device.index or 0, len(states) - 1)
-            torch.cuda.set_rng_state(states[index].detach().cpu(), device=device)
+        torch.cuda.set_rng_state_all(state["cuda_rng_state_all"])
 
 
 def _validate_resume_state(
@@ -439,9 +436,8 @@ def _validate_resume_state(
     step = int(state.get("step", 0))
     if step > config.max_steps:
         raise ValueError(f"resume checkpoint step {step} exceeds max_steps {config.max_steps}")
-    # A resume may intentionally change world_size, as long as the per-loader
-    # global microbatch and optimizer-step token counts stay fixed.
     expected = {
+        "world_size": world_size,
         "micro_tokens_per_step": micro_tokens,
         "tokens_per_step": tokens_per_step,
     }
