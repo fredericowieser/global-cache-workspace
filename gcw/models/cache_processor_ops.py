@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 
-from gcw.models.cache_state import CacheState
+from gcw.models.cache_state import CacheState, select_l2_indices
 from gcw.models.transformer import apply_rotary, flash_sdpa
+from gcw.models.windowed_cache import WindowedCache
 
 
 def rotary_for_indices(
@@ -18,26 +21,149 @@ def rotary_for_indices(
     return freqs.cos().unsqueeze(2).to(dtype), freqs.sin().unsqueeze(2).to(dtype)
 
 
-def gather_cache_layers(cache: CacheState, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    keys = torch.stack(cache.keys, dim=0)
-    values = torch.stack(cache.values, dim=0)
+def gather_cache_layers(cache: CacheState | WindowedCache, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    if isinstance(cache, WindowedCache):
+        keys, values = cache.keys, cache.values
+    else:
+        keys = torch.stack(cache.keys, dim=0)
+        values = torch.stack(cache.values, dim=0)
     index = indices[None, :, None, :, None].expand(keys.shape[0], -1, keys.shape[2], -1, keys.shape[4])
     return torch.gather(keys, 3, index), torch.gather(values, 3, index)
 
 
+def gather_cache_values(cache: CacheState | WindowedCache, indices: torch.Tensor) -> torch.Tensor:
+    values = cache.values if isinstance(cache, WindowedCache) else torch.stack(cache.values, dim=0)
+    index = indices[None, :, None, :, None].expand(values.shape[0], -1, values.shape[2], -1, values.shape[4])
+    return torch.gather(values, 3, index)
+
+
+def select_kv_norm_indices(
+    cache: CacheState | WindowedCache,
+    score_logits: torch.Tensor,
+    process_every: int,
+    topk: int,
+) -> torch.Tensor:
+    scores = kv_norm_scores(cache, score_logits)
+    token_scores = scores.amax(dim=(0, 2))
+    return select_l2_indices(token_scores, process_every=process_every, topk=topk)
+
+
+def kv_norm_scores(cache: CacheState | WindowedCache, score_logits: torch.Tensor) -> torch.Tensor:
+    keys, values = _cache_tensors(cache)
+    weights = torch.softmax(score_logits.float(), dim=0)
+    key_norm = keys.float().pow(2).mean(dim=-1).sqrt()
+    value_norm = values.float().pow(2).mean(dim=-1).sqrt()
+    return weights[0] * key_norm + weights[1] * value_norm
+
+
+def workspace_writer_values(
+    cache: CacheState | WindowedCache,
+    indices: torch.Tensor,
+    score_logits: torch.Tensor,
+    writer_head_fraction: float,
+    temperature: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    values = gather_cache_values(cache, indices)
+    selected_scores = _selected_kv_norm_scores(cache, indices, score_logits)
+    gate = _workspace_gate(selected_scores, writer_head_fraction, temperature)
+    return values * gate.to(values.dtype), values
+
+
+def workspace_writer_kv(
+    cache: CacheState | WindowedCache,
+    indices: torch.Tensor,
+    score_logits: torch.Tensor,
+    writer_head_fraction: float,
+    temperature: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    keys, values = gather_cache_layers(cache, indices)
+    selected_scores = _selected_kv_norm_scores(cache, indices, score_logits)
+    gate = _workspace_gate(selected_scores, writer_head_fraction, temperature)
+    return keys * gate.to(keys.dtype), values * gate.to(values.dtype), keys, values
+
+
 def scatter_cache_layers(
-    cache: CacheState,
+    cache: CacheState | WindowedCache,
     indices: torch.Tensor,
     keys: torch.Tensor,
     values: torch.Tensor,
-) -> None:
-    old_keys = torch.stack(cache.keys, dim=0)
-    old_values = torch.stack(cache.values, dim=0)
+) -> CacheState | WindowedCache:
+    if isinstance(cache, WindowedCache):
+        old_keys, old_values = cache.keys, cache.values
+    else:
+        old_keys = torch.stack(cache.keys, dim=0)
+        old_values = torch.stack(cache.values, dim=0)
     index = indices[None, :, None, :, None].expand_as(keys)
     new_keys = old_keys.scatter(3, index, keys.to(old_keys.dtype))
     new_values = old_values.scatter(3, index, values.to(old_values.dtype))
-    cache.keys = list(new_keys.unbind(0))
-    cache.values = list(new_values.unbind(0))
+    if isinstance(cache, WindowedCache):
+        cache.keys = new_keys
+        cache.values = new_values
+    else:
+        cache.keys = list(new_keys.unbind(0))
+        cache.values = list(new_values.unbind(0))
+    return cache
+
+
+def scatter_cache_values(
+    cache: CacheState | WindowedCache,
+    indices: torch.Tensor,
+    values: torch.Tensor,
+) -> CacheState | WindowedCache:
+    old_values = cache.values if isinstance(cache, WindowedCache) else torch.stack(cache.values, dim=0)
+    index = indices[None, :, None, :, None].expand_as(values)
+    new_values = old_values.scatter(3, index, values.to(old_values.dtype))
+    if isinstance(cache, WindowedCache):
+        cache.values = new_values
+    else:
+        cache.values = list(new_values.unbind(0))
+    return cache
+
+
+def _cache_tensors(cache: CacheState | WindowedCache) -> tuple[torch.Tensor, torch.Tensor]:
+    if isinstance(cache, WindowedCache):
+        return cache.keys, cache.values
+    return torch.stack(cache.keys, dim=0), torch.stack(cache.values, dim=0)
+
+
+def _selected_kv_norm_scores(
+    cache: CacheState | WindowedCache,
+    indices: torch.Tensor,
+    score_logits: torch.Tensor,
+) -> torch.Tensor:
+    scores = kv_norm_scores(cache, score_logits)
+    score_index = indices[None, :, None, :].expand(scores.shape[0], -1, scores.shape[2], -1)
+    return torch.gather(scores, 3, score_index)
+
+
+def _workspace_gate(
+    selected_scores: torch.Tensor,
+    writer_head_fraction: float,
+    temperature: float,
+) -> torch.Tensor:
+    return _writer_head_gate(selected_scores, writer_head_fraction, temperature) * _token_gate(selected_scores, temperature)
+
+
+def _writer_head_gate(
+    selected_scores: torch.Tensor,
+    writer_head_fraction: float,
+    temperature: float,
+) -> torch.Tensor:
+    layers, _, heads, _ = selected_scores.shape
+    head_scores = selected_scores.mean(dim=(1, 3))
+    writer_count = max(1, math.ceil(layers * heads * writer_head_fraction))
+    top = torch.topk(head_scores.flatten(), k=writer_count).indices
+    mask = torch.zeros_like(head_scores.flatten(), dtype=torch.bool)
+    mask.scatter_(0, top, True)
+    logits = (head_scores.flatten() / temperature).masked_fill(~mask, torch.finfo(head_scores.dtype).min)
+    gate = torch.softmax(logits, dim=0).view(layers, heads) * writer_count
+    return gate[:, None, :, None, None]
+
+
+def _token_gate(selected_scores: torch.Tensor, temperature: float) -> torch.Tensor:
+    token_scores = selected_scores.amax(dim=(0, 2))
+    gate = torch.softmax(token_scores / temperature, dim=-1) * selected_scores.shape[-1]
+    return gate[None, :, None, :, None]
 
 
 def merge_layer_kv(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
@@ -47,6 +173,11 @@ def merge_layer_kv(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
     return torch.cat([k, v], dim=-1)
 
 
+def merge_layer_values(values: torch.Tensor) -> torch.Tensor:
+    layers, batch, heads, seq, dim = values.shape
+    return values.permute(0, 1, 3, 2, 4).reshape(layers, batch, seq, heads * dim)
+
+
 def split_layer_kv(x: torch.Tensor, num_heads: int, head_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
     layers, batch, seq, _ = x.shape
     feature_dim = num_heads * head_dim
@@ -54,6 +185,11 @@ def split_layer_kv(x: torch.Tensor, num_heads: int, head_dim: int) -> tuple[torc
     keys = keys.view(layers, batch, seq, num_heads, head_dim).permute(0, 1, 3, 2, 4).contiguous()
     values = values.view(layers, batch, seq, num_heads, head_dim).permute(0, 1, 3, 2, 4).contiguous()
     return keys, values
+
+
+def split_layer_values(x: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
+    layers, batch, seq, _ = x.shape
+    return x.view(layers, batch, seq, num_heads, head_dim).permute(0, 1, 3, 2, 4).contiguous()
 
 
 def merge_global_kv(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
@@ -66,6 +202,11 @@ def merge_global_kv(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         dim=-1,
     )
     return by_layer.reshape(batch, seq, layers * 2 * heads * dim)
+
+
+def merge_global_values(values: torch.Tensor) -> torch.Tensor:
+    layers, batch, heads, seq, dim = values.shape
+    return values.permute(1, 3, 0, 2, 4).reshape(batch, seq, layers * heads * dim)
 
 
 def split_global_kv(
@@ -81,6 +222,16 @@ def split_global_kv(
     return keys, values
 
 
+def split_global_values(
+    x: torch.Tensor,
+    num_layers: int,
+    num_heads: int,
+    head_dim: int,
+) -> torch.Tensor:
+    batch, seq, _ = x.shape
+    return x.view(batch, seq, num_layers, num_heads, head_dim).permute(2, 0, 3, 1, 4).contiguous()
+
+
 def run_batched_cache_processors(blocks, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
     block_list = list(blocks)
     h = _linear(_rms_norm(x, [b.in_norm for b in block_list]), block_list, "in_proj")
@@ -90,14 +241,28 @@ def run_batched_cache_processors(blocks, x: torch.Tensor, positions: torch.Tenso
         m = _rms_norm(h, [layer.post_norm for layer in layers])
         h = h + _linear(F.silu(_linear(m, layers, "gate_proj")) * _linear(m, layers, "up_proj"), layers, "down_proj")
     delta = _linear(_rms_norm(h, [b.out_norm for b in block_list]), block_list, "out_proj")
-    gate = torch.stack([b.gate for b in block_list], dim=0).view(len(block_list), 1, 1, 1)
-    return x + delta * torch.sigmoid(gate).to(delta.dtype)
+    return x + delta * _gate_scale(block_list, delta.dtype)
+
+
+def _gate_scale(blocks, dtype: torch.dtype) -> torch.Tensor:
+    gate = torch.stack([b.gate for b in blocks], dim=0).view(len(blocks), 1, 1, 1)
+    mode = blocks[0].config.gate_mode
+    if mode == "sigmoid":
+        return torch.sigmoid(gate).to(dtype)
+    if mode == "direct":
+        return gate.to(dtype)
+    raise ValueError(f"unsupported cache processor gate_mode: {mode}")
 
 
 def _linear(x: torch.Tensor, modules, name: str) -> torch.Tensor:
     linears = [getattr(module, name) for module in modules]
     weight = torch.stack([linear.weight for linear in linears], dim=0)
-    out = torch.einsum("lbsi,loi->lbso", x, weight)
+    layers, batch, seq, in_features = x.shape
+    out_features = weight.shape[1]
+    out = torch.bmm(
+        x.reshape(layers, batch * seq, in_features),
+        weight.transpose(1, 2),
+    ).view(layers, batch, seq, out_features)
     if linears[0].bias is not None:
         bias = torch.stack([linear.bias for linear in linears], dim=0)
         out = out + bias[:, None, None, :]

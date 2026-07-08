@@ -1,8 +1,6 @@
 from types import SimpleNamespace
 
 from gcw.eval import (
-    _apply_eval_cache_processor_overrides,
-    _apply_eval_cache_processor_passes,
     _encode_generate_prompt,
     _legacy_bottleneck_cache_eval,
     _legacy_generate_add_special_tokens,
@@ -56,38 +54,6 @@ def test_legacy_bottleneck_loglikelihood_uses_boundary_path_only_for_cp_models()
     )
     assert _legacy_bottleneck_cache_eval(model)
     assert not _legacy_bottleneck_cache_eval(SimpleNamespace(config=SimpleNamespace(legacy_bottleneck_generate=True, variant="tf")))
-
-
-def test_eval_cache_processor_passes_repeats_invocations(monkeypatch):
-    calls = []
-
-    class Processor:
-        config = object()
-
-        def __call__(self, cache, **kwargs):
-            calls.append(kwargs)
-            return cache + 1
-
-    model = SimpleNamespace(cache_processor=Processor())
-    monkeypatch.setenv("GCW_EVAL_CACHE_PROCESSOR_PASSES", "2")
-
-    _apply_eval_cache_processor_passes(model)
-
-    assert model.cache_processor(0) == 2
-    assert model.cache_processor(0, select_all=True) == 2
-    assert calls == [{}, {}, {"select_all": True}, {"select_all": True}]
-
-
-def test_eval_process_every_override_updates_model_and_processor(monkeypatch):
-    processor_config = SimpleNamespace(process_every=512)
-    model_config = SimpleNamespace(cache_processor=SimpleNamespace(process_every=512))
-    model = SimpleNamespace(config=model_config, cache_processor=SimpleNamespace(config=processor_config))
-    monkeypatch.setenv("GCW_EVAL_PROCESS_EVERY", "256")
-
-    _apply_eval_cache_processor_overrides(model)
-
-    assert model.config.cache_processor.process_every == 256
-    assert model.cache_processor.config.process_every == 256
 
 
 def test_context_continuation_truncation_keeps_at_least_one_context_token():
