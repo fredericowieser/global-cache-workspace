@@ -1,0 +1,37 @@
+model:
+  variant: bgt
+  family: smollm
+  sequence_len: 32
+  vocab_size: 128
+  hidden_size: 32
+  intermediate_size: 64
+  num_layers: 2
+  num_heads: 4
+  num_kv_heads: 2
+  head_dim: 8
+  rope_theta: 10000.0
+  norm_eps: 1.0e-5
+  tie_embeddings: true
+  cache_processor:
+    process_every: 4
+    topk: 2
+    score: attn_l2
+    hidden_size: 8
+    intermediate_size: 16
+    num_layers: 1
+    num_heads: 1
+    num_kv_heads: 1
+    gate_init: -5.0
+data:
+  kind: random
+mode: pretrain
+distributed: none
+freeze_backbone: false
+output_dir: runs/smoke_bgt
+batch_size: 2
+sequence_len: 16
+max_steps: 2
+learning_rate: 0.001
+warmup_steps: 1
+bf16: false
+save_every: 0

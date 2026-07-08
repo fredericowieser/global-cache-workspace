@@ -1,0 +1,62 @@
+model:
+  variant: bt
+  family: qwen3
+  sequence_len: 8192
+  vocab_size: 151936
+  hidden_size: 1024
+  intermediate_size: 3072
+  num_layers: 28
+  num_heads: 16
+  num_kv_heads: 8
+  head_dim: 128
+  rope_theta: 1000000.0
+  norm_eps: 1.0e-6
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  legacy_bottleneck_generate: true
+  cache_processor:
+    process_every: 64
+    topk: 32
+    score: attn_l2
+    hidden_size: 512
+    intermediate_size: 2240
+    num_layers: 1
+    num_heads: 16
+    num_kv_heads: 16
+    norm_eps: 1.0e-6
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+data:
+  kind: sft
+  dataset: data/OpenMathInstruct-2/train.jsonl
+  tokenizer: hf
+  tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/qwen3-0.6b/final_model
+  sft_skip_rows: 128000
+  sft_take_rows: 128000
+  response_prefix: "\n"
+mode: sft
+distributed: ddp
+freeze_backbone: true
+backbone_checkpoint: runs/converted_sft/qwen3_06b_tf/checkpoint
+output_dir: runs/bottleneck_compat/qwen3_06b_bt_from_sft
+batch_size: 16
+sequence_len: 512
+max_steps: 1000
+total_batch_size: 65536
+learning_rate: 1.0e-4
+adam_beta2: 0.999
+warmup_steps: 0
+warmdown_ratio: 0.0
+weight_decay: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 100
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: qwen3-06b-bt-from-sft
+  group: bottleneck-compat
+  tags: [bottleneck-llm, bt, qwen3-0.6b, sft-backbone]
