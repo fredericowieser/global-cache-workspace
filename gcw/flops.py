@@ -64,7 +64,7 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
     cp = config.cache_processor
     if config.variant == "tf" or cp is None:
         return 0.0
-    per_layer_dim = cp.stream_factor * config.num_kv_heads * int(config.head_dim)
+    per_layer_dim = 2 * config.num_kv_heads * int(config.head_dim)
     total = 0.0
     for start in range(cp.process_every, seq_len, cp.process_every):
         selected = _selected_count(start, cp.process_every, cp.topk)
@@ -72,25 +72,7 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
             total += config.num_layers * _processor_block_flops_per_call(per_layer_dim, cp, selected)
         elif config.variant == "bgt":
             total += _processor_block_flops_per_call(config.num_layers * per_layer_dim, cp, selected)
-        elif config.variant == "icarus":
-            cache_heads = config.num_layers * config.num_kv_heads
-            selected_heads = min(max(cp.topk_heads, 0), cache_heads)
-            total += _icarus_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
     return total
-
-
-def _icarus_processor_block_flops_per_call(
-    input_dim: int,
-    config: CacheProcessorConfig,
-    selected: int,
-    cache_heads: int,
-    selected_heads: int,
-) -> float:
-    in_out = input_dim * config.hidden_size + config.hidden_size * input_dim
-    matmul = 2 * selected * cache_heads * (in_out + config.num_layers * _processor_layer_matmul_params(config))
-    head_dim = config.hidden_size // config.num_heads
-    attn = config.num_layers * 4 * config.num_heads * head_dim * (cache_heads * selected) * (selected_heads * selected)
-    return float(matmul + attn)
 
 
 def flops_per_token(config: ModelConfig, seq_len: int) -> float:

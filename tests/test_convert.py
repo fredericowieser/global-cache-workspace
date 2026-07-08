@@ -1,17 +1,8 @@
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM, Qwen3Config, Qwen3ForCausalLM
 
-from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_checkpoint
 from gcw.config import CacheProcessorConfig, ModelConfig
-from gcw.convert import (
-    config_from_bottleneck,
-    config_from_hf,
-    config_from_ppt_meta,
-    convert_bottleneck,
-    load_bottleneck_state,
-    load_hf_state,
-    load_ppt_state,
-)
+from gcw.convert import config_from_hf, config_from_ppt_meta, load_bottleneck_state, load_hf_state, load_ppt_state
 from gcw.models import build_model
 
 
@@ -34,44 +25,6 @@ def test_hf_llama_key_mapping_loads_native_backbone():
     }
     load_hf_state(model, hf, family="llama")
     assert torch.equal(model.embed_tokens.weight[:16], hf["model.embed_tokens.weight"])
-
-
-def test_untied_backbone_loads_lm_head_from_tied_embedding_checkpoint(tmp_path):
-    tied = ModelConfig(
-        vocab_size=16,
-        hidden_size=8,
-        intermediate_size=16,
-        num_layers=1,
-        num_heads=2,
-        num_kv_heads=1,
-        head_dim=4,
-        sequence_len=8,
-        tie_embeddings=True,
-    )
-    source = build_model(tied)
-    source.init_weights()
-    save_checkpoint(tmp_path / "tied", source, tied)
-
-    cp = CacheProcessorConfig(hidden_size=8, intermediate_size=16, num_heads=1, num_kv_heads=1)
-    target = build_model(
-        ModelConfig(
-            variant="bgt",
-            vocab_size=16,
-            hidden_size=8,
-            intermediate_size=16,
-            num_layers=1,
-            num_heads=2,
-            num_kv_heads=1,
-            head_dim=4,
-            sequence_len=8,
-            tie_embeddings=False,
-            cache_processor=cp,
-        )
-    )
-
-    load_backbone_checkpoint(target, tmp_path / "tied")
-
-    assert torch.equal(target.backbone.lm_head.weight, source.embed_tokens.weight)
 
 
 def test_tiny_llama_logits_match_transformers():
@@ -178,125 +131,6 @@ def test_bottleneck_bgt_mapping_loads_legacy_checkpoint_keys():
         state["cache_processor.block.layers.0.gate_proj.weight"],
         old["cache_processor.unified_block.transformer.0.mlp.gate_proj.weight"],
     )
-
-
-def test_bottleneck_mapping_pads_legacy_vocab_rows():
-    cfg = _tiny_bottleneck_config("bgt")
-    cfg.vocab_size = 129
-    model = build_model(cfg)
-    old = _legacy_state_from_native(model.state_dict(), "bgt")
-    old["backbone.model.embed_tokens.weight"] = torch.randn(129, cfg.hidden_size)
-    old["backbone.lm_head.weight"] = torch.randn(129, cfg.hidden_size)
-
-    load_bottleneck_state(model, old, variant="bgt")
-    state = model.state_dict()
-
-    assert torch.equal(state["backbone.embed_tokens.weight"][:129], old["backbone.model.embed_tokens.weight"])
-    assert torch.equal(state["backbone.lm_head.weight"][:129], old["backbone.lm_head.weight"])
-
-
-def test_bottleneck_mapping_ignores_duplicate_lm_head_for_tied_embeddings():
-    cfg = _tiny_bottleneck_config("bgt")
-    cfg.tie_embeddings = True
-    model = build_model(cfg)
-    old = _legacy_state_from_native(model.state_dict(), "bgt")
-    old["backbone.lm_head.weight"] = torch.randn(cfg.vocab_size, cfg.hidden_size)
-
-    load_bottleneck_state(model, old, variant="bgt")
-
-    assert "backbone.lm_head.weight" not in model.state_dict()
-
-
-def test_bottleneck_specs_cover_paper_backbones():
-    llama = config_from_bottleneck("llama-3.2-1b", "bgt")
-    assert llama.sequence_len == 8192
-    assert llama.cache_processor.hidden_size == 1536
-    assert llama.cache_processor.intermediate_size == 6272
-    assert llama.legacy_bottleneck_generate is False
-
-    qwen = config_from_bottleneck("qwen3-0.6b", "bgt")
-    assert qwen.family == "qwen3"
-    assert qwen.qk_norm
-    assert qwen.vocab_size == 151936
-    assert qwen.cache_processor.hidden_size == 1344
-    assert qwen.cache_processor.intermediate_size == 5632
-
-    qwen_legacy = config_from_bottleneck("qwen3-0.6b", "bgt", legacy_vocab=True)
-    assert qwen_legacy.vocab_size == 151669
-
-    bt = config_from_bottleneck("llama-3.1-8b", "bt", sequence_len=4096, legacy_generate=True)
-    assert bt.sequence_len == 4096
-    assert bt.legacy_bottleneck_generate
-    assert bt.cache_processor.hidden_size == 512
-    assert bt.cache_processor.intermediate_size == 2240
-
-
-def test_convert_bottleneck_prefers_local_tokenizer_source(monkeypatch, tmp_path):
-    import gcw.convert as convert
-
-    cfg = _tiny_bottleneck_config("bgt")
-    cfg.sequence_len = 8192
-    cfg.legacy_bottleneck_generate = True
-    model = build_model(cfg)
-    model.init_weights()
-    old = _legacy_state_from_native(model.state_dict(), "bgt")
-    monkeypatch.setattr(convert, "config_from_bottleneck", lambda *args, **kwargs: cfg)
-
-    legacy_dir = tmp_path / "legacy"
-    legacy_dir.mkdir()
-    from safetensors.torch import save_file
-
-    save_file(old, legacy_dir / "model.safetensors")
-    (legacy_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
-
-    out = tmp_path / "converted"
-    convert_bottleneck(
-        legacy_dir,
-        out,
-        variant="bgt",
-        backbone="llama-3.2-1b",
-        sequence_len=8192,
-        legacy_generate=True,
-    )
-
-    _, converted_cfg, state = load_checkpoint(out)
-    assert converted_cfg.sequence_len == 8192
-    assert converted_cfg.legacy_bottleneck_generate
-    assert state["source"] == str(legacy_dir)
-    assert state["backbone_source"] == "meta-llama/Llama-3.2-1B"
-    assert state["sequence_len"] == 8192
-
-
-def test_convert_bottleneck_allows_public_tokenizer_source(monkeypatch, tmp_path):
-    import gcw.convert as convert
-
-    cfg = _tiny_bottleneck_config("bt")
-    cfg.sequence_len = 8192
-    cfg.legacy_bottleneck_generate = True
-    model = build_model(cfg)
-    model.init_weights()
-    old = _legacy_state_from_native(model.state_dict(), "bt")
-    monkeypatch.setattr(convert, "config_from_bottleneck", lambda *args, **kwargs: cfg)
-
-    legacy_dir = tmp_path / "legacy"
-    legacy_dir.mkdir()
-    from safetensors.torch import save_file
-
-    save_file(old, legacy_dir / "model.safetensors")
-    (legacy_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
-
-    out = tmp_path / "converted"
-    convert_bottleneck(
-        legacy_dir,
-        out,
-        variant="bt",
-        backbone="llama-3.2-1b",
-        legacy_generate=True,
-        tokenizer_source="/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model",
-    )
-
-    _, _, state = load_checkpoint(out)
-    assert state["source"] == "/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model"
 
 
 def _tiny_bottleneck_config(variant: str) -> ModelConfig:
