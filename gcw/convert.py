@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 import json
 
 import torch
 from safetensors.torch import load_file
 
+from gcw.bottleneck_specs import BottleneckSpec, bottleneck_spec
 from gcw.checkpoint import save_checkpoint
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
@@ -17,107 +18,6 @@ ALIASES = {
     "llama3.1-8b": "meta-llama/Meta-Llama-3.1-8B",
     "llama3.2-1b": "meta-llama/Llama-3.2-1B",
     "llama3.2-3b": "meta-llama/Llama-3.2-3B",
-}
-
-
-@dataclass(frozen=True)
-class BottleneckSpec:
-    family: str
-    source: str
-    vocab_size: int
-    hidden_size: int
-    intermediate_size: int
-    num_layers: int
-    num_heads: int
-    num_kv_heads: int
-    head_dim: int
-    rope_theta: float
-    norm_eps: float
-    tie_embeddings: bool
-    qk_norm: bool
-    bt_hidden_size: int
-    bt_intermediate_size: int
-    bgt_hidden_size: int
-    bgt_intermediate_size: int
-
-
-BOTTLENECK_SPECS: dict[str, BottleneckSpec] = {
-    "llama-3.2-1b": BottleneckSpec(
-        family="llama",
-        source="meta-llama/Llama-3.2-1B",
-        vocab_size=128256,
-        hidden_size=2048,
-        intermediate_size=8192,
-        num_layers=16,
-        num_heads=32,
-        num_kv_heads=8,
-        head_dim=64,
-        rope_theta=500000.0,
-        norm_eps=1e-5,
-        tie_embeddings=False,
-        qk_norm=False,
-        bt_hidden_size=512,
-        bt_intermediate_size=2240,
-        bgt_hidden_size=1536,
-        bgt_intermediate_size=6272,
-    ),
-    "llama-3.2-3b": BottleneckSpec(
-        family="llama",
-        source="meta-llama/Llama-3.2-3B",
-        vocab_size=128256,
-        hidden_size=3072,
-        intermediate_size=8192,
-        num_layers=28,
-        num_heads=24,
-        num_kv_heads=8,
-        head_dim=128,
-        rope_theta=500000.0,
-        norm_eps=1e-5,
-        tie_embeddings=False,
-        qk_norm=False,
-        bt_hidden_size=512,
-        bt_intermediate_size=2240,
-        bgt_hidden_size=1344,
-        bgt_intermediate_size=5632,
-    ),
-    "llama-3.1-8b": BottleneckSpec(
-        family="llama",
-        source="meta-llama/Meta-Llama-3.1-8B",
-        vocab_size=128256,
-        hidden_size=4096,
-        intermediate_size=14336,
-        num_layers=32,
-        num_heads=32,
-        num_kv_heads=8,
-        head_dim=128,
-        rope_theta=500000.0,
-        norm_eps=1e-5,
-        tie_embeddings=False,
-        qk_norm=False,
-        bt_hidden_size=512,
-        bt_intermediate_size=2240,
-        bgt_hidden_size=1408,
-        bgt_intermediate_size=4352,
-    ),
-    "qwen3-0.6b": BottleneckSpec(
-        family="qwen3",
-        source="Qwen/Qwen3-0.6B",
-        vocab_size=151936,
-        hidden_size=1024,
-        intermediate_size=3072,
-        num_layers=28,
-        num_heads=16,
-        num_kv_heads=8,
-        head_dim=128,
-        rope_theta=1000000.0,
-        norm_eps=1e-6,
-        tie_embeddings=True,
-        qk_norm=True,
-        bt_hidden_size=512,
-        bt_intermediate_size=2240,
-        bgt_hidden_size=1344,
-        bgt_intermediate_size=5632,
-    ),
 }
 
 
@@ -136,7 +36,7 @@ def convert_hf(
     model_id = ALIASES.get(model_id.lower(), model_id)
     hf_cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=False)
     cfg = config_from_hf(hf_cfg, family=family, variant=variant)
-    if variant in {"bt", "bgt"}:
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
         cfg = replace(cfg, cache_processor=CacheProcessorConfig())
     torch_dtype = _resolve_dtype(dtype)
     hf = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
@@ -148,7 +48,12 @@ def convert_hf(
         out,
         native,
         cfg,
-        {"source": model_id, "source_format": "hf", "family": family, "dtype": str(model_dtype).removeprefix("torch.")},
+        {
+            "source": model_id,
+            "source_format": "hf",
+            "family": family,
+            "dtype": str(model_dtype).removeprefix("torch."),
+        },
     )
 
 
@@ -185,6 +90,7 @@ def convert_bottleneck(
     variant: str,
     dtype: str = "auto",
     source: str | None = None,
+    tokenizer_source: str | None = None,
     backbone: str = "llama-3.2-1b",
     sequence_len: int = 8192,
     legacy_generate: bool = False,
@@ -198,13 +104,19 @@ def convert_bottleneck(
     torch_dtype = _resolve_dtype(dtype)
     if torch_dtype == "auto":
         torch_dtype = _infer_state_dtype(old_state) or torch.bfloat16
-    cfg = config_from_bottleneck(backbone, variant, sequence_len=sequence_len, legacy_generate=legacy_generate)
+    cfg = config_from_bottleneck(
+        backbone,
+        variant,
+        sequence_len=sequence_len,
+        legacy_generate=legacy_generate,
+        legacy_vocab=True,
+    )
     model = build_model(cfg).to(dtype=torch_dtype)
     model.init_weights()
     load_bottleneck_state(model, old_state, variant=variant)
     spec = _bottleneck_spec(backbone)
     source = source or spec.source
-    tokenizer_source = str(checkpoint.parent) if (checkpoint.parent / "tokenizer.json").exists() else source
+    tokenizer_source = tokenizer_source or (str(checkpoint.parent) if (checkpoint.parent / "tokenizer.json").exists() else source)
     save_checkpoint(
         out,
         model,
@@ -297,17 +209,19 @@ def config_from_bottleneck(
     variant: str,
     sequence_len: int = 8192,
     legacy_generate: bool = False,
+    legacy_vocab: bool = False,
 ) -> ModelConfig:
     if variant not in {"bt", "bgt"}:
         raise ValueError("bottleneck configs support only bt and bgt variants")
     spec = _bottleneck_spec(backbone)
+    vocab_size = spec.legacy_vocab_size if legacy_vocab and spec.legacy_vocab_size is not None else spec.vocab_size
     hidden = spec.bt_hidden_size if variant == "bt" else spec.bgt_hidden_size
     intermediate = spec.bt_intermediate_size if variant == "bt" else spec.bgt_intermediate_size
     return ModelConfig(
         variant=variant,
         family=spec.family,
         sequence_len=sequence_len,
-        vocab_size=spec.vocab_size,
+        vocab_size=vocab_size,
         hidden_size=spec.hidden_size,
         intermediate_size=spec.intermediate_size,
         num_layers=spec.num_layers,
@@ -351,10 +265,7 @@ def config_from_bottleneck_llama1b(
 
 
 def _bottleneck_spec(backbone: str) -> BottleneckSpec:
-    key = backbone.lower()
-    if key not in BOTTLENECK_SPECS:
-        raise ValueError(f"unsupported bottleneck backbone {backbone!r}; expected one of {sorted(BOTTLENECK_SPECS)}")
-    return BOTTLENECK_SPECS[key]
+    return bottleneck_spec(backbone)
 
 
 def config_from_ppt_meta(meta: dict) -> ModelConfig:
@@ -387,9 +298,15 @@ def load_bottleneck_state(native, old_state: dict[str, torch.Tensor], variant: s
             unmapped.append(old_key)
             continue
         if key not in target:
+            if key == "backbone.lm_head.weight":
+                continue
             unmapped.append(old_key)
             continue
         if target[key].shape != tensor.shape:
+            padded = _pad_vocab_tensor(key, target[key], tensor)
+            if padded is not None:
+                mapped[key] = padded
+                continue
             raise ValueError(
                 f"shape mismatch for {key}: native {tuple(target[key].shape)} "
                 f"vs bottleneck {tuple(tensor.shape)} from {old_key}"
@@ -403,6 +320,18 @@ def load_bottleneck_state(native, old_state: dict[str, torch.Tensor], variant: s
             f"missing={missing[:8]} extra={extra[:8]} unmapped={unmapped[:8]}"
         )
     native.load_state_dict(mapped, strict=True)
+
+
+def _pad_vocab_tensor(key: str, expected: torch.Tensor, tensor: torch.Tensor) -> torch.Tensor | None:
+    if key not in {"backbone.embed_tokens.weight", "backbone.lm_head.weight"}:
+        return None
+    if expected.ndim != tensor.ndim or expected.ndim != 2:
+        return None
+    if expected.shape[0] < tensor.shape[0] or expected.shape[1:] != tensor.shape[1:]:
+        return None
+    padded = expected.clone()
+    padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
+    return padded
 
 
 def _map_bottleneck_key(key: str, variant: str) -> str | None:

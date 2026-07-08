@@ -11,8 +11,10 @@ import torch.nn.functional as F
 
 from gcw.config import ModelConfig
 from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.windowed_cache import WindowedCache
 
-ProcessorFn = Callable[..., CacheState | StaticCacheState]
+CacheLike = CacheState | WindowedCache
+ProcessorFn = Callable[..., CacheLike | StaticCacheState]
 
 try:
     from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -25,6 +27,8 @@ except ImportError:  # pragma: no cover - older torch fallback
 
 class Linear(nn.Linear):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if _autocast_dtype(x.device) is not None or x.dtype == self.weight.dtype:
+            return F.linear(x, self.weight, None)
         return F.linear(x, self.weight.to(dtype=x.dtype), None)
 
 
@@ -36,6 +40,12 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.rms_norm(x, (x.shape[-1],), self.weight.to(x.dtype), self.eps)
+
+
+def _autocast_dtype(device: torch.device) -> torch.dtype | None:
+    if device.type == "cuda" and torch.is_autocast_enabled("cuda"):
+        return torch.get_autocast_dtype(device.type)
+    return None
 
 
 def apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, style: str = "llama") -> torch.Tensor:
@@ -74,6 +84,11 @@ class RotaryCache(nn.Module):
         cos = self.cos.index_select(1, positions).to(dtype)
         sin = self.sin.index_select(1, positions).to(dtype)
         return cos, sin
+
+    def get_range(self, start: int, seq_len: int, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+        self.maybe_grow(start + seq_len, device)
+        end = start + seq_len
+        return self.cos[:, start:end].to(dtype), self.sin[:, start:end].to(dtype)
 
 
 class CausalSelfAttention(nn.Module):
@@ -305,8 +320,7 @@ class TF(nn.Module):
         loss_reduction: str = "mean",
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
-        pos = torch.arange(0, input_ids.shape[1], device=input_ids.device)
-        cos_sin = self.rotary.get(pos, x.dtype)
+        cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
         for layer in self.layers:
             x, _, _, _ = layer(x, cos_sin, None)
         x = self.norm(x)
@@ -324,10 +338,11 @@ class TF(nn.Module):
     def loss_from_hidden(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
         if loss_reduction == "none":
             raise ValueError("chunked loss does not support reduction='none'")
+        chunk_size = 256 if x.is_cuda else 64
         loss_sum = x.new_zeros((), dtype=torch.float32)
         token_count = x.new_zeros((), dtype=torch.float32)
-        for start in range(0, x.shape[1], 64):
-            end = start + 64
+        for start in range(0, x.shape[1], chunk_size):
+            end = start + chunk_size
             logits = self.logits_from_hidden(x[:, start:end])
             chunk_targets = targets[:, start:end].reshape(-1).clone()
             valid = chunk_targets >= 0
@@ -352,29 +367,15 @@ class TF(nn.Module):
         process_every: int,
         loss_reduction: str = "mean",
     ) -> torch.Tensor:
-        cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
-        loss_sum = input_ids.new_zeros((), dtype=torch.float32)
-        token_count = input_ids.new_zeros((), dtype=torch.float32)
+        cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+        hidden_chunks = []
         for start in range(0, input_ids.shape[1], process_every):
             if start > 0:
                 cache = processor(cache)
             end = start + process_every
-            chunk_logits, cache = self.forward_chunk(input_ids[:, start:end], start, cache, logits=True)
-            chunk_targets = targets[:, start:end].reshape(-1).clone()
-            valid = chunk_targets >= 0
-            chunk_targets[~valid] = -100
-            loss_sum = loss_sum + F.cross_entropy(
-                chunk_logits.reshape(-1, chunk_logits.shape[-1]),
-                chunk_targets,
-                ignore_index=-100,
-                reduction="sum",
-            )
-            token_count = token_count + valid.sum().to(torch.float32)
-        if loss_reduction == "sum":
-            return loss_sum
-        if loss_reduction == "none":
-            raise ValueError("windowed loss does not support reduction='none'")
-        return loss_sum / token_count.clamp_min(1.0)
+            hidden, cache = self.forward_chunk(input_ids[:, start:end], start, cache, logits=False, cache_format="windowed")
+            hidden_chunks.append(hidden)
+        return self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction)
 
     def forward_windowed(
         self,
@@ -395,18 +396,24 @@ class TF(nn.Module):
         self,
         input_ids: torch.Tensor,
         start_pos: int,
-        cache: CacheState | None = None,
+        cache: CacheLike | None = None,
         *,
         logits: bool = True,
-    ) -> tuple[torch.Tensor, CacheState]:
+        cache_format: str = "list",
+    ) -> tuple[torch.Tensor, CacheLike]:
         x = self.embed_tokens(input_ids)
-        pos = torch.arange(start_pos, start_pos + input_ids.shape[1], device=input_ids.device)
-        cos_sin = self.rotary.get(pos, x.dtype)
+        cos_sin = self.rotary.get_range(
+            start_pos,
+            input_ids.shape[1],
+            input_ids.device,
+            _autocast_dtype(x.device) or x.dtype,
+        )
         keys: list[torch.Tensor] = []
         values: list[torch.Tensor] = []
         layer_scores: list[torch.Tensor] = []
+        has_cache = cache is not None and cache.scores.numel() > 0
         for i, layer in enumerate(self.layers):
-            past = None if cache is None or not cache.keys else cache.layer(i)
+            past = None if not has_cache else cache.layer(i)
             x, k, v, scores = layer(x, cos_sin, past)
             keys.append(k)
             values.append(v)
@@ -416,6 +423,8 @@ class TF(nn.Module):
         chunk_scores = torch.stack(layer_scores).mean(dim=0)
         old_scores = input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32) if cache is None else cache.scores
         new_scores = chunk_scores if old_scores.numel() == 0 else torch.cat([old_scores, chunk_scores], dim=1)
+        if cache_format == "windowed" or isinstance(cache, WindowedCache):
+            return out, WindowedCache.from_lists(keys, values, new_scores)
         return out, CacheState(keys, values, new_scores)
 
     def forward_chunk_static(

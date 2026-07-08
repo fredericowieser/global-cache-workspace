@@ -5,6 +5,7 @@ import json
 
 from gcw.convert import convert_bottleneck, convert_hf, convert_ppt
 from gcw.data.fineweb import prepare_fineweb
+from gcw.data.sft import prepare_openmath
 from pathlib import Path
 
 from gcw.eval import is_main_process, run_core, run_fineweb, run_math, run_paper7, run_ppt
@@ -22,6 +23,10 @@ def main(argv: list[str] | None = None) -> None:
     fineweb.add_argument("--out", required=True)
     fineweb.add_argument("--shard-tokens", type=int, default=100_000_000)
     fineweb.add_argument("--limit", type=int, default=None)
+    openmath = prepare_sub.add_parser("openmath")
+    openmath.add_argument("--source", required=True)
+    openmath.add_argument("--out", required=True)
+    openmath.add_argument("--limit", type=int, default=None)
 
     train = sub.add_parser("train")
     train.add_argument("--config", required=True)
@@ -60,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     hf = convert_sub.add_parser("hf")
     hf.add_argument("--family", choices=["llama", "qwen3"], required=True)
     hf.add_argument("--model", required=True)
-    hf.add_argument("--variant", choices=["tf", "bt", "bgt"], default="tf")
+    hf.add_argument("--variant", choices=["tf", "bt", "bgt", "icarus", "longshot"], default="tf")
     hf.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
     hf.add_argument("--out", required=True)
     ppt = convert_sub.add_parser("ppt")
@@ -73,6 +78,7 @@ def main(argv: list[str] | None = None) -> None:
     bottleneck.add_argument("--variant", choices=["bt", "bgt"], required=True)
     bottleneck.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="auto")
     bottleneck.add_argument("--source", default=None)
+    bottleneck.add_argument("--tokenizer-source", default=None)
     bottleneck.add_argument("--backbone", choices=["llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b", "qwen3-0.6b"], default="llama-3.2-1b")
     bottleneck.add_argument("--sequence-len", type=int, default=8192)
     bottleneck.add_argument("--legacy-generate", action="store_true")
@@ -89,7 +95,11 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
     if args.cmd == "prepare":
-        prepare_fineweb(args.out, shard_tokens=args.shard_tokens, limit=args.limit)
+        if args.kind == "fineweb":
+            prepare_fineweb(args.out, shard_tokens=args.shard_tokens, limit=args.limit)
+        else:
+            rows = prepare_openmath(args.source, args.out, limit=args.limit)
+            print(f"Wrote {rows} rows to {args.out}")
     elif args.cmd == "train":
         train_from_config(args.config)
     elif args.cmd == "eval":
@@ -108,7 +118,13 @@ def main(argv: list[str] | None = None) -> None:
             print(text)
     elif args.cmd == "convert":
         if args.source == "hf":
-            convert_hf(args.model, args.out, family=args.family, variant=args.variant, dtype=args.dtype)
+            convert_hf(
+                args.model,
+                args.out,
+                family=args.family,
+                variant=args.variant,
+                dtype=args.dtype,
+            )
         elif args.source == "ppt":
             convert_ppt(args.checkpoint, args.meta, args.out, dtype=args.dtype)
         else:
@@ -118,6 +134,7 @@ def main(argv: list[str] | None = None) -> None:
                 variant=args.variant,
                 dtype=args.dtype,
                 source=args.source,
+                tokenizer_source=args.tokenizer_source,
                 backbone=args.backbone,
                 sequence_len=args.sequence_len,
                 legacy_generate=args.legacy_generate,

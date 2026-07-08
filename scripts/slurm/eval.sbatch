@@ -19,34 +19,52 @@ BATCH_SIZE="${BATCH_SIZE:-}"
 DATA_DIR="${DATA_DIR:-}"
 EVAL_TOKENS="${EVAL_TOKENS:-}"
 OUT="${OUT:-}"
+EVAL_MANIFEST="${EVAL_MANIFEST:-}"
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
-mkdir -p slurm_out "$(dirname "${OUT:-results/tmp.json}")"
+mkdir -p slurm_out
 
-gcw_args=(eval "$SUITE" --checkpoint "$CHECKPOINT")
-if [[ -n "$LIMIT" && "$SUITE" != "fineweb" ]]; then
-  gcw_args+=(--limit "$LIMIT")
-fi
-if [[ -n "$BATCH_SIZE" ]]; then
-  gcw_args+=(--batch-size "$BATCH_SIZE")
-fi
-if [[ "$SUITE" == "fineweb" && -n "$DATA_DIR" ]]; then
-  gcw_args+=(--data-dir "$DATA_DIR")
-fi
-if [[ "$SUITE" == "fineweb" && -n "$EVAL_TOKENS" ]]; then
-  gcw_args+=(--eval-tokens "$EVAL_TOKENS")
-fi
-if [[ -n "$OUT" ]]; then
-  gcw_args+=(--out "$OUT")
-fi
+UV_RUN=(uv run --locked --extra gpu --extra eval)
+"${UV_RUN[@]}" python scripts/check_cuda_env.py
 
-NGPU="${SLURM_GPUS_ON_NODE:-1}"
-if [[ "$SUITE" != "fineweb" && "$NGPU" -gt 1 ]]; then
-  uv run --extra gpu --extra eval torchrun --standalone --nproc-per-node="$NGPU" -m gcw.cli "${gcw_args[@]}"
+run_eval() {
+  local checkpoint="$1"
+  local out="$2"
+  local ngpu="${SLURM_GPUS_ON_NODE:-1}"
+  local gcw_args=(eval "$SUITE" --checkpoint "$checkpoint")
+  if [[ -n "$LIMIT" && "$SUITE" != "fineweb" ]]; then
+    gcw_args+=(--limit "$LIMIT")
+  fi
+  if [[ -n "$BATCH_SIZE" ]]; then
+    gcw_args+=(--batch-size "$BATCH_SIZE")
+  fi
+  if [[ "$SUITE" == "fineweb" && -n "$DATA_DIR" ]]; then
+    gcw_args+=(--data-dir "$DATA_DIR")
+  fi
+  if [[ "$SUITE" == "fineweb" && -n "$EVAL_TOKENS" ]]; then
+    gcw_args+=(--eval-tokens "$EVAL_TOKENS")
+  fi
+  if [[ -n "$out" ]]; then
+    mkdir -p "$(dirname "$out")"
+    gcw_args+=(--out "$out")
+  fi
+
+  if [[ "$SUITE" != "fineweb" && "$ngpu" -gt 1 ]]; then
+    "${UV_RUN[@]}" torchrun --standalone --nproc-per-node="$ngpu" -m gcw.cli "${gcw_args[@]}"
+  else
+    "${UV_RUN[@]}" gcw "${gcw_args[@]}"
+  fi
+  if [[ -n "$out" ]]; then
+    echo "Wrote $out"
+  fi
+}
+
+if [[ -n "$EVAL_MANIFEST" ]]; then
+  while IFS=$'\t' read -r manifest_checkpoint manifest_out; do
+    if [[ -z "$manifest_checkpoint" ]]; then
+      continue
+    fi
+    run_eval "$manifest_checkpoint" "$manifest_out"
+  done < "$EVAL_MANIFEST"
 else
-  uv run --extra gpu --extra eval gcw "${gcw_args[@]}"
-fi
-if [[ -n "$OUT" ]]; then
-  echo "Wrote $OUT"
-else
-  true
+  run_eval "$CHECKPOINT" "$OUT"
 fi

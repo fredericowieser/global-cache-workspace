@@ -45,6 +45,9 @@ elif [ "$SOURCE" = "bottleneck" ]; then
   if [ -n "${BACKBONE_SOURCE:-}" ]; then
     cmd+=(--source "$BACKBONE_SOURCE")
   fi
+  if [ -n "${TOKENIZER_SOURCE:-}" ]; then
+    cmd+=(--tokenizer-source "$TOKENIZER_SOURCE")
+  fi
   if [ "${LEGACY_GENERATE:-0}" = "1" ]; then
     cmd+=(--legacy-generate)
   fi
