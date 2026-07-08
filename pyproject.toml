@@ -1,0 +1,77 @@
+[project]
+name = "gcw"
+version = "0.1.0"
+description = "Minimal CE-only workspace for TF, BT, and BGT cache-processor experiments."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.7",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "safetensors>=0.4",
+    "tokenizers>=0.20",
+    "huggingface_hub>=0.24",
+    "datasets>=3.0,<4",
+    "tqdm>=4.66",
+    "wandb>=0.18",
+    "filelock>=3.15",
+    "certifi>=2024.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+gcw = "gcw.cli:main"
+
+[project.optional-dependencies]
+cpu = ["torch>=2.7"]
+gpu = ["torch>=2.7"]
+rocm = ["torch>=2.7", "pytorch-triton-rocm"]
+eval = ["lm-eval>=0.4", "transformers>=4.40", "pillow>=10.0", "accelerate>=1.0"]
+convert = ["transformers>=4.40"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.uv]
+default-groups = []
+conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "rocm" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu128", extra = "gpu" },
+    { index = "pytorch-rocm", extra = "rocm" },
+]
+pytorch-triton-rocm = [{ index = "pytorch-rocm", extra = "rocm" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.3"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: network- or download-dependent tests",
+    "gpu: requires a CUDA GPU",
+]
+
+[tool.ruff]
+line-length = 120
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
