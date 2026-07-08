@@ -1,0 +1,55 @@
+model:
+  variant: bt
+  family: smollm
+  sequence_len: 2048
+  vocab_size: 49152
+  hidden_size: 960
+  intermediate_size: 2560
+  num_layers: 32
+  num_heads: 15
+  num_kv_heads: 5
+  head_dim: 64
+  rope_theta: 10000.0
+  norm_eps: 1.0e-05
+  tie_embeddings: true
+  qk_norm: false
+  cache_processor:
+    process_every: 64
+    topk: 32
+    score: attn_l2
+    hidden_size: 128
+    intermediate_size: 512
+    num_layers: 1
+    num_heads: 1
+    num_kv_heads: 1
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+data:
+  kind: fineweb
+  data_dir: ~/.cache/gcw/fineweb_edu_dedup_cosmo2
+  max_length: 2048
+mode: pretrain
+distributed: ddp
+freeze_backbone: false
+loss: next_token_ce
+checkpoint_format: native_safetensors
+output_dir: runs/smollm360m_bt_pretrain
+batch_size: 32
+sequence_len: 2048
+max_steps: 38147
+learning_rate: 0.003
+weight_decay: 0.1
+warmup_steps: 1907
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 1000
+eval_every: 250
+metadata:
+  backbone_non_embedding_params: 314635200
+  processor_params: 13701152
+  processor_fraction: 0.04354615122529202
+  target_processor_fraction: 0.05
+  target_processor_params: 15731760
