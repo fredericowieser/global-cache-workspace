@@ -1,0 +1,47 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Test, lint, and type-check caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build and packaging outputs
+build/
+dist/
+*.egg-info/
+
+# Local training/evaluation outputs
+runs/
+checkpoints/
+outputs/
+slurm_out/
+wandb/
+
+# Large model and dataset artifacts
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.npy
+*.npz
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
