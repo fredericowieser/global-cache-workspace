@@ -39,15 +39,7 @@ elif [ "$SOURCE" = "bottleneck" ]; then
     --checkpoint "${CHECKPOINT:?CHECKPOINT is required}" \
     --variant "${VARIANT:?VARIANT is required}" \
     --dtype "$DTYPE" \
-    --backbone "${BACKBONE:-llama-3.2-1b}" \
-    --sequence-len "${SEQUENCE_LEN:-8192}" \
     --out "${OUT:?OUT is required}")
-  if [ -n "${BACKBONE_SOURCE:-}" ]; then
-    cmd+=(--source "$BACKBONE_SOURCE")
-  fi
-  if [ -n "${TOKENIZER_SOURCE:-}" ]; then
-    cmd+=(--tokenizer-source "$TOKENIZER_SOURCE")
-  fi
   if [ "${LEGACY_GENERATE:-0}" = "1" ]; then
     cmd+=(--legacy-generate)
   fi

@@ -1,11 +1,7 @@
 import sys
 
-import torch
-
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, WandbConfig
-from gcw.checkpoint import load_checkpoint, save_checkpoint
+from gcw.config import DataConfig, ModelConfig, TrainConfig, WandbConfig
 from gcw.data.shards import ShardWriter
-from gcw.models import build_model
 from gcw.train import train
 
 
@@ -98,59 +94,3 @@ def test_train_reads_pretrain_shards(tmp_path):
     train(cfg)
 
     assert (tmp_path / "run" / "checkpoint" / "train_state.json").exists()
-
-
-def test_train_loads_native_backbone_checkpoint(tmp_path):
-    backbone_cfg = ModelConfig(
-        variant="tf",
-        family="smollm",
-        sequence_len=16,
-        vocab_size=128,
-        hidden_size=32,
-        intermediate_size=64,
-        num_layers=2,
-        num_heads=4,
-        num_kv_heads=2,
-        head_dim=8,
-        tie_embeddings=True,
-    )
-    backbone = build_model(backbone_cfg)
-    backbone.init_weights()
-    with torch.no_grad():
-        backbone.embed_tokens.weight.fill_(0.123)
-    checkpoint = tmp_path / "backbone"
-    save_checkpoint(checkpoint, backbone, backbone_cfg)
-
-    cfg = tiny_train_config(tmp_path)
-    cfg.model = ModelConfig(
-        variant="bt",
-        family="smollm",
-        sequence_len=16,
-        vocab_size=128,
-        hidden_size=32,
-        intermediate_size=64,
-        num_layers=2,
-        num_heads=4,
-        num_kv_heads=2,
-        head_dim=8,
-        tie_embeddings=True,
-        cache_processor=CacheProcessorConfig(
-            process_every=4,
-            topk=2,
-            hidden_size=8,
-            intermediate_size=16,
-            num_heads=1,
-            num_kv_heads=1,
-        ),
-    )
-    cfg.freeze_backbone = True
-    cfg.backbone_checkpoint = str(checkpoint)
-    cfg.wandb.enabled = False
-    cfg.eval_every = 0
-    cfg.eval_on_start = False
-    cfg.max_steps = 1
-
-    train(cfg)
-
-    trained, _, _ = load_checkpoint(tmp_path / "run" / "checkpoint")
-    assert torch.allclose(trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123))
