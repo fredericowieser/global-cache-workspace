@@ -1,0 +1,77 @@
+model:
+  variant: icarus
+  family: llama
+  sequence_len: 8192
+  vocab_size: 128256
+  hidden_size: 2048
+  intermediate_size: 8192
+  num_layers: 16
+  num_heads: 32
+  num_kv_heads: 8
+  head_dim: 64
+  rope_theta: 500000.0
+  norm_eps: 1.0e-05
+  tie_embeddings: true
+  qk_norm: false
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 32
+    score: attn_l2
+    hidden_size: 960
+    intermediate_size: 3840
+    num_layers: 1
+    num_heads: 15
+    num_kv_heads: 15
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+    per_cache_head_projections: true
+    gradient_checkpointing: true
+    unrope_keys: false
+data:
+  kind: sft
+  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
+  tokenizer: hf
+  tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model
+  sft_skip_rows: 128000
+  sft_take_rows: 128000
+  response_prefix: "\n"
+mode: sft
+distributed: ddp
+freeze_backbone: false
+backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf
+output_dir: runs/bottleneck_llm/llama32_1b_icarus_from_sft_unfrozen
+batch_size: 16
+sequence_len: 512
+max_steps: 3000
+total_batch_size: 65536
+learning_rate: 0.0001
+adam_beta2: 0.999
+warmup_steps: 0
+warmdown_ratio: 0.0
+weight_decay: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 100
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: llama32-1b-icarus-from-sft-unfrozen
+  group: bottleneck-llm-reproduction
+  tags:
+    - bottleneck-llm
+    - icarus
+    - llama-3.2-1b
+    - openmath
+    - unfrozen
+metadata:
+  backbone_non_embedding_params: 973146112
+  processor_params: 46348033
+  total_non_embedding_params: 1019494145
+  processor_fraction: 0.04762700320997634
+  target_processor_fraction: 0.05
+  target_processor_params: 48657306

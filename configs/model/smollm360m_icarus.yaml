@@ -1,0 +1,42 @@
+model:
+  variant: icarus
+  family: smollm
+  sequence_len: 2048
+  vocab_size: 49152
+  hidden_size: 960
+  intermediate_size: 2560
+  num_layers: 32
+  num_heads: 15
+  num_kv_heads: 5
+  head_dim: 64
+  rope_theta: 10000.0
+  norm_eps: 1.0e-05
+  tie_embeddings: true
+  qk_norm: false
+  rotary_style: ppt
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 32
+    score: attn_l2
+    hidden_size: 960
+    intermediate_size: 3840
+    num_layers: 1
+    num_heads: 15
+    num_kv_heads: 15
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+    per_cache_head_projections: false
+    unrope_keys: false
+metadata:
+  backbone_non_embedding_params: 314635200
+  processor_params: 14998337
+  total_non_embedding_params: 329633537
+  processor_fraction: 0.04766897346514312
+  target_processor_fraction: 0.05
+  target_processor_params: 15731760
+  target_non_embedding_params: 314635200
+  delta_from_target: 14998337
+  regime: added_on_top

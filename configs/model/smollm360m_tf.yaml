@@ -1,0 +1,21 @@
+model:
+  variant: tf
+  family: smollm
+  sequence_len: 2048
+  vocab_size: 49152
+  hidden_size: 960
+  intermediate_size: 2560
+  num_layers: 32
+  num_heads: 15
+  num_kv_heads: 5
+  head_dim: 64
+  rope_theta: 10000.0
+  norm_eps: 1.0e-05
+  tie_embeddings: true
+  qk_norm: false
+  rotary_style: ppt
+  cache_processor: null
+  legacy_bottleneck_generate: false
+metadata:
+  backbone_non_embedding_params: 314635200
+  total_non_embedding_params: 314635200
