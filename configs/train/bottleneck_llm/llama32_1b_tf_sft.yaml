@@ -11,7 +11,7 @@ model:
   head_dim: 64
   rope_theta: 500000.0
   norm_eps: 1.0e-05
-  tie_embeddings: false
+  tie_embeddings: true
   qk_norm: false
   rotary_style: llama
   cache_processor: null
@@ -21,6 +21,8 @@ data:
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
   tokenizer: hf
   tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model
+  sft_take_rows: 128000
+  response_prefix: "\n"
 mode: sft
 distributed: ddp
 freeze_backbone: false
@@ -31,6 +33,7 @@ sequence_len: 512
 max_steps: 1000
 total_batch_size: 65536
 learning_rate: 0.0001
+adam_beta2: 0.999
 warmup_steps: 0
 warmdown_ratio: 0.0
 weight_decay: 0.0

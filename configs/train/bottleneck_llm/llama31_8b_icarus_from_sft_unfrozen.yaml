@@ -29,11 +29,15 @@ model:
     gate_init: -5.0
     attention_dropout: 0.0
     per_cache_head_projections: true
+    gradient_checkpointing: true
 data:
   kind: sft
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
   tokenizer: hf
   tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.1-8b/final_model
+  sft_skip_rows: 128000
+  sft_take_rows: 128000
+  response_prefix: "\n"
 mode: sft
 distributed: ddp
 freeze_backbone: false
@@ -44,6 +48,7 @@ sequence_len: 512
 max_steps: 1000
 total_batch_size: 65536
 learning_rate: 0.0001
+adam_beta2: 0.999
 warmup_steps: 0
 warmdown_ratio: 0.0
 weight_decay: 0.0

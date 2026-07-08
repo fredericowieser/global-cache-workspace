@@ -3,14 +3,16 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-CONFIG="${CONFIG:-configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml}"
+CONFIG="${CONFIG:-configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml}"
 JOB_NAME="${JOB_NAME:-gcw-llama32-1b-icarus}"
 PARTITION="${PARTITION:-agent-xlong-15,agent-xlong}"
 TIME="${TIME:-24:00:00}"
-GPUS="${GPUS:-1}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-8}"
+GPUS="${GPUS:-2}"
+CPUS_PER_TASK="${CPUS_PER_TASK:-16}"
 MEM="${MEM:-180G}"
 WANDB_MODE="${WANDB_MODE:-online}"
+PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+UV_EXTRAS="${UV_EXTRAS:---extra gpu --extra eval}"
 
 OPENMATH_DATA="/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl"
 SFT_BACKBONE="/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf/model.safetensors"
@@ -36,10 +38,10 @@ sbatch \
   --partition="$PARTITION" \
   --time="$TIME" \
   --nodes=1 \
-  --ntasks-per-node="$GPUS" \
+  --ntasks-per-node=1 \
   --gres="gpu:$GPUS" \
   --cpus-per-task="$CPUS_PER_TASK" \
   --mem="$MEM" \
   --output="slurm_out/llama32-1b-icarus-%j.out" \
-  --export="ALL,CONFIG=$CONFIG,WANDB_MODE=$WANDB_MODE" \
+  --export="ALL,CONFIG=$CONFIG,WANDB_MODE=$WANDB_MODE,GPUS=$GPUS,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS" \
   scripts/slurm/train.sbatch
