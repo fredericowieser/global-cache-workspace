@@ -1,0 +1,20 @@
+from gcw.config import ModelConfig
+from gcw.models.bgt import BGT
+from gcw.models.bt import BT
+from gcw.models.icarus import Icarus
+from gcw.models.transformer import TF
+
+
+def build_model(config: ModelConfig):
+    if config.variant == "tf":
+        return TF(config)
+    if config.variant == "bt":
+        return BT(config)
+    if config.variant == "bgt":
+        return BGT(config)
+    if config.variant == "icarus":
+        return Icarus(config)
+    raise ValueError(f"unknown model variant: {config.variant}")
+
+
+__all__ = ["BGT", "BT", "Icarus", "TF", "build_model"]
