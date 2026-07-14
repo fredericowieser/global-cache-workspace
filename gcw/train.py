@@ -17,11 +17,11 @@ from gcw.common import cleanup_distributed, dist_info, init_distributed, print0
 from gcw.compile import maybe_compile
 from gcw.config import TrainConfig, load_train_config, to_dict
 from gcw.data.shards import data_loader
-from gcw.data.sft import iter_jsonl, sft_batch
-from gcw.data.tokenizers import get_tokenizer
+from gcw.data.training import TrainingBatchStream, build_training_stream, training_data_identity
 from gcw.flops import total_training_flops, training_flops_per_token
 from gcw.models import build_model
 from gcw.params import processor_params, total_non_embedding_params
+from gcw.training_checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
 
 
 def train_from_config(path: str | Path) -> None:
@@ -32,9 +32,38 @@ def train(config: TrainConfig) -> None:
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
     _, rank, _, world_size = dist_info()
+    micro_tokens = config.batch_size * config.sequence_len * world_size
+    tokens_per_step = config.total_batch_size or micro_tokens
+    if tokens_per_step % micro_tokens != 0:
+        raise ValueError(f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}")
+    grad_accum_steps = tokens_per_step // micro_tokens
+    fingerprint = _training_fingerprint(config, world_size, micro_tokens, tokens_per_step, grad_accum_steps)
+    checkpoint = None
+    start_step = 0
+    smooth_loss = 0.0
+    cursor = None
+    if config.resume is not None:
+        checkpoint = TrainingCheckpoint.open(
+            config.resume.checkpoint,
+            expected_fingerprint=fingerprint,
+            topology=config.resume.topology,
+            current_world_size=world_size,
+        )
+        start_step = checkpoint.resume_state.step
+        if start_step > config.max_steps:
+            raise ValueError(f"checkpoint step {start_step} exceeds max_steps {config.max_steps}")
+        if start_step == config.max_steps:
+            print0(f"checkpoint already completed max_steps={config.max_steps}")
+            cleanup_distributed()
+            return
+        smooth_loss = checkpoint.resume_state.smooth_loss
+        cursor = checkpoint.loader_cursor(rank=rank)
+
     model = build_model(config.model).to(device)
     model.init_weights()
-    if config.backbone_checkpoint:
+    if checkpoint is not None:
+        checkpoint.restore_model(model)
+    elif config.backbone_checkpoint:
         load_backbone_checkpoint(model, config.backbone_checkpoint)
     if config.freeze_backbone and hasattr(model, "backbone"):
         for p in model.backbone.parameters():
@@ -47,12 +76,11 @@ def train(config: TrainConfig) -> None:
 
     params = [p for p in model.parameters() if p.requires_grad]
     opt = _build_optimizer(params, config)
-    loader = _loader(config, device)
-    micro_tokens = config.batch_size * config.sequence_len * world_size
-    tokens_per_step = config.total_batch_size or micro_tokens
-    if tokens_per_step % micro_tokens != 0:
-        raise ValueError(f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}")
-    grad_accum_steps = tokens_per_step // micro_tokens
+    if checkpoint is not None:
+        checkpoint.restore_optimizer(opt, device=device)
+    stream = build_training_stream(config, device, rank=rank, world_size=world_size, cursor=cursor)
+    if checkpoint is not None:
+        checkpoint.restore_rng(rank=rank)
     target_tokens = tokens_per_step * config.max_steps
     flops_per_tok = training_flops_per_token(config.model, config.sequence_len)
     run_meta = {
@@ -66,6 +94,8 @@ def train(config: TrainConfig) -> None:
         "non_embedding_params": total_non_embedding_params(config.model),
         "processor_params": processor_params(config.model),
         "world_size": world_size,
+        "resumed_from_step": start_step if checkpoint is not None else None,
+        "resume_exact_topology": checkpoint.resume_state.exact_topology if checkpoint is not None else True,
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     print0(
@@ -76,25 +106,23 @@ def train(config: TrainConfig) -> None:
         f"micro_tokens={micro_tokens:,} grad_accum={grad_accum_steps}"
     )
     wandb_run = _init_wandb(config, run_meta) if rank == 0 else None
-    if config.eval_on_start and config.eval_every:
+    if start_step == 0 and config.eval_on_start and config.eval_every:
         val = _eval_loss(model, config, device)
         if rank == 0:
             print0(f"step 0/{config.max_steps} val_loss={val['val/loss']:.4f}")
             _wandb_log(wandb_run, {"train/step": 0, **val}, step=0)
     retained_checkpoint_every = _retained_checkpoint_every()
     model.train()
-    smooth_loss = 0.0
-    last_state: dict[str, Any] = {"kind": "uninitialized"}
-    for step in range(config.max_steps):
+    for step in range(start_step, config.max_steps):
         step_start = time.perf_counter()
         opt.zero_grad(set_to_none=True)
         loss_total = 0.0
         for micro_step in range(grad_accum_steps):
-            x, y, last_state = next(loader)
+            batch = next(stream)
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
-                    loss = model(x, y)
+                    loss = model(batch.x, batch.y)
                 loss_total += float(loss.detach().cpu())
                 (loss / grad_accum_steps).backward()
         grad_norm = None
@@ -124,7 +152,7 @@ def train(config: TrainConfig) -> None:
             "train/tokens": tokens_seen,
             "train/flops": flops_seen,
             "train/progress": step_num / config.max_steps,
-            "train/epoch": last_state.get("epoch") if isinstance(last_state, dict) else None,
+            "train/epoch": getattr(stream.cursor, "epoch", None),
             "train/grad_accum_steps": grad_accum_steps,
             "train/micro_tokens_per_step": micro_tokens,
             "train/tokens_per_step": tokens_per_step,
@@ -146,25 +174,39 @@ def train(config: TrainConfig) -> None:
             print0(msg)
             if config.wandb.enabled and step_num % max(1, config.wandb.log_every) == 0:
                 _wandb_log(wandb_run, _compact_metrics(train_metrics), step=step_num)
-        if config.save_every and step_num % config.save_every == 0 and rank == 0:
-            checkpoint_state = _checkpoint_state(checkpoint_meta, step_num, last_state)
-            save_checkpoint(
+        if config.save_every and step_num % config.save_every == 0:
+            resume_state = _resume_state(step_num, smooth_loss, stream, world_size, checkpoint_meta)
+            _save_training_state(
                 Path(config.output_dir) / "checkpoint",
                 _unwrap(model),
-                config.model,
-                checkpoint_state,
+                opt,
+                config,
+                resume_state,
+                fingerprint,
+                rank,
             )
             if retained_checkpoint_every is not None and step_num % retained_checkpoint_every == 0:
-                save_checkpoint(
+                _save_training_state(
                     Path(config.output_dir) / f"checkpoint-{step_num}",
                     _unwrap(model),
-                    config.model,
-                    checkpoint_state,
+                    opt,
+                    config,
+                    resume_state,
+                    fingerprint,
+                    rank,
                 )
-    if rank == 0:
-        save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, _checkpoint_state(checkpoint_meta, config.max_steps))
-        if wandb_run is not None:
-            wandb_run.finish()
+    final_state = _resume_state(config.max_steps, smooth_loss, stream, world_size, checkpoint_meta)
+    _save_training_state(
+        Path(config.output_dir) / "checkpoint",
+        _unwrap(model),
+        opt,
+        config,
+        final_state,
+        fingerprint,
+        rank,
+    )
+    if rank == 0 and wandb_run is not None:
+        wandb_run.finish()
     cleanup_distributed()
 
 
@@ -193,6 +235,81 @@ def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | 
     return state
 
 
+def _training_fingerprint(
+    config: TrainConfig,
+    world_size: int,
+    micro_tokens: int,
+    tokens_per_step: int,
+    grad_accum_steps: int,
+) -> dict[str, Any]:
+    return {
+        "model": to_dict(config.model),
+        "data": to_dict(config.data),
+        "data_identity": training_data_identity(config),
+        "data_kind": config.data.kind,
+        "mode": config.mode,
+        "distributed": config.distributed,
+        "freeze_backbone": config.freeze_backbone,
+        "loss": config.loss,
+        "checkpoint_format": config.checkpoint_format,
+        "bf16": config.bf16,
+        "seed": config.seed,
+        "optimizer": {
+            "learning_rate": config.learning_rate,
+            "adam_beta1": config.adam_beta1,
+            "adam_beta2": config.adam_beta2,
+            "adam_eps": config.adam_eps,
+            "weight_decay": config.weight_decay,
+            "grad_clip": config.grad_clip,
+        },
+        "schedule": {
+            "max_steps": config.max_steps,
+            "warmup_steps": config.warmup_steps,
+            "warmdown_ratio": config.warmdown_ratio,
+            "final_lr_frac": config.final_lr_frac,
+        },
+        "batch": {
+            "sequence_len": config.sequence_len,
+            "micro_tokens": micro_tokens,
+            "tokens_per_step": tokens_per_step,
+            "grad_accum_steps": grad_accum_steps,
+        },
+    }
+
+
+def _resume_state(
+    step: int,
+    smooth_loss: float,
+    stream: TrainingBatchStream,
+    world_size: int,
+    metadata: dict[str, Any],
+) -> ResumeState:
+    return ResumeState(
+        step=step,
+        smooth_loss=smooth_loss,
+        loader_cursor=stream.cursor,
+        saved_world_size=world_size,
+        exact_topology=True,
+        metadata=metadata,
+    )
+
+
+def _save_training_state(
+    path: Path,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    config: TrainConfig,
+    resume_state: ResumeState,
+    fingerprint: dict[str, Any],
+    rank: int,
+) -> None:
+    if config.distributed == "fsdp":
+        if rank == 0:
+            save_checkpoint(path, model, config.model, {**resume_state.metadata, "step": resume_state.step})
+        return
+    save_training_checkpoint(path, model, config.model, optimizer, resume_state, fingerprint)
+
+
 def _retained_checkpoint_every() -> int | None:
     keep = os.environ.get("GCW_KEEP_STEP_CHECKPOINTS", "0").lower()
     if keep not in {"1", "true", "yes", "on"}:
@@ -205,53 +322,6 @@ def _retained_checkpoint_every() -> int | None:
     if every <= 0:
         raise ValueError("GCW_STEP_CHECKPOINT_EVERY must be positive")
     return every
-
-
-def _loader(config: TrainConfig, device: torch.device):
-    if config.data.kind == "random":
-        vocab = config.model.vocab_size
-        while True:
-            x = torch.randint(0, vocab, (config.batch_size, config.sequence_len), device=device)
-            y = torch.roll(x, shifts=-1, dims=1)
-            yield x, y, {"kind": "random"}
-    if config.mode == "sft":
-        if config.data.dataset is None:
-            raise ValueError("SFT mode requires data.dataset JSONL path")
-        tokenizer_name = config.data.tokenizer
-        if tokenizer_name == "hf":
-            if config.data.tokenizer_source is None:
-                raise ValueError("data.tokenizer_source is required when data.tokenizer='hf'")
-            tokenizer_name = f"hf:{config.data.tokenizer_source}"
-        tokenizer = get_tokenizer(tokenizer_name)
-        rows = list(iter_jsonl(config.data.dataset))
-        if config.data.sft_skip_rows:
-            if config.data.sft_skip_rows >= len(rows):
-                raise ValueError(f"data.sft_skip_rows={config.data.sft_skip_rows} exceeds dataset length {len(rows)}")
-            rows = rows[config.data.sft_skip_rows :]
-        if config.data.sft_take_rows is not None:
-            rows = rows[: config.data.sft_take_rows]
-        if not rows:
-            raise ValueError(f"empty SFT dataset: {config.data.dataset}")
-        i = 0
-        while True:
-            batch = [rows[(i + j) % len(rows)] for j in range(config.batch_size)]
-            i += config.batch_size
-            x, y = sft_batch(
-                batch,
-                tokenizer,
-                config.sequence_len,
-                device=device,
-                response_prefix=config.data.response_prefix,
-            )
-            yield x, y, {"kind": "sft", "row": (config.data.sft_skip_rows + i) % len(rows)}
-    yield from data_loader(
-        config.batch_size,
-        config.sequence_len,
-        split="train",
-        device=device,
-        data_dir=config.data.data_dir,
-        infinite=True,
-    )
 
 
 def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> torch.optim.AdamW:
@@ -288,8 +358,9 @@ def _weight_decay(step: int, max_steps: int, base_weight_decay: float) -> float:
 
 
 def _no_sync(model: torch.nn.Module, *, enabled: bool):
-    if enabled and hasattr(model, "no_sync"):
-        return model.no_sync()
+    no_sync = getattr(model, "no_sync", None)
+    if enabled and callable(no_sync):
+        return no_sync()
     return nullcontext()
 
 
@@ -347,7 +418,7 @@ def _init_wandb(config: TrainConfig, run_meta: dict[str, Any]):
     import wandb
 
     name = config.wandb.name or Path(config.output_dir).name
-    init_kwargs = {
+    init_kwargs: dict[str, Any] = {
         "project": config.wandb.project,
         "name": name,
         "group": config.wandb.group,
@@ -356,12 +427,15 @@ def _init_wandb(config: TrainConfig, run_meta: dict[str, Any]):
             **to_dict(config),
             "run_budget": run_meta,
         },
-        "resume": "allow",
     }
     if config.wandb.entity:
         init_kwargs["entity"] = config.wandb.entity
     if config.wandb.mode:
         init_kwargs["mode"] = config.wandb.mode
+    if config.wandb.id:
+        init_kwargs["id"] = config.wandb.id
+    if config.wandb.resume:
+        init_kwargs["resume"] = config.wandb.resume
     run = wandb.init(**init_kwargs)
     run.define_metric("train/step")
     run.define_metric("*", step_metric="train/step")

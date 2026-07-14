@@ -1,14 +1,18 @@
 import json
 import sys
 
+import pytest
 import torch
 
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, WandbConfig
+import gcw.train as train_module
+from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, ResumeConfig, TrainConfig, WandbConfig
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
 from gcw.train import _checkpoint_metadata, train
+from gcw.training_checkpoint import save_training_checkpoint as real_save_training_checkpoint
+from gcw.training_checkpoint import CheckpointCompatibilityError
 
 
 class FakeRun:
@@ -91,6 +95,19 @@ def test_train_logs_wandb_train_and_validation_metrics(monkeypatch, tmp_path):
     assert all("train/loss" in metrics for _, metrics in logs[1:])
     assert all("val/loss" in metrics for _, metrics in logs[1:])
     assert all("train/tokens" in metrics for _, metrics in logs[1:])
+
+
+def test_train_passes_explicit_wandb_resume_identity(monkeypatch, tmp_path):
+    fake = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    config = tiny_train_config(tmp_path)
+    config.wandb.id = "run-123"
+    config.wandb.resume = "must"
+
+    train(config)
+
+    assert fake.init_kwargs["id"] == "run-123"
+    assert fake.init_kwargs["resume"] == "must"
 
 
 def test_train_reads_pretrain_shards(tmp_path):
@@ -213,3 +230,83 @@ def test_sft_batch_uses_next_token_targets():
 
     assert x.tolist() == [[1, 2, 5, 3, 4, 0]]
     assert y.tolist() == [[-100, 5, 3, 4, 0, -100]]
+
+
+def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_path):
+    baseline = tiny_train_config(tmp_path)
+    baseline.output_dir = str(tmp_path / "baseline")
+    baseline.max_steps = 4
+    baseline.save_every = 0
+    baseline.eval_every = 0
+    baseline.eval_on_start = False
+    baseline.wandb.enabled = False
+    train(baseline)
+
+    interrupted = tiny_train_config(tmp_path)
+    interrupted.output_dir = str(tmp_path / "resumed")
+    interrupted.max_steps = 4
+    interrupted.save_every = 2
+    interrupted.eval_every = 0
+    interrupted.eval_on_start = False
+    interrupted.wandb.enabled = False
+
+    def save_then_interrupt(path, model, model_config, optimizer, resume_state, training_fingerprint):
+        real_save_training_checkpoint(path, model, model_config, optimizer, resume_state, training_fingerprint)
+        if resume_state.step == 2 and str(path).endswith("checkpoint"):
+            raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr(train_module, "save_training_checkpoint", save_then_interrupt, raising=False)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        train(interrupted)
+
+    monkeypatch.setattr(train_module, "save_training_checkpoint", real_save_training_checkpoint)
+    resumed = tiny_train_config(tmp_path)
+    resumed.output_dir = str(tmp_path / "resumed")
+    resumed.max_steps = 4
+    resumed.save_every = 2
+    resumed.eval_every = 0
+    resumed.eval_on_start = False
+    resumed.wandb.enabled = False
+    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "resumed" / "checkpoint"))
+    train(resumed)
+
+    baseline_model, _, baseline_state = load_checkpoint(tmp_path / "baseline" / "checkpoint")
+    resumed_model, _, resumed_state = load_checkpoint(tmp_path / "resumed" / "checkpoint")
+    assert baseline_state["step"] == resumed_state["step"] == 4
+    for expected, actual in zip(baseline_model.parameters(), resumed_model.parameters(), strict=True):
+        assert torch.equal(expected, actual)
+
+
+def test_resume_at_max_steps_exits_without_retraining(capsys, tmp_path):
+    config = tiny_train_config(tmp_path)
+    config.wandb.enabled = False
+    config.eval_every = 0
+    config.eval_on_start = False
+    train(config)
+
+    resumed = tiny_train_config(tmp_path)
+    resumed.wandb.enabled = False
+    resumed.eval_every = 0
+    resumed.eval_on_start = False
+    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "run" / "checkpoint"))
+    train(resumed)
+
+    assert "checkpoint already completed max_steps=2" in capsys.readouterr().out
+
+
+def test_resume_rejects_changed_training_dynamics(tmp_path):
+    config = tiny_train_config(tmp_path)
+    config.wandb.enabled = False
+    config.eval_every = 0
+    config.eval_on_start = False
+    train(config)
+
+    resumed = tiny_train_config(tmp_path)
+    resumed.wandb.enabled = False
+    resumed.eval_every = 0
+    resumed.eval_on_start = False
+    resumed.learning_rate *= 2
+    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "run" / "checkpoint"))
+
+    with pytest.raises(CheckpointCompatibilityError, match="optimizer"):
+        train(resumed)
