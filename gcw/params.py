@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
-from gcw.config import CacheProcessorConfig, ModelConfig, dump_yaml, to_dict
+from gcw.config import CacheProcessorConfig, ModelConfig, Variant, dump_yaml, to_dict
 from gcw.models.transformer import estimate_non_embedding_params
 
 
@@ -14,17 +14,24 @@ def processor_params(config: ModelConfig) -> int:
     return 0
 
 
+def _head_dim(config: ModelConfig) -> int:
+    if config.head_dim is None:
+        raise ValueError("model head_dim must be resolved before parameter accounting")
+    return config.head_dim
+
+
 def estimate_processor_params(config: ModelConfig) -> int:
     if config.cache_processor is None:
         return 0
-    per_layer_dim = config.cache_processor.stream_factor * config.num_kv_heads * int(config.head_dim)
+    head_dim = _head_dim(config)
+    per_layer_dim = config.cache_processor.stream_factor * config.num_kv_heads * head_dim
     if config.variant == "bt":
         return config.num_layers * _processor_block_params(per_layer_dim, config.cache_processor)
     if config.variant == "bgt":
         return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor) + _salience_params(config)
     if config.variant == "icarus":
         projection_count = config.num_layers * config.num_kv_heads if config.cache_processor.per_cache_head_projections else 1
-        return _processor_block_params(2 * int(config.head_dim), config.cache_processor, projection_count=projection_count)
+        return _processor_block_params(2 * head_dim, config.cache_processor, projection_count=projection_count)
     if config.variant == "longshot":
         return _longshot_processor_params(config)
     return 0
@@ -81,7 +88,7 @@ def _longshot_processor_params(config: ModelConfig) -> int:
     cp = config.cache_processor
     if cp is None:
         return 0
-    input_dim = 2 * int(config.head_dim)
+    input_dim = 2 * _head_dim(config)
     cache_heads = config.num_layers * config.num_kv_heads
     projection_count = cache_heads if cp.per_cache_head_projections else 1
     in_proj_dim = input_dim if cp.encoder_method == "query_attention" else input_dim * _longshot_encoder_seq_len(cp)
@@ -112,7 +119,7 @@ def _longshot_encoder_seq_len(config: CacheProcessorConfig) -> int:
 
 def fit_processor_config(
     backbone: ModelConfig,
-    variant: str,
+    variant: Variant,
     fraction: float = 0.05,
     *,
     cache_processor_overrides: dict[str, Any] | None = None,
@@ -150,7 +157,7 @@ def fit_processor_config(
     return cfg, meta
 
 
-def _processor_config_kwargs(hidden: int, heads: int, variant: str, overrides: dict[str, Any]) -> dict[str, Any]:
+def _processor_config_kwargs(hidden: int, heads: int, variant: Variant, overrides: dict[str, Any]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "hidden_size": hidden,
         "intermediate_size": hidden * 4,

@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import json
+from typing import cast
 
 import torch
 from safetensors.torch import load_file
 
 from gcw.bottleneck_specs import BottleneckSpec, bottleneck_spec
 from gcw.checkpoint import save_checkpoint
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, Family, ModelConfig, Variant
 from gcw.models import build_model
 
 
@@ -175,7 +176,21 @@ def _step_from_path(path: Path) -> int | None:
     return None
 
 
+def _validated_family(value: str) -> Family:
+    if value not in {"smollm", "llama", "qwen3"}:
+        raise ValueError(f"unsupported model family: {value}")
+    return cast(Family, value)
+
+
+def _validated_variant(value: str) -> Variant:
+    if value not in {"tf", "bt", "bgt", "icarus", "longshot"}:
+        raise ValueError(f"unsupported model variant: {value}")
+    return cast(Variant, value)
+
+
 def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
+    model_family = _validated_family(family)
+    model_variant = _validated_variant(variant)
     layer_types = getattr(hf_cfg, "layer_types", None)
     if family == "qwen3" and layer_types and any(t != "full_attention" for t in layer_types):
         raise NotImplementedError("Qwen3 sliding attention is not implemented in gcw yet.")
@@ -186,8 +201,8 @@ def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     if rope_theta is None:
         rope_theta = getattr(hf_cfg, "rope_parameters", {}).get("rope_theta", 10000.0)
     return ModelConfig(
-        variant=variant,
-        family=family,
+        variant=model_variant,
+        family=model_family,
         sequence_len=int(getattr(hf_cfg, "max_position_embeddings", 2048)),
         vocab_size=int(hf_cfg.vocab_size),
         hidden_size=hidden,
@@ -213,13 +228,14 @@ def config_from_bottleneck(
 ) -> ModelConfig:
     if variant not in {"bt", "bgt"}:
         raise ValueError("bottleneck configs support only bt and bgt variants")
+    model_variant = cast(Variant, variant)
     spec = _bottleneck_spec(backbone)
     vocab_size = spec.legacy_vocab_size if legacy_vocab and spec.legacy_vocab_size is not None else spec.vocab_size
     hidden = spec.bt_hidden_size if variant == "bt" else spec.bgt_hidden_size
     intermediate = spec.bt_intermediate_size if variant == "bt" else spec.bgt_intermediate_size
     return ModelConfig(
-        variant=variant,
-        family=spec.family,
+        variant=model_variant,
+        family=_validated_family(spec.family),
         sequence_len=sequence_len,
         vocab_size=vocab_size,
         hidden_size=spec.hidden_size,

@@ -25,6 +25,7 @@ from gcw.eval_support import (
     truncate_context_continuation,
 )
 from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.transformer import TF
 
 
 DEFAULT_CHECKPOINT = "/mnt/jfs-01/shared/gcw-best_longshot"
@@ -175,7 +176,10 @@ def run_analysis(args: argparse.Namespace) -> None:
                         )
                     )
             if iteration < max_iteration:
-                cache = model.cache_processor(cache, select_all=True)
+                processed = _cache_processor(model)(cache, select_all=True)
+                if not isinstance(processed, CacheState):
+                    raise TypeError("Longshot analysis requires list-backed cache state")
+                cache = processed
         _write_progress(progress_path, example_idx + 1, len(examples), start_time, skipped=skipped)
         if (example_idx + 1) % args.flush_every == 0:
             write_outputs(out_dir, detail_rows, generation_rows, args.bootstrap_samples, args.seed)
@@ -237,7 +241,7 @@ def calibration_batches(
     max_target_tokens: int,
     target_prefix: str,
 ) -> Iterable[torch.Tensor]:
-    device = model.get_device()
+    device = _backbone(model).get_device()
     add_special = _analysis_add_special_tokens(model)
     for example in examples:
         prompt_ids = _encode(tokenizer, example.prompt, add_special_tokens=add_special)
@@ -257,7 +261,8 @@ def prepare_answer(
     prompt_style: str,
     prefill_mode: str,
 ) -> PreparedAnswer | None:
-    device = model.get_device()
+    backbone = _backbone(model)
+    device = backbone.get_device()
     add_special = _analysis_add_special_tokens(model)
     prompt = format_prompt(tokenizer, example.prompt, prompt_style=prompt_style)
     prompt_ids = _encode(tokenizer, prompt, add_special_tokens=add_special and prompt_style != "legacy")
@@ -283,7 +288,9 @@ def prepare_answer(
     else:
         raise ValueError(f"unsupported prefill_mode: {prefill_mode}")
     empty_scores = prefix_ids.new_empty(1, 0, dtype=torch.float32)
-    _, prefix_cache = model.backbone.forward_chunk(prefix_ids, 0, CacheState([], [], empty_scores))
+    _, prefix_cache = backbone.forward_chunk(prefix_ids, 0, CacheState([], [], empty_scores))
+    if not isinstance(prefix_cache, CacheState):
+        raise TypeError("Longshot analysis requires list-backed cache state")
     return PreparedAnswer(
         prefix_len=prefix_ids.shape[1],
         prefix_cache=prefix_cache,
@@ -305,7 +312,7 @@ def score_answer_nll(
 ) -> torch.Tensor:
     context = ablator.ablated(masks) if ablator is not None else _null_context()
     with context:
-        logits, _ = model.backbone.forward_chunk(prepared.score_input_ids, prepared.prefix_len, cache)
+        logits, _ = _backbone(model).forward_chunk(prepared.score_input_ids, prepared.prefix_len, cache)
     logp = torch.log_softmax(logits[0].float(), dim=-1)
     target = prepared.score_target_ids[0]
     if logp.shape[0] != target.shape[0]:
@@ -325,7 +332,8 @@ def generate_for_iteration(
     max_new_tokens: int,
 ) -> GenerationRow:
     generation_cache = static_cache_from_cache(model, cache, extra_tokens=prepared.generation_input_ids.shape[1] + max_new_tokens)
-    logits, generation_cache = model.backbone.forward_chunk_static(prepared.generation_input_ids, prepared.prefix_len, generation_cache)
+    backbone = _backbone(model)
+    logits, generation_cache = backbone.forward_chunk_static(prepared.generation_input_ids, prepared.prefix_len, generation_cache)
     pos = prepared.prefix_len + prepared.generation_input_ids.shape[1]
     generated: list[int] = []
     stop_sequences = stop_token_sequences(tokenizer, UNTIL)
@@ -338,7 +346,7 @@ def generate_for_iteration(
             generated = trimmed
             break
         next_tensor = torch.tensor([[next_id]], dtype=prepared.generation_input_ids.dtype, device=prepared.generation_input_ids.device)
-        logits, generation_cache = model.backbone.forward_chunk_static(next_tensor, pos, generation_cache)
+        logits, generation_cache = backbone.forward_chunk_static(next_tensor, pos, generation_cache)
         pos += 1
     text = tokenizer.decode(generated)
     prediction = extract_flexible(text) or ""
@@ -360,7 +368,7 @@ def static_cache_from_cache(model: torch.nn.Module, cache: CacheState, *, extra_
         max_seq_len=cache.seq_len + extra_tokens,
         head_dim=cache.keys[0].shape[-1],
         device=cache.device,
-        dtype=model.backbone.embed_tokens.weight.dtype,
+        dtype=_backbone(model).embed_tokens.weight.dtype,
     )
     for layer_idx, (keys, values) in enumerate(zip(cache.keys, cache.values, strict=True)):
         static.write_layer(layer_idx, 0, keys, values)
@@ -376,12 +384,12 @@ def summarize_rows(
     seed: int,
 ) -> list[SummaryRow]:
     generations_by_iteration: dict[int, list[GenerationRow]] = {}
-    for row in generation_rows:
-        generations_by_iteration.setdefault(row.iteration, []).append(row)
+    for generation_row in generation_rows:
+        generations_by_iteration.setdefault(generation_row.iteration, []).append(generation_row)
 
     examples_by_iteration: dict[int, dict[int, list[IterationExampleRow]]] = {}
-    for row in detail_rows:
-        examples_by_iteration.setdefault(row.iteration, {}).setdefault(row.example_id, []).append(row)
+    for detail_row in detail_rows:
+        examples_by_iteration.setdefault(detail_row.iteration, {}).setdefault(detail_row.example_id, []).append(detail_row)
 
     summaries = []
     for iteration in sorted(examples_by_iteration):
@@ -796,6 +804,20 @@ def _configure_environment() -> None:
         return
     os.environ.setdefault("SSL_CERT_FILE", certifi.where())
     os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
+
+def _backbone(model: torch.nn.Module) -> TF:
+    backbone = getattr(model, "backbone", None)
+    if not isinstance(backbone, TF):
+        raise TypeError(f"Longshot analysis requires a wrapped TF backbone, got {type(model).__name__}")
+    return backbone
+
+
+def _cache_processor(model: torch.nn.Module) -> torch.nn.Module:
+    processor = getattr(model, "cache_processor", None)
+    if not isinstance(processor, torch.nn.Module):
+        raise TypeError(f"Longshot analysis requires a cache processor, got {type(model).__name__}")
+    return processor
 
 
 def _mean(values: list[float]) -> float:

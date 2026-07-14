@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from safetensors.torch import load_file, save_file
@@ -46,7 +46,7 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
 def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     path = Path(path)
     weights = load_file(path / "model.safetensors", device="cpu")
-    target = model.backbone if hasattr(model, "backbone") else model
+    target = cast(torch.nn.Module, getattr(model, "backbone", model))
     target_state = target.state_dict()
     loadable = {}
     missing = []

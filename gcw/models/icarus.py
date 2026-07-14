@@ -95,12 +95,14 @@ class CacheProcessor(nn.Module):
         super().__init__()
         self.config = config
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
+        self.in_proj: nn.Module
         if config.per_cache_head_projections:
             self.in_proj = PerCacheHeadLinear(num_cache_heads, input_dim, config.hidden_size)
         else:
             self.in_proj = nn.Linear(input_dim, config.hidden_size)
         self.layers = nn.ModuleList(ProcessorLayer(config) for _ in range(config.num_layers))
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
+        self.out_proj: nn.Module
         if config.per_cache_head_projections:
             self.out_proj = PerCacheHeadLinear(num_cache_heads, config.hidden_size, input_dim)
         else:
@@ -162,7 +164,9 @@ class GlobalCacheProcessor(nn.Module):
             raise ValueError("Icarus supports only cache_processor.score='attn_l2'")
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
-        self.head_dim = int(model_config.head_dim)
+        if model_config.head_dim is None:
+            raise ValueError("Icarus requires a resolved model head_dim")
+        self.head_dim = model_config.head_dim
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
         self.num_cache_heads = self.num_layers * self.num_kv_heads
@@ -195,8 +199,10 @@ class Icarus(BGT):
 
 
 def _zero_projection(module: nn.Module) -> None:
+    if not isinstance(module, (nn.Linear, PerCacheHeadLinear)):
+        raise TypeError(f"unsupported projection type: {type(module).__name__}")
     nn.init.zeros_(module.weight)
-    if getattr(module, "bias", None) is not None:
+    if module.bias is not None:
         nn.init.zeros_(module.bias)
 
 

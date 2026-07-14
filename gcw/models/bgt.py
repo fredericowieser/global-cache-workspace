@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import ClassVar
 
 import torch
 import torch.nn as nn
 
-from gcw.config import ModelConfig
+from gcw.config import CacheProcessorConfig, ModelConfig, Variant
 from gcw.models.cache_processor import GlobalCacheProcessor
 from gcw.models.transformer import TF
 
 
 class BGT(nn.Module):
-    processor_cls = GlobalCacheProcessor
-    variant = "bgt"
+    processor_cls: ClassVar[type[nn.Module]] = GlobalCacheProcessor
+    variant: ClassVar[Variant] = "bgt"
 
     def __init__(self, config: ModelConfig):
         super().__init__()
@@ -26,13 +27,19 @@ class BGT(nn.Module):
     def get_device(self) -> torch.device:
         return self.backbone.get_device()
 
+    def _cache_processor_config(self) -> CacheProcessorConfig:
+        config = self.config.cache_processor
+        if config is None:
+            raise RuntimeError(f"{self.variant} model has no cache processor configuration")
+        return config
+
     def forward(self, input_ids: torch.Tensor, targets: torch.Tensor | None = None, loss_reduction: str = "mean") -> torch.Tensor:
-        cp = self.config.cache_processor
+        cp = self._cache_processor_config()
         return self.backbone(input_ids, targets, loss_reduction, processor=self.cache_processor, process_every=cp.process_every)
 
     @torch.no_grad()
     def generate(self, input_ids: torch.Tensor, max_new_tokens: int, eos_token_id: int | None = None) -> torch.Tensor:
-        cp = self.config.cache_processor
+        cp = self._cache_processor_config()
         legacy = self.config.legacy_bottleneck_generate
         return self.backbone.generate(
             input_ids,
@@ -54,7 +61,7 @@ class BGT(nn.Module):
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
     ) -> torch.Tensor:
-        cp = self.config.cache_processor
+        cp = self._cache_processor_config()
         legacy = self.config.legacy_bottleneck_generate
         return self.backbone.generate_fast(
             input_ids,

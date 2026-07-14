@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, TypedDict
 
 import torch
 
@@ -105,36 +105,48 @@ class ExampleMetadata:
     target_token_ids: str
 
 
+class PreviewEntry(TypedDict):
+    examples: set[tuple[str, int]]
+    n_rows: int
+    n_tokens: int
+    raw: float
+    useful: float
+    full: float
+    base: float
+    a: float
+    b: float
+
+
+def _new_preview_entry() -> PreviewEntry:
+    return {
+        "examples": set(),
+        "n_rows": 0,
+        "n_tokens": 0,
+        "raw": 0.0,
+        "useful": 0.0,
+        "full": 0.0,
+        "base": 0.0,
+        "a": 0.0,
+        "b": 0.0,
+    }
+
+
 class PreviewStats:
     def __init__(self) -> None:
-        self.rows: dict[tuple[str, str, str], dict[str, float | set[tuple[str, int]]]] = defaultdict(
-            lambda: {
-                "examples": set(),
-                "n_rows": 0,
-                "n_tokens": 0,
-                "raw": 0.0,
-                "useful": 0.0,
-                "full": 0.0,
-                "base": 0.0,
-                "a": 0.0,
-                "b": 0.0,
-            }
-        )
+        self.rows: dict[tuple[str, str, str], PreviewEntry] = defaultdict(_new_preview_entry)
 
     def update(self, row: dict[str, object]) -> None:
         key = (str(row["family"]), str(row["variant"]), str(row["task"]))
         stats = self.rows[key]
-        examples = stats["examples"]
-        assert isinstance(examples, set)
-        examples.add((str(row["task"]), int(row["example_id"])))
-        stats["n_rows"] = int(stats["n_rows"]) + 1
-        stats["n_tokens"] = int(stats["n_tokens"]) + 1
-        stats["raw"] = float(stats["raw"]) + float(row["raw_token"])
-        stats["useful"] = float(stats["useful"]) + float(row["useful_token"])
-        stats["full"] = float(stats["full"]) + float(row["nll_full"])
-        stats["base"] = float(stats["base"]) + float(row["nll_base"])
-        stats["a"] = float(stats["a"]) + float(row["nll_a"])
-        stats["b"] = float(stats["b"]) + float(row["nll_b"])
+        stats["examples"].add((str(row["task"]), _integer_field(row, "example_id")))
+        stats["n_rows"] += 1
+        stats["n_tokens"] += 1
+        stats["raw"] += _numeric_field(row, "raw_token")
+        stats["useful"] += _numeric_field(row, "useful_token")
+        stats["full"] += _numeric_field(row, "nll_full")
+        stats["base"] += _numeric_field(row, "nll_base")
+        stats["a"] += _numeric_field(row, "nll_a")
+        stats["b"] += _numeric_field(row, "nll_b")
 
     def write(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -142,9 +154,8 @@ class PreviewStats:
             writer = csv.DictWriter(f, fieldnames=SUMMARY_COLUMNS)
             writer.writeheader()
             for (family, variant, task), stats in sorted(self.rows.items()):
-                n_rows = int(stats["n_rows"])
+                n_rows = stats["n_rows"]
                 examples = stats["examples"]
-                assert isinstance(examples, set)
                 writer.writerow(
                     {
                         "family": family,
@@ -152,13 +163,13 @@ class PreviewStats:
                         "task": task,
                         "n_examples": len(examples),
                         "n_rows": n_rows,
-                        "n_tokens": int(stats["n_tokens"]),
-                        "mean_raw_token": _safe_mean(float(stats["raw"]), n_rows),
-                        "mean_useful_token": _safe_mean(float(stats["useful"]), n_rows),
-                        "mean_full_nll": _safe_mean(float(stats["full"]), n_rows),
-                        "mean_base_nll": _safe_mean(float(stats["base"]), n_rows),
-                        "mean_a_nll": _safe_mean(float(stats["a"]), n_rows),
-                        "mean_b_nll": _safe_mean(float(stats["b"]), n_rows),
+                        "n_tokens": stats["n_tokens"],
+                        "mean_raw_token": _safe_mean(stats["raw"], n_rows),
+                        "mean_useful_token": _safe_mean(stats["useful"], n_rows),
+                        "mean_full_nll": _safe_mean(stats["full"], n_rows),
+                        "mean_base_nll": _safe_mean(stats["base"], n_rows),
+                        "mean_a_nll": _safe_mean(stats["a"], n_rows),
+                        "mean_b_nll": _safe_mean(stats["b"], n_rows),
                     }
                 )
 
@@ -475,6 +486,20 @@ def _write_progress(family_dir: Path, record: CheckpointRecord, task: str | None
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     (family_dir / "progress.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _numeric_field(row: dict[str, object], key: str) -> float:
+    value = row[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{key} must be numeric, got {type(value).__name__}")
+    return float(value)
+
+
+def _integer_field(row: dict[str, object], key: str) -> int:
+    value = row[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{key} must be an integer, got {type(value).__name__}")
+    return value
 
 
 def _safe_mean(total: float, count: int) -> float:

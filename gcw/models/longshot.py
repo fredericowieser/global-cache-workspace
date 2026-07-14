@@ -96,6 +96,7 @@ class QueryAttentionTimeEncoder(nn.Module):
         if self.encoder_query_source == "learned":
             self.query = nn.Parameter(torch.empty(num_cache_heads, input_dim))
         elif self.encoder_query_source == "final_token":
+            self.query_proj: nn.Module
             if config.per_cache_head_projections:
                 self.query_proj = PerCacheHeadLinear(num_cache_heads, input_dim, input_dim)
             else:
@@ -142,12 +143,14 @@ class CacheProcessor(nn.Module):
             self.time_encoder = QueryAttentionTimeEncoder(input_dim, num_cache_heads, config)
         else:
             raise ValueError(f"unknown encoder_method: {encoder_method}")
+        self.in_proj: nn.Module
         if config.per_cache_head_projections:
             self.in_proj = PerCacheHeadLinear(num_cache_heads, in_features, config.hidden_size)
         else:
             self.in_proj = nn.Linear(in_features, config.hidden_size)
         self.layers = nn.ModuleList(ProcessorLayer(config) for _ in range(config.num_layers))
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
+        self.out_proj: nn.Module
         if config.per_cache_head_projections:
             self.out_proj = PerCacheHeadLinear(num_cache_heads, config.hidden_size, input_dim)
         else:
@@ -228,7 +231,9 @@ class GlobalCacheProcessor(nn.Module):
         encoder_method = encoder_method or self.config.encoder_method
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
-        self.head_dim = int(model_config.head_dim)
+        if model_config.head_dim is None:
+            raise ValueError("Longshot requires a resolved model head_dim")
+        self.head_dim = model_config.head_dim
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
         self.num_cache_heads = self.num_layers * self.num_kv_heads
@@ -266,8 +271,10 @@ class Longshot(BGT):
 
 
 def _zero_projection(module: nn.Module) -> None:
+    if not isinstance(module, (nn.Linear, PerCacheHeadLinear)):
+        raise TypeError(f"unsupported projection type: {type(module).__name__}")
     nn.init.zeros_(module.weight)
-    if getattr(module, "bias", None) is not None:
+    if module.bias is not None:
         nn.init.zeros_(module.bias)
 
 

@@ -28,7 +28,10 @@ class Tokenizer:
         return [item.ids for item in self.enc.encode_batch(texts, add_special_tokens=False)]
 
     def decode(self, ids) -> str:
-        return self.enc.decode(list(ids), skip_special_tokens=False)
+        decoded = self.enc.decode(list(ids), skip_special_tokens=False)
+        if not isinstance(decoded, str):
+            raise TypeError("tokenizer decode returned multiple sequences")
+        return decoded
 
     def get_vocab_size(self) -> int:
         return self.vocab_size
@@ -73,7 +76,10 @@ class TransformersTokenizer:
         return self.enc.encode(text, add_special_tokens=False)
 
     def decode(self, ids) -> str:
-        return self.enc.decode(list(ids), skip_special_tokens=False)
+        decoded = self.enc.decode(list(ids), skip_special_tokens=False)
+        if not isinstance(decoded, str):
+            raise TypeError("tokenizer decode returned multiple sequences")
+        return decoded
 
     def get_vocab_size(self) -> int:
         return self.vocab_size

@@ -18,6 +18,7 @@ from gcw.checkpoint import load_checkpoint
 from gcw.data.sft import iter_jsonl
 from gcw.eval_support import tokenizer_for_checkpoint, truncate_context_continuation
 from gcw.models.cache_state import CacheState
+from gcw.models.transformer import TF
 
 
 DEFAULT_SHARED_ROOT = Path("/mnt/jfs-01/shared/gcw")
@@ -137,9 +138,15 @@ def prepare_continuation(
     cont_ids = torch.tensor(cont, dtype=torch.long, device=device).unsqueeze(0)
 
     cache = CacheState([], [], ctx_ids.new_empty(1, 0, dtype=torch.float32))
-    ctx_logits, cache = backbone.forward_chunk(ctx_ids, 0, cache)
+    ctx_logits, next_cache = backbone.forward_chunk(ctx_ids, 0, cache)
+    if not isinstance(next_cache, CacheState):
+        raise TypeError("synergy analysis requires list-backed cache state")
+    cache = next_cache
     if _uses_legacy_boundary_processor(model):
-        cache = model.cache_processor(cache, select_all=True)
+        processed = _cache_processor(model)(cache, select_all=True)
+        if not isinstance(processed, CacheState):
+            raise TypeError("synergy analysis requires list-backed cache state")
+        cache = processed
     return PreparedContinuation(len(ctx), cont_ids, ctx_logits, cache), cont
 
 
@@ -599,8 +606,18 @@ def _encode(tokenizer, text: str, *, add_special_tokens: bool) -> list[int]:
         return list(tokenizer.encode(text))
 
 
-def _backbone(model: torch.nn.Module):
-    return model.backbone if hasattr(model, "backbone") else model
+def _backbone(model: torch.nn.Module) -> TF:
+    backbone = getattr(model, "backbone", model)
+    if not isinstance(backbone, TF):
+        raise TypeError(f"unsupported analysis backbone: {type(backbone).__name__}")
+    return backbone
+
+
+def _cache_processor(model: torch.nn.Module) -> torch.nn.Module:
+    processor = getattr(model, "cache_processor", None)
+    if not isinstance(processor, torch.nn.Module):
+        raise TypeError(f"model has no cache processor: {type(model).__name__}")
+    return processor
 
 
 @contextmanager

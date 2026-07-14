@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import replace
-from typing import Callable
+from typing import Any, Callable, cast
 
 import torch
 import torch.nn as nn
@@ -17,12 +17,16 @@ CacheLike = CacheState | WindowedCache
 ProcessorFn = Callable[..., CacheLike | StaticCacheState]
 
 try:
-    from torch.nn.attention import SDPBackend, sdpa_kernel
-    from torch.nn.attention.bias import causal_lower_right
+    from torch.nn.attention import SDPBackend as _SDPBackend, sdpa_kernel as _sdpa_kernel
+    from torch.nn.attention.bias import causal_lower_right as _causal_lower_right
 except ImportError:  # pragma: no cover - older torch fallback
-    SDPBackend = None
-    causal_lower_right = None
-    sdpa_kernel = None
+    _SDPBackend = None  # type: ignore[assignment,misc]
+    _causal_lower_right = None  # type: ignore[assignment]
+    _sdpa_kernel = None  # type: ignore[assignment]
+
+SDPBackend: Any = _SDPBackend
+causal_lower_right: Any = _causal_lower_right
+sdpa_kernel: Any = _sdpa_kernel
 
 
 class Linear(nn.Linear):
@@ -57,6 +61,9 @@ def apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, style: s
 
 
 class RotaryCache(nn.Module):
+    cos: torch.Tensor
+    sin: torch.Tensor
+
     def __init__(self, max_seq_len: int, head_dim: int, theta: float):
         super().__init__()
         self.max_seq_len = max_seq_len
@@ -97,7 +104,9 @@ class CausalSelfAttention(nn.Module):
         self.layer_idx = layer_idx
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
-        self.head_dim = int(config.head_dim)
+        if config.head_dim is None:
+            raise ValueError("attention requires a resolved model head_dim")
+        self.head_dim = config.head_dim
         self.rotary_style = config.rotary_style
         q_dim = self.num_heads * self.head_dim
         kv_dim = self.num_kv_heads * self.head_dim
@@ -118,7 +127,7 @@ class CausalSelfAttention(nn.Module):
         q = self.q_proj(x).view(batch, steps, self.num_heads, self.head_dim)
         k = self.k_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
         v = self.v_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
-        if self.q_norm is not None:
+        if self.q_norm is not None and self.k_norm is not None:
             q = self.q_norm(q)
             k = self.k_norm(k)
         rotary = (cos_sin[0].to(q.dtype), cos_sin[1].to(q.dtype))
@@ -149,7 +158,7 @@ class CausalSelfAttention(nn.Module):
         q = self.q_proj(x).view(batch, steps, self.num_heads, self.head_dim)
         k = self.k_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
         v = self.v_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
-        if self.q_norm is not None:
+        if self.q_norm is not None and self.k_norm is not None:
             q = self.q_norm(q)
             k = self.k_norm(k)
         rotary = (cos_sin[0].to(q.dtype), cos_sin[1].to(q.dtype))
@@ -280,7 +289,9 @@ class TF(nn.Module):
         self.embed_tokens = nn.Embedding(vocab, config.hidden_size)
         self.layers = nn.ModuleList(Block(config, i) for i in range(config.num_layers))
         self.norm = RMSNorm(config.hidden_size, config.norm_eps)
-        self.rotary = RotaryCache(config.sequence_len, int(config.head_dim), config.rope_theta)
+        if config.head_dim is None:
+            raise ValueError("transformer requires a resolved model head_dim")
+        self.rotary = RotaryCache(config.sequence_len, config.head_dim, config.rope_theta)
         self.lm_head = None if config.tie_embeddings else Linear(config.hidden_size, vocab, bias=False)
 
     @torch.no_grad()
@@ -322,7 +333,7 @@ class TF(nn.Module):
         x = self.embed_tokens(input_ids)
         cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
         for layer in self.layers:
-            x, _, _, _ = layer(x, cos_sin, None)
+            x, _, _, _ = cast(Block, layer)(x, cos_sin, None)
         x = self.norm(x)
         if targets is not None:
             return self.loss_from_hidden(x, targets, loss_reduction)
@@ -332,6 +343,8 @@ class TF(nn.Module):
         if self.config.tie_embeddings:
             logits = F.linear(x, self.embed_tokens.weight.to(x.dtype))
         else:
+            if self.lm_head is None:
+                raise RuntimeError("untied transformer has no language-model head")
             logits = self.lm_head(x)
         return logits[..., : self.config.vocab_size].float()
 
@@ -371,7 +384,7 @@ class TF(nn.Module):
         hidden_chunks = []
         for start in range(0, input_ids.shape[1], process_every):
             if start > 0:
-                cache = processor(cache)
+                cache = cast(CacheLike, processor(cache))
             end = start + process_every
             hidden, cache = self.forward_chunk(input_ids[:, start:end], start, cache, logits=False, cache_format="windowed")
             hidden_chunks.append(hidden)
@@ -382,12 +395,12 @@ class TF(nn.Module):
         input_ids: torch.Tensor,
         processor: ProcessorFn | None = None,
         process_every: int = 64,
-    ) -> tuple[torch.Tensor, CacheState]:
-        cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+    ) -> tuple[torch.Tensor, CacheLike]:
+        cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
         logits = []
         for start in range(0, input_ids.shape[1], process_every):
             if start > 0 and processor is not None:
-                cache = processor(cache)
+                cache = cast(CacheLike, processor(cache))
             chunk_logits, cache = self.forward_chunk(input_ids[:, start : start + process_every], start, cache)
             logits.append(chunk_logits)
         return torch.cat(logits, dim=1), cache
@@ -413,8 +426,8 @@ class TF(nn.Module):
         layer_scores: list[torch.Tensor] = []
         has_cache = cache is not None and cache.scores.numel() > 0
         for i, layer in enumerate(self.layers):
-            past = None if not has_cache else cache.layer(i)
-            x, k, v, scores = layer(x, cos_sin, past)
+            past = None if cache is None or not has_cache else cache.layer(i)
+            x, k, v, scores = cast(Block, layer)(x, cos_sin, past)
             keys.append(k)
             values.append(v)
             layer_scores.append(scores)
@@ -441,7 +454,7 @@ class TF(nn.Module):
         cos_sin = self.rotary.get(pos, x.dtype)
         layer_scores: list[torch.Tensor] = []
         for layer in self.layers:
-            x, scores = layer.forward_static(x, cos_sin, cache, start_pos, end_pos)
+            x, scores = cast(Block, layer).forward_static(x, cos_sin, cache, start_pos, end_pos)
             layer_scores.append(scores)
         x = self.norm(x)
         out = self.logits_from_hidden(x) if logits else x
@@ -461,12 +474,12 @@ class TF(nn.Module):
         relative_generation_cadence: bool = False,
     ) -> torch.Tensor:
         out = input_ids[:, -self.config.sequence_len :]
-        cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+        cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
         logits = None
         if process_prefill_windows:
             for start in range(0, out.shape[1], process_every):
                 if start > 0 and processor is not None:
-                    cache = processor(cache)
+                    cache = cast(CacheLike, processor(cache))
                 logits, cache = self.forward_chunk(out[:, start : start + process_every], start, cache)
         else:
             logits, cache = self.forward_chunk(out, 0, cache)
@@ -485,7 +498,7 @@ class TF(nn.Module):
                 else:
                     should_process = pos > 0 and pos % process_every == 0
                 if should_process:
-                    cache = processor(cache, select_all=relative_generation_cadence and generated_idx == 0)
+                    cache = cast(CacheLike, processor(cache, select_all=relative_generation_cadence and generated_idx == 0))
             logits, cache = self.forward_chunk(next_id, pos, cache)
         return out
 
@@ -506,12 +519,14 @@ class TF(nn.Module):
         out = input_ids[:, -self.config.sequence_len :]
         if out.shape[1] == 0:
             raise ValueError("generate requires at least one input token")
+        if self.config.head_dim is None:
+            raise RuntimeError("transformer has no resolved head_dim")
         cache = StaticCacheState.allocate(
             batch_size=out.shape[0],
             num_layers=len(self.layers),
             num_kv_heads=self.config.num_kv_heads,
             max_seq_len=out.shape[1] + max_new_tokens,
-            head_dim=int(self.config.head_dim),
+            head_dim=self.config.head_dim,
             device=out.device,
             dtype=self.embed_tokens.weight.dtype,
         )
@@ -519,7 +534,7 @@ class TF(nn.Module):
         if process_prefill_windows:
             for start in range(0, out.shape[1], process_every):
                 if start > 0 and processor is not None:
-                    cache = processor(cache)
+                    cache = cast(StaticCacheState, processor(cache))
                 logits, cache = self.forward_chunk_static(out[:, start : start + process_every], start, cache)
         else:
             logits, cache = self.forward_chunk_static(out, 0, cache)
@@ -549,7 +564,7 @@ class TF(nn.Module):
                 else:
                     should_process = pos > 0 and pos % process_every == 0
                 if should_process:
-                    cache = processor(cache, select_all=relative_generation_cadence and generated_idx == 0)
+                    cache = cast(StaticCacheState, processor(cache, select_all=relative_generation_cadence and generated_idx == 0))
             logits, cache = self.forward_chunk_static(next_id, pos, cache)
         return out
 

@@ -10,8 +10,14 @@ def _padded_vocab(vocab_size: int) -> int:
     return ((vocab_size + PAD_VOCAB_TO - 1) // PAD_VOCAB_TO) * PAD_VOCAB_TO
 
 
+def _head_dim(config: ModelConfig) -> int:
+    if config.head_dim is None:
+        raise ValueError("model head_dim must be resolved before FLOP accounting")
+    return config.head_dim
+
+
 def _backbone_matmul_params(config: ModelConfig) -> int:
-    head_dim = int(config.head_dim)
+    head_dim = _head_dim(config)
     q_dim = config.num_heads * head_dim
     kv_dim = config.num_kv_heads * head_dim
     per_layer = (
@@ -26,7 +32,7 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
 
 
 def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> int:
-    return config.num_layers * 4 * config.num_heads * int(config.head_dim) * seq_len
+    return config.num_layers * 4 * config.num_heads * _head_dim(config) * seq_len
 
 
 def backbone_flops_per_token(config: ModelConfig, seq_len: int) -> float:
@@ -64,7 +70,8 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
     cp = config.cache_processor
     if config.variant == "tf" or cp is None:
         return 0.0
-    per_layer_dim = cp.stream_factor * config.num_kv_heads * int(config.head_dim)
+    head_dim = _head_dim(config)
+    per_layer_dim = cp.stream_factor * config.num_kv_heads * head_dim
     total = 0.0
     for start in range(cp.process_every, seq_len, cp.process_every):
         selected = _selected_count(start, cp.process_every, cp.topk)
@@ -75,11 +82,11 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
         elif config.variant == "icarus":
             cache_heads = config.num_layers * config.num_kv_heads
             selected_heads = min(max(cp.topk_heads, 0), cache_heads)
-            total += _icarus_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
+            total += _icarus_processor_block_flops_per_call(2 * head_dim, cp, selected, cache_heads, selected_heads)
         elif config.variant == "longshot":
             cache_heads = config.num_layers * config.num_kv_heads
             selected_heads = min(max(cp.topk_heads, 0), cache_heads)
-            total += _longshot_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
+            total += _longshot_processor_block_flops_per_call(2 * head_dim, cp, selected, cache_heads, selected_heads)
     return total
 
 

@@ -95,7 +95,7 @@ class GCWEvalLM(TemplateLM):
         if _legacy_bottleneck_cache_eval(self.model):
             return self._loglikelihood_tokens_legacy_boundary(requests)
         device = self.model.get_device()
-        out = [None] * len(requests)
+        out: list[tuple[float, bool] | None] = [None] * len(requests)
         order = sorted(range(len(requests)), key=lambda i: len(requests[i][1]) + len(requests[i][2]))
         for start in range(0, len(order), self.batch_size):
             idxs = order[start : start + self.batch_size]
@@ -125,7 +125,7 @@ class GCWEvalLM(TemplateLM):
         from gcw.models.cache_state import CacheState
 
         device = self.model.get_device()
-        out = [None] * len(requests)
+        out: list[tuple[float, bool] | None] = [None] * len(requests)
         for i, req in enumerate(requests):
             _, ctx, cont = req
             ctx = list(ctx)
@@ -160,7 +160,7 @@ class GCWEvalLM(TemplateLM):
     def generate_until(self, requests, disable_tqdm: bool = False):
         if os.environ.get("GCW_EVAL_REFERENCE_GENERATE") == "1":
             return self._generate_until_reference(requests)
-        outs = [None] * len(requests)
+        outs: list[str | None] = [None] * len(requests)
         device = self.model.get_device()
         groups: dict[tuple[int, int, tuple[str, ...]], list[tuple[int, list[int]]]] = {}
         for i, req in enumerate(requests):
@@ -181,17 +181,17 @@ class GCWEvalLM(TemplateLM):
             for start in range(0, len(rows), self.batch_size):
                 chunk = rows[start : start + self.batch_size]
                 prompt_len = len(chunk[0][1])
-                ids = torch.tensor([row_ids for _, row_ids in chunk], dtype=torch.long, device=device)
+                batch_ids = torch.tensor([row_ids for _, row_ids in chunk], dtype=torch.long, device=device)
                 if use_fast:
                     gen = self.model.generate_fast(
-                        ids,
+                        batch_ids,
                         max_new_tokens=max_new,
                         eos_token_id=self.eot_token_id,
                         stop_sequences=stop_sequences,
                         pad_token_id=self.eot_token_id,
                     )
                 else:
-                    gen = self.model.generate(ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)
+                    gen = self.model.generate(batch_ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)
                 for row, (out_idx, _) in enumerate(chunk):
                     tokens = gen[row, prompt_len:].tolist()
                     tokens = _trim_generated_token_ids(tokens, stop_sequences, self.eot_token_id)
