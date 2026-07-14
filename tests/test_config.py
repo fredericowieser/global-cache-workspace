@@ -1,6 +1,6 @@
 import pytest
 
-from gcw.config import ResumeConfig, TrainConfig, WandbConfig
+from gcw.config import ResumeConfig, TrainConfig, WandbConfig, load_train_config
 
 
 def test_train_config_builds_explicit_resume_and_wandb_state():
@@ -24,3 +24,20 @@ def test_train_config_rejects_conflicting_checkpoint_sources():
 def test_wandb_must_resume_requires_run_id():
     with pytest.raises(ValueError, match="wandb.id"):
         WandbConfig(enabled=True, resume="must")
+
+
+@pytest.mark.parametrize(
+    ("path", "topology"),
+    [
+        ("configs/train/resume/smollm360m_matched_bgt_20b_pe512_resume.yaml", "same"),
+        ("configs/train/resume/smollm360m_matched_bt_20b_pe512_resume.yaml", "same"),
+        ("configs/train/resume/smollm360m_matched_bt_20b_pe512_resume_2gpu.yaml", "elastic_ddp"),
+    ],
+)
+def test_resume_configs_use_versioned_resume_interface(path, topology):
+    config = load_train_config(path)
+
+    assert config.resume is not None
+    assert config.resume.topology == topology
+    assert config.wandb.id
+    assert config.wandb.resume == "must"

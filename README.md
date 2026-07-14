@@ -6,6 +6,7 @@ GCW is a PyTorch workspace for training, converting, and evaluating transformer 
 - `BT`: a bottlenecked transformer with one cache processor per backbone layer.
 - `BGT`: a bottlenecked global transformer with one shared cache processor across layers.
 - `Icarus`: a global cache-head processor that reads selected cache tokens and rewrites the latest selected cache position.
+- `Longshot`: an iterative global cache processor with configurable cache encoding and query sources.
 
 The repo supports three workflows:
 
@@ -19,8 +20,8 @@ HF checkpoints are converted into native GCW `safetensors`; training and eval do
 
 ```bash
 uv sync --extra cpu --extra convert --extra eval
-uv run ruff check gcw scripts tests
-uv run pytest -q
+uv run --extra cpu --group dev ruff check gcw scripts tests
+uv run --extra cpu --group dev pytest -q
 ```
 
 On the LRC H100 cluster, use the GPU extra inside Slurm:
@@ -65,7 +66,8 @@ This writes:
 - `/mnt/jfs-01/shared/gcw/manifest.json`
 - `/mnt/jfs-01/shared/gcw/MANIFEST.md`
 
-See [docs/checkpoints.md](docs/checkpoints.md).
+See [docs/checkpoints.md](docs/checkpoints.md). Training checkpoints use a separate, resumable format described in
+[docs/training-resume.md](docs/training-resume.md).
 
 ## Training
 
@@ -106,7 +108,11 @@ sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama31_8b_icarus_from_s
 sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
 ```
 
-See [docs/training-modes.md](docs/training-modes.md) and [docs/reproduce-bottleneck-llm.md](docs/reproduce-bottleneck-llm.md).
+Exact-resume templates live under `configs/train/resume/`. `max_steps` always means the total target step, not the
+number of additional steps after resuming.
+
+See [docs/training-modes.md](docs/training-modes.md), [docs/training-resume.md](docs/training-resume.md), and
+[docs/reproduce-bottleneck-llm.md](docs/reproduce-bottleneck-llm.md).
 
 ## Evaluation
 
@@ -129,3 +135,19 @@ uv run --extra eval python scripts/extract_paper_table.py \
   --out results/llama32_1b_bgt_paper7.md \
   --csv results/llama32_1b_bgt_paper7.csv
 ```
+
+## Research analysis
+
+The imported cache-head and Longshot analyses share the same checkpoint tokenization and generation semantics as the
+main evaluation path:
+
+```bash
+bash scripts/run_bottleneck_synergy.sh
+bash scripts/run_bottleneck_head_loss_dump.sh
+bash scripts/run_longshot_gsm8k_iterations.sh
+```
+
+For sharded Longshot analysis, first submit `scripts/slurm/longshot_4gpu_allocation.sbatch`, then run
+`scripts/run_longshot_gsm8k_iterations_4gpu.sh`.
+
+The branch-integration history and recovery hashes are recorded in [docs/unified-dev.md](docs/unified-dev.md).

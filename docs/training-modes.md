@@ -72,3 +72,20 @@ model:
 ```
 
 `variant: tf` never constructs a cache processor.
+
+## Resume Training
+
+Use a version-2 training checkpoint:
+
+```yaml
+resume:
+  checkpoint: runs/example/checkpoint
+  topology: same
+```
+
+`topology: same` requires the original world size. FineWeb DDP runs may use `topology: elastic_ddp` when the global
+microbatch, total batch size, gradient accumulation, data inventory, model, optimizer, and schedule remain unchanged.
+FSDP, random-data, and SFT topology changes are rejected.
+
+Do not set `backbone_checkpoint` and `resume` together. A backbone checkpoint starts a new optimizer and schedule;
+resume restores an existing training state. See [training-resume.md](training-resume.md) for the complete contract.

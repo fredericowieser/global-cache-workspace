@@ -1,0 +1,95 @@
+model:
+  variant: bgt
+  family: smollm
+  sequence_len: 2048
+  vocab_size: 49152
+  hidden_size: 960
+  intermediate_size: 2560
+  num_layers: 30
+  num_heads: 15
+  num_kv_heads: 5
+  head_dim: 64
+  rope_theta: 10000.0
+  norm_eps: 1.0e-05
+  tie_embeddings: true
+  qk_norm: false
+  rotary_style: ppt
+  cache_processor:
+    process_every: 512
+    topk: 32
+    score: attn_l2
+    hidden_size: 320
+    intermediate_size: 1280
+    num_layers: 1
+    num_heads: 5
+    num_kv_heads: 5
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+data:
+  kind: fineweb
+  data_dir: /mnt/jfs-00/team-agent/home/f50056118/ppt-cache/fineweb_edu_dedup_cosmo2
+  max_length: 2048
+mode: pretrain
+distributed: ddp
+freeze_backbone: false
+# Requires a complete version-2 training checkpoint; legacy model-only checkpoints are rejected.
+resume:
+  checkpoint: runs/smollm360m_matched_bgt_20b_pe512_1gpu/checkpoint
+  topology: same
+loss: next_token_ce
+checkpoint_format: native_safetensors
+output_dir: runs/smollm360m_matched_bgt_20b_pe512_1gpu
+batch_size: 8
+sequence_len: 2048
+max_steps: 38147
+total_batch_size: 524288
+learning_rate: 0.003
+weight_decay: 0.1
+warmup_steps: 1907
+warmdown_ratio: 0.2
+final_lr_frac: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 2000
+eval_every: 250
+eval_batches: 320
+eval_on_start: true
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  entity: huawei-noahs-ark
+  id: 92jgywpf
+  resume: must
+  name: smollm360m-bgt-matched-20b-pe512-1gpu
+  group: smollm360m-matched-total-20b-pe512
+  mode: online
+  tags:
+    - smollm360m
+    - bgt
+    - pretrain
+    - 20b
+    - matched-total
+    - pe512
+    - chunks4
+    - resumed
+  log_every: 1
+metadata:
+  regime: matched_total
+  baseline: smollm360m_tf_20b
+  baseline_non_embedding_params: 314635200
+  backbone_non_embedding_params: 294970560
+  processor_params: 13967041
+  total_non_embedding_params: 308937601
+  delta_from_baseline_non_embedding: -5697599
+  processor_fraction: 0.04735062712699193
+  target_processor_fraction: 0.05
+  total_training_tokens: 20000014336
+  training_flops_per_token: 2881017600.0
+  total_training_flops: 5.762039330226831e+19
+  gpus: 1
+  process_every: 512
+  chunk_calls_per_sequence: 4
+  processor_calls_per_sequence: 3
