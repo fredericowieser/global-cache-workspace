@@ -57,7 +57,7 @@ constraint-dependencies = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cpu", marker = "extra != 'gpu' and extra != 'rocm'" },
+    { index = "pytorch-cpu", extra = "cpu" },
     { index = "pytorch-cu128", extra = "gpu" },
     { index = "pytorch-rocm", extra = "rocm" },
 ]
