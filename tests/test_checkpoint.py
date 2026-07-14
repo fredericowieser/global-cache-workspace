@@ -3,7 +3,7 @@ import pytest
 
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.config import ModelConfig
-from gcw.eval import _tokenizer_for
+from gcw.eval_support import tokenizer_for_checkpoint
 from gcw.models import build_model
 
 
@@ -34,4 +34,4 @@ def test_hf_family_eval_requires_tokenizer_source():
     )
 
     with pytest.raises(ValueError, match="tokenizer"):
-        _tokenizer_for(cfg, {})
+        tokenizer_for_checkpoint(cfg, {})
