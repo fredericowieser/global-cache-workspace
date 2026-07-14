@@ -430,8 +430,6 @@ def load_examples_jsonl(path: str | Path, tasks: list[str], limit: int | None) -
 
 
 def run(args: argparse.Namespace) -> None:
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     checkpoints = select_checkpoints(args.root, args.families, args.variants)
     if args.limit_checkpoints is not None:
         checkpoints = checkpoints[: args.limit_checkpoints]
@@ -439,6 +437,9 @@ def run(args: argparse.Namespace) -> None:
         payload = {"checkpoints": [asdict(record) for record in checkpoints], "tasks": args.tasks}
         print(json.dumps(payload, indent=2))
         return
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.examples_jsonl:
         examples_by_task, calibration_by_task = load_examples_jsonl(args.examples_jsonl, args.tasks, args.num_examples)

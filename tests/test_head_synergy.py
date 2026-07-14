@@ -185,10 +185,11 @@ def test_deterministic_masks_are_reproducible():
     assert torch.equal(b1[0], b2[0])
 
 
-def test_synergy_cli_dry_run_lists_selected_records(capsys):
+def test_synergy_cli_dry_run_lists_selected_records(capsys, tmp_path):
+    out_dir = tmp_path / "unused"
     args = Namespace(
         root="/shared",
-        out_dir="unused",
+        out_dir=str(out_dir),
         tasks=["gsm8k_openmath"],
         families=["llama32_1b"],
         variants=["sft", "bt"],
@@ -201,6 +202,7 @@ def test_synergy_cli_dry_run_lists_selected_records(capsys):
     payload = json.loads(capsys.readouterr().out)
     assert [record["variant"] for record in payload["checkpoints"]] == ["sft", "bt"]
     assert payload["tasks"] == ["gsm8k_openmath"]
+    assert not out_dir.exists()
 
 
 def test_synthetic_cli_run_writes_summary_outputs(tmp_path):
