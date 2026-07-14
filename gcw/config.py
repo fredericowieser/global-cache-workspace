@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -130,6 +130,18 @@ class DataConfig:
     response_prefix: str = ""
 
 
+@dataclass(frozen=True)
+class ResumeConfig:
+    checkpoint: str
+    topology: Literal["same", "elastic_ddp"] = "same"
+
+    def __post_init__(self) -> None:
+        if not self.checkpoint:
+            raise ValueError("resume.checkpoint must not be empty")
+        if self.topology not in {"same", "elastic_ddp"}:
+            raise ValueError("resume.topology must be 'same' or 'elastic_ddp'")
+
+
 @dataclass
 class WandbConfig:
     enabled: bool = False
@@ -138,8 +150,16 @@ class WandbConfig:
     name: str | None = None
     group: str | None = None
     mode: str | None = None
+    id: str | None = None
+    resume: Literal["allow", "must", "never", "auto"] | None = None
     tags: list[str] = field(default_factory=list)
     log_every: int = 1
+
+    def __post_init__(self) -> None:
+        if self.resume not in {None, "allow", "must", "never", "auto"}:
+            raise ValueError("wandb.resume must be 'allow', 'must', 'never', 'auto', or null")
+        if self.resume == "must" and not self.id:
+            raise ValueError("wandb.id is required when wandb.resume='must'")
 
 
 @dataclass
@@ -150,6 +170,7 @@ class TrainConfig:
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     freeze_backbone: bool = False
     backbone_checkpoint: str | None = None
+    resume: ResumeConfig | None = None
     loss: str = "next_token_ce"
     checkpoint_format: str = "native_safetensors"
     output_dir: str = "runs/smoke"
@@ -182,6 +203,10 @@ class TrainConfig:
             self.data = DataConfig(**self.data)
         if isinstance(self.wandb, dict):
             self.wandb = WandbConfig(**self.wandb)
+        if isinstance(self.resume, dict):
+            self.resume = ResumeConfig(**self.resume)
+        if self.resume is not None and self.backbone_checkpoint is not None:
+            raise ValueError("resume and backbone_checkpoint cannot be configured together")
 
 
 @dataclass
@@ -221,6 +246,6 @@ def to_dict(value: Any) -> Any:
 
 
 def dump_yaml(path: str | Path, value: Any) -> None:
-    data = asdict(value) if is_dataclass(value) else to_dict(value)
+    data = to_dict(value)
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, sort_keys=False)

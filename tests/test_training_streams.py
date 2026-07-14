@@ -1,0 +1,90 @@
+import torch
+
+from gcw.data.shards import ShardWriter
+from gcw.data.training import FineWebBatchStream, RandomBatchStream, SFTBatchStream
+
+
+class TinyTokenizer:
+    eot_id = 0
+
+    def encode(self, text: str) -> list[int]:
+        return [ord(char) % 64 + 1 for char in text]
+
+
+def test_random_stream_is_rank_distinct_and_resumable():
+    rank0 = RandomBatchStream(batch_size=2, sequence_len=4, vocab_size=128, device="cpu", seed=24, rank=0)
+    rank1 = RandomBatchStream(batch_size=2, sequence_len=4, vocab_size=128, device="cpu", seed=24, rank=1)
+
+    first0 = next(rank0)
+    first1 = next(rank1)
+    cursor = rank0.cursor
+    expected = next(rank0)
+    resumed = RandomBatchStream(
+        batch_size=2,
+        sequence_len=4,
+        vocab_size=128,
+        device="cpu",
+        seed=999,
+        rank=0,
+        cursor=cursor,
+    )
+
+    assert not torch.equal(first0.x, first1.x)
+    assert torch.equal(next(resumed).x, expected.x)
+
+
+def test_fineweb_stream_resumes_at_next_global_microbatch(tmp_path):
+    writer = ShardWriter(tmp_path, "train", shard_tokens=1000)
+    writer.add_tokens([index % 128 for index in range(129)])
+    writer.close()
+
+    rank0 = FineWebBatchStream(tmp_path, batch_size=2, sequence_len=4, device="cpu", rank=0, world_size=2)
+    rank1 = FineWebBatchStream(tmp_path, batch_size=2, sequence_len=4, device="cpu", rank=1, world_size=2)
+    batch0 = next(rank0)
+    batch1 = next(rank1)
+    cursor = rank0.cursor
+    expected = next(rank0)
+    resumed = FineWebBatchStream(
+        tmp_path,
+        batch_size=2,
+        sequence_len=4,
+        device="cpu",
+        rank=0,
+        world_size=2,
+        cursor=cursor,
+    )
+
+    assert rank1.cursor == cursor
+    assert set(batch0.x.flatten().tolist()).isdisjoint(batch1.x.flatten().tolist())
+    assert torch.equal(next(resumed).x, expected.x)
+
+
+def test_sft_stream_partitions_global_rows_between_ranks():
+    rows = [
+        {"prompt": f"Q{index}", "answer": f"A{index}"}
+        for index in range(8)
+    ]
+    rank0 = SFTBatchStream(
+        rows,
+        TinyTokenizer(),
+        batch_size=1,
+        sequence_len=16,
+        device="cpu",
+        rank=0,
+        world_size=2,
+    )
+    rank1 = SFTBatchStream(
+        rows,
+        TinyTokenizer(),
+        batch_size=1,
+        sequence_len=16,
+        device="cpu",
+        rank=1,
+        world_size=2,
+    )
+
+    batch0 = next(rank0)
+    batch1 = next(rank1)
+
+    assert rank0.cursor == rank1.cursor
+    assert not torch.equal(batch0.x, batch1.x)
