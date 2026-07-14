@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import shutil
 
 import torch
@@ -90,12 +91,7 @@ def test_rank_zero_checkpoint_failure_reaches_every_ddp_rank(tmp_path):
 
 
 def _train_worker(rank: int, world_size: int, init_file: str, output_dir: str, interrupt: bool) -> None:
-    dist.init_process_group(
-        "gloo",
-        init_method=f"file://{init_file}",
-        rank=rank,
-        world_size=world_size,
-    )
+    _init_process_group(rank, world_size, init_file)
     config = _config(output_dir)
     if not interrupt:
         train(config)
@@ -119,24 +115,14 @@ def _train_worker(rank: int, world_size: int, init_file: str, output_dir: str, i
 
 
 def _elastic_worker(rank: int, world_size: int, init_file: str, output_dir: str, data_dir: str) -> None:
-    dist.init_process_group(
-        "gloo",
-        init_method=f"file://{init_file}",
-        rank=rank,
-        world_size=world_size,
-    )
+    _init_process_group(rank, world_size, init_file)
     config = _fineweb_config(output_dir, data_dir, batch_size=1)
     config.resume = ResumeConfig(checkpoint=str(Path(output_dir) / "checkpoint"), topology="elastic_ddp")
     train(config)
 
 
 def _checkpoint_failure_worker(rank: int, world_size: int, init_file: str, output_dir: str) -> None:
-    dist.init_process_group(
-        "gloo",
-        init_method=f"file://{init_file}",
-        rank=rank,
-        world_size=world_size,
-    )
+    _init_process_group(rank, world_size, init_file)
     config = _config(output_dir)
     model = build_model(config.model)
     model.init_weights()
@@ -171,6 +157,21 @@ def _checkpoint_failure_worker(rank: int, world_size: int, init_file: str, outpu
     finally:
         checkpoint_module._write_checkpoint = original_write
         dist.destroy_process_group()
+
+
+def _init_process_group(rank: int, world_size: int, init_file: str) -> None:
+    use_cuda = os.environ.get("GCW_DDP_TEST_DEVICE") == "cuda"
+    if use_cuda:
+        if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
+            raise RuntimeError(f"CUDA DDP test requires {world_size} visible GPUs")
+        os.environ["LOCAL_RANK"] = str(rank)
+        torch.cuda.set_device(rank)
+    dist.init_process_group(
+        "nccl" if use_cuda else "gloo",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=world_size,
+    )
 
 
 def _config(output_dir: str) -> TrainConfig:
