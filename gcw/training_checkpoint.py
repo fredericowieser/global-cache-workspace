@@ -16,10 +16,11 @@ import torch.distributed as dist
 from safetensors.torch import load_file, save_file
 
 from gcw.config import ModelConfig, to_dict
-from gcw.data.training import LoaderCursor, cursor_from_dict, cursor_to_dict
+from gcw.data.training import FineWebCursor, LoaderCursor, cursor_from_dict, cursor_to_dict
 
 
 FORMAT_VERSION = 2
+PAYLOAD_FILES = frozenset({"model.safetensors", "optimizer.pt", "rng.pt", "config.json", "train_state.json"})
 
 
 class TrainingCheckpointError(RuntimeError):
@@ -55,13 +56,13 @@ class TrainingCheckpoint:
         resume_state: ResumeState,
         manifest: dict[str, Any],
         *,
-        elastic_seed: int | None,
+        elastic_seeds: list[int] | None,
         rank_loader_cursors: list[LoaderCursor],
     ) -> None:
         self.path = path
         self.resume_state = resume_state
         self.manifest = manifest
-        self._elastic_seed = elastic_seed
+        self._elastic_seeds = elastic_seeds
         self._rank_loader_cursors = rank_loader_cursors
 
     @classmethod
@@ -73,6 +74,8 @@ class TrainingCheckpoint:
         topology: Literal["same", "elastic_ddp"],
         current_world_size: int,
     ) -> TrainingCheckpoint:
+        if expected_fingerprint.get("distributed") == "fsdp":
+            raise UnsupportedTopologyError("FSDP training resume is not supported")
         resolved = _resolve_checkpoint_path(Path(path))
         manifest = _read_manifest(resolved)
         _verify_files(resolved, manifest)
@@ -104,9 +107,13 @@ class TrainingCheckpoint:
             exact_topology=True,
             metadata={key: value for key, value in train_state.items() if key not in reserved},
         )
-        if expected_fingerprint.get("distributed") == "fsdp":
-            raise UnsupportedTopologyError("FSDP training resume is not supported")
-        elastic_seed = None
+        if resume_state.saved_world_size <= 0:
+            raise CheckpointCompatibilityError("checkpoint saved_world_size must be positive")
+        if len(rank_loader_cursors) != resume_state.saved_world_size:
+            raise CheckpointCompatibilityError(
+                f"checkpoint has {len(rank_loader_cursors)} rank cursors for saved world size {resume_state.saved_world_size}"
+            )
+        elastic_seeds = None
         if resume_state.saved_world_size != current_world_size:
             if topology != "elastic_ddp":
                 raise CheckpointCompatibilityError(
@@ -114,17 +121,20 @@ class TrainingCheckpoint:
                 )
             if expected_fingerprint.get("distributed") != "ddp" or expected_fingerprint.get("data_kind") != "fineweb":
                 raise UnsupportedTopologyError("elastic DDP resume is supported only for FineWeb DDP training")
-            elastic_seed = _elastic_seed(
-                int(expected_fingerprint["seed"]),
-                resume_state.step,
-                current_world_size,
-            )
+            if not isinstance(resume_state.loader_cursor, FineWebCursor) or any(
+                cursor != resume_state.loader_cursor for cursor in rank_loader_cursors
+            ):
+                raise CheckpointCompatibilityError("elastic FineWeb resume requires one shared global loader cursor")
+            elastic_seeds = [
+                _elastic_seed(int(expected_fingerprint["seed"]), resume_state.step, rank, current_world_size)
+                for rank in range(current_world_size)
+            ]
             resume_state = replace(resume_state, exact_topology=False)
         return cls(
             resolved,
             resume_state,
             manifest,
-            elastic_seed=elastic_seed,
+            elastic_seeds=elastic_seeds,
             rank_loader_cursors=rank_loader_cursors,
         )
 
@@ -148,8 +158,10 @@ class TrainingCheckpoint:
             _move_tensors(value, target)
 
     def restore_rng(self, *, rank: int) -> None:
-        if self._elastic_seed is not None:
-            seed = self._elastic_seed + rank
+        if self._elastic_seeds is not None:
+            if rank >= len(self._elastic_seeds):
+                raise CheckpointCompatibilityError(f"elastic checkpoint has no deterministic seed for rank {rank}")
+            seed = self._elastic_seeds[rank]
             random.seed(seed)
             np.random.seed(seed % (2**32))
             torch.manual_seed(seed)
@@ -202,6 +214,22 @@ def save_training_checkpoint(
         error = result or {"type": "TrainingCheckpointError", "message": "rank zero did not report checkpoint status"}
         raise TrainingCheckpointError(f"{error['type']}: {error['message']}")
 
+    if distributed:
+        dist.barrier()
+    cleanup_status: list[dict[str, Any] | None] = [None]
+    if rank == 0:
+        try:
+            _remove_previous(Path(path))
+            cleanup_status[0] = {"ok": True}
+        except Exception as exc:
+            cleanup_status[0] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+    if distributed:
+        dist.broadcast_object_list(cleanup_status, src=0)
+    cleanup_result = cleanup_status[0]
+    if not cleanup_result or not cleanup_result.get("ok"):
+        error = cleanup_result or {"type": "TrainingCheckpointError", "message": "rank zero did not report cleanup status"}
+        raise TrainingCheckpointError(f"checkpoint committed but rollback cleanup failed: {error['type']}: {error['message']}")
+
 
 def _write_checkpoint(
     path: Path,
@@ -234,14 +262,14 @@ def _write_checkpoint(
                 "exact_topology": resume_state.exact_topology,
             },
         )
-        payload_files = ["model.safetensors", "optimizer.pt", "rng.pt", "config.json", "train_state.json"]
         manifest = {
             "format_version": FORMAT_VERSION,
             "complete": True,
             "step": resume_state.step,
             "saved_world_size": resume_state.saved_world_size,
+            "topology": training_fingerprint.get("distributed"),
             "training_fingerprint": training_fingerprint,
-            "files": {name: _sha256(temp_path / name) for name in payload_files},
+            "files": {name: _sha256(temp_path / name) for name in sorted(PAYLOAD_FILES)},
         }
         _write_json(temp_path / "manifest.json", manifest)
         _fsync_tree(temp_path)
@@ -253,9 +281,6 @@ def _write_checkpoint(
             _fsync_directory(path.parent)
         os.replace(temp_path, path)
         _fsync_directory(path.parent)
-        if previous.exists():
-            shutil.rmtree(previous)
-            _fsync_directory(path.parent)
     except Exception:
         if moved_previous and not path.exists() and previous.exists():
             os.replace(previous, path)
@@ -267,15 +292,29 @@ def _write_checkpoint(
 
 
 def _resolve_checkpoint_path(path: Path) -> Path:
-    manifest = path / "manifest.json"
-    if manifest.exists():
-        return path
     previous = path.with_name(f"{path.name}.previous")
-    if (previous / "manifest.json").exists():
+    primary_error = _checkpoint_error(path)
+    if primary_error is None:
+        return path
+    previous_error = _checkpoint_error(previous)
+    if previous_error is None:
         return previous
-    if (path / "model.safetensors").exists():
+    if not (path / "manifest.json").exists() and (path / "model.safetensors").exists():
         raise LegacyCheckpointError(f"{path} is not a complete version-2 training checkpoint")
-    raise TrainingCheckpointError(f"training checkpoint not found: {path}")
+    if path.exists():
+        raise TrainingCheckpointError(
+            f"invalid training checkpoint at {path}: {primary_error}; no valid rollback checkpoint: {previous_error}"
+        ) from primary_error
+    raise TrainingCheckpointError(f"training checkpoint not found: {path}; rollback checkpoint: {previous_error}")
+
+
+def _checkpoint_error(path: Path) -> TrainingCheckpointError | None:
+    try:
+        manifest = _read_manifest(path)
+        _verify_files(path, manifest)
+    except TrainingCheckpointError as exc:
+        return exc
+    return None
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -296,13 +335,31 @@ def _verify_files(path: Path, manifest: dict[str, Any]) -> None:
     files = manifest.get("files")
     if not isinstance(files, dict):
         raise TrainingCheckpointError("checkpoint manifest has no file hashes")
+    if set(files) != PAYLOAD_FILES:
+        missing = sorted(PAYLOAD_FILES - set(files))
+        unexpected = sorted(set(files) - PAYLOAD_FILES)
+        raise TrainingCheckpointError(
+            f"checkpoint manifest does not contain exactly the required file hashes; missing={missing}, unexpected={unexpected}"
+        )
     for name, expected_hash in files.items():
+        if not isinstance(expected_hash, str):
+            raise TrainingCheckpointError(f"checkpoint hash for {name} is not a string")
         candidate = path / name
         if not candidate.is_file():
             raise TrainingCheckpointError(f"checkpoint file is missing: {name}")
         actual_hash = _sha256(candidate)
         if actual_hash != expected_hash:
             raise TrainingCheckpointError(f"checkpoint hash mismatch for {name}")
+
+
+def _remove_previous(path: Path) -> None:
+    previous = path.with_name(f"{path.name}.previous")
+    if previous.is_dir():
+        shutil.rmtree(previous)
+        _fsync_directory(path.parent)
+    elif previous.exists():
+        previous.unlink()
+        _fsync_directory(path.parent)
 
 
 def _capture_rng_state() -> dict[str, Any]:
@@ -322,8 +379,8 @@ def _restore_rng_state(state: dict[str, Any]) -> None:
         torch.cuda.set_rng_state_all(state["torch_cuda"])
 
 
-def _elastic_seed(seed: int, step: int, world_size: int) -> int:
-    digest = hashlib.sha256(f"{seed}:{step}:{world_size}".encode()).digest()
+def _elastic_seed(seed: int, step: int, rank: int, world_size: int) -> int:
+    digest = hashlib.sha256(f"{seed}:{step}:{rank}:{world_size}".encode()).digest()
     return int.from_bytes(digest[:8], "big") % (2**31)
 
 

@@ -169,6 +169,9 @@ class SFTBatchStream:
         self.device = torch.device(device)
         self.rank = rank
         self.world_size = world_size
+        global_rows = batch_size * world_size
+        if len(rows) < global_rows:
+            raise ValueError(f"SFT dataset has {len(rows)} rows but global batch requires {global_rows} disjoint rows")
         self.response_prefix = response_prefix
         self._cursor = cursor or SFTCursor()
         if self._cursor.row >= len(rows):

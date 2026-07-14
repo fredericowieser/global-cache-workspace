@@ -1,4 +1,5 @@
 import torch
+import pytest
 
 from gcw.data.shards import ShardWriter
 from gcw.data.training import FineWebBatchStream, RandomBatchStream, SFTBatchStream
@@ -88,3 +89,16 @@ def test_sft_stream_partitions_global_rows_between_ranks():
 
     assert rank0.cursor == rank1.cursor
     assert not torch.equal(batch0.x, batch1.x)
+
+
+def test_sft_stream_rejects_a_global_batch_larger_than_the_dataset():
+    with pytest.raises(ValueError, match="disjoint rows"):
+        SFTBatchStream(
+            [{"prompt": "Q", "answer": "A"}],
+            TinyTokenizer(),
+            batch_size=1,
+            sequence_len=16,
+            device="cpu",
+            rank=0,
+            world_size=2,
+        )

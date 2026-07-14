@@ -96,6 +96,8 @@ def train(config: TrainConfig) -> None:
         "world_size": world_size,
         "resumed_from_step": start_step if checkpoint is not None else None,
         "resume_exact_topology": checkpoint.resume_state.exact_topology if checkpoint is not None else True,
+        "resume_saved_world_size": checkpoint.resume_state.saved_world_size if checkpoint is not None else world_size,
+        "resume_current_world_size": world_size,
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     print0(

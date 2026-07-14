@@ -1,11 +1,14 @@
 import copy
+from dataclasses import replace
+import json
+import shutil
 
 import pytest
 import torch
 
 from gcw.checkpoint import save_checkpoint
 from gcw.config import ModelConfig
-from gcw.data.training import RandomCursor
+from gcw.data.training import FineWebCursor, RandomCursor
 from gcw.models import build_model
 from gcw.training_checkpoint import (
     CheckpointCompatibilityError,
@@ -88,6 +91,16 @@ def test_exact_resume_rejects_legacy_model_only_checkpoint(tmp_path):
         )
 
 
+def test_fsdp_resume_fails_with_specific_topology_error(tmp_path):
+    with pytest.raises(UnsupportedTopologyError, match="FSDP"):
+        TrainingCheckpoint.open(
+            tmp_path / "legacy-or-missing",
+            expected_fingerprint={"distributed": "fsdp"},
+            topology="same",
+            current_world_size=2,
+        )
+
+
 def test_training_checkpoint_rejects_corrupt_payload(tmp_path):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
@@ -118,8 +131,42 @@ def test_incomplete_destination_falls_back_to_previous_complete_checkpoint(tmp_p
     assert checkpoint.resume_state.step == 1
 
 
+def test_corrupt_destination_falls_back_to_previous_complete_checkpoint(tmp_path):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    previous = tmp_path / "checkpoint.previous"
+    path.rename(previous)
+    shutil.copytree(previous, path)
+    with (path / "optimizer.pt").open("ab") as handle:
+        handle.write(b"corrupt")
+
+    checkpoint = TrainingCheckpoint.open(
+        path,
+        expected_fingerprint=fingerprint,
+        topology="same",
+        current_world_size=1,
+    )
+
+    assert checkpoint.path == previous
+
+
+def test_manifest_must_hash_every_required_payload(tmp_path):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    manifest_path = path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["files"]["optimizer.pt"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(TrainingCheckpointError, match="required file hashes"):
+        TrainingCheckpoint.open(path, expected_fingerprint=fingerprint, topology="same", current_world_size=1)
+
+
 def test_elastic_resume_requires_fineweb_ddp_and_marks_changed_topology(tmp_path):
     config, model, optimizer, resume, _ = _checkpoint_fixture()
+    resume = replace(resume, loader_cursor=FineWebCursor())
     fingerprint = {"distributed": "ddp", "data_kind": "fineweb", "seed": 24}
     path = tmp_path / "checkpoint"
     save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
