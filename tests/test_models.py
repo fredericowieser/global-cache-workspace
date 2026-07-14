@@ -11,9 +11,8 @@ from gcw.models.cache_processor_ops import (
     expand_cache_head_indices,
     gather_per_cache_head_scores,
     gather_per_cache_head_kv,
-    per_cache_head_kv_norm_scores,
     select_heads_from_per_cache_head_scores,
-    select_per_cache_head_kv_norm_indices,
+    select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
 from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
@@ -354,15 +353,19 @@ def test_per_cache_head_kv_norm_indices_select_independent_history():
     values[0][0, 1, 2] = 9.0
     cache = CacheState(keys, values, torch.zeros(1, 6))
 
-    indices = select_per_cache_head_kv_norm_indices(cache, process_every=2, topk=1)
+    all_indices = expand_cache_head_indices(cache.all_indices(), cache.num_layers * keys[0].shape[1])
+    scores = gather_per_cache_head_kv(cache, all_indices).float().pow(2).sum(dim=-1)
+    indices = select_per_cache_head_kv_norm_indices_from_scores(scores, process_every=2, topk=1)
 
     assert indices.tolist() == [[[1, 4, 5], [2, 4, 5]]]
 
 
 def test_score_based_cache_head_selection_matches_merged_kv_norms():
     cache = _random_cache(tiny_config("icarus"))
-    scores = per_cache_head_kv_norm_scores(cache)
-    indices = select_per_cache_head_kv_norm_indices(cache, process_every=4, topk=2)
+    all_indices = expand_cache_head_indices(cache.all_indices(), cache.num_layers * cache.keys[0].shape[1])
+    full_merged = gather_per_cache_head_kv(cache, all_indices)
+    scores = full_merged.float().pow(2).sum(dim=-1)
+    indices = select_per_cache_head_kv_norm_indices_from_scores(scores, process_every=4, topk=2)
 
     selected_scores = gather_per_cache_head_scores(scores, indices)
     merged = gather_per_cache_head_kv(cache, indices)

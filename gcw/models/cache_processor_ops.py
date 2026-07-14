@@ -54,17 +54,6 @@ def expand_cache_head_indices(indices: torch.Tensor, num_cache_heads: int) -> to
     return indices[:, None, :].expand(-1, num_cache_heads, -1)
 
 
-def select_per_cache_head_kv_norm_indices(cache: CacheLike, process_every: int, topk: int) -> torch.Tensor:
-    return select_per_cache_head_kv_norm_indices_from_scores(per_cache_head_kv_norm_scores(cache), process_every, topk)
-
-
-def per_cache_head_kv_norm_scores(cache: CacheLike) -> torch.Tensor:
-    keys, values = _cache_tensors(cache)
-    key_sq = _flatten_cache_heads(keys).float().pow(2).sum(dim=-1)
-    value_sq = _flatten_cache_heads(values).float().pow(2).sum(dim=-1)
-    return (key_sq + value_sq).sqrt()
-
-
 def select_per_cache_head_kv_norm_indices_from_scores(
     scores: torch.Tensor,
     process_every: int,
@@ -101,7 +90,7 @@ def select_heads_from_per_cache_head_scores(scores: torch.Tensor, topk: int) -> 
     batch = scores.shape[0]
     if topk <= 0:
         return torch.empty(batch, 0, dtype=torch.long, device=scores.device)
-    head_scores = scores.float().pow(2).sum(dim=-1)
+    head_scores = scores.float().sum(dim=-1)
     k = min(topk, head_scores.shape[-1])
     _, indices = torch.topk(head_scores, k=k, dim=-1)
     return indices.sort(dim=-1).values
@@ -133,10 +122,7 @@ def latest_shared_indices(indices: torch.Tensor) -> torch.Tensor:
         return indices[:, -1:]
     if indices.ndim != 3:
         raise ValueError("indices must have shape (batch, selected) or (batch, cache_heads, selected)")
-    latest = indices[:, :, -1]
-    if not bool(torch.equal(latest, latest[:, :1].expand_as(latest))):
-        raise ValueError("latest selected position must be shared across cache heads")
-    return latest[:, :1]
+    return indices[:, :1, -1]
 
 
 def gather_cache_layers(cache: CacheState | WindowedCache, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

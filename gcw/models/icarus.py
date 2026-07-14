@@ -12,7 +12,6 @@ from gcw.models.cache_processor_ops import (
     gather_per_cache_head_scores,
     gather_per_cache_head_kv,
     latest_shared_indices,
-    per_cache_head_kv_norm_scores,
     rotary_for_indices,
     rotate_cache_keys,
     select_heads_from_per_cache_head_scores,
@@ -181,16 +180,33 @@ class GlobalCacheProcessor(nn.Module):
         self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config)
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
-        indices, selected_heads = self._select_indices_and_heads(cache, select_all)
+        if self.config.score == "kv_norm" and not select_all:
+            all_indices = expand_cache_head_indices(cache.all_indices(), self.num_cache_heads)
+            merged = gather_per_cache_head_kv(
+                cache,
+                all_indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+            )
+            indices, selected_heads = self._select_indices_and_heads(cache, merged, select_all)
+            if indices.shape[-1] == 0:
+                return cache
+            index = indices[..., None].expand(-1, -1, -1, merged.shape[-1])
+            merged = torch.gather(merged, dim=2, index=index)
+        else:
+            indices, selected_heads = self._select_indices_and_heads(cache, None, select_all)
+            if indices.shape[-1] == 0:
+                return cache
+            merged = gather_per_cache_head_kv(
+                cache,
+                indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+            )
         if indices.shape[-1] == 0:
             return cache
-        merged = gather_per_cache_head_kv(
-            cache,
-            indices,
-            unrope_keys=self.config.unrope_keys,
-            rope_theta=self.rope_theta,
-            rotary_style=self.rotary_style,
-        )
         if selected_heads is None:
             selected_heads = _select_heads_from_merged(merged, self.config.topk_heads)
         updated = self.block(merged, indices, selected_heads)
@@ -201,11 +217,18 @@ class GlobalCacheProcessor(nn.Module):
             keys = rotate_cache_keys(keys, latest, theta=self.rope_theta, rotary_style=self.rotary_style)
         return _scatter_latest(cache, latest, keys, values)
 
-    def _select_indices_and_heads(self, cache: CacheLike, select_all: bool) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def _select_indices_and_heads(
+        self,
+        cache: CacheLike,
+        merged: torch.Tensor | None,
+        select_all: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if select_all:
             return expand_cache_head_indices(cache.all_indices(), self.num_cache_heads), cache.all_heads()
         if self.config.score == "kv_norm":
-            scores = per_cache_head_kv_norm_scores(cache)
+            if merged is None:
+                raise ValueError("merged cache is required for kv_norm selection")
+            scores = merged.float().pow(2).sum(dim=-1)
             indices = select_per_cache_head_kv_norm_indices_from_scores(scores, self.config.process_every, self.config.topk)
             selected_scores = gather_per_cache_head_scores(scores, indices)
             selected_heads = select_heads_from_per_cache_head_scores(selected_scores, self.config.topk_heads)
