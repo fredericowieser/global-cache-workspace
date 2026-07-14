@@ -5,9 +5,11 @@ import math
 import torch
 import torch.nn.functional as F
 
-from gcw.models.cache_state import CacheState, select_l2_indices
+from gcw.models.cache_state import CacheState, StaticCacheState, select_l2_indices
 from gcw.models.transformer import apply_rotary, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
+
+CacheLike = CacheState | StaticCacheState | WindowedCache
 
 
 def rotary_for_indices(
@@ -18,7 +20,7 @@ def rotary_for_indices(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2, device=indices.device, dtype=torch.float32) / head_dim))
     freqs = indices.float().unsqueeze(-1) * inv
-    return freqs.cos().unsqueeze(2).to(dtype), freqs.sin().unsqueeze(2).to(dtype)
+    return freqs.cos().unsqueeze(-2).to(dtype), freqs.sin().unsqueeze(-2).to(dtype)
 
 
 def rotate_cache_keys(
@@ -29,13 +31,112 @@ def rotate_cache_keys(
     rotary_style: str,
     inverse: bool = False,
 ) -> torch.Tensor:
-    """Apply or undo the backbone RoPE transform on cache keys."""
+    """Apply or undo RoPE on layer-major or flattened cache-key tensors."""
     cos, sin = rotary_for_indices(indices, keys.shape[-1], theta, keys.dtype)
-    cos = cos.permute(0, 2, 1, 3).unsqueeze(0)
-    sin = sin.permute(0, 2, 1, 3).unsqueeze(0)
+    if keys.shape[:-1] == indices.shape:
+        cos = cos.squeeze(-2)
+        sin = sin.squeeze(-2)
+    elif keys.ndim == 5 and indices.ndim == 2 and keys.shape[1] == indices.shape[0] and keys.shape[3] == indices.shape[1]:
+        cos = cos.permute(0, 2, 1, 3).unsqueeze(0)
+        sin = sin.permute(0, 2, 1, 3).unsqueeze(0)
+    else:
+        raise ValueError("keys and indices shapes are not compatible for cache-key RoPE")
     if inverse:
         sin = -sin
     return apply_rotary(keys, cos, sin, style=rotary_style)
+
+
+def expand_cache_head_indices(indices: torch.Tensor, num_cache_heads: int) -> torch.Tensor:
+    if indices.ndim == 3:
+        return indices
+    if indices.ndim != 2:
+        raise ValueError("indices must have shape (batch, selected) or (batch, cache_heads, selected)")
+    return indices[:, None, :].expand(-1, num_cache_heads, -1)
+
+
+def select_per_cache_head_kv_norm_indices(cache: CacheLike, process_every: int, topk: int) -> torch.Tensor:
+    return select_per_cache_head_kv_norm_indices_from_scores(per_cache_head_kv_norm_scores(cache), process_every, topk)
+
+
+def per_cache_head_kv_norm_scores(cache: CacheLike) -> torch.Tensor:
+    keys, values = _cache_tensors(cache)
+    key_sq = _flatten_cache_heads(keys).float().pow(2).sum(dim=-1)
+    value_sq = _flatten_cache_heads(values).float().pow(2).sum(dim=-1)
+    return (key_sq + value_sq).sqrt()
+
+
+def select_per_cache_head_kv_norm_indices_from_scores(
+    scores: torch.Tensor,
+    process_every: int,
+    topk: int,
+) -> torch.Tensor:
+    if scores.ndim != 3:
+        raise ValueError("scores must have shape (batch, cache_heads, seq)")
+    batch, cache_heads, seq = scores.shape
+    if seq == 0:
+        return torch.empty(batch, cache_heads, 0, dtype=torch.long, device=scores.device)
+    recent = min(process_every, seq)
+    hist_len = seq - recent
+    recent_idx = torch.arange(hist_len, seq, device=scores.device).view(1, 1, recent).expand(batch, cache_heads, -1)
+    if hist_len > 0 and topk > 0:
+        k = min(topk, hist_len)
+        _, hist_idx = torch.topk(scores[:, :, :hist_len], k=k, dim=-1)
+        selected = torch.cat([hist_idx, recent_idx], dim=-1)
+    else:
+        selected = recent_idx
+    return selected.sort(dim=-1).values
+
+
+def gather_per_cache_head_scores(scores: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    if scores.ndim != 3:
+        raise ValueError("scores must have shape (batch, cache_heads, seq)")
+    if indices.ndim != 3:
+        raise ValueError("indices must have shape (batch, cache_heads, selected)")
+    return torch.gather(scores, dim=2, index=indices)
+
+
+def select_heads_from_per_cache_head_scores(scores: torch.Tensor, topk: int) -> torch.Tensor:
+    if scores.ndim != 3:
+        raise ValueError("scores must have shape (batch, cache_heads, selected)")
+    batch = scores.shape[0]
+    if topk <= 0:
+        return torch.empty(batch, 0, dtype=torch.long, device=scores.device)
+    head_scores = scores.float().pow(2).sum(dim=-1)
+    k = min(topk, head_scores.shape[-1])
+    _, indices = torch.topk(head_scores, k=k, dim=-1)
+    return indices.sort(dim=-1).values
+
+
+def gather_per_cache_head_kv(
+    cache: CacheLike,
+    indices: torch.Tensor,
+    *,
+    unrope_keys: bool = False,
+    rope_theta: float = 10000.0,
+    rotary_style: str = "llama",
+) -> torch.Tensor:
+    keys, values = _cache_tensors(cache)
+    keys = _flatten_cache_heads(keys)
+    values = _flatten_cache_heads(values)
+    if indices.ndim != 3:
+        raise ValueError("indices must have shape (batch, cache_heads, selected)")
+    index = indices[..., None].expand(-1, -1, -1, keys.shape[-1])
+    keys = torch.gather(keys, dim=2, index=index)
+    values = torch.gather(values, dim=2, index=index)
+    if unrope_keys:
+        keys = rotate_cache_keys(keys, indices, theta=rope_theta, rotary_style=rotary_style, inverse=True)
+    return torch.cat([keys, values], dim=-1)
+
+
+def latest_shared_indices(indices: torch.Tensor) -> torch.Tensor:
+    if indices.ndim == 2:
+        return indices[:, -1:]
+    if indices.ndim != 3:
+        raise ValueError("indices must have shape (batch, selected) or (batch, cache_heads, selected)")
+    latest = indices[:, :, -1]
+    if not bool(torch.equal(latest, latest[:, :1].expand_as(latest))):
+        raise ValueError("latest selected position must be shared across cache heads")
+    return latest[:, :1]
 
 
 def gather_cache_layers(cache: CacheState | WindowedCache, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -137,10 +238,19 @@ def scatter_cache_values(
     return cache
 
 
-def _cache_tensors(cache: CacheState | WindowedCache) -> tuple[torch.Tensor, torch.Tensor]:
+def _cache_tensors(cache: CacheLike) -> tuple[torch.Tensor, torch.Tensor]:
     if isinstance(cache, WindowedCache):
         return cache.keys, cache.values
+    if isinstance(cache, StaticCacheState):
+        keys = [cache.layer_view(i, cache.length)[0] for i in range(cache.num_layers)]
+        values = [cache.layer_view(i, cache.length)[1] for i in range(cache.num_layers)]
+        return torch.stack(keys, dim=0), torch.stack(values, dim=0)
     return torch.stack(cache.keys, dim=0), torch.stack(cache.values, dim=0)
+
+
+def _flatten_cache_heads(x: torch.Tensor) -> torch.Tensor:
+    layers, batch, heads, seq, dim = x.shape
+    return x.permute(1, 0, 2, 3, 4).reshape(batch, layers * heads, seq, dim)
 
 
 def _selected_kv_norm_scores(

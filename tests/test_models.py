@@ -7,6 +7,14 @@ from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.models import icarus as icarus_module
 from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.cache_processor_ops import (
+    expand_cache_head_indices,
+    gather_per_cache_head_scores,
+    gather_per_cache_head_kv,
+    per_cache_head_kv_norm_scores,
+    select_heads_from_per_cache_head_scores,
+    select_per_cache_head_kv_norm_indices,
+)
 from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
 from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
 from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
@@ -339,6 +347,93 @@ def test_icarus_gathers_cache_heads_per_batch():
     assert torch.equal(gathered[1], x[1, [0, 2]])
 
 
+def test_per_cache_head_kv_norm_indices_select_independent_history():
+    keys = [torch.zeros(1, 2, 6, 3)]
+    values = [torch.zeros(1, 2, 6, 3)]
+    keys[0][0, 0, 1] = 10.0
+    values[0][0, 1, 2] = 9.0
+    cache = CacheState(keys, values, torch.zeros(1, 6))
+
+    indices = select_per_cache_head_kv_norm_indices(cache, process_every=2, topk=1)
+
+    assert indices.tolist() == [[[1, 4, 5], [2, 4, 5]]]
+
+
+def test_score_based_cache_head_selection_matches_merged_kv_norms():
+    cache = _random_cache(tiny_config("icarus"))
+    scores = per_cache_head_kv_norm_scores(cache)
+    indices = select_per_cache_head_kv_norm_indices(cache, process_every=4, topk=2)
+
+    selected_scores = gather_per_cache_head_scores(scores, indices)
+    merged = gather_per_cache_head_kv(cache, indices)
+
+    assert torch.equal(
+        select_heads_from_per_cache_head_scores(selected_scores, topk=2),
+        _select_heads_from_merged(merged, topk=2),
+    )
+
+
+def test_icarus_and_longshot_pass_per_head_positions_to_block():
+    for variant in ("icarus", "longshot"):
+        model = build_model(tiny_config(variant, score="kv_norm"))
+        cache = _random_cache(model.config)
+        for layer_idx in range(model.config.num_layers):
+            cache.keys[layer_idx].zero_()
+            cache.values[layer_idx].zero_()
+        cache.keys[0][0, 0, 0] = 10.0
+        cache.keys[0][0, 1, 1] = 10.0
+        cache.keys[1][0, 0, 1] = 10.0
+        cache.keys[1][0, 1, 2] = 10.0
+        calls = []
+
+        def forward(self, *args):
+            if variant == "icarus":
+                x, positions, selected_heads = args
+                calls.append((positions.clone(), selected_heads.clone()))
+                return x
+            x, selected_heads = args
+            calls.append((x.clone(), selected_heads.clone()))
+            return x[:, :, -1, :]
+
+        model.cache_processor.block.forward = types.MethodType(forward, model.cache_processor.block)
+        model.cache_processor(cache)
+
+        assert len(calls) == 1
+        if variant == "icarus":
+            positions = calls[0][0]
+            assert positions.shape == (2, 4, 6)
+            assert not torch.equal(positions[0, 0], positions[0, 3])
+        else:
+            merged = calls[0][0]
+            assert merged.shape == (2, 4, 6, 16)
+
+
+def test_icarus_and_longshot_default_attn_l2_uses_shared_token_positions():
+    for variant in ("icarus", "longshot"):
+        model = build_model(tiny_config(variant))
+        cache = _random_cache(model.config)
+        calls = []
+
+        def forward(self, *args):
+            if variant == "icarus":
+                x, positions, selected_heads = args
+                calls.append((positions.clone(), selected_heads.clone()))
+                return x
+            x, selected_heads = args
+            calls.append((x.clone(), selected_heads.clone()))
+            return x[:, :, -1, :]
+
+        model.cache_processor.block.forward = types.MethodType(forward, model.cache_processor.block)
+        model.cache_processor(cache)
+
+        expected = expand_cache_head_indices(cache.select_indices(4, 2), model.cache_processor.num_cache_heads)
+        if variant == "icarus":
+            assert torch.equal(calls[0][0], expected)
+        else:
+            expected_merged = gather_per_cache_head_kv(cache, expected)
+            assert torch.equal(calls[0][0], expected_merged)
+
+
 def test_icarus_cache_processor_matches_windowed_cache_path_and_updates_latest_only():
     model = build_model(tiny_config("icarus"))
     model.init_weights()
@@ -381,7 +476,8 @@ def test_icarus_select_all_uses_all_indices_and_heads():
     model.cache_processor(cache, select_all=True)
 
     assert len(calls) == 1
-    assert torch.equal(calls[0][0], cache.all_indices())
+    expected_indices = cache.all_indices()[:, None, :].expand(-1, model.cache_processor.num_cache_heads, -1)
+    assert torch.equal(calls[0][0], expected_indices)
     assert torch.equal(calls[0][1], cache.all_heads())
 
 
@@ -1045,7 +1141,8 @@ def _assert_unselected_unchanged(original: CacheState, actual: CacheState, indic
 
 def _not_latest_mask(cache: CacheState, indices: torch.Tensor) -> torch.Tensor:
     mask = torch.ones(cache.scores.shape, dtype=torch.bool)
-    mask.scatter_(1, indices[:, -1:].cpu(), False)
+    latest = indices[:, -1:] if indices.ndim == 2 else indices[:, :1, -1]
+    mask.scatter_(1, latest.cpu(), False)
     return mask
 
 

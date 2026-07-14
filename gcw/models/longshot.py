@@ -9,7 +9,16 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import CacheEncoderMethod, CacheEncoderQuerySource, CacheProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
-from gcw.models.cache_processor_ops import rotate_cache_keys
+from gcw.models.cache_processor_ops import (
+    expand_cache_head_indices,
+    gather_per_cache_head_scores,
+    gather_per_cache_head_kv,
+    latest_shared_indices,
+    per_cache_head_kv_norm_scores,
+    rotate_cache_keys,
+    select_heads_from_per_cache_head_scores,
+    select_per_cache_head_kv_norm_indices_from_scores,
+)
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.transformer import RMSNorm, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
@@ -223,8 +232,8 @@ class GlobalCacheProcessor(nn.Module):
             raise ValueError("Longshot supports only cache_processor.processor_mode='standard'")
         if self.config.update_stream != "kv":
             raise ValueError("Longshot supports only cache_processor.update_stream='kv'")
-        if self.config.score != "attn_l2":
-            raise ValueError("Longshot supports only cache_processor.score='attn_l2'")
+        if self.config.score not in {"attn_l2", "kv_norm"}:
+            raise ValueError("Longshot supports only cache_processor.score='attn_l2' or 'kv_norm'")
         encoder_method = encoder_method or self.config.encoder_method
         self.num_layers = model_config.num_layers
         self.num_kv_heads = model_config.num_kv_heads
@@ -241,23 +250,36 @@ class GlobalCacheProcessor(nn.Module):
         )
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
-        indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
+        indices, selected_heads = self._select_indices_and_heads(cache, select_all)
         if indices.shape[-1] == 0:
             return cache
-        merged = _gather_merged(
+        merged = gather_per_cache_head_kv(
             cache,
             indices,
             unrope_keys=self.config.unrope_keys,
             rope_theta=self.rope_theta,
             rotary_style=self.rotary_style,
         )
-        selected_heads = cache.all_heads() if select_all else _select_heads_from_merged(merged, self.config.topk_heads)
+        if selected_heads is None:
+            selected_heads = _select_heads_from_merged(merged, self.config.topk_heads)
         updated = self.block(merged, selected_heads)
-        latest = indices[:, -1:]
+        latest = latest_shared_indices(indices)
         keys, values = _split_merged(updated[:, :, None, :], self.num_layers, self.num_kv_heads, self.head_dim)
         if self.config.unrope_keys:
             keys = rotate_cache_keys(keys, latest, theta=self.rope_theta, rotary_style=self.rotary_style)
         return _scatter_latest(cache, latest, keys, values)
+
+    def _select_indices_and_heads(self, cache: CacheLike, select_all: bool) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if select_all:
+            return expand_cache_head_indices(cache.all_indices(), self.num_cache_heads), cache.all_heads()
+        if self.config.score == "kv_norm":
+            scores = per_cache_head_kv_norm_scores(cache)
+            indices = select_per_cache_head_kv_norm_indices_from_scores(scores, self.config.process_every, self.config.topk)
+            selected_scores = gather_per_cache_head_scores(scores, indices)
+            selected_heads = select_heads_from_per_cache_head_scores(selected_scores, self.config.topk_heads)
+            return indices, selected_heads
+        indices = expand_cache_head_indices(cache.select_indices(self.config.process_every, self.config.topk), self.num_cache_heads)
+        return indices, None
 
 
 class Longshot(BGT):
@@ -269,35 +291,6 @@ def _zero_projection(module: nn.Module) -> None:
     nn.init.zeros_(module.weight)
     if getattr(module, "bias", None) is not None:
         nn.init.zeros_(module.bias)
-
-
-def _cache_tensors(cache: CacheLike) -> tuple[torch.Tensor, torch.Tensor]:
-    if isinstance(cache, WindowedCache):
-        return cache.keys, cache.values
-    if isinstance(cache, StaticCacheState):
-        keys = [cache.layer_view(i, cache.length)[0] for i in range(cache.num_layers)]
-        values = [cache.layer_view(i, cache.length)[1] for i in range(cache.num_layers)]
-        return torch.stack(keys, dim=0), torch.stack(values, dim=0)
-    return torch.stack(cache.keys, dim=0), torch.stack(cache.values, dim=0)
-
-
-def _gather_merged(
-    cache: CacheLike,
-    indices: torch.Tensor,
-    *,
-    unrope_keys: bool = False,
-    rope_theta: float = 10000.0,
-    rotary_style: str = "llama",
-) -> torch.Tensor:
-    keys, values = _cache_tensors(cache)
-    index = indices[None, :, None, :, None].expand(keys.shape[0], -1, keys.shape[2], -1, keys.shape[4])
-    keys = torch.gather(keys, 3, index)
-    values = torch.gather(values, 3, index)
-    if unrope_keys:
-        keys = rotate_cache_keys(keys, indices, theta=rope_theta, rotary_style=rotary_style, inverse=True)
-    return torch.cat([keys, values], dim=-1).permute(1, 0, 2, 3, 4).reshape(
-        keys.shape[1], keys.shape[0] * keys.shape[2], keys.shape[3], 2 * keys.shape[4]
-    )
 
 
 def _scatter_latest(cache: CacheLike, indices: torch.Tensor, keys: torch.Tensor, values: torch.Tensor) -> CacheLike:

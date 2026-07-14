@@ -78,6 +78,9 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     longshot_query_final_token_unrope_shared = load_train_config(
         "configs/train/bottleneck_llm/llama32_1b_longshot_query_final_token_unrope_from_sft_frozen_shared.yaml"
     )
+    longshot_query_final_token_unrope_kv_norm_shared = load_train_config(
+        "configs/train/bottleneck_llm/llama32_1b_longshot_query_final_token_unrope_kv_norm_from_sft_frozen_shared.yaml"
+    )
     tf_sft = load_train_config("configs/train/bottleneck_llm/llama32_1b_tf_sft.yaml")
 
     assert frozen.freeze_backbone
@@ -196,6 +199,20 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert longshot_query_final_token_unrope_shared.metadata["processor_params"] == processor_params(
         longshot_query_final_token_unrope_shared.model
     )
+    assert longshot_query_final_token_unrope_kv_norm_shared.model.variant == "longshot"
+    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.score == "kv_norm"
+    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.encoder_method == "query_attention"
+    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.encoder_query_source == "final_token"
+    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.unrope_keys is True
+    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.per_cache_head_projections is False
+    assert "kv-norm" in longshot_query_final_token_unrope_kv_norm_shared.wandb.tags
+    assert "per-head-token-selection" in longshot_query_final_token_unrope_kv_norm_shared.wandb.tags
+    assert longshot_query_final_token_unrope_kv_norm_shared.metadata["processor_params"] == processor_params(
+        longshot_query_final_token_unrope_kv_norm_shared.model
+    )
+    assert longshot_query_final_token_unrope_kv_norm_shared.metadata[
+        "total_non_embedding_params"
+    ] == total_non_embedding_params(longshot_query_final_token_unrope_kv_norm_shared.model)
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None
 
@@ -233,7 +250,7 @@ def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
 def test_openmath_sft_configs_use_legacy_formatting_and_slices():
     paths = _openmath_sft_config_paths()
 
-    assert len(paths) == 49
+    assert len(paths) == 50
     for path in paths:
         config = load_train_config(path)
         assert config.data.response_prefix == "\n", path
