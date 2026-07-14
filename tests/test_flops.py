@@ -25,3 +25,22 @@ def test_value_only_processor_flops_use_smaller_cache_stream():
     v = replace(backbone, variant="bgt", cache_processor=replace(kv_cp, update_stream="v"))
 
     assert processor_forward_flops_per_sequence(v, 128) < processor_forward_flops_per_sequence(kv, 128)
+
+
+def test_self_head_kv_processor_flops_include_appended_self_head():
+    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
+    cp = CacheProcessorConfig(
+        process_every=32,
+        topk=8,
+        topk_heads=1,
+        hidden_size=64,
+        intermediate_size=256,
+        num_heads=1,
+        num_kv_heads=1,
+    )
+
+    for variant in ("icarus", "longshot"):
+        base = replace(backbone, variant=variant, cache_processor=cp)
+        self_head = replace(backbone, variant=variant, cache_processor=replace(cp, include_self_head_kv=True))
+
+        assert processor_forward_flops_per_sequence(self_head, 128) > processor_forward_flops_per_sequence(base, 128)

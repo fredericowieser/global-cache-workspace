@@ -18,7 +18,9 @@ from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
 from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
 from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
 from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
+from gcw.models.icarus import ProcessorAttention as IcarusProcessorAttention
 from gcw.models.longshot import GlobalCacheProcessor as LongshotGlobalCacheProcessor
+from gcw.models.longshot import ProcessorAttention as LongshotProcessorAttention
 from gcw.models.longshot import QueryAttentionTimeEncoder
 from gcw.models.longshot import Longshot
 from gcw.models.transformer import _matches_stop_sequence, apply_rotary
@@ -595,7 +597,47 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.writer_head_fraction == 1.0
     assert cp.salience_temperature == 1.0
     assert cp.unrope_keys is False
+    assert cp.include_self_head_kv is False
     assert cp.stream_factor == 2
+
+
+def test_self_head_kv_attention_is_config_gated_at_init():
+    default_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=False,
+    )
+    enabled_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=True,
+    )
+
+    for attention_cls in (IcarusProcessorAttention, LongshotProcessorAttention):
+        default_attn = attention_cls(default_config)
+        enabled_attn = attention_cls(enabled_config)
+
+        assert default_attn.forward.__func__ is default_attn.forward_selected_head_kv.__func__
+        assert enabled_attn.forward.__func__ is enabled_attn.forward_with_self_head_kv.__func__
+
+
+def test_self_head_kv_attention_can_be_enabled_from_config_dict():
+    cfg = ModelConfig(
+        variant="icarus",
+        cache_processor={
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "num_heads": 1,
+            "num_kv_heads": 1,
+            "include_self_head_kv": True,
+        },
+    )
+
+    assert cfg.cache_processor.include_self_head_kv is True
 
 
 def test_cache_processor_forward_is_residual_scaled_update():

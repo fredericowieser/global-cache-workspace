@@ -39,8 +39,18 @@ class ProcessorAttention(nn.Module):
         self.k_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
         self.v_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        if config.include_self_head_kv:
+            self.forward = self.forward_with_self_head_kv
+        else:
+            self.forward = self.forward_selected_head_kv
 
-    def forward(self, x: torch.Tensor, positions: torch.Tensor, theta: float, selected_heads: torch.Tensor) -> torch.Tensor:
+    def forward_selected_head_kv(
+        self,
+        x: torch.Tensor,
+        positions: torch.Tensor,
+        theta: float,
+        selected_heads: torch.Tensor,
+    ) -> torch.Tensor:
         batch, cache_heads, seq, _ = x.shape
         if selected_heads.shape[-1] == 0:
             return torch.zeros_like(x)
@@ -68,6 +78,59 @@ class ProcessorAttention(nn.Module):
         )
         y = y.view(batch, self.num_heads, cache_heads, seq, self.head_dim)
         y = y.permute(0, 2, 3, 1, 4).contiguous().view(batch, cache_heads, seq, -1)
+        return self.o_proj(y)
+
+    def forward_with_self_head_kv(
+        self,
+        x: torch.Tensor,
+        positions: torch.Tensor,
+        theta: float,
+        selected_heads: torch.Tensor,
+    ) -> torch.Tensor:
+        batch, cache_heads, seq, _ = x.shape
+        selected_count = selected_heads.shape[-1]
+        groups = self.num_heads // self.num_kv_heads
+
+        q = self.q_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, groups, self.head_dim)
+        k_all = self.k_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
+        v_all = self.v_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
+        q_cos, q_sin = rotary_for_indices(positions, self.head_dim, theta, q.dtype)
+        k_cos, k_sin = rotary_for_indices(positions, self.head_dim, theta, k_all.dtype)
+        q = apply_rotary(q, q_cos.unsqueeze(-2), q_sin.unsqueeze(-2))
+        k_all = apply_rotary(k_all, k_cos, k_sin)
+
+        gather_index = selected_heads[:, :, None, None, None].expand(-1, -1, seq, self.num_kv_heads, self.head_dim)
+        k_sel = torch.gather(k_all, dim=1, index=gather_index)
+        v_sel = torch.gather(v_all, dim=1, index=gather_index)
+
+        q, k_sel, k_all = q.to(v_all.dtype), k_sel.to(v_all.dtype), k_all.to(v_all.dtype)
+        scale = self.head_dim**-0.5
+        selected_logits = torch.einsum("bcnkgd,bsmkd->bcnkgsm", q, k_sel) * scale
+        selected_logits = selected_logits.reshape(batch, cache_heads, seq, self.num_kv_heads, groups, selected_count * seq)
+        self_logits = torch.einsum("bcnkgd,bcmkd->bcnkgm", q, k_all) * scale
+        if selected_count:
+            query_heads = torch.arange(cache_heads, device=x.device)
+            self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
+            self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None, None], float("-inf"))
+
+        logits = torch.cat([selected_logits, self_logits], dim=-1)
+        attn = torch.softmax(logits, dim=-1)
+        if self.training and self.dropout > 0.0:
+            attn = F.dropout(attn, p=self.dropout, training=True)
+
+        selected_attn = attn[..., : selected_count * seq].reshape(
+            batch,
+            cache_heads,
+            seq,
+            self.num_kv_heads,
+            groups,
+            selected_count,
+            seq,
+        )
+        self_attn = attn[..., selected_count * seq :]
+        y = torch.einsum("bcnkgsm,bsmkd->bcnkgd", selected_attn, v_sel)
+        y = y + torch.einsum("bcnkgm,bcmkd->bcnkgd", self_attn, v_all)
+        y = y.contiguous().view(batch, cache_heads, seq, self.num_heads * self.head_dim)
         return self.o_proj(y)
 
 
