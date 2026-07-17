@@ -83,7 +83,9 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
             selected_heads = min(max(cp.topk_heads, 0), cache_heads)
             if cp.include_self_head_kv and selected_heads < cache_heads:
                 selected_heads += 1
-            total += _longshot_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
+            total += cp.iterations * _longshot_processor_block_flops_per_call(
+                2 * int(config.head_dim), cp, selected, cache_heads, selected_heads
+            )
     return total
 
 

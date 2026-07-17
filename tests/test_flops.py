@@ -36,6 +36,22 @@ def test_longshot_value_only_writeback_flops_keep_kv_input_but_reduce_output():
     assert processor_forward_flops_per_sequence(v, 128) < processor_forward_flops_per_sequence(kv, 128)
 
 
+def test_longshot_processor_flops_scale_with_iterations():
+    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
+    cp = CacheProcessorConfig(
+        process_every=32,
+        topk=8,
+        hidden_size=64,
+        intermediate_size=256,
+        num_heads=1,
+        num_kv_heads=1,
+    )
+    once = replace(backbone, variant="longshot", cache_processor=cp)
+    twice = replace(backbone, variant="longshot", cache_processor=replace(cp, iterations=2))
+
+    assert processor_forward_flops_per_sequence(twice, 128) == 2 * processor_forward_flops_per_sequence(once, 128)
+
+
 def test_icarus_value_only_writeback_flops_keep_kv_input_but_reduce_output():
     backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
     kv_cp = CacheProcessorConfig(process_every=32, topk=8, hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)

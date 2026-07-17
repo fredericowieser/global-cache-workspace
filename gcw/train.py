@@ -137,6 +137,7 @@ def train(config: TrainConfig) -> None:
         if device.type == "cuda":
             train_metrics["system/vram_allocated_mib"] = torch.cuda.max_memory_allocated(device) / 1024 / 1024
             train_metrics["system/vram_reserved_mib"] = torch.cuda.max_memory_reserved(device) / 1024 / 1024
+        train_metrics.update(_cache_processor_metrics(model))
         if config.eval_every and step_num % config.eval_every == 0:
             train_metrics.update(_eval_loss(model, config, device))
         if rank == 0:
@@ -339,6 +340,17 @@ def _random_loader(config: TrainConfig, device: torch.device):
 
 def _unwrap(model):
     return model.module if hasattr(model, "module") else model
+
+
+def _cache_processor_metrics(model) -> dict[str, float]:
+    model = _unwrap(model)
+    model = getattr(model, "_orig_mod", model)
+    processor = getattr(model, "cache_processor", None)
+    block = getattr(processor, "block", None)
+    pop_metrics = getattr(block, "pop_iteration_metrics", None)
+    if pop_metrics is None:
+        return {}
+    return pop_metrics()
 
 
 def _init_wandb(config: TrainConfig, run_meta: dict[str, Any]):

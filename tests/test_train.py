@@ -93,6 +93,45 @@ def test_train_logs_wandb_train_and_validation_metrics(monkeypatch, tmp_path):
     assert all("train/tokens" in metrics for _, metrics in logs[1:])
 
 
+def test_train_logs_longshot_iteration_overlap_metrics(monkeypatch, tmp_path):
+    fake = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    cfg = tiny_train_config(tmp_path)
+    cfg.model = ModelConfig(
+        variant="longshot",
+        family="smollm",
+        sequence_len=16,
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        tie_embeddings=True,
+        cache_processor=CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=1,
+            num_kv_heads=1,
+            encoder_seq_len=4,
+            iterations=2,
+        ),
+    )
+    cfg.max_steps = 1
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+
+    train(cfg)
+
+    _, metrics = fake.run.logs[0]
+    assert "cache_processor/selected_head_overlap_after_iter_1" in metrics
+    assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
+
+
 def test_train_reads_pretrain_shards(tmp_path):
     data_dir = tmp_path / "data"
     writer = ShardWriter(data_dir, "train", shard_tokens=1000)

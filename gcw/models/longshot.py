@@ -49,10 +49,18 @@ class ProcessorAttention(nn.Module):
         else:
             self.forward = self.forward_selected_head_kv
 
-    def forward_selected_head_kv(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
+    def forward_selected_head_kv(
+        self,
+        x: torch.Tensor,
+        selected_heads: torch.Tensor,
+        return_attn_scores: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         if selected_heads.shape[-1] == 0:
-            return torch.zeros_like(x)
+            y = torch.zeros_like(x)
+            if return_attn_scores:
+                return y, x.new_zeros(batch, cache_heads, dtype=torch.float32)
+            return y
         q = self.q_proj(x).view(batch, cache_heads, self.num_heads, self.head_dim)
         selected_x = _gather_cache_heads(x, selected_heads)
         k = self.k_proj(selected_x).view(batch, selected_heads.shape[-1], self.num_kv_heads, self.head_dim)
@@ -68,9 +76,17 @@ class ProcessorAttention(nn.Module):
             enable_gqa=self.num_kv_heads != self.num_heads,
         )
         y = y.permute(0, 2, 1, 3).contiguous().view(batch, cache_heads, -1)
-        return self.o_proj(y)
+        y = self.o_proj(y)
+        if return_attn_scores:
+            return y, y.float().pow(2).sum(dim=-1)
+        return y
 
-    def forward_with_self_head_kv(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
+    def forward_with_self_head_kv(
+        self,
+        x: torch.Tensor,
+        selected_heads: torch.Tensor,
+        return_attn_scores: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
         groups = self.num_heads // self.num_kv_heads
@@ -100,7 +116,10 @@ class ProcessorAttention(nn.Module):
         y = torch.einsum("bckgs,bskd->bckgd", selected_attn, v_sel)
         y = y + self_attn[:, :, :, :, None] * v_all[:, :, :, None, :]
         y = y.contiguous().view(batch, cache_heads, self.num_heads * self.head_dim)
-        return self.o_proj(y)
+        y = self.o_proj(y)
+        if return_attn_scores:
+            return y, y.float().pow(2).sum(dim=-1)
+        return y
 
 
 class ProcessorLayer(nn.Module):
@@ -113,10 +132,21 @@ class ProcessorLayer(nn.Module):
         self.input_norm = RMSNorm(config.hidden_size, config.norm_eps)
         self.post_norm = RMSNorm(config.hidden_size, config.norm_eps)
 
-    def forward(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.input_norm(x), selected_heads)
+    def forward(
+        self,
+        x: torch.Tensor,
+        selected_heads: torch.Tensor,
+        return_attn_scores: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        attn_out = self.attn(self.input_norm(x), selected_heads, return_attn_scores=return_attn_scores)
+        if return_attn_scores:
+            attn_out, attn_scores = attn_out
+        x = x + attn_out
         h = self.post_norm(x)
-        return x + self.down_proj(F.silu(self.gate_proj(h)) * self.up_proj(h))
+        x = x + self.down_proj(F.silu(self.gate_proj(h)) * self.up_proj(h))
+        if return_attn_scores:
+            return x, attn_scores
+        return x
 
 
 class PerCacheHeadLinear(nn.Module):
@@ -199,6 +229,8 @@ class CacheProcessor(nn.Module):
         else:
             self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        self._selected_head_overlap_totals: dict[int, torch.Tensor] = {}
+        self._selected_head_overlap_counts: dict[int, int] = {}
         self.init_weights()
 
     def init_weights(self, std: float = 0.02) -> None:
@@ -220,13 +252,64 @@ class CacheProcessor(nn.Module):
             _zero_projection(self.out_proj)
 
     def compute_update(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        h = self._encode_time(self.in_norm(x))
-        for layer in self.layers:
-            if self.config.gradient_checkpointing and self.training and torch.is_grad_enabled():
-                h = checkpoint(layer, h, selected_heads, use_reentrant=False)
-            else:
-                h = layer(h, selected_heads)
+        h = self._encode_time(self.in_norm(x))  # TODO: add a skip connection here?
+        for iteration in range(self.config.iterations):
+            return_attn_scores = iteration + 1 < self.config.iterations
+            layer_scores = []
+            for layer in self.layers:
+                if return_attn_scores:
+                    h, attn_scores = self._run_layer(layer, h, selected_heads, return_attn_scores=True)
+                    layer_scores.append(attn_scores)
+                else:
+                    h = self._run_layer(layer, h, selected_heads, return_attn_scores=False)
+            if return_attn_scores:
+                head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
+                next_selected_heads = _select_heads_from_head_scores(head_scores, self.config.topk_heads)
+                self._record_selected_head_overlap(iteration + 1, selected_heads, next_selected_heads)
+                selected_heads = next_selected_heads
         return self.out_proj(self.out_norm(h))
+
+    def _run_layer(
+        self,
+        layer: ProcessorLayer,
+        h: torch.Tensor,
+        selected_heads: torch.Tensor,
+        *,
+        return_attn_scores: bool,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if self.config.gradient_checkpointing and self.training and torch.is_grad_enabled():
+            return checkpoint(layer, h, selected_heads, return_attn_scores, use_reentrant=False)
+        return layer(h, selected_heads, return_attn_scores=return_attn_scores)
+
+    def pop_iteration_metrics(self) -> dict[str, float]:
+        metrics = {
+            f"cache_processor/selected_head_overlap_after_iter_{iteration}": float(
+                (total / self._selected_head_overlap_counts[iteration]).detach().cpu()
+            )
+            for iteration in sorted(self._selected_head_overlap_totals)
+            for total in (self._selected_head_overlap_totals[iteration],)
+            if self._selected_head_overlap_counts[iteration] > 0
+        }
+        self._selected_head_overlap_totals.clear()
+        self._selected_head_overlap_counts.clear()
+        return metrics
+
+    def _record_selected_head_overlap(
+        self,
+        iteration: int,
+        selected_heads: torch.Tensor,
+        next_selected_heads: torch.Tensor,
+    ) -> None:
+        if selected_heads.shape[-1] == 0 or next_selected_heads.shape[-1] == 0:
+            return
+        maintained = (selected_heads[:, :, None] == next_selected_heads[:, None, :]).any(dim=-1)
+        overlap = maintained.float().mean().detach()
+        if iteration in self._selected_head_overlap_totals:
+            self._selected_head_overlap_totals[iteration] = self._selected_head_overlap_totals[iteration] + overlap
+            self._selected_head_overlap_counts[iteration] += 1
+        else:
+            self._selected_head_overlap_totals[iteration] = overlap
+            self._selected_head_overlap_counts[iteration] = 1
 
     def scaled_update(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
         delta = self.compute_update(x, selected_heads)
@@ -447,4 +530,15 @@ def _select_heads_from_merged(x: torch.Tensor, topk: int) -> torch.Tensor:
     scores = x.float().flatten(start_dim=2).norm(dim=-1)
     k = min(topk, scores.shape[-1])
     _, indices = torch.topk(scores, k=k, dim=-1)
+    return indices.sort(dim=-1).values
+
+
+def _select_heads_from_head_scores(scores: torch.Tensor, topk: int) -> torch.Tensor:
+    if scores.ndim != 2:
+        raise ValueError("scores must have shape (batch, cache_heads)")
+    batch = scores.shape[0]
+    if topk <= 0:
+        return torch.empty(batch, 0, dtype=torch.long, device=scores.device)
+    k = min(topk, scores.shape[-1])
+    _, indices = torch.topk(scores.float(), k=k, dim=-1)
     return indices.sort(dim=-1).values

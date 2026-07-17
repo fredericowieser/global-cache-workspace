@@ -48,6 +48,7 @@ class CacheProcessorConfig:
     encoder_query_source: CacheEncoderQuerySource = "learned"
     unrope_keys: bool = False
     include_self_head_kv: bool = False
+    iterations: int = 1
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
@@ -74,6 +75,8 @@ class CacheProcessorConfig:
             raise ValueError("cache_processor.encoder_seq_len must be positive when set")
         if self.encoder_query_source not in {"learned", "final_token"}:
             raise ValueError("cache_processor.encoder_query_source must be 'learned' or 'final_token'")
+        if self.iterations < 1:
+            raise ValueError("cache_processor.iterations must be positive")
 
     @property
     def stream_factor(self) -> int:

@@ -2,10 +2,12 @@ import types
 
 import pytest
 import torch
+import torch.nn as nn
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.models import icarus as icarus_module
+from gcw.models import longshot as longshot_module
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.cache_processor_ops import (
     expand_cache_head_indices,
@@ -20,6 +22,7 @@ from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
 from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
 from gcw.models.icarus import ProcessorAttention as IcarusProcessorAttention
 from gcw.models.longshot import GlobalCacheProcessor as LongshotGlobalCacheProcessor
+from gcw.models.longshot import CacheProcessor as LongshotCacheProcessor
 from gcw.models.longshot import ProcessorAttention as LongshotProcessorAttention
 from gcw.models.longshot import QueryAttentionTimeEncoder
 from gcw.models.longshot import Longshot
@@ -158,6 +161,39 @@ def test_icarus_gradient_checkpointing_is_config_gated(monkeypatch):
 
     build_processor(True).compute_update(x, positions, selected_heads).sum().backward()
     assert calls == [{"use_reentrant": False}, {"use_reentrant": False}]
+
+
+def test_longshot_iterative_checkpointing_includes_score_collection(monkeypatch):
+    calls = []
+
+    def fake_checkpoint(fn, *args, **kwargs):
+        calls.append(kwargs)
+        return fn(*args)
+
+    config = CacheProcessorConfig(
+        topk_heads=0,
+        hidden_size=8,
+        intermediate_size=16,
+        num_layers=2,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_seq_len=3,
+        iterations=2,
+        gradient_checkpointing=True,
+    )
+    block = LongshotCacheProcessor(16, 2, config).train()
+    monkeypatch.setattr(longshot_module, "checkpoint", fake_checkpoint)
+    x = torch.randn(1, 2, 3, 16, requires_grad=True)
+    selected_heads = torch.empty(1, 0, dtype=torch.long)
+
+    block.compute_update(x, selected_heads).sum().backward()
+
+    assert calls == [
+        {"use_reentrant": False},
+        {"use_reentrant": False},
+        {"use_reentrant": False},
+        {"use_reentrant": False},
+    ]
 
 
 def test_tiny_models_bf16_autocast_forward_backward():
@@ -659,7 +695,13 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.salience_temperature == 1.0
     assert cp.unrope_keys is False
     assert cp.include_self_head_kv is False
+    assert cp.iterations == 1
     assert cp.stream_factor == 2
+
+
+def test_cache_processor_iterations_must_be_positive():
+    with pytest.raises(ValueError, match="iterations"):
+        CacheProcessorConfig(iterations=0)
 
 
 def test_self_head_kv_attention_is_config_gated_at_init():
@@ -711,6 +753,69 @@ def test_cache_processor_forward_is_residual_scaled_update():
     positions = torch.arange(5).unsqueeze(0).expand(2, -1)
 
     assert torch.allclose(block(x, positions), x + block.scaled_update(x, positions))
+
+
+def test_longshot_iterative_processor_reselects_heads_between_iterations():
+    class RecordingLayer(nn.Module):
+        def __init__(self, scores: torch.Tensor):
+            super().__init__()
+            self.register_buffer("scores", scores)
+            self.calls = []
+
+        def forward(self, x, selected_heads, return_attn_scores=False):
+            self.calls.append(selected_heads.detach().clone())
+            x = x + 1.0
+            if return_attn_scores:
+                return x, self.scores[None, :].expand(x.shape[0], -1)
+            return x
+
+    config = CacheProcessorConfig(
+        process_every=4,
+        topk=2,
+        topk_heads=2,
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_seq_len=3,
+        iterations=3,
+    )
+    block = LongshotCacheProcessor(16, 4, config)
+    layer = RecordingLayer(torch.tensor([0.0, 4.0, 1.0, 3.0]))
+    block.layers = nn.ModuleList([layer])
+    x = torch.randn(1, 4, 3, 16)
+
+    out = block.compute_update(x, torch.tensor([[0, 2]]))
+
+    assert out.shape == (1, 4, 16)
+    assert len(layer.calls) == 3
+    assert torch.equal(layer.calls[0], torch.tensor([[0, 2]]))
+    assert torch.equal(layer.calls[1], torch.tensor([[1, 3]]))
+    assert torch.equal(layer.calls[2], torch.tensor([[1, 3]]))
+    assert block.pop_iteration_metrics() == {
+        "cache_processor/selected_head_overlap_after_iter_1": 0.0,
+        "cache_processor/selected_head_overlap_after_iter_2": 1.0,
+    }
+    assert block.pop_iteration_metrics() == {}
+
+
+def test_longshot_iterative_processor_supports_empty_reselected_heads():
+    config = CacheProcessorConfig(
+        process_every=4,
+        topk=2,
+        topk_heads=0,
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_seq_len=3,
+        iterations=2,
+    )
+    block = LongshotCacheProcessor(16, 4, config)
+    x = torch.randn(2, 4, 3, 16)
+    selected_heads = torch.empty(2, 0, dtype=torch.long)
+
+    assert block(x, selected_heads).shape == (2, 4, 16)
 
 
 def test_zero_out_direct_gate_starts_as_identity():

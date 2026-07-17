@@ -69,6 +69,31 @@ def test_processor_attention_self_head_kv_empty_selection_is_self_only():
     assert torch.allclose(actual, self_only, atol=1e-6, rtol=1e-6)
 
 
+def test_processor_attention_can_return_attention_output_scores():
+    torch.manual_seed(24)
+    x = torch.randn(2, 4, 8)
+    selected_heads = torch.tensor([[0, 2], [1, 3]])
+
+    for include_self_head_kv in (False, True):
+        attn = ProcessorAttention(
+            CacheProcessorConfig(
+                hidden_size=8,
+                intermediate_size=16,
+                num_heads=2,
+                num_kv_heads=1,
+                attention_dropout=0.0,
+                include_self_head_kv=include_self_head_kv,
+            )
+        ).eval()
+
+        output = attn(x, selected_heads)
+        scored_output, scores = attn(x, selected_heads, return_attn_scores=True)
+
+        assert torch.allclose(scored_output, output, atol=1e-6, rtol=1e-6)
+        assert scores.shape == (2, 4)
+        assert torch.allclose(scores, output.float().pow(2).sum(dim=-1), atol=1e-6, rtol=1e-6)
+
+
 def _dense_self_head_kv_reference(
     attn: ProcessorAttention,
     x: torch.Tensor,
