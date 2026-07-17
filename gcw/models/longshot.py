@@ -253,8 +253,9 @@ class CacheProcessor(nn.Module):
 
     def compute_update(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
         h = self._encode_time(self.in_norm(x))  # TODO: add a skip connection here?
-        for iteration in range(self.config.iterations):
-            return_attn_scores = iteration + 1 < self.config.iterations
+        iterations = self.config.iterations if self.config.iteration_mode == "internal" else 1
+        for iteration in range(iterations):
+            return_attn_scores = iteration + 1 < iterations
             layer_scores = []
             for layer in self.layers:
                 if return_attn_scores:
@@ -265,7 +266,7 @@ class CacheProcessor(nn.Module):
             if return_attn_scores:
                 head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
                 next_selected_heads = _select_heads_from_head_scores(head_scores, self.config.topk_heads)
-                self._record_selected_head_overlap(iteration + 1, selected_heads, next_selected_heads)
+                self.record_selected_head_overlap(iteration + 1, selected_heads, next_selected_heads)
                 selected_heads = next_selected_heads
         return self.out_proj(self.out_norm(h))
 
@@ -294,7 +295,7 @@ class CacheProcessor(nn.Module):
         self._selected_head_overlap_counts.clear()
         return metrics
 
-    def _record_selected_head_overlap(
+    def record_selected_head_overlap(
         self,
         iteration: int,
         selected_heads: torch.Tensor,
@@ -373,6 +374,18 @@ class GlobalCacheProcessor(nn.Module):
         )
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
+        if self.config.iteration_mode == "external":
+            previous_selected_heads = None
+            for iteration in range(1, self.config.iterations + 1):
+                cache, selected_heads = self._forward_once(cache, select_all=select_all)
+                if previous_selected_heads is not None and selected_heads is not None:
+                    self.block.record_selected_head_overlap(iteration - 1, previous_selected_heads, selected_heads)
+                previous_selected_heads = selected_heads
+            return cache
+        cache, _ = self._forward_once(cache, select_all=select_all)
+        return cache
+
+    def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:
         if self.config.score == "kv_norm" and not select_all:
             all_indices = expand_cache_head_indices(cache.all_indices(), self.num_cache_heads)
             merged = gather_per_cache_head_kv(
@@ -384,13 +397,13 @@ class GlobalCacheProcessor(nn.Module):
             )
             indices, selected_heads = self._select_indices_and_heads(cache, merged, select_all)
             if indices.shape[-1] == 0:
-                return cache
+                return cache, None
             index = indices[..., None].expand(-1, -1, -1, merged.shape[-1])
             merged = torch.gather(merged, dim=2, index=index)
         else:
             indices, selected_heads = self._select_indices_and_heads(cache, None, select_all)
             if indices.shape[-1] == 0:
-                return cache
+                return cache, None
             merged = gather_per_cache_head_kv(
                 cache,
                 indices,
@@ -399,18 +412,18 @@ class GlobalCacheProcessor(nn.Module):
                 rotary_style=self.rotary_style,
             )
         if indices.shape[-1] == 0:
-            return cache
+            return cache, None
         if selected_heads is None:
             selected_heads = _select_heads_from_merged(merged, self.config.topk_heads)
         updated = self.block(merged, selected_heads)
         latest = latest_shared_indices(indices)
         if self.config.update_stream == "v":
             values = _split_merged_values(updated[:, :, None, :], self.num_layers, self.num_kv_heads, self.head_dim)
-            return _scatter_latest_values(cache, latest, values)
+            return _scatter_latest_values(cache, latest, values), selected_heads
         keys, values = _split_merged(updated[:, :, None, :], self.num_layers, self.num_kv_heads, self.head_dim)
         if self.config.unrope_keys:
             keys = rotate_cache_keys(keys, latest, theta=self.rope_theta, rotary_style=self.rotary_style)
-        return _scatter_latest(cache, latest, keys, values)
+        return _scatter_latest(cache, latest, keys, values), selected_heads
 
     def _select_indices_and_heads(
         self,

@@ -48,8 +48,16 @@ def test_longshot_processor_flops_scale_with_iterations():
     )
     once = replace(backbone, variant="longshot", cache_processor=cp)
     twice = replace(backbone, variant="longshot", cache_processor=replace(cp, iterations=2))
+    twice_external = replace(
+        backbone,
+        variant="longshot",
+        cache_processor=replace(cp, iterations=2, iteration_mode="external"),
+    )
 
     assert processor_forward_flops_per_sequence(twice, 128) == 2 * processor_forward_flops_per_sequence(once, 128)
+    assert processor_forward_flops_per_sequence(twice_external, 128) == 2 * processor_forward_flops_per_sequence(
+        once, 128
+    )
 
 
 def test_icarus_value_only_writeback_flops_keep_kv_input_but_reduce_output():

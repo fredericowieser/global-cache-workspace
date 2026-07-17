@@ -696,12 +696,18 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.unrope_keys is False
     assert cp.include_self_head_kv is False
     assert cp.iterations == 1
+    assert cp.iteration_mode == "internal"
     assert cp.stream_factor == 2
 
 
 def test_cache_processor_iterations_must_be_positive():
     with pytest.raises(ValueError, match="iterations"):
         CacheProcessorConfig(iterations=0)
+
+
+def test_cache_processor_iteration_mode_must_be_known():
+    with pytest.raises(ValueError, match="iteration_mode"):
+        CacheProcessorConfig(iteration_mode="outer")
 
 
 def test_self_head_kv_attention_is_config_gated_at_init():
@@ -816,6 +822,83 @@ def test_longshot_iterative_processor_supports_empty_reselected_heads():
     selected_heads = torch.empty(2, 0, dtype=torch.long)
 
     assert block(x, selected_heads).shape == (2, 4, 16)
+
+
+def test_longshot_external_iteration_repeats_forward_once_and_preserves_select_all():
+    model_config = tiny_config("longshot", iterations=3, iteration_mode="external")
+    processor = LongshotGlobalCacheProcessor(model_config)
+    cache = _random_cache(model_config)
+    calls = []
+    selected_heads = torch.tensor([[0, 1], [1, 2]])
+
+    def fake_forward_once(self, cache, *, select_all=False):
+        calls.append(select_all)
+        return cache, selected_heads
+
+    processor._forward_once = types.MethodType(fake_forward_once, processor)
+
+    assert processor(cache, select_all=True) is cache
+    assert calls == [True, True, True]
+
+
+def test_longshot_external_iteration_runs_one_block_iteration_per_global_call():
+    class RecordingLayer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def forward(self, x, selected_heads, return_attn_scores=False):
+            self.calls += 1
+            assert return_attn_scores is False
+            return x
+
+    model_config = tiny_config("longshot", iterations=3, iteration_mode="external")
+    processor = LongshotGlobalCacheProcessor(model_config)
+    layer = RecordingLayer()
+    processor.block.layers = nn.ModuleList([layer])
+    cache = _random_cache(model_config)
+
+    processor(cache)
+
+    assert layer.calls == 3
+
+
+def test_longshot_external_iteration_logs_selected_head_overlap_between_calls():
+    processor = LongshotGlobalCacheProcessor(tiny_config("longshot", iterations=3, iteration_mode="external"))
+    cache = _random_cache(tiny_config("longshot"))
+    selections = iter(
+        [
+            torch.tensor([[0, 1], [0, 2]]),
+            torch.tensor([[1, 2], [2, 3]]),
+            torch.tensor([[2, 3], [0, 3]]),
+        ]
+    )
+
+    def fake_forward_once(self, cache, *, select_all=False):
+        return cache, next(selections)
+
+    processor._forward_once = types.MethodType(fake_forward_once, processor)
+
+    processor(cache)
+
+    assert processor.block.pop_iteration_metrics() == {
+        "cache_processor/selected_head_overlap_after_iter_1": 0.5,
+        "cache_processor/selected_head_overlap_after_iter_2": 0.5,
+    }
+
+
+def test_longshot_external_single_iteration_logs_no_selected_head_overlap():
+    processor = LongshotGlobalCacheProcessor(tiny_config("longshot", iterations=1, iteration_mode="external"))
+    cache = _random_cache(tiny_config("longshot"))
+
+    def fake_forward_once(self, cache, *, select_all=False):
+        return cache, torch.tensor([[0, 1], [1, 2]])
+
+    processor._forward_once = types.MethodType(fake_forward_once, processor)
+
+    processor(cache)
+
+    assert processor.block.pop_iteration_metrics() == {}
 
 
 def test_zero_out_direct_gate_starts_as_identity():
