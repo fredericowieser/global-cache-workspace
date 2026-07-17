@@ -165,9 +165,18 @@ class PerCacheHeadLinear(nn.Module):
 
 
 class CacheProcessor(nn.Module):
-    def __init__(self, input_dim: int, num_cache_heads: int, config: CacheProcessorConfig):
+    def __init__(
+        self,
+        input_dim: int,
+        num_cache_heads: int,
+        config: CacheProcessorConfig,
+        *,
+        output_dim: int | None = None,
+    ):
         super().__init__()
         self.config = config
+        self.input_dim = input_dim
+        self.output_dim = output_dim or input_dim
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
         if config.per_cache_head_projections:
             self.in_proj = PerCacheHeadLinear(num_cache_heads, input_dim, config.hidden_size)
@@ -176,9 +185,9 @@ class CacheProcessor(nn.Module):
         self.layers = nn.ModuleList(ProcessorLayer(config) for _ in range(config.num_layers))
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
         if config.per_cache_head_projections:
-            self.out_proj = PerCacheHeadLinear(num_cache_heads, config.hidden_size, input_dim)
+            self.out_proj = PerCacheHeadLinear(num_cache_heads, config.hidden_size, self.output_dim)
         else:
-            self.out_proj = nn.Linear(config.hidden_size, input_dim)
+            self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
         self.init_weights()
 
@@ -212,7 +221,8 @@ class CacheProcessor(nn.Module):
         return delta * self._gate_scale(delta.dtype)
 
     def forward(self, x: torch.Tensor, positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        return x + self.scaled_update(x, positions, selected_heads)
+        residual = x[..., -self.output_dim :]
+        return residual + self.scaled_update(x, positions, selected_heads)
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
         if self.config.gate_mode == "sigmoid":
@@ -230,8 +240,8 @@ class GlobalCacheProcessor(nn.Module):
         self.config = model_config.cache_processor
         if self.config.processor_mode != "standard":
             raise ValueError("Icarus supports only cache_processor.processor_mode='standard'")
-        if self.config.update_stream != "kv":
-            raise ValueError("Icarus supports only cache_processor.update_stream='kv'")
+        if self.config.update_stream not in {"kv", "v"}:
+            raise ValueError("Icarus supports only cache_processor.update_stream='kv' or 'v'")
         if self.config.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("Icarus supports only cache_processor.score='attn_l2' or 'kv_norm'")
         self.num_layers = model_config.num_layers
@@ -240,7 +250,8 @@ class GlobalCacheProcessor(nn.Module):
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
         self.num_cache_heads = self.num_layers * self.num_kv_heads
-        self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config)
+        output_dim = self.head_dim if self.config.update_stream == "v" else 2 * self.head_dim
+        self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config, output_dim=output_dim)
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
         if self.config.score == "kv_norm" and not select_all:
@@ -275,6 +286,9 @@ class GlobalCacheProcessor(nn.Module):
         updated = self.block(merged, indices, selected_heads)
         latest = latest_shared_indices(indices)
         latest_update = updated[:, :, -1:].contiguous()
+        if self.config.update_stream == "v":
+            values = _split_merged_values(latest_update, self.num_layers, self.num_kv_heads, self.head_dim)
+            return _scatter_latest_values(cache, latest, values)
         keys, values = _split_merged(latest_update, self.num_layers, self.num_kv_heads, self.head_dim)
         if self.config.unrope_keys:
             keys = rotate_cache_keys(keys, latest, theta=self.rope_theta, rotary_style=self.rotary_style)
@@ -326,6 +340,23 @@ def _scatter_latest(cache: CacheLike, indices: torch.Tensor, keys: torch.Tensor,
     return cache
 
 
+def _scatter_latest_values(cache: CacheLike, indices: torch.Tensor, values: torch.Tensor) -> CacheLike:
+    if isinstance(cache, WindowedCache):
+        index = indices[None, :, None, :, None].expand_as(values)
+        cache.values = cache.values.scatter(3, index, values.to(cache.values.dtype))
+        return cache
+    if isinstance(cache, StaticCacheState):
+        for layer_idx in range(cache.num_layers):
+            target = cache.values[layer_idx][:, :, : cache.length, :]
+            index = indices[:, None, :, None].expand_as(values[layer_idx])
+            target.scatter_(2, index, values[layer_idx].to(target.dtype))
+        return cache
+    for layer_idx in range(cache.num_layers):
+        index = indices[:, None, :, None].expand_as(values[layer_idx])
+        cache.values[layer_idx] = cache.values[layer_idx].scatter(2, index, values[layer_idx].to(cache.values[layer_idx].dtype))
+    return cache
+
+
 def _split_merged(
     x: torch.Tensor,
     num_layers: int,
@@ -337,6 +368,16 @@ def _split_merged(
     keys = split[:, :, :, :, 0].permute(1, 0, 2, 3, 4).contiguous()
     values = split[:, :, :, :, 1].permute(1, 0, 2, 3, 4).contiguous()
     return keys, values
+
+
+def _split_merged_values(
+    x: torch.Tensor,
+    num_layers: int,
+    num_heads: int,
+    head_dim: int,
+) -> torch.Tensor:
+    batch, cache_heads, seq, _ = x.shape
+    return x.view(batch, num_layers, num_heads, seq, head_dim).permute(1, 0, 2, 3, 4).contiguous()
 
 
 def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:

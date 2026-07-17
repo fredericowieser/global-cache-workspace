@@ -71,9 +71,19 @@ def test_tiny_icarus_uses_icarus_processor():
     model = build_model(tiny_config("icarus"))
     assert isinstance(model, Icarus)
     assert isinstance(model.cache_processor, IcarusGlobalCacheProcessor)
+    x = torch.randn(2, 4, 6, 16)
+    positions = torch.arange(6).view(1, 1, 6).expand(2, 4, -1)
+    selected_heads = torch.tensor([[0, 2], [1, 3]])
+    assert model.cache_processor.block(x, positions, selected_heads).shape == (2, 4, 6, 16)
+
+    value_only = build_model(tiny_config("icarus", update_stream="v"))
+    assert value_only.cache_processor.block.input_dim == 16
+    assert value_only.cache_processor.block.output_dim == 8
+    assert value_only.cache_processor.block(x, positions, selected_heads).shape == (2, 4, 6, 8)
+
     model.init_weights()
-    x = torch.randint(0, 128, (2, 9))
-    loss = model(x, x)
+    tokens = torch.randint(0, 128, (2, 9))
+    loss = model(tokens, tokens)
     loss.backward()
     assert torch.isfinite(loss)
     assert any(p.grad is not None for p in model.cache_processor.parameters())
@@ -88,6 +98,10 @@ def test_tiny_longshot_uses_longshot_processor_and_configured_encoder():
     selected_heads = torch.tensor([[0, 2], [1, 3]])
     out = linear.cache_processor.block(x, selected_heads)
     assert out.shape == (2, 4, 16)
+
+    value_only = build_model(tiny_config("longshot", encoder_seq_len=6, update_stream="v"))
+    value_out = value_only.cache_processor.block(x, selected_heads)
+    assert value_out.shape == (2, 4, 8)
 
     query = build_model(tiny_config("longshot", encoder_method="query_attention"))
     assert query.cache_processor.block.encoder_method == "query_attention"
@@ -468,6 +482,51 @@ def test_icarus_cache_processor_matches_static_cache_path():
     _assert_cache_close(_cache_state_from_static(static), expected)
 
 
+def test_icarus_value_only_updates_only_latest_values():
+    model = build_model(tiny_config("icarus", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    actual = _clone_cache(cache)
+    indices = cache.select_indices(4, 2)
+
+    model.cache_processor(actual)
+
+    _assert_keys_unchanged(cache, actual)
+    _assert_cache_positions_unchanged(cache, actual, _not_latest_mask(cache, indices))
+    value_delta = sum((new_value - old_value).abs().sum() for old_value, new_value in zip(cache.values, actual.values))
+    assert value_delta > 0
+
+
+def test_icarus_value_only_matches_windowed_cache_path():
+    model = build_model(tiny_config("icarus", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    actual = WindowedCache.from_cache_state(_clone_cache(cache))
+
+    model.cache_processor(expected)
+    model.cache_processor(actual)
+
+    actual_state = actual.to_cache_state()
+    _assert_cache_close(actual_state, expected)
+    _assert_keys_unchanged(cache, actual_state)
+
+
+def test_icarus_value_only_matches_static_cache_path():
+    model = build_model(tiny_config("icarus", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    static = _static_cache_from_state(cache)
+
+    model.cache_processor(expected)
+    model.cache_processor(static)
+
+    actual = _cache_state_from_static(static)
+    _assert_cache_close(actual, expected)
+    _assert_keys_unchanged(cache, actual)
+
+
 def test_icarus_select_all_uses_all_indices_and_heads():
     model = build_model(tiny_config("icarus"))
     cache = _random_cache(model.config)
@@ -487,15 +546,17 @@ def test_icarus_select_all_uses_all_indices_and_heads():
 
 
 def test_icarus_rejects_unsupported_cache_processor_modes():
-    with pytest.raises(ValueError, match="update_stream"):
-        build_model(tiny_config("icarus", update_stream="v"))
+    model = build_model(tiny_config("icarus", update_stream="v"))
+    assert model.cache_processor.block.input_dim == 16
+    assert model.cache_processor.block.output_dim == 8
     with pytest.raises(ValueError, match="processor_mode"):
         build_model(tiny_config("icarus", processor_mode="workspace_broadcast"))
 
 
 def test_longshot_rejects_unsupported_cache_processor_modes():
-    with pytest.raises(ValueError, match="update_stream"):
-        build_model(tiny_config("longshot", update_stream="v"))
+    model = build_model(tiny_config("longshot", update_stream="v"))
+    assert model.cache_processor.block.input_dim == 16
+    assert model.cache_processor.block.output_dim == 8
     with pytest.raises(ValueError, match="processor_mode"):
         build_model(tiny_config("longshot", processor_mode="workspace_broadcast"))
 
@@ -731,6 +792,51 @@ def test_value_only_cache_processor_matches_windowed_cache_path():
         _assert_keys_unchanged(cache, actual_state)
 
 
+def test_longshot_value_only_updates_only_latest_values():
+    model = build_model(tiny_config("longshot", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    actual = _clone_cache(cache)
+    indices = cache.select_indices(4, 2)
+
+    model.cache_processor(actual)
+
+    _assert_keys_unchanged(cache, actual)
+    _assert_cache_positions_unchanged(cache, actual, _not_latest_mask(cache, indices))
+    value_delta = sum((new_value - old_value).abs().sum() for old_value, new_value in zip(cache.values, actual.values))
+    assert value_delta > 0
+
+
+def test_longshot_value_only_matches_windowed_cache_path():
+    model = build_model(tiny_config("longshot", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    actual = WindowedCache.from_cache_state(_clone_cache(cache))
+
+    model.cache_processor(expected)
+    model.cache_processor(actual)
+
+    actual_state = actual.to_cache_state()
+    _assert_cache_close(actual_state, expected)
+    _assert_keys_unchanged(cache, actual_state)
+
+
+def test_longshot_value_only_matches_static_cache_path():
+    model = build_model(tiny_config("longshot", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    static = _static_cache_from_state(cache)
+
+    model.cache_processor(expected)
+    model.cache_processor(static)
+
+    actual = _cache_state_from_static(static)
+    _assert_cache_close(actual, expected)
+    _assert_keys_unchanged(cache, actual)
+
+
 def test_experimental_value_only_forward_backward():
     for variant in ("bt", "bgt"):
         model = build_model(
@@ -748,6 +854,42 @@ def test_experimental_value_only_forward_backward():
 
         assert torch.isfinite(loss)
         assert any(p.grad is not None for p in model.cache_processor.parameters())
+
+
+def test_icarus_value_only_forward_backward():
+    model = build_model(
+        tiny_config(
+            "icarus",
+            update_stream="v",
+            out_proj_init="zero",
+            gate_mode="direct",
+            gate_init=1.0,
+        )
+    )
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in model.cache_processor.parameters())
+
+
+def test_longshot_value_only_forward_backward():
+    model = build_model(
+        tiny_config(
+            "longshot",
+            update_stream="v",
+            out_proj_init="zero",
+            gate_mode="direct",
+            gate_init=1.0,
+        )
+    )
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in model.cache_processor.parameters())
 
 
 def test_workspace_broadcast_zero_out_starts_as_identity():

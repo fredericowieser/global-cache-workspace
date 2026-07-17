@@ -24,7 +24,15 @@ def estimate_processor_params(config: ModelConfig) -> int:
         return _processor_block_params(config.num_layers * per_layer_dim, config.cache_processor) + _salience_params(config)
     if config.variant == "icarus":
         projection_count = config.num_layers * config.num_kv_heads if config.cache_processor.per_cache_head_projections else 1
-        return _processor_block_params(2 * int(config.head_dim), config.cache_processor, projection_count=projection_count)
+        input_dim = 2 * int(config.head_dim)
+        out_proj_dim = int(config.head_dim) if config.cache_processor.update_stream == "v" else input_dim
+        return _processor_block_params_with_dims(
+            input_norm_dim=input_dim,
+            in_proj_dim=input_dim,
+            out_proj_dim=out_proj_dim,
+            config=config.cache_processor,
+            projection_count=projection_count,
+        )
     if config.variant == "longshot":
         return _longshot_processor_params(config)
     return 0
@@ -85,11 +93,12 @@ def _longshot_processor_params(config: ModelConfig) -> int:
     cache_heads = config.num_layers * config.num_kv_heads
     projection_count = cache_heads if cp.per_cache_head_projections else 1
     in_proj_dim = input_dim if cp.encoder_method == "query_attention" else input_dim * _longshot_encoder_seq_len(cp)
+    out_proj_dim = int(config.head_dim) if cp.update_stream == "v" else input_dim
     query = _longshot_query_params(input_dim, cache_heads, cp)
     return query + _processor_block_params_with_dims(
         input_norm_dim=input_dim,
         in_proj_dim=in_proj_dim,
-        out_proj_dim=input_dim,
+        out_proj_dim=out_proj_dim,
         config=cp,
         projection_count=projection_count,
     )

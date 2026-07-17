@@ -94,7 +94,8 @@ def _icarus_processor_block_flops_per_call(
     cache_heads: int,
     selected_heads: int,
 ) -> float:
-    in_out = input_dim * config.hidden_size + config.hidden_size * input_dim
+    output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
+    in_out = input_dim * config.hidden_size + config.hidden_size * output_dim
     matmul = 2 * selected * cache_heads * (in_out + config.num_layers * _processor_layer_matmul_params(config))
     head_dim = config.hidden_size // config.num_heads
     attn = config.num_layers * 4 * config.num_heads * head_dim * (cache_heads * selected) * (selected_heads * selected)
@@ -110,7 +111,8 @@ def _longshot_processor_block_flops_per_call(
 ) -> float:
     encoder_len = config.encoder_seq_len or config.process_every + max(config.topk, 0)
     encoder_in = input_dim if config.encoder_method == "query_attention" else input_dim * encoder_len
-    in_out = encoder_in * config.hidden_size + config.hidden_size * input_dim
+    output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
+    in_out = encoder_in * config.hidden_size + config.hidden_size * output_dim
     encode_extra = 0
     if config.encoder_method == "query_attention":
         encode_extra = 4 * cache_heads * selected * input_dim

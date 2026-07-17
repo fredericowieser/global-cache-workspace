@@ -27,6 +27,24 @@ def test_value_only_processor_flops_use_smaller_cache_stream():
     assert processor_forward_flops_per_sequence(v, 128) < processor_forward_flops_per_sequence(kv, 128)
 
 
+def test_longshot_value_only_writeback_flops_keep_kv_input_but_reduce_output():
+    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
+    kv_cp = CacheProcessorConfig(process_every=32, topk=8, hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)
+    kv = replace(backbone, variant="longshot", cache_processor=kv_cp)
+    v = replace(backbone, variant="longshot", cache_processor=replace(kv_cp, update_stream="v"))
+
+    assert processor_forward_flops_per_sequence(v, 128) < processor_forward_flops_per_sequence(kv, 128)
+
+
+def test_icarus_value_only_writeback_flops_keep_kv_input_but_reduce_output():
+    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
+    kv_cp = CacheProcessorConfig(process_every=32, topk=8, hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)
+    kv = replace(backbone, variant="icarus", cache_processor=kv_cp)
+    v = replace(backbone, variant="icarus", cache_processor=replace(kv_cp, update_stream="v"))
+
+    assert processor_forward_flops_per_sequence(v, 128) < processor_forward_flops_per_sequence(kv, 128)
+
+
 def test_self_head_kv_processor_flops_include_appended_self_head():
     backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
     cp = CacheProcessorConfig(
