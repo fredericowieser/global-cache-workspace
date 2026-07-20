@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 import warnings
 
 import torch
@@ -48,6 +49,13 @@ class ProcessorAttention(nn.Module):
             self.forward = self.forward_with_self_head_kv
         else:
             self.forward = self.forward_selected_head_kv
+        if config.internal_iteration_score == "cache_head_attention":
+            self.forward_with_iteration_scores = partial(
+                self.forward_with_cache_head_attention_scores,
+                include_self_head_kv=config.include_self_head_kv,
+            )
+        else:
+            self.forward_with_iteration_scores = partial(self.forward, return_attn_scores=True)
 
     def forward_selected_head_kv(
         self,
@@ -121,6 +129,79 @@ class ProcessorAttention(nn.Module):
             return y, y.float().pow(2).sum(dim=-1)
         return y
 
+    def forward_with_cache_head_attention_scores(
+        self,
+        x: torch.Tensor,
+        selected_heads: torch.Tensor,
+        *,
+        include_self_head_kv: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the attention output plus all-key attention mass per cache head."""
+        batch, cache_heads, _ = x.shape
+        selected_count = selected_heads.shape[-1]
+        groups = self.num_heads // self.num_kv_heads
+
+        q = self.q_proj(x).view(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
+        k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
+        v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
+
+        q, k_all = q.to(v_all.dtype), k_all.to(v_all.dtype)
+        scale = self.head_dim**-0.5
+        logits = torch.einsum("bckgd,bskd->bckgs", q, k_all) * scale
+        all_attn = torch.softmax(logits.float(), dim=-1)
+        cache_head_attention_scores = all_attn.float().sum(dim=(1, 2, 3))
+
+        if selected_count == 0 and not include_self_head_kv:
+            y = torch.zeros_like(x)
+            return y, cache_head_attention_scores
+
+        if selected_count:
+            logit_index = selected_heads[:, None, None, None, :].expand(
+                -1,
+                cache_heads,
+                self.num_kv_heads,
+                groups,
+                -1,
+            )
+            selected_logits = torch.gather(logits, dim=-1, index=logit_index)
+            value_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
+            v_sel = torch.gather(v_all, dim=1, index=value_index)
+        else:
+            selected_logits = logits.new_empty(batch, cache_heads, self.num_kv_heads, groups, 0)
+            v_sel = v_all.new_empty(batch, 0, self.num_kv_heads, self.head_dim)
+
+        if include_self_head_kv:
+            query_heads = torch.arange(cache_heads, device=x.device)
+            self_index = query_heads[None, :, None, None, None].expand(
+                batch,
+                -1,
+                self.num_kv_heads,
+                groups,
+                1,
+            )
+            self_logits = torch.gather(logits, dim=-1, index=self_index)
+            if selected_count:
+                self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
+                self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None], float("-inf"))
+            output_logits = torch.cat([selected_logits, self_logits], dim=-1)
+        else:
+            output_logits = selected_logits
+
+        output_attn = torch.softmax(output_logits, dim=-1)
+        if self.training and self.dropout > 0.0:
+            output_attn = F.dropout(output_attn, p=self.dropout, training=True)
+
+        if selected_count:
+            selected_attn = output_attn[..., :selected_count]
+            y = torch.einsum("bckgs,bskd->bckgd", selected_attn, v_sel)
+        else:
+            y = v_all.new_zeros(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
+        if include_self_head_kv:
+            self_attn = output_attn[..., selected_count]
+            y = y + self_attn[:, :, :, :, None] * v_all[:, :, :, None, :]
+        y = y.contiguous().view(batch, cache_heads, self.num_heads * self.head_dim)
+        return self.o_proj(y), cache_head_attention_scores
+
 
 class ProcessorLayer(nn.Module):
     def __init__(self, config: CacheProcessorConfig):
@@ -138,7 +219,12 @@ class ProcessorLayer(nn.Module):
         selected_heads: torch.Tensor,
         return_attn_scores: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        attn_out = self.attn(self.input_norm(x), selected_heads, return_attn_scores=return_attn_scores)
+        h = self.input_norm(x)
+        attn_out = (
+            self.attn.forward_with_iteration_scores(h, selected_heads)
+            if return_attn_scores
+            else self.attn(h, selected_heads)
+        )
         if return_attn_scores:
             attn_out, attn_scores = attn_out
         x = x + attn_out

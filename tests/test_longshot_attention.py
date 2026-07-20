@@ -94,6 +94,75 @@ def test_processor_attention_can_return_attention_output_scores():
         assert torch.allclose(scores, output.float().pow(2).sum(dim=-1), atol=1e-6, rtol=1e-6)
 
 
+def test_processor_attention_cache_head_attention_scores_match_existing_outputs():
+    torch.manual_seed(25)
+    attn = ProcessorAttention(
+        CacheProcessorConfig(
+            hidden_size=12,
+            intermediate_size=24,
+            num_heads=4,
+            num_kv_heads=2,
+            attention_dropout=0.0,
+        )
+    ).eval()
+    x = torch.randn(2, 5, 12)
+    selected_heads = torch.tensor([[0, 3], [1, 4]])
+
+    no_self_output, no_self_scores = attn.forward_with_cache_head_attention_scores(
+        x,
+        selected_heads,
+        include_self_head_kv=False,
+    )
+    self_output, self_scores = attn.forward_with_cache_head_attention_scores(
+        x,
+        selected_heads,
+        include_self_head_kv=True,
+    )
+
+    assert torch.allclose(no_self_output, attn.forward_selected_head_kv(x, selected_heads), atol=1e-6, rtol=1e-6)
+    assert torch.allclose(self_output, attn.forward_with_self_head_kv(x, selected_heads), atol=1e-6, rtol=1e-6)
+    assert no_self_scores.shape == (2, 5)
+    assert torch.allclose(no_self_scores, self_scores, atol=1e-6, rtol=1e-6)
+    assert torch.allclose(
+        no_self_scores.sum(dim=-1),
+        torch.full((2,), 5 * attn.num_heads, device=x.device, dtype=no_self_scores.dtype),
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+
+def test_processor_attention_cache_head_attention_scores_support_empty_selection():
+    torch.manual_seed(26)
+    attn = ProcessorAttention(
+        CacheProcessorConfig(
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=2,
+            num_kv_heads=1,
+            attention_dropout=0.0,
+        )
+    ).eval()
+    x = torch.randn(1, 3, 8)
+    selected_heads = torch.empty(1, 0, dtype=torch.long)
+
+    no_self_output, scores = attn.forward_with_cache_head_attention_scores(
+        x,
+        selected_heads,
+        include_self_head_kv=False,
+    )
+    self_output, self_scores = attn.forward_with_cache_head_attention_scores(
+        x,
+        selected_heads,
+        include_self_head_kv=True,
+    )
+
+    assert torch.equal(no_self_output, torch.zeros_like(x))
+    assert torch.allclose(self_output, _self_only_reference(attn, x), atol=1e-6, rtol=1e-6)
+    assert scores.shape == (1, 3)
+    assert torch.allclose(scores, self_scores, atol=1e-6, rtol=1e-6)
+    assert torch.allclose(scores.sum(dim=-1), torch.tensor([3 * attn.num_heads], dtype=scores.dtype))
+
+
 def _dense_self_head_kv_reference(
     attn: ProcessorAttention,
     x: torch.Tensor,

@@ -17,6 +17,7 @@ CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broad
 CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
 CacheProcessorIterationMode = Literal["internal", "external"]
+CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention"]
 
 
 @dataclass
@@ -51,6 +52,7 @@ class CacheProcessorConfig:
     include_self_head_kv: bool = False
     iterations: int = 1
     iteration_mode: CacheProcessorIterationMode = "internal"
+    internal_iteration_score: CacheProcessorInternalIterationScore = "attn_l2"
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
@@ -81,6 +83,8 @@ class CacheProcessorConfig:
             raise ValueError("cache_processor.iterations must be positive")
         if self.iteration_mode not in {"internal", "external"}:
             raise ValueError("cache_processor.iteration_mode must be 'internal' or 'external'")
+        if self.internal_iteration_score not in {"attn_l2", "cache_head_attention"}:
+            raise ValueError("cache_processor.internal_iteration_score must be 'attn_l2' or 'cache_head_attention'")
 
     @property
     def stream_factor(self) -> int:

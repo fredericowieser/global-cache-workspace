@@ -1,3 +1,4 @@
+import functools
 import types
 
 import pytest
@@ -697,6 +698,7 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.include_self_head_kv is False
     assert cp.iterations == 1
     assert cp.iteration_mode == "internal"
+    assert cp.internal_iteration_score == "attn_l2"
     assert cp.stream_factor == 2
 
 
@@ -708,6 +710,11 @@ def test_cache_processor_iterations_must_be_positive():
 def test_cache_processor_iteration_mode_must_be_known():
     with pytest.raises(ValueError, match="iteration_mode"):
         CacheProcessorConfig(iteration_mode="outer")
+
+
+def test_cache_processor_internal_iteration_score_must_be_known():
+    with pytest.raises(ValueError, match="internal_iteration_score"):
+        CacheProcessorConfig(internal_iteration_score="attention")
 
 
 def test_self_head_kv_attention_is_config_gated_at_init():
@@ -732,6 +739,37 @@ def test_self_head_kv_attention_is_config_gated_at_init():
 
         assert default_attn.forward.__func__ is default_attn.forward_selected_head_kv.__func__
         assert enabled_attn.forward.__func__ is enabled_attn.forward_with_self_head_kv.__func__
+
+
+def test_longshot_cache_head_attention_score_forward_is_config_gated_at_init():
+    default_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=False,
+        internal_iteration_score="cache_head_attention",
+    )
+    enabled_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=True,
+        internal_iteration_score="cache_head_attention",
+    )
+
+    default_attn = LongshotProcessorAttention(default_config)
+    enabled_attn = LongshotProcessorAttention(enabled_config)
+
+    assert default_attn.forward.__func__ is default_attn.forward_selected_head_kv.__func__
+    assert isinstance(default_attn.forward_with_iteration_scores, functools.partial)
+    assert default_attn.forward_with_iteration_scores.func.__func__ is default_attn.forward_with_cache_head_attention_scores.__func__
+    assert default_attn.forward_with_iteration_scores.keywords == {"include_self_head_kv": False}
+    assert enabled_attn.forward.__func__ is enabled_attn.forward_with_self_head_kv.__func__
+    assert isinstance(enabled_attn.forward_with_iteration_scores, functools.partial)
+    assert enabled_attn.forward_with_iteration_scores.func.__func__ is enabled_attn.forward_with_cache_head_attention_scores.__func__
+    assert enabled_attn.forward_with_iteration_scores.keywords == {"include_self_head_kv": True}
 
 
 def test_self_head_kv_attention_can_be_enabled_from_config_dict():
@@ -803,6 +841,52 @@ def test_longshot_iterative_processor_reselects_heads_between_iterations():
         "cache_processor/selected_head_overlap_after_iter_2": 1.0,
     }
     assert block.pop_iteration_metrics() == {}
+
+
+def test_longshot_iterative_processor_can_reselect_from_cache_head_attention_scores():
+    class RecordingAttention(nn.Module):
+        def __init__(self, scores: torch.Tensor):
+            super().__init__()
+            self.register_buffer("scores", scores)
+            self.calls = []
+
+        def forward(self, x, selected_heads, return_attn_scores=False):
+            assert return_attn_scores is False
+            self.calls.append((selected_heads.detach().clone(), return_attn_scores))
+            return torch.zeros_like(x)
+
+        def forward_with_iteration_scores(self, x, selected_heads):
+            self.calls.append((selected_heads.detach().clone(), True))
+            x = torch.zeros_like(x)
+            return x, self.scores[None, :].expand(x.shape[0], -1)
+
+    config = CacheProcessorConfig(
+        process_every=4,
+        topk=2,
+        topk_heads=2,
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_seq_len=3,
+        iterations=2,
+        include_self_head_kv=True,
+        internal_iteration_score="cache_head_attention",
+    )
+    block = LongshotCacheProcessor(16, 4, config)
+    attention = RecordingAttention(torch.tensor([0.0, 4.0, 1.0, 3.0]))
+    block.layers[0].attn = attention
+    x = torch.randn(1, 4, 3, 16)
+
+    out = block.compute_update(x, torch.tensor([[0, 2]]))
+
+    assert out.shape == (1, 4, 16)
+    assert len(attention.calls) == 2
+    assert torch.equal(attention.calls[0][0], torch.tensor([[0, 2]]))
+    assert attention.calls[0][1] is True
+    assert torch.equal(attention.calls[1][0], torch.tensor([[1, 3]]))
+    assert attention.calls[1][1] is False
+    assert block.pop_iteration_metrics() == {"cache_processor/selected_head_overlap_after_iter_1": 0.0}
 
 
 def test_longshot_iterative_processor_supports_empty_reselected_heads():
