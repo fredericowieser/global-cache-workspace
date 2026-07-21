@@ -55,28 +55,6 @@ def test_processor_attention_self_head_kv_masks_duplicate_self_head_sequence():
     assert torch.allclose(without_duplicate[:, 1], with_duplicate[:, 1], atol=1e-6, rtol=1e-6)
 
 
-def test_processor_attention_self_head_kv_empty_selection_attends_to_self_sequence():
-    torch.manual_seed(33)
-    attn = ProcessorAttention(
-        CacheProcessorConfig(
-            hidden_size=12,
-            intermediate_size=24,
-            num_heads=3,
-            num_kv_heads=3,
-            attention_dropout=0.0,
-        )
-    ).eval()
-    x = torch.randn(2, 5, 3, 12)
-    positions = torch.arange(30).view(2, 5, 3)
-    selected_heads = torch.empty(2, 0, dtype=torch.long)
-
-    actual = attn.forward_with_self_head_kv(x, positions, 10000.0, selected_heads)
-    expected = _dense_self_head_kv_reference(attn, x, positions, 10000.0, selected_heads)
-
-    assert actual.shape == (2, 5, 3, 12)
-    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
-
-
 def _dense_self_head_kv_reference(
     attn: ProcessorAttention,
     x: torch.Tensor,

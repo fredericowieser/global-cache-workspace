@@ -46,29 +46,6 @@ def test_processor_attention_self_head_kv_masks_appended_duplicate_self():
     assert torch.allclose(without_duplicate[:, 1], with_duplicate[:, 1], atol=1e-6, rtol=1e-6)
 
 
-def test_processor_attention_self_head_kv_empty_selection_is_self_only():
-    torch.manual_seed(23)
-    attn = ProcessorAttention(
-        CacheProcessorConfig(
-            hidden_size=12,
-            intermediate_size=24,
-            num_heads=3,
-            num_kv_heads=3,
-            attention_dropout=0.0,
-        )
-    ).eval()
-    x = torch.randn(2, 5, 12)
-    selected_heads = torch.empty(2, 0, dtype=torch.long)
-
-    actual = attn.forward_with_self_head_kv(x, selected_heads)
-    expected = _dense_self_head_kv_reference(attn, x, selected_heads)
-    self_only = _self_only_reference(attn, x)
-
-    assert actual.shape == (2, 5, 12)
-    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
-    assert torch.allclose(actual, self_only, atol=1e-6, rtol=1e-6)
-
-
 def test_processor_attention_can_return_attention_output_scores():
     torch.manual_seed(24)
     x = torch.randn(2, 4, 8)
@@ -131,38 +108,6 @@ def test_processor_attention_cache_head_attention_scores_match_existing_outputs(
     )
 
 
-def test_processor_attention_cache_head_attention_scores_support_empty_selection():
-    torch.manual_seed(26)
-    attn = ProcessorAttention(
-        CacheProcessorConfig(
-            hidden_size=8,
-            intermediate_size=16,
-            num_heads=2,
-            num_kv_heads=1,
-            attention_dropout=0.0,
-        )
-    ).eval()
-    x = torch.randn(1, 3, 8)
-    selected_heads = torch.empty(1, 0, dtype=torch.long)
-
-    no_self_output, scores = attn.forward_with_cache_head_attention_scores(
-        x,
-        selected_heads,
-        include_self_head_kv=False,
-    )
-    self_output, self_scores = attn.forward_with_cache_head_attention_scores(
-        x,
-        selected_heads,
-        include_self_head_kv=True,
-    )
-
-    assert torch.equal(no_self_output, torch.zeros_like(x))
-    assert torch.allclose(self_output, _self_only_reference(attn, x), atol=1e-6, rtol=1e-6)
-    assert scores.shape == (1, 3)
-    assert torch.allclose(scores, self_scores, atol=1e-6, rtol=1e-6)
-    assert torch.allclose(scores.sum(dim=-1), torch.tensor([3 * attn.num_heads], dtype=scores.dtype))
-
-
 def test_processor_attention_kv_norm_scores_match_existing_outputs():
     torch.manual_seed(27)
     x = torch.randn(2, 5, 12)
@@ -192,36 +137,6 @@ def test_processor_attention_kv_norm_scores_match_existing_outputs():
         assert torch.allclose(scores, expected_scores, atol=1e-6, rtol=1e-6)
 
 
-def test_processor_attention_kv_norm_scores_support_empty_selection():
-    torch.manual_seed(28)
-    x = torch.randn(1, 3, 8)
-    selected_heads = torch.empty(1, 0, dtype=torch.long)
-
-    for include_self_head_kv in (False, True):
-        attn = ProcessorAttention(
-            CacheProcessorConfig(
-                hidden_size=8,
-                intermediate_size=16,
-                num_heads=2,
-                num_kv_heads=1,
-                attention_dropout=0.0,
-                include_self_head_kv=include_self_head_kv,
-                internal_iteration_score="kv_norm",
-            )
-        ).eval()
-
-        output, scores = attn.forward_with_iteration_scores(x, selected_heads)
-        k_all = attn.k_proj(x).view(1, 3, attn.num_kv_heads, attn.head_dim)
-        v_all = attn.v_proj(x).view(1, 3, attn.num_kv_heads, attn.head_dim)
-        expected_scores = k_all.float().pow(2).sum(dim=(2, 3)) + v_all.float().pow(2).sum(dim=(2, 3))
-
-        if include_self_head_kv:
-            assert torch.allclose(output, _self_only_reference(attn, x), atol=1e-6, rtol=1e-6)
-        else:
-            assert torch.equal(output, torch.zeros_like(x))
-        assert torch.allclose(scores, expected_scores, atol=1e-6, rtol=1e-6)
-
-
 def _dense_self_head_kv_reference(
     attn: ProcessorAttention,
     x: torch.Tensor,
@@ -246,11 +161,3 @@ def _dense_self_head_kv_reference(
     y = y.contiguous().view(batch, cache_heads, attn.num_heads * attn.head_dim)
     return attn.o_proj(y)
 
-
-def _self_only_reference(attn: ProcessorAttention, x: torch.Tensor) -> torch.Tensor:
-    batch, cache_heads, _ = x.shape
-    groups = attn.num_heads // attn.num_kv_heads
-    v = attn.v_proj(x).view(batch, cache_heads, attn.num_kv_heads, attn.head_dim)
-    y = v[:, :, :, None, :].expand(-1, -1, -1, groups, -1)
-    y = y.contiguous().view(batch, cache_heads, attn.num_heads * attn.head_dim)
-    return attn.o_proj(y)

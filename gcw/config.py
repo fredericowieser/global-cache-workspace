@@ -57,8 +57,8 @@ class CacheProcessorConfig:
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("cache_processor.score must be 'attn_l2' or 'kv_norm'")
-        if self.topk_heads < 0:
-            raise ValueError("cache_processor.topk_heads must be non-negative")
+        if self.topk_heads <= 0:
+            raise ValueError("cache_processor.topk_heads must be positive")
         if self.update_stream not in {"kv", "v"}:
             raise ValueError("cache_processor.update_stream must be 'kv' or 'v'")
         if self.out_proj_init not in {"normal", "zero"}:

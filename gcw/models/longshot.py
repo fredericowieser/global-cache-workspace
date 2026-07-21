@@ -68,15 +68,7 @@ class ProcessorAttention(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         score_kv_norm = return_attn_scores and self.internal_iteration_score == "kv_norm"
-        if selected_heads.shape[-1] == 0:
-            y = torch.zeros_like(x)
-            if return_attn_scores:
-                if score_kv_norm:
-                    k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-                    v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-                    return y, k_all.float().pow(2).sum(dim=(2, 3)) + v_all.float().pow(2).sum(dim=(2, 3))
-                return y, x.new_zeros(batch, cache_heads, dtype=torch.float32)
-            return y
+        assert selected_heads.shape[-1] > 0, "selected_heads must include at least one cache head"
         q = self.q_proj(x).view(batch, cache_heads, self.num_heads, self.head_dim)
         if score_kv_norm:
             k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
@@ -115,6 +107,7 @@ class ProcessorAttention(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
+        assert selected_count > 0, "selected_heads must include at least one cache head"
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
@@ -130,10 +123,9 @@ class ProcessorAttention(nn.Module):
         scale = self.head_dim**-0.5
         selected_logits = torch.einsum("bckgd,bskd->bckgs", q, k_sel) * scale
         self_logits = torch.einsum("bckgd,bckd->bckg", q, k_all)[:, :, :, :, None] * scale
-        if selected_count:
-            query_heads = torch.arange(cache_heads, device=x.device)
-            self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
-            self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None], float("-inf"))
+        query_heads = torch.arange(cache_heads, device=x.device)
+        self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
+        self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None], float("-inf"))
 
         logits = torch.cat([selected_logits, self_logits], dim=-1)
         attn = torch.softmax(logits, dim=-1)
@@ -161,6 +153,7 @@ class ProcessorAttention(nn.Module):
         """Return the attention output plus all-key attention mass per cache head."""
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
+        assert selected_count > 0, "selected_heads must include at least one cache head"
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
@@ -173,24 +166,16 @@ class ProcessorAttention(nn.Module):
         all_attn = torch.softmax(logits.float(), dim=-1)
         cache_head_attention_scores = all_attn.float().sum(dim=(1, 2, 3))
 
-        if selected_count == 0 and not include_self_head_kv:
-            y = torch.zeros_like(x)
-            return y, cache_head_attention_scores
-
-        if selected_count:
-            logit_index = selected_heads[:, None, None, None, :].expand(
-                -1,
-                cache_heads,
-                self.num_kv_heads,
-                groups,
-                -1,
-            )
-            selected_logits = torch.gather(logits, dim=-1, index=logit_index)
-            value_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
-            v_sel = torch.gather(v_all, dim=1, index=value_index)
-        else:
-            selected_logits = logits.new_empty(batch, cache_heads, self.num_kv_heads, groups, 0)
-            v_sel = v_all.new_empty(batch, 0, self.num_kv_heads, self.head_dim)
+        logit_index = selected_heads[:, None, None, None, :].expand(
+            -1,
+            cache_heads,
+            self.num_kv_heads,
+            groups,
+            -1,
+        )
+        selected_logits = torch.gather(logits, dim=-1, index=logit_index)
+        value_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
+        v_sel = torch.gather(v_all, dim=1, index=value_index)
 
         if include_self_head_kv:
             query_heads = torch.arange(cache_heads, device=x.device)
@@ -202,9 +187,8 @@ class ProcessorAttention(nn.Module):
                 1,
             )
             self_logits = torch.gather(logits, dim=-1, index=self_index)
-            if selected_count:
-                self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
-                self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None], float("-inf"))
+            self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
+            self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None], float("-inf"))
             output_logits = torch.cat([selected_logits, self_logits], dim=-1)
         else:
             output_logits = selected_logits
@@ -213,11 +197,8 @@ class ProcessorAttention(nn.Module):
         if self.training and self.dropout > 0.0:
             output_attn = F.dropout(output_attn, p=self.dropout, training=True)
 
-        if selected_count:
-            selected_attn = output_attn[..., :selected_count]
-            y = torch.einsum("bckgs,bskd->bckgd", selected_attn, v_sel)
-        else:
-            y = v_all.new_zeros(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
+        selected_attn = output_attn[..., :selected_count]
+        y = torch.einsum("bckgs,bskd->bckgd", selected_attn, v_sel)
         if include_self_head_kv:
             self_attn = output_attn[..., selected_count]
             y = y + self_attn[:, :, :, :, None] * v_all[:, :, :, None, :]
@@ -409,8 +390,8 @@ class CacheProcessor(nn.Module):
         selected_heads: torch.Tensor,
         next_selected_heads: torch.Tensor,
     ) -> None:
-        if selected_heads.shape[-1] == 0 or next_selected_heads.shape[-1] == 0:
-            return
+        assert selected_heads.shape[-1] > 0, "selected_heads must include at least one cache head"
+        assert next_selected_heads.shape[-1] > 0, "next_selected_heads must include at least one cache head"
         maintained = (selected_heads[:, :, None] == next_selected_heads[:, None, :]).any(dim=-1)
         overlap = maintained.float().mean().detach()
         if iteration in self._selected_head_overlap_totals:
@@ -645,9 +626,7 @@ def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.
 
 
 def _select_heads_from_merged(x: torch.Tensor, topk: int) -> torch.Tensor:
-    batch = x.shape[0]
-    if topk <= 0:
-        return torch.empty(batch, 0, dtype=torch.long, device=x.device)
+    assert topk > 0, "topk must select at least one cache head"
     scores = x.float().flatten(start_dim=2).norm(dim=-1)
     k = min(topk, scores.shape[-1])
     _, indices = torch.topk(scores, k=k, dim=-1)
@@ -657,9 +636,7 @@ def _select_heads_from_merged(x: torch.Tensor, topk: int) -> torch.Tensor:
 def _select_heads_from_head_scores(scores: torch.Tensor, topk: int) -> torch.Tensor:
     if scores.ndim != 2:
         raise ValueError("scores must have shape (batch, cache_heads)")
-    batch = scores.shape[0]
-    if topk <= 0:
-        return torch.empty(batch, 0, dtype=torch.long, device=scores.device)
+    assert topk > 0, "topk must select at least one cache head"
     k = min(topk, scores.shape[-1])
     _, indices = torch.topk(scores.float(), k=k, dim=-1)
     return indices.sort(dim=-1).values

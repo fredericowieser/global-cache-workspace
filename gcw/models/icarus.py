@@ -52,8 +52,7 @@ class ProcessorAttention(nn.Module):
         selected_heads: torch.Tensor,
     ) -> torch.Tensor:
         batch, cache_heads, seq, _ = x.shape
-        if selected_heads.shape[-1] == 0:
-            return torch.zeros_like(x)
+        assert selected_heads.shape[-1] > 0, "selected_heads must include at least one cache head"
         q = self.q_proj(x).view(batch, cache_heads, seq, self.num_heads, self.head_dim)
         selected_x = _gather_cache_heads(x, selected_heads)
         selected_positions = _gather_cache_head_positions(positions, selected_heads)
@@ -89,6 +88,7 @@ class ProcessorAttention(nn.Module):
     ) -> torch.Tensor:
         batch, cache_heads, seq, _ = x.shape
         selected_count = selected_heads.shape[-1]
+        assert selected_count > 0, "selected_heads must include at least one cache head"
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, groups, self.head_dim)
@@ -108,10 +108,9 @@ class ProcessorAttention(nn.Module):
         selected_logits = torch.einsum("bcnkgd,bsmkd->bcnkgsm", q, k_sel) * scale
         selected_logits = selected_logits.reshape(batch, cache_heads, seq, self.num_kv_heads, groups, selected_count * seq)
         self_logits = torch.einsum("bcnkgd,bcmkd->bcnkgm", q, k_all) * scale
-        if selected_count:
-            query_heads = torch.arange(cache_heads, device=x.device)
-            self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
-            self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None, None], float("-inf"))
+        query_heads = torch.arange(cache_heads, device=x.device)
+        self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
+        self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None, None], float("-inf"))
 
         logits = torch.cat([selected_logits, self_logits], dim=-1)
         attn = torch.softmax(logits, dim=-1)
@@ -399,9 +398,7 @@ def _gather_cache_head_positions(positions: torch.Tensor, selected_heads: torch.
 
 
 def _select_heads_from_merged(x: torch.Tensor, topk: int) -> torch.Tensor:
-    batch = x.shape[0]
-    if topk <= 0:
-        return torch.empty(batch, 0, dtype=torch.long, device=x.device)
+    assert topk > 0, "topk must select at least one cache head"
     scores = x.float().flatten(start_dim=2).norm(dim=-1)
     k = min(topk, scores.shape[-1])
     _, indices = torch.topk(scores, k=k, dim=-1)

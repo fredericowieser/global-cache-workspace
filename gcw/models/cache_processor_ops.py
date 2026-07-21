@@ -87,9 +87,7 @@ def gather_per_cache_head_scores(scores: torch.Tensor, indices: torch.Tensor) ->
 def select_heads_from_per_cache_head_scores(scores: torch.Tensor, topk: int) -> torch.Tensor:
     if scores.ndim != 3:
         raise ValueError("scores must have shape (batch, cache_heads, selected)")
-    batch = scores.shape[0]
-    if topk <= 0:
-        return torch.empty(batch, 0, dtype=torch.long, device=scores.device)
+    assert topk > 0, "topk must select at least one cache head"
     head_scores = scores.float().sum(dim=-1)
     k = min(topk, head_scores.shape[-1])
     _, indices = torch.topk(head_scores, k=k, dim=-1)
