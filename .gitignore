@@ -26,6 +26,7 @@ dist/
 *.egg-info/
 
 # Local training/evaluation outputs
+configs/experiments
 runs/
 checkpoints/
 outputs/
@@ -46,3 +47,6 @@ wandb/
 .DS_Store
 Thumbs.db
 *.swp
+
+# Agents
+AGENTS.md
