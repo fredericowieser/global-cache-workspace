@@ -59,27 +59,9 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     icarus_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen.yaml")
     icarus_shared = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml")
     icarus_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_unfrozen.yaml")
-    longshot_frozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_frozen.yaml")
     longshot_shared = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_frozen_shared.yaml")
-    longshot_unfrozen = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_from_sft_unfrozen.yaml")
-    longshot_linear = load_train_config("configs/train/bottleneck_llm/llama32_1b_longshot_linear_from_sft_frozen.yaml")
-    longshot_final_token = load_train_config(
-        "configs/train/bottleneck_llm/llama32_1b_longshot_final_token_from_sft_frozen.yaml"
-    )
-    longshot_final_token_shared = load_train_config(
-        "configs/train/bottleneck_llm/llama32_1b_longshot_final_token_from_sft_frozen_shared.yaml"
-    )
     icarus_unrope_shared = load_train_config(
         "configs/train/bottleneck_llm/llama32_1b_icarus_unrope_from_sft_frozen_shared.yaml"
-    )
-    longshot_query_learned_unrope_shared = load_train_config(
-        "configs/train/bottleneck_llm/llama32_1b_longshot_query_learned_unrope_from_sft_frozen_shared.yaml"
-    )
-    longshot_query_final_token_unrope_shared = load_train_config(
-        "configs/train/bottleneck_llm/llama32_1b_longshot_query_final_token_unrope_from_sft_frozen_shared.yaml"
-    )
-    longshot_query_final_token_unrope_kv_norm_shared = load_train_config(
-        "configs/train/bottleneck_llm/llama32_1b_longshot_query_final_token_unrope_kv_norm_from_sft_frozen_shared.yaml"
     )
     tf_sft = load_train_config("configs/train/bottleneck_llm/llama32_1b_tf_sft.yaml")
 
@@ -126,93 +108,35 @@ def test_bottleneck_llm_training_configs_load_with_expected_modes():
     assert icarus_shared.metadata["total_non_embedding_params"] == total_non_embedding_params(icarus_shared.model)
     assert not icarus_unfrozen.freeze_backbone
     assert icarus_unfrozen.model.variant == "icarus"
-    assert longshot_frozen.freeze_backbone
-    assert longshot_frozen.model.variant == "longshot"
-    assert longshot_frozen.model.cache_processor.encoder_method == "query_attention"
-    assert longshot_frozen.model.cache_processor.per_cache_head_projections is True
-    assert longshot_frozen.data.dataset == icarus_frozen.data.dataset
-    assert longshot_frozen.backbone_checkpoint == icarus_frozen.backbone_checkpoint
     assert longshot_shared.freeze_backbone
     assert longshot_shared.model.variant == "longshot"
+    assert longshot_shared.model.cache_processor.score == "kv_norm"
     assert longshot_shared.model.cache_processor.encoder_method == "query_attention"
+    assert longshot_shared.model.cache_processor.encoder_query_source == "final_token"
+    assert longshot_shared.model.cache_processor.unrope_keys is True
     assert longshot_shared.model.cache_processor.per_cache_head_projections is False
     assert longshot_shared.model.cache_processor.gradient_checkpointing
     assert longshot_shared.model.legacy_bottleneck_generate
     assert longshot_shared.output_dir.endswith("_shared")
     assert longshot_shared.wandb.name.endswith("-shared")
+    assert "final-token-query" in longshot_shared.wandb.tags
     assert "shared-projection" in longshot_shared.wandb.tags
+    assert "unrope-keys" in longshot_shared.wandb.tags
+    assert "kv-norm" in longshot_shared.wandb.tags
+    assert "per-head-token-selection" in longshot_shared.wandb.tags
+    assert longshot_shared.data.dataset == icarus_frozen.data.dataset
+    assert longshot_shared.backbone_checkpoint == icarus_frozen.backbone_checkpoint
     assert longshot_shared.data.sft_skip_rows == 128000
     assert longshot_shared.data.sft_take_rows == 128000
     assert longshot_shared.data.response_prefix == "\n"
     assert longshot_shared.adam_beta2 == 0.999
     assert longshot_shared.metadata["processor_params"] == processor_params(longshot_shared.model)
     assert longshot_shared.metadata["total_non_embedding_params"] == total_non_embedding_params(longshot_shared.model)
-    assert not longshot_unfrozen.freeze_backbone
-    assert longshot_unfrozen.model.variant == "longshot"
-    assert longshot_linear.freeze_backbone
-    assert longshot_linear.model.variant == "longshot"
-    assert longshot_linear.model.cache_processor.encoder_method == "linear"
-    assert longshot_linear.model.cache_processor.per_cache_head_projections is False
-    assert "linear-encoder" in longshot_linear.wandb.tags
-    assert "shared-projection" in longshot_linear.wandb.tags
-    assert longshot_linear.data.dataset == icarus_frozen.data.dataset
-    assert longshot_linear.metadata["processor_params"] == processor_params(longshot_linear.model)
-    assert longshot_linear.metadata["total_non_embedding_params"] == total_non_embedding_params(longshot_linear.model)
-    assert longshot_final_token.freeze_backbone
-    assert longshot_final_token.model.variant == "longshot"
-    assert longshot_final_token.model.cache_processor.encoder_method == "query_attention"
-    assert longshot_final_token.model.cache_processor.encoder_query_source == "final_token"
-    assert longshot_final_token.model.cache_processor.per_cache_head_projections is True
-    assert "final-token-query" in longshot_final_token.wandb.tags
-    assert longshot_final_token.metadata["processor_params"] == processor_params(longshot_final_token.model)
-    assert longshot_final_token.metadata["total_non_embedding_params"] == total_non_embedding_params(longshot_final_token.model)
-    assert longshot_final_token_shared.freeze_backbone
-    assert longshot_final_token_shared.model.variant == "longshot"
-    assert longshot_final_token_shared.model.cache_processor.encoder_method == "query_attention"
-    assert longshot_final_token_shared.model.cache_processor.encoder_query_source == "final_token"
-    assert longshot_final_token_shared.model.cache_processor.per_cache_head_projections is False
-    assert longshot_final_token_shared.model.legacy_bottleneck_generate
-    assert "final-token-query" in longshot_final_token_shared.wandb.tags
-    assert "shared-projection" in longshot_final_token_shared.wandb.tags
-    assert longshot_final_token_shared.metadata["processor_params"] == processor_params(longshot_final_token_shared.model)
-    assert longshot_final_token_shared.metadata["total_non_embedding_params"] == total_non_embedding_params(
-        longshot_final_token_shared.model
-    )
     assert icarus_unrope_shared.model.variant == "icarus"
     assert icarus_unrope_shared.model.cache_processor.unrope_keys is True
     assert icarus_unrope_shared.model.cache_processor.per_cache_head_projections is False
     assert "unrope-keys" in icarus_unrope_shared.wandb.tags
     assert icarus_unrope_shared.metadata["processor_params"] == processor_params(icarus_unrope_shared.model)
-    assert longshot_query_learned_unrope_shared.model.variant == "longshot"
-    assert longshot_query_learned_unrope_shared.model.cache_processor.encoder_method == "query_attention"
-    assert longshot_query_learned_unrope_shared.model.cache_processor.encoder_query_source == "learned"
-    assert longshot_query_learned_unrope_shared.model.cache_processor.unrope_keys is True
-    assert "unrope-keys" in longshot_query_learned_unrope_shared.wandb.tags
-    assert longshot_query_learned_unrope_shared.metadata["processor_params"] == processor_params(
-        longshot_query_learned_unrope_shared.model
-    )
-    assert longshot_query_final_token_unrope_shared.model.variant == "longshot"
-    assert longshot_query_final_token_unrope_shared.model.cache_processor.encoder_method == "query_attention"
-    assert longshot_query_final_token_unrope_shared.model.cache_processor.encoder_query_source == "final_token"
-    assert longshot_query_final_token_unrope_shared.model.cache_processor.unrope_keys is True
-    assert "unrope-keys" in longshot_query_final_token_unrope_shared.wandb.tags
-    assert longshot_query_final_token_unrope_shared.metadata["processor_params"] == processor_params(
-        longshot_query_final_token_unrope_shared.model
-    )
-    assert longshot_query_final_token_unrope_kv_norm_shared.model.variant == "longshot"
-    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.score == "kv_norm"
-    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.encoder_method == "query_attention"
-    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.encoder_query_source == "final_token"
-    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.unrope_keys is True
-    assert longshot_query_final_token_unrope_kv_norm_shared.model.cache_processor.per_cache_head_projections is False
-    assert "kv-norm" in longshot_query_final_token_unrope_kv_norm_shared.wandb.tags
-    assert "per-head-token-selection" in longshot_query_final_token_unrope_kv_norm_shared.wandb.tags
-    assert longshot_query_final_token_unrope_kv_norm_shared.metadata["processor_params"] == processor_params(
-        longshot_query_final_token_unrope_kv_norm_shared.model
-    )
-    assert longshot_query_final_token_unrope_kv_norm_shared.metadata[
-        "total_non_embedding_params"
-    ] == total_non_embedding_params(longshot_query_final_token_unrope_kv_norm_shared.model)
     assert tf_sft.model.variant == "tf"
     assert tf_sft.model.cache_processor is None
 
@@ -222,7 +146,7 @@ def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
     eval_script = Path("scripts/slurm/eval.sbatch").read_text(encoding="utf-8")
 
     assert 'llama32_1b_icarus_from_sft_frozen_shared.yaml' in script
-    assert 'GPUS="${GPUS:-2}"' in script
+    assert 'GPUS="${GPUS:-1}"' in script
     assert 'EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-1}"' in script
     assert 'EVAL_SUITE="${EVAL_SUITE:-paper7}"' in script
     assert 'GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"' in script
@@ -250,7 +174,7 @@ def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
 def test_openmath_sft_configs_use_legacy_formatting_and_slices():
     paths = _openmath_sft_config_paths()
 
-    assert len(paths) == 61
+    assert len(paths) == 53
     for path in paths:
         config = load_train_config(path)
         assert config.data.response_prefix == "\n", path
