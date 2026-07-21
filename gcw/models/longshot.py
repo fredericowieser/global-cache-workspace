@@ -45,6 +45,7 @@ class ProcessorAttention(nn.Module):
         self.k_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
         self.v_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        self.internal_iteration_score = config.internal_iteration_score
         if config.include_self_head_kv:
             self.forward = self.forward_with_self_head_kv
         else:
@@ -54,6 +55,8 @@ class ProcessorAttention(nn.Module):
                 self.forward_with_cache_head_attention_scores,
                 include_self_head_kv=config.include_self_head_kv,
             )
+        elif config.internal_iteration_score == "kv_norm":
+            self.forward_with_iteration_scores = partial(self.forward, return_attn_scores=True)
         else:
             self.forward_with_iteration_scores = partial(self.forward, return_attn_scores=True)
 
@@ -64,15 +67,28 @@ class ProcessorAttention(nn.Module):
         return_attn_scores: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
+        score_kv_norm = return_attn_scores and self.internal_iteration_score == "kv_norm"
         if selected_heads.shape[-1] == 0:
             y = torch.zeros_like(x)
             if return_attn_scores:
+                if score_kv_norm:
+                    k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
+                    v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
+                    return y, k_all.float().pow(2).sum(dim=(2, 3)) + v_all.float().pow(2).sum(dim=(2, 3))
                 return y, x.new_zeros(batch, cache_heads, dtype=torch.float32)
             return y
         q = self.q_proj(x).view(batch, cache_heads, self.num_heads, self.head_dim)
-        selected_x = _gather_cache_heads(x, selected_heads)
-        k = self.k_proj(selected_x).view(batch, selected_heads.shape[-1], self.num_kv_heads, self.head_dim)
-        v = self.v_proj(selected_x).view(batch, selected_heads.shape[-1], self.num_kv_heads, self.head_dim)
+        if score_kv_norm:
+            k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
+            v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
+            iteration_scores = k_all.float().pow(2).sum(dim=(2, 3)) + v_all.float().pow(2).sum(dim=(2, 3))
+            gather_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
+            k = torch.gather(k_all, dim=1, index=gather_index)
+            v = torch.gather(v_all, dim=1, index=gather_index)
+        else:
+            selected_x = _gather_cache_heads(x, selected_heads)
+            k = self.k_proj(selected_x).view(batch, selected_heads.shape[-1], self.num_kv_heads, self.head_dim)
+            v = self.v_proj(selected_x).view(batch, selected_heads.shape[-1], self.num_kv_heads, self.head_dim)
         q = q.permute(0, 2, 1, 3)
         k, v = (t.permute(0, 2, 1, 3) for t in (k, v))
         q, k = q.to(v.dtype), k.to(v.dtype)
@@ -86,6 +102,8 @@ class ProcessorAttention(nn.Module):
         y = y.permute(0, 2, 1, 3).contiguous().view(batch, cache_heads, -1)
         y = self.o_proj(y)
         if return_attn_scores:
+            if score_kv_norm:
+                return y, iteration_scores
             return y, y.float().pow(2).sum(dim=-1)
         return y
 
@@ -102,6 +120,8 @@ class ProcessorAttention(nn.Module):
         q = self.q_proj(x).view(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
         k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
         v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
+        if return_attn_scores and self.internal_iteration_score == "kv_norm":
+            iteration_scores = k_all.float().pow(2).sum(dim=(2, 3)) + v_all.float().pow(2).sum(dim=(2, 3))
         gather_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
         k_sel = torch.gather(k_all, dim=1, index=gather_index)
         v_sel = torch.gather(v_all, dim=1, index=gather_index)
@@ -126,6 +146,8 @@ class ProcessorAttention(nn.Module):
         y = y.contiguous().view(batch, cache_heads, self.num_heads * self.head_dim)
         y = self.o_proj(y)
         if return_attn_scores:
+            if self.internal_iteration_score == "kv_norm":
+                return y, iteration_scores
             return y, y.float().pow(2).sum(dim=-1)
         return y
 

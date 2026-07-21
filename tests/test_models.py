@@ -717,6 +717,11 @@ def test_cache_processor_internal_iteration_score_must_be_known():
         CacheProcessorConfig(internal_iteration_score="attention")
 
 
+def test_cache_processor_internal_iteration_score_accepts_kv_norm():
+    cp = CacheProcessorConfig(internal_iteration_score="kv_norm")
+    assert cp.internal_iteration_score == "kv_norm"
+
+
 def test_self_head_kv_attention_is_config_gated_at_init():
     default_config = CacheProcessorConfig(
         hidden_size=8,
@@ -770,6 +775,37 @@ def test_longshot_cache_head_attention_score_forward_is_config_gated_at_init():
     assert isinstance(enabled_attn.forward_with_iteration_scores, functools.partial)
     assert enabled_attn.forward_with_iteration_scores.func.__func__ is enabled_attn.forward_with_cache_head_attention_scores.__func__
     assert enabled_attn.forward_with_iteration_scores.keywords == {"include_self_head_kv": True}
+
+
+def test_longshot_kv_norm_score_forward_is_config_gated_at_init():
+    default_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=False,
+        internal_iteration_score="kv_norm",
+    )
+    enabled_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=True,
+        internal_iteration_score="kv_norm",
+    )
+
+    default_attn = LongshotProcessorAttention(default_config)
+    enabled_attn = LongshotProcessorAttention(enabled_config)
+
+    assert default_attn.forward.__func__ is default_attn.forward_selected_head_kv.__func__
+    assert isinstance(default_attn.forward_with_iteration_scores, functools.partial)
+    assert default_attn.forward_with_iteration_scores.func.__func__ is default_attn.forward_selected_head_kv.__func__
+    assert default_attn.forward_with_iteration_scores.keywords == {"return_attn_scores": True}
+    assert enabled_attn.forward.__func__ is enabled_attn.forward_with_self_head_kv.__func__
+    assert isinstance(enabled_attn.forward_with_iteration_scores, functools.partial)
+    assert enabled_attn.forward_with_iteration_scores.func.__func__ is enabled_attn.forward_with_self_head_kv.__func__
+    assert enabled_attn.forward_with_iteration_scores.keywords == {"return_attn_scores": True}
 
 
 def test_self_head_kv_attention_can_be_enabled_from_config_dict():
