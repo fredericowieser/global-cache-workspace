@@ -12,7 +12,7 @@ cd "$repo_root"
 JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
 PARTITION="${PARTITION:-agent-xlong-15,agent-xlong}"
 ARRAY_WORKERS="${ARRAY_WORKERS:-1}"
-ARRAY_TIME="${ARRAY_TIME:-12:00:00}"
+ARRAY_TIME="${ARRAY_TIME:-1-12:00:00}"
 GPUS="${GPUS:-1}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-8}"
 MEM="${MEM:-180G}"
@@ -225,10 +225,14 @@ worker_main() {
   CONFIG_LIST="${CONFIG_LIST:?CONFIG_LIST is required in worker mode}"
   STATE_DIR="${STATE_DIR:?STATE_DIR is required in worker mode}"
   CLAIMED_FILE="$STATE_DIR/claimed_configs"
+  COMPLETED_FILE="$STATE_DIR/completed_configs"
+  FAILED_FILE="$STATE_DIR/failed_configs.tsv"
   LOCK_FILE="$STATE_DIR/queue.lock"
+  local claim_result rc failures=0
 
   mkdir -p "$STATE_DIR" slurm_out "$OUT_DIR"
   require_path "$CONFIG_LIST"
+  touch "$COMPLETED_FILE" "$FAILED_FILE"
 
   echo "Worker ${SLURM_ARRAY_TASK_ID:-0} consuming configs from $CONFIG_LIST"
   while true; do
@@ -237,8 +241,26 @@ worker_main() {
       echo "No unclaimed configs remain; exiting"
       break
     fi
-    run_one_config "$claim_result"
+    if run_one_config "$claim_result"; then
+      (
+        flock -x 200
+        printf "%s\n" "$claim_result" >> "$COMPLETED_FILE"
+      ) 200>"$LOCK_FILE"
+    else
+      rc="$?"
+      failures=$((failures + 1))
+      echo "Config failed with exit code $rc; continuing: $claim_result" >&2
+      (
+        flock -x 200
+        printf "%s\t%s\n" "$rc" "$claim_result" >> "$FAILED_FILE"
+      ) 200>"$LOCK_FILE"
+    fi
   done
+
+  if [[ "$failures" -gt 0 ]]; then
+    echo "Worker completed with $failures failed config(s). See $FAILED_FILE" >&2
+    return 1
+  fi
 }
 
 write_config_list() {
