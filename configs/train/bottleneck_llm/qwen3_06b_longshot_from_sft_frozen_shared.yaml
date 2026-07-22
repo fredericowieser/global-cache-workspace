@@ -47,7 +47,7 @@ distributed: ddp
 freeze_backbone: true
 backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/qwen3_06b/tf
 output_dir: runs/bottleneck_llm/qwen3_06b_longshot_query_final_token_unrope_kv_norm_from_sft_frozen_shared
-batch_size: 16
+batch_size: 32
 sequence_len: 512
 max_steps: 1000
 total_batch_size: 65536

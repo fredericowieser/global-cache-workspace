@@ -51,7 +51,7 @@ backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_3b
 output_dir: runs/bottleneck_llm/llama32_3b_longshot_query_final_token_unrope_kv_norm_cp_frac010_from_sft_frozen_shared
 batch_size: 8
 sequence_len: 512
-max_steps: 1000
+max_steps: 2000
 total_batch_size: 65536
 learning_rate: 0.0001
 adam_beta2: 0.999
