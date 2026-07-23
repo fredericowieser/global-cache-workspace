@@ -6,13 +6,14 @@ set -euo pipefail
 # This keeps Slurm submission count low: one sbatch call creates N array workers,
 # and each worker runs train followed by eval inline for every config it claims.
 
-repo_root="${GCW_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+repo_root="${GCW_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 cd "$repo_root"
 
 JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
 PARTITION="${PARTITION:-agent-xlong-15,agent-xlong}"
 ARRAY_WORKERS="${ARRAY_WORKERS:-1}"
 ARRAY_TIME="${ARRAY_TIME:-1-12:00:00}"
+EXCLUDE="${EXCLUDE:-}"
 GPUS="${GPUS:-1}"
 CPUS_PER_TASK="${CPUS_PER_TASK:-8}"
 MEM="${MEM:-180G}"
@@ -20,6 +21,7 @@ WANDB_MODE="${WANDB_MODE:-online}"
 PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 UV_EXTRAS="${UV_EXTRAS:---extra gpu --extra eval}"
 EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-1}"
+EVAL_ONLY="${EVAL_ONLY:-0}"
 EVAL_SUITE="${EVAL_SUITE:-paper7}"
 EVAL_GPUS="${EVAL_GPUS:-1}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
@@ -44,7 +46,8 @@ Options:
 
 Common environment overrides:
   JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
-  EVAL_AFTER_TRAIN, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, OUT_DIR
+  EXCLUDE
+  EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, OUT_DIR
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
 EOF
 }
@@ -107,9 +110,9 @@ run_eval() {
   fi
 
   if [[ "$EVAL_SUITE" != "fineweb" && "$ngpu" -gt 1 ]]; then
-    worker_uv_run_eval torchrun --standalone --nproc-per-node="$ngpu" -m gcw.cli "${gcw_args[@]}"
+    worker_uv_run_eval torchrun --standalone --nproc-per-node="$ngpu" -m gcw.cli "${gcw_args[@]}" || return $?
   else
-    worker_uv_run_eval gcw "${gcw_args[@]}"
+    worker_uv_run_eval gcw "${gcw_args[@]}" || return $?
   fi
   if [[ -n "$out" ]]; then
     echo "Wrote $out"
@@ -157,7 +160,11 @@ run_one_config() {
   fi
 
   run_name="$(basename "$output_dir")"
-  echo "=== Training $config ==="
+  if [[ "$EVAL_ONLY" == "1" ]]; then
+    echo "=== Evaluating $config ==="
+  else
+    echo "=== Training $config ==="
+  fi
   echo "Output dir: $output_dir"
 
   export PATH="$HOME/.local/bin:$PATH"
@@ -169,21 +176,24 @@ run_one_config() {
   export GCW_STEP_CHECKPOINT_EVERY="$KEEP_STEP_CHECKPOINT_EVERY"
   mkdir -p "$WANDB_DIR" slurm_out
 
-  worker_uv_run_train python scripts/check_cuda_env.py
-  nproc="$GPUS"
-  if [[ "$nproc" == "1" ]]; then
-    worker_uv_run_train gcw train --config "$config"
-  else
-    worker_uv_run_train torchrun --standalone --nproc_per_node="$nproc" -m gcw.cli train --config "$config"
+  if [[ "$EVAL_ONLY" != "1" ]]; then
+    worker_uv_run_train python scripts/check_cuda_env.py || return $?
+    nproc="$GPUS"
+    if [[ "$nproc" == "1" ]]; then
+      worker_uv_run_train gcw train --config "$config" || return $?
+    else
+      worker_uv_run_train torchrun --standalone --nproc_per_node="$nproc" -m gcw.cli train --config "$config" || return $?
+    fi
+
+    if [[ "$EVAL_AFTER_TRAIN" != "1" ]]; then
+      return
+    fi
+
+    echo "=== Evaluating $config ==="
   fi
 
-  if [[ "$EVAL_AFTER_TRAIN" != "1" ]]; then
-    return
-  fi
-
-  echo "=== Evaluating $config ==="
   export GCW_EVAL_SKIP_TASKS
-  worker_uv_run_eval python scripts/check_cuda_env.py
+  worker_uv_run_eval python scripts/check_cuda_env.py || return $?
   if [[ -n "${CHECKPOINT:-}" || -n "${OUT:-}" ]]; then
     run_eval "${CHECKPOINT:-$output_dir/checkpoint}" "${OUT:-${OUT_DIR}/${run_name}_${OUT_SUFFIX:-final}_${EVAL_SUITE}.json}"
   elif [[ "$keep_step_checkpoints" == "1" ]]; then
@@ -205,17 +215,18 @@ claim_next_config() {
     flock -x 200
     touch "$CLAIMED_FILE"
 
-    while IFS= read -r config; do
-      if [[ -z "$config" || "$config" =~ ^[[:space:]]*# ]]; then
-        continue
-      fi
-      if grep -Fxq "$config" "$CLAIMED_FILE"; then
-        continue
-      fi
+    config="$(
+      awk '
+        ARGIND == 1 { claimed[$0] = 1; next }
+        /^[[:space:]]*($|#)/ { next }
+        !($0 in claimed) { print; exit }
+      ' "$CLAIMED_FILE" "$CONFIG_LIST"
+    )"
+    if [[ -n "$config" ]]; then
       echo "$config" >> "$CLAIMED_FILE"
       echo "$config"
       return
-    done < "$CONFIG_LIST"
+    fi
 
     echo "STOP"
   ) 200>"$LOCK_FILE"
@@ -236,7 +247,10 @@ worker_main() {
 
   echo "Worker ${SLURM_ARRAY_TASK_ID:-0} consuming configs from $CONFIG_LIST"
   while true; do
-    claim_result="$(claim_next_config)"
+    if ! claim_result="$(claim_next_config)"; then
+      echo "Failed to claim a config from $CONFIG_LIST" >&2
+      return 1
+    fi
     if [[ "$claim_result" == "STOP" ]]; then
       echo "No unclaimed configs remain; exiting"
       break
@@ -367,9 +381,12 @@ launcher_main() {
     --mem="$MEM"
     --array="$workers_arg"
     --output="slurm_out/${JOB_NAME}-%A_%a.out"
-    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
-    "$0"
+    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
   )
+  if [[ -n "$EXCLUDE" ]]; then
+    sbatch_cmd+=(--exclude="$EXCLUDE")
+  fi
+  sbatch_cmd+=("$0")
 
   if [[ "$dry_run" == "1" ]]; then
     printf '%q ' "${sbatch_cmd[@]}"

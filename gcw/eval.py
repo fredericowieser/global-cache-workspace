@@ -67,8 +67,19 @@ class GCWEvalLM(TemplateLM):
         self.add_special_tokens_for_generate = _legacy_generate_add_special_tokens(model)
 
     @property
+    def tokenizer_name(self) -> str:
+        return getattr(self.tokenizer, "name_or_path", self.tokenizer.__class__.__name__)
+
+    @property
     def eot_token_id(self) -> int:
         return self.tokenizer.eot_id
+
+    def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt=True) -> str:
+        return self.tokenizer.apply_chat_template(
+            chat_history,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+        )
 
     def tok_encode(self, string: str, **kwargs) -> list[int]:
         return self.tokenizer.encode(string)
@@ -401,7 +412,7 @@ def _tokenizer_for(config, state):
         except ImportError as exc:
             raise ImportError("Converted HF checkpoints require transformers for eval tokenization.") from exc
         tok = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
-        return _HFTokenizerAdapter(tok)
+        return _HFTokenizerAdapter(tok, str(source))
     if config.family in {"llama", "qwen3"}:
         raise ValueError(
             "HF-family checkpoints require train_state.json to include 'source' "
@@ -413,8 +424,9 @@ def _tokenizer_for(config, state):
 
 
 class _HFTokenizerAdapter:
-    def __init__(self, tokenizer):
+    def __init__(self, tokenizer, name_or_path: str):
         self.tokenizer = tokenizer
+        self.name_or_path = name_or_path
         self.eot_id = tokenizer.eos_token_id or tokenizer.pad_token_id or 0
         self.chat_template = getattr(tokenizer, "chat_template", None)
         self.default_chat_template = getattr(tokenizer, "default_chat_template", None)
