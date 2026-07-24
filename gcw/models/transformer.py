@@ -305,11 +305,19 @@ class TF(nn.Module):
         loss_reduction: str = "mean",
         processor: ProcessorFn | None = None,
         process_every: int = 64,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if processor is None:
-            return self.forward_full(input_ids, targets, loss_reduction)
+            return self.forward_full(input_ids, targets, loss_reduction, attention_mask=attention_mask)
         if targets is not None:
-            return self.forward_windowed_loss(input_ids, targets, processor=processor, process_every=process_every, loss_reduction=loss_reduction)
+            return self.forward_windowed_loss(
+                input_ids,
+                targets,
+                processor=processor,
+                process_every=process_every,
+                loss_reduction=loss_reduction,
+                attention_mask=attention_mask,
+            )
         logits, _ = self.forward_windowed(input_ids, processor=processor, process_every=process_every)
         return logits
 
@@ -318,6 +326,7 @@ class TF(nn.Module):
         input_ids: torch.Tensor,
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
         cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
@@ -366,6 +375,7 @@ class TF(nn.Module):
         processor: ProcessorFn,
         process_every: int,
         loss_reduction: str = "mean",
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
         hidden_chunks = []
@@ -508,7 +518,7 @@ class TF(nn.Module):
             raise ValueError("generate requires at least one input token")
         cache = StaticCacheState.allocate(
             batch_size=out.shape[0],
-            num_layers=len(self.layers),
+            num_layers=self.config.cache_num_layers,
             num_kv_heads=self.config.num_kv_heads,
             max_seq_len=out.shape[1] + max_new_tokens,
             head_dim=int(self.config.head_dim),
@@ -564,6 +574,8 @@ class TF(nn.Module):
 
 
 def estimate_non_embedding_params(config: ModelConfig) -> int:
+    if config.family == "qwen3_5_moe":
+        return _estimate_qwen35_moe_non_embedding_params(config)
     head_dim = int(config.head_dim or config.hidden_size // config.num_heads)
     attn = config.hidden_size * (config.num_heads * head_dim)
     attn += 2 * config.hidden_size * (config.num_kv_heads * head_dim)
@@ -572,6 +584,38 @@ def estimate_non_embedding_params(config: ModelConfig) -> int:
     norms = 2 * config.hidden_size
     qk = 2 * config.num_layers * config.num_kv_heads * 0
     return config.num_layers * (attn + mlp + norms) + config.hidden_size + qk
+
+
+def _estimate_qwen35_moe_non_embedding_params(config: ModelConfig) -> int:
+    head_dim = int(config.head_dim or config.hidden_size // config.num_heads)
+    full_q_dim = config.num_heads * head_dim
+    full_kv_dim = config.num_kv_heads * head_dim
+    linear_key_dim = int(config.linear_num_key_heads or config.num_kv_heads) * int(config.linear_key_head_dim or head_dim)
+    linear_value_heads = int(config.linear_num_value_heads or config.num_heads)
+    linear_value_dim = linear_value_heads * int(config.linear_value_head_dim or head_dim)
+    linear_conv_dim = 2 * linear_key_dim + linear_value_dim
+    moe_hidden = int(config.moe_intermediate_size or config.intermediate_size)
+    shared_hidden = int(config.shared_expert_intermediate_size or moe_hidden)
+    total = config.hidden_size
+    for layer_type in config.layer_types or []:
+        if layer_type == "full_attention":
+            attn = config.hidden_size * full_q_dim * 2 + 2 * config.hidden_size * full_kv_dim + full_q_dim * config.hidden_size
+            attn += 2 * head_dim
+        else:
+            attn = config.hidden_size * linear_conv_dim
+            attn += config.hidden_size * linear_value_dim
+            attn += 2 * config.hidden_size * linear_value_heads
+            attn += linear_conv_dim * config.linear_conv_kernel_dim
+            attn += linear_value_heads * 2
+            attn += int(config.linear_value_head_dim or head_dim)
+            attn += linear_value_dim * config.hidden_size
+        moe = config.num_experts * (2 * moe_hidden * config.hidden_size + config.hidden_size * moe_hidden)
+        moe += config.hidden_size * config.num_experts
+        moe += 3 * config.hidden_size * shared_hidden
+        moe += config.hidden_size
+        norms = 2 * config.hidden_size
+        total += attn + moe + norms
+    return total
 
 
 def cosine_lr(step: int, max_steps: int, warmup_steps: int) -> float:

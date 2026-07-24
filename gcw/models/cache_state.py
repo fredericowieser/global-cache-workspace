@@ -10,6 +10,7 @@ class CacheState:
     keys: list[torch.Tensor]
     values: list[torch.Tensor]
     scores: torch.Tensor
+    linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None = None
 
     @property
     def batch_size(self) -> int:
@@ -32,7 +33,7 @@ class CacheState:
 
     def append_scores(self, chunk_scores: torch.Tensor) -> "CacheState":
         scores = chunk_scores if self.scores.numel() == 0 else torch.cat([self.scores, chunk_scores], dim=1)
-        return CacheState(self.keys, self.values, scores)
+        return CacheState(self.keys, self.values, scores, self.linear_states)
 
     def select_indices(self, process_every: int = 64, topk: int = 32) -> torch.Tensor:
         return select_l2_indices(self.scores, process_every=process_every, topk=topk)
@@ -89,11 +90,19 @@ def _expand_cache_indices(indices: torch.Tensor, cache: torch.Tensor) -> torch.T
 
 
 class StaticCacheState:
-    def __init__(self, keys: list[torch.Tensor], values: list[torch.Tensor], score_storage: torch.Tensor, length: int = 0):
+    def __init__(
+        self,
+        keys: list[torch.Tensor],
+        values: list[torch.Tensor],
+        score_storage: torch.Tensor,
+        length: int = 0,
+        linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None = None,
+    ):
         self.keys = keys
         self.values = values
         self.score_storage = score_storage
         self.length = length
+        self.linear_states = linear_states
 
     @classmethod
     def allocate(

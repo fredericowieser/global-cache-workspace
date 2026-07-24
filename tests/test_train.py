@@ -8,7 +8,7 @@ from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
-from gcw.train import _checkpoint_metadata, train
+from gcw.train import _build_training_model, _checkpoint_metadata, _model_loss, train
 
 
 class FakeRun:
@@ -172,6 +172,35 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp
     assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
 
 
+def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+
+    model = _build_training_model(cfg, torch.device("cpu"), rank=1, use_fsdp=True)
+
+    assert all(param.is_meta for param in model.parameters())
+
+
+def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step(monkeypatch, tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.wandb.enabled = False
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.save_every = 1
+    calls = []
+
+    def fake_save(path, model, model_config, checkpoint_state, *, use_fsdp=False):
+        calls.append((path, checkpoint_state["step"], use_fsdp))
+
+    monkeypatch.setattr("gcw.train._save_training_checkpoint", fake_save)
+
+    train(cfg)
+
+    assert [(path.name, step, use_fsdp) for path, step, use_fsdp in calls] == [
+        ("checkpoint", 1, False),
+        ("checkpoint", 2, False),
+    ]
+
+
 def test_train_reads_pretrain_shards(tmp_path):
     data_dir = tmp_path / "data"
     writer = ShardWriter(data_dir, "train", shard_tokens=1000)
@@ -292,3 +321,37 @@ def test_sft_batch_uses_next_token_targets():
 
     assert x.tolist() == [[1, 2, 5, 3, 4, 0]]
     assert y.tolist() == [[-100, 5, 3, 4, 0, -100]]
+
+
+def test_sft_batch_can_return_attention_mask():
+    x, y, attention_mask = sft_batch(
+        [{"prompt": "A", "answer": "B"}, {"prompt": "AB", "answer": "C"}],
+        TinyTokenizer(),
+        max_length=8,
+        response_prefix="",
+        return_attention_mask=True,
+    )
+
+    assert x.tolist() == [[1, 2, 0, 0], [1, 2, 3, 0]]
+    assert y.tolist() == [[2, 0, -100, -100], [-100, 3, 0, -100]]
+    assert attention_mask.tolist() == [[True, True, True, False], [True, True, True, True]]
+
+
+def test_model_loss_forwards_attention_mask():
+    class MaskedLossModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.seen_mask = None
+
+        def forward(self, input_ids, targets, loss_reduction="mean", attention_mask=None):
+            self.seen_mask = attention_mask
+            return input_ids.float().sum() + targets.float().sum()
+
+    model = MaskedLossModel()
+    x = torch.ones(1, 2, dtype=torch.long)
+    y = torch.ones(1, 2, dtype=torch.long)
+    attention_mask = torch.tensor([[True, False]])
+
+    _model_loss(model, x, y, attention_mask=attention_mask)
+
+    assert model.seen_mask is attention_mask

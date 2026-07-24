@@ -77,7 +77,8 @@ def sft_batch(
     max_length: int,
     device: torch.device | str = "cpu",
     response_prefix: str = "",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    return_attention_mask: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     ids = []
     targets = []
     for row in rows:
@@ -93,7 +94,13 @@ def sft_batch(
     width = min(max_length, max(len(x) for x in ids))
     x = torch.zeros(len(ids), width, dtype=torch.long)
     y = torch.full((len(ids), width), -100, dtype=torch.long)
+    attention_mask = torch.zeros(len(ids), width, dtype=torch.bool)
     for i, (seq, target) in enumerate(zip(ids, targets)):
         x[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
         y[i, : len(target)] = torch.tensor(target, dtype=torch.long)
-    return x.to(device), y.to(device)
+        attention_mask[i, : len(seq)] = True
+    x = x.to(device)
+    y = y.to(device)
+    if return_attention_mask:
+        return x, y, attention_mask.to(device)
+    return x, y

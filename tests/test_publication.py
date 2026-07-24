@@ -174,7 +174,7 @@ def test_martin_launch_script_uses_shared_two_gpu_icarus_recipe():
 def test_openmath_sft_configs_use_legacy_formatting_and_slices():
     paths = _openmath_sft_config_paths()
 
-    assert len(paths) == 53
+    assert len(paths) == 58
     for path in paths:
         config = load_train_config(path)
         assert config.data.response_prefix == "\n", path

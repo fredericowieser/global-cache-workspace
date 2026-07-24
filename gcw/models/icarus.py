@@ -243,7 +243,7 @@ class GlobalCacheProcessor(nn.Module):
             raise ValueError("Icarus supports only cache_processor.update_stream='kv' or 'v'")
         if self.config.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("Icarus supports only cache_processor.score='attn_l2' or 'kv_norm'")
-        self.num_layers = model_config.num_layers
+        self.num_layers = model_config.cache_num_layers
         self.num_kv_heads = model_config.num_kv_heads
         self.head_dim = int(model_config.head_dim)
         self.rope_theta = model_config.rope_theta

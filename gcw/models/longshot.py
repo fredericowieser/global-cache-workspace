@@ -446,7 +446,7 @@ class GlobalCacheProcessor(nn.Module):
         if self.config.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("Longshot supports only cache_processor.score='attn_l2' or 'kv_norm'")
         encoder_method = encoder_method or self.config.encoder_method
-        self.num_layers = model_config.num_layers
+        self.num_layers = model_config.cache_num_layers
         self.num_kv_heads = model_config.num_kv_heads
         self.head_dim = int(model_config.head_dim)
         self.rope_theta = model_config.rope_theta

@@ -4,12 +4,12 @@ import math
 import os
 import time
 from contextlib import nullcontext
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.distributed as dist
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 from gcw.checkpoint import load_backbone_checkpoint, save_checkpoint
@@ -21,6 +21,7 @@ from gcw.data.sft import iter_jsonl, sft_batch
 from gcw.data.tokenizers import get_tokenizer
 from gcw.flops import total_training_flops, training_flops_per_token
 from gcw.models import build_model
+from gcw.models.transformer import Block
 from gcw.params import processor_params, total_non_embedding_params
 
 
@@ -32,18 +33,19 @@ def train(config: TrainConfig) -> None:
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
     _, rank, _, world_size = dist_info()
-    model = build_model(config.model).to(device)
-    model.init_weights()
-    if config.backbone_checkpoint:
-        load_backbone_checkpoint(model, config.backbone_checkpoint)
+    use_fsdp = _fsdp_active(config)
+    model = _build_training_model(config, device, rank=rank, use_fsdp=use_fsdp)
     if config.freeze_backbone and hasattr(model, "backbone"):
         for p in model.backbone.parameters():
             p.requires_grad_(False)
-    model = maybe_compile(model)
+    if use_fsdp:
+        _apply_activation_checkpointing(model)
+    if not use_fsdp:
+        model = maybe_compile(model)
     if config.distributed == "ddp" and torch.distributed.is_initialized():
         model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
-    elif config.distributed == "fsdp" and torch.distributed.is_initialized():
-        model = FSDP(model)
+    elif use_fsdp:
+        model = _wrap_fsdp(model, config, device)
 
     params = [p for p in model.parameters() if p.requires_grad]
     opt = _build_optimizer(params, config)
@@ -66,6 +68,7 @@ def train(config: TrainConfig) -> None:
         "non_embedding_params": total_non_embedding_params(config.model),
         "processor_params": processor_params(config.model),
         "world_size": world_size,
+        "model_runtime_backends": _model_runtime_backends(model, device),
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     print0(
@@ -85,21 +88,22 @@ def train(config: TrainConfig) -> None:
     model.train()
     smooth_loss = 0.0
     last_state: dict[str, Any] = {"kind": "uninitialized"}
+    last_checkpoint_step = 0
     for step in range(config.max_steps):
         step_start = time.perf_counter()
         opt.zero_grad(set_to_none=True)
         loss_total = 0.0
         for micro_step in range(grad_accum_steps):
             x, y, last_state = next(loader)
-            sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1)
+            sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
-                    loss = model(x, y)
+                    loss = _model_loss(model, x, y, attention_mask=_attention_mask_from_state(last_state))
                 loss_total += float(loss.detach().cpu())
                 (loss / grad_accum_steps).backward()
         grad_norm = None
         if config.grad_clip:
-            grad_norm = torch.nn.utils.clip_grad_norm_(params, config.grad_clip)
+            grad_norm = _clip_grad_norm(model, params, config.grad_clip, use_fsdp=use_fsdp)
         lr_scale = _wsd_lr(step, config.max_steps, config.warmup_steps, config.warmdown_ratio, config.final_lr_frac)
         weight_decay = _weight_decay(step, config.max_steps, config.weight_decay)
         for group in opt.param_groups:
@@ -147,23 +151,33 @@ def train(config: TrainConfig) -> None:
             print0(msg)
             if config.wandb.enabled and step_num % max(1, config.wandb.log_every) == 0:
                 _wandb_log(wandb_run, _compact_metrics(train_metrics), step=step_num)
-        if config.save_every and step_num % config.save_every == 0 and rank == 0:
+        if config.save_every and step_num % config.save_every == 0:
             checkpoint_state = _checkpoint_state(checkpoint_meta, step_num, last_state)
-            save_checkpoint(
+            _save_training_checkpoint(
                 Path(config.output_dir) / "checkpoint",
-                _unwrap(model),
+                model,
                 config.model,
                 checkpoint_state,
+                use_fsdp=use_fsdp,
             )
+            last_checkpoint_step = step_num
             if retained_checkpoint_every is not None and step_num % retained_checkpoint_every == 0:
-                save_checkpoint(
+                _save_training_checkpoint(
                     Path(config.output_dir) / f"checkpoint-{step_num}",
-                    _unwrap(model),
+                    model,
                     config.model,
                     checkpoint_state,
+                    use_fsdp=use_fsdp,
                 )
+    if last_checkpoint_step != config.max_steps:
+        _save_training_checkpoint(
+            Path(config.output_dir) / "checkpoint",
+            model,
+            config.model,
+            _checkpoint_state(checkpoint_meta, config.max_steps),
+            use_fsdp=use_fsdp,
+        )
     if rank == 0:
-        save_checkpoint(Path(config.output_dir) / "checkpoint", _unwrap(model), config.model, _checkpoint_state(checkpoint_meta, config.max_steps))
         if wandb_run is not None:
             wandb_run.finish()
     cleanup_distributed()
@@ -185,6 +199,16 @@ def _checkpoint_metadata(config: TrainConfig, run_meta: dict[str, Any]) -> dict[
         state["source"] = config.data.tokenizer_source
         state["tokenizer_source"] = config.data.tokenizer_source
     return state
+
+
+def _model_runtime_backends(model: torch.nn.Module, device: torch.device) -> dict[str, str]:
+    model = _unwrap(model)
+    model = getattr(model, "backbone", model)
+    for module in model.modules():
+        effective_backends = getattr(module, "effective_backends", None)
+        if effective_backends is not None:
+            return effective_backends(device)
+    return {}
 
 
 def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -237,14 +261,19 @@ def _loader(config: TrainConfig, device: torch.device):
         while True:
             batch = [rows[(i + j) % len(rows)] for j in range(config.batch_size)]
             i += config.batch_size
-            x, y = sft_batch(
+            x, y, attention_mask = sft_batch(
                 batch,
                 tokenizer,
                 config.sequence_len,
                 device=device,
                 response_prefix=config.data.response_prefix,
+                return_attention_mask=True,
             )
-            yield x, y, {"kind": "sft", "row": (config.data.sft_skip_rows + i) % len(rows)}
+            yield x, y, {
+                "kind": "sft",
+                "row": (config.data.sft_skip_rows + i) % len(rows),
+                "attention_mask": attention_mask,
+            }
     yield from data_loader(
         config.batch_size,
         config.sequence_len,
@@ -253,6 +282,27 @@ def _loader(config: TrainConfig, device: torch.device):
         data_dir=config.data.data_dir,
         infinite=True,
     )
+
+
+def _attention_mask_from_state(state: dict[str, Any] | Any) -> torch.Tensor | None:
+    if isinstance(state, dict):
+        mask = state.get("attention_mask")
+        if isinstance(mask, torch.Tensor):
+            return mask
+    return None
+
+
+def _model_loss(
+    model: torch.nn.Module,
+    input_ids: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    loss_reduction: str = "mean",
+    attention_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if attention_mask is None:
+        return model(input_ids, targets, loss_reduction=loss_reduction)
+    return model(input_ids, targets, loss_reduction=loss_reduction, attention_mask=attention_mask)
 
 
 def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> torch.optim.AdamW:
@@ -288,10 +338,22 @@ def _weight_decay(step: int, max_steps: int, base_weight_decay: float) -> float:
     return base_weight_decay * 0.5 * (1.0 + math.cos(math.pi * step / max(1, max_steps)))
 
 
-def _no_sync(model: torch.nn.Module, *, enabled: bool):
-    if enabled and hasattr(model, "no_sync"):
+def _no_sync(model: torch.nn.Module, *, enabled: bool, use_fsdp: bool = False):
+    if enabled and not use_fsdp and hasattr(model, "no_sync"):
         return model.no_sync()
     return nullcontext()
+
+
+def _clip_grad_norm(
+    model: torch.nn.Module,
+    params: list[torch.nn.Parameter],
+    max_norm: float,
+    *,
+    use_fsdp: bool = False,
+) -> torch.Tensor:
+    if use_fsdp:
+        return model.clip_grad_norm_(max_norm)
+    return torch.nn.utils.clip_grad_norm_(params, max_norm)
 
 
 @torch.no_grad()
@@ -340,6 +402,111 @@ def _random_loader(config: TrainConfig, device: torch.device):
 
 def _unwrap(model):
     return model.module if hasattr(model, "module") else model
+
+
+def _fsdp_active(config: TrainConfig) -> bool:
+    return config.distributed == "fsdp" and torch.distributed.is_initialized()
+
+
+def _build_training_model(config: TrainConfig, device: torch.device, *, rank: int, use_fsdp: bool) -> torch.nn.Module:
+    if use_fsdp:
+        if rank == 0:
+            model = build_model(config.model)
+            model.init_weights()
+            if config.backbone_checkpoint:
+                load_backbone_checkpoint(model, config.backbone_checkpoint)
+            return model
+        with torch.device("meta"):
+            return build_model(config.model)
+
+    model = build_model(config.model).to(device)
+    model.init_weights()
+    if config.backbone_checkpoint:
+        load_backbone_checkpoint(model, config.backbone_checkpoint)
+    return model
+
+
+def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device) -> torch.nn.Module:
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
+    from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+
+    layer_classes = _transformer_layer_classes()
+    auto_wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=layer_classes)
+    mixed_precision = (
+        MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
+        if config.bf16
+        else None
+    )
+    kwargs: dict[str, Any] = {
+        "auto_wrap_policy": auto_wrap_policy,
+        "mixed_precision": mixed_precision,
+        "use_orig_params": True,
+        "sync_module_states": True,
+        "param_init_fn": _fsdp_param_init_fn(device),
+    }
+    if device.type == "cuda":
+        kwargs["device_id"] = device
+    return FSDP(model, **kwargs)
+
+
+def _fsdp_param_init_fn(device: torch.device):
+    def init_fn(module: torch.nn.Module) -> None:
+        has_meta_param = any(param.is_meta for param in module.parameters(recurse=False))
+        has_meta_buffer = any(buffer.is_meta for buffer in module.buffers(recurse=False))
+        if has_meta_param or has_meta_buffer:
+            module.to_empty(device=device, recurse=False)
+
+    return init_fn
+
+
+def _transformer_layer_classes() -> set[type[torch.nn.Module]]:
+    classes: set[type[torch.nn.Module]] = {Block}
+    try:
+        from gcw.models.qwen3 import Qwen35MoeBlock
+
+        classes.add(Qwen35MoeBlock)
+    except Exception:
+        pass
+    return classes
+
+
+def _apply_activation_checkpointing(model: torch.nn.Module) -> None:
+    enabled = os.environ.get("GCW_FSDP_ACTIVATION_CHECKPOINTING", "1").lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return
+    try:
+        from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+            CheckpointImpl,
+            apply_activation_checkpointing,
+            checkpoint_wrapper,
+        )
+    except ImportError:
+        return
+    layer_classes = _transformer_layer_classes()
+    wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
+    apply_activation_checkpointing(model, checkpoint_wrapper_fn=wrapper, check_fn=lambda module: type(module) in layer_classes)
+
+
+def _save_training_checkpoint(
+    path: Path,
+    model: torch.nn.Module,
+    model_config,
+    checkpoint_state: dict[str, Any],
+    *,
+    use_fsdp: bool = False,
+) -> None:
+    if use_fsdp:
+        from torch.distributed.fsdp import FullStateDictConfig, FullyShardedDataParallel as FSDP, StateDictType
+
+        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, cfg):
+            state = model.state_dict()
+        if dist_info()[1] == 0:
+            save_checkpoint(path, state, model_config, checkpoint_state)
+        return
+    if dist.is_available() and dist.is_initialized() and dist_info()[1] != 0:
+        return
+    save_checkpoint(path, _unwrap(model), model_config, checkpoint_state)
 
 
 def _cache_processor_metrics(model) -> dict[str, float]:

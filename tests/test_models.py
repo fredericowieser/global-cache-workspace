@@ -59,6 +59,49 @@ def tiny_config(variant="tf", **processor_overrides):
     )
 
 
+def tiny_qwen35_moe_config(variant="tf", **processor_overrides):
+    cp = None
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
+        cp = CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=1,
+            num_kv_heads=1,
+            **processor_overrides,
+        )
+    return ModelConfig(
+        variant=variant,
+        family="qwen3_5_moe",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=8,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        moe_intermediate_size=8,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=8,
+        cache_processor=cp,
+    )
+
+
 def test_tiny_models_forward_backward():
     for variant in ("tf", "bt", "bgt", "icarus"):
         model = build_model(tiny_config(variant))
@@ -69,6 +112,155 @@ def test_tiny_models_forward_backward():
         loss.backward()
         assert torch.isfinite(loss)
         assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_tiny_qwen35_moe_forward_backward_and_cache_layers():
+    model = build_model(tiny_qwen35_moe_config())
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.config.cache_layer_indices == [1, 3]
+    assert model.config.cache_num_heads == 2
+    assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_tiny_qwen35_moe_linear_attention_reports_effective_backends():
+    model = build_model(tiny_qwen35_moe_config())
+    linear_layer = model.layers[0].linear_attn
+    backends = linear_layer.effective_backends(torch.device("cpu"))
+
+    assert backends["causal_conv"] == "torch-conv1d"
+    assert backends["gated_delta"] == "transformers-torch"
+
+
+def test_tiny_qwen35_moe_experts_use_transformers_grouped_mm_backend(monkeypatch):
+    pytest.importorskip("transformers.integrations.moe")
+    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
+    calls = []
+
+    def fake_grouped_mm(module, hidden_states, top_k_index, top_k_weights):
+        calls.append((module.config._experts_implementation, top_k_index.shape, top_k_weights.shape))
+        return torch.zeros_like(hidden_states)
+
+    monkeypatch.setitem(ALL_EXPERTS_FUNCTIONS, "grouped_mm", fake_grouped_mm)
+    model = build_model(tiny_qwen35_moe_config())
+    flat = torch.randn(3, model.config.hidden_size)
+    selected = torch.tensor([[0, 1], [1, 2], [2, 3]])
+    weights = torch.full((3, 2), 0.5)
+
+    out = model.layers[1].mlp.experts(flat, selected, weights)
+
+    assert out.shape == flat.shape
+    assert calls == [("grouped_mm", selected.shape, weights.shape)]
+
+
+def test_tiny_qwen35_moe_router_aux_loss_is_added_to_mean_training_loss():
+    model = build_model(tiny_qwen35_moe_config())
+    model.init_weights()
+    x = torch.tensor([[1, 2, 3, 4, 0, 0], [5, 6, 7, 8, 9, 10]])
+    y = x.clone()
+    y[:, -2:] = -100
+
+    model.config.router_aux_loss_coef = 0.0
+    ce_loss = model(x, y)
+    model.config.router_aux_loss_coef = 0.1
+    loss_with_aux = model(x, y)
+
+    assert loss_with_aux > ce_loss
+
+
+def test_tiny_qwen35_moe_router_aux_uses_explicit_attention_mask(monkeypatch):
+    from gcw.models import qwen3 as qwen3_module
+
+    cfg = ModelConfig(
+        variant="tf",
+        family="qwen3_5_moe",
+        vocab_size=32,
+        hidden_size=8,
+        intermediate_size=4,
+        num_layers=1,
+        num_heads=1,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=8,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["full_attention"],
+        processor_layer_indices=[0],
+        partial_rotary_factor=0.5,
+        moe_intermediate_size=4,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=4,
+        router_aux_loss_coef=0.1,
+    )
+    captured = {}
+
+    def fake_aux(router_logits, *, num_experts, top_k, attention_mask=None):
+        captured["attention_mask"] = attention_mask
+        return torch.zeros((), device=router_logits[0].device)
+
+    monkeypatch.setattr(qwen3_module, "qwen35_moe_load_balancing_loss", fake_aux)
+    model = build_model(cfg)
+    model.init_weights()
+    x = torch.tensor([[0, 2, 3, 0]])
+    y = torch.tensor([[-100, 2, 3, -100]])
+    attention_mask = torch.tensor([[True, True, True, False]])
+
+    model(x, y, attention_mask=attention_mask)
+
+    assert captured["attention_mask"] is attention_mask
+
+
+def test_tiny_qwen35_moe_static_chunk_matches_dynamic_chunk():
+    torch.manual_seed(7)
+    model = build_model(tiny_qwen35_moe_config()).eval()
+    model.init_weights()
+    x = torch.randint(1, 128, (2, 5))
+    cache = StaticCacheState.allocate(
+        batch_size=x.shape[0],
+        num_layers=model.config.cache_num_layers,
+        num_kv_heads=model.config.num_kv_heads,
+        max_seq_len=8,
+        head_dim=int(model.config.head_dim),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    with torch.no_grad():
+        dynamic_logits, _ = model.forward_chunk(x, 0)
+        static_logits, _ = model.forward_chunk_static(x, 0, cache)
+
+    assert torch.allclose(static_logits, dynamic_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_qwen35_moe_chunked_cache_tracks_full_attention_layers_only():
+    torch.manual_seed(5)
+    model = build_model(tiny_qwen35_moe_config()).eval()
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    with torch.no_grad():
+        logits, cache = model.forward_windowed(x, process_every=4)
+    assert logits.shape == (2, 9, 128)
+    assert cache.num_layers == 2
+    assert len(cache.keys) == 2
+    assert cache.keys[0].shape == (2, 1, 9, 8)
+    assert cache.linear_states is not None
+    assert sorted(cache.linear_states) == [0, 2]
+
+
+def test_qwen35_moe_processors_use_full_attention_cache_heads_only():
+    for variant in ("bt", "bgt", "icarus", "longshot"):
+        model = build_model(tiny_qwen35_moe_config(variant, encoder_seq_len=6))
+        assert model.config.cache_num_layers == 2
+        if variant == "bt":
+            assert len(model.cache_processor.blocks) == 2
+        else:
+            assert model.cache_processor.num_cache_heads == 2
 
 
 def test_tiny_icarus_uses_icarus_processor():
@@ -1551,6 +1743,7 @@ def _reference_windowed_loss(
     processor,
     process_every: int,
     loss_reduction: str = "mean",
+    attention_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
     loss_sum = input_ids.new_zeros((), dtype=torch.float32)

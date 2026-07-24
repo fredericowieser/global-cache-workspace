@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from gcw.config import CacheProcessorConfig
+from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.flops import processor_forward_flops_per_sequence, total_training_flops, training_flops_per_token
 from gcw.params import fit_processor_config, smollm360m_backbone
 
@@ -16,6 +16,32 @@ def test_training_flops_include_processor_work():
     assert processor_forward_flops_per_sequence(icarus, 128) > 0.0
     assert training_flops_per_token(bt, 128) > training_flops_per_token(tf, 128)
     assert total_training_flops(bgt, tokens=1024, seq_len=128) == training_flops_per_token(bgt, 128) * 1024
+
+
+def test_qwen35_moe_flops_count_active_routed_experts_per_token():
+    top1 = ModelConfig(
+        family="qwen3_5_moe",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=8,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        layer_types=["linear_attention"],
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        moe_intermediate_size=8,
+        shared_expert_intermediate_size=8,
+        num_experts=4,
+        num_experts_per_tok=1,
+    )
+    top4 = replace(top1, num_experts_per_tok=4)
+    per_expert_matmuls = 2 * top1.moe_intermediate_size * top1.hidden_size + top1.hidden_size * top1.moe_intermediate_size
+
+    assert training_flops_per_token(top4, 16) - training_flops_per_token(top1, 16) == 3 * 2 * 3 * per_expert_matmuls
 
 
 def test_value_only_processor_flops_use_smaller_cache_stream():
