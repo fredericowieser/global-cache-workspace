@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
 from gcw.models.cache_processor_ops import (
     expand_cache_head_indices,
@@ -18,6 +18,7 @@ from gcw.models.cache_processor_ops import (
     select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.flow import LatentFlow
 from gcw.models.transformer import RMSNorm, apply_rotary, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
 
@@ -171,6 +172,7 @@ class CacheProcessor(nn.Module):
         config: CacheProcessorConfig,
         *,
         output_dim: int | None = None,
+        flow_config: FlowProcessorConfig | None = None,
     ):
         super().__init__()
         self.config = config
@@ -190,6 +192,7 @@ class CacheProcessor(nn.Module):
         else:
             self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        self.flow = LatentFlow(config.hidden_size, flow_config) if flow_config is not None else None
         self.init_weights()
 
     def init_weights(self, std: float = 0.02) -> None:
@@ -209,13 +212,27 @@ class CacheProcessor(nn.Module):
             _zero_projection(self.out_proj)
 
     def compute_update(self, x: torch.Tensor, positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        h = self.in_proj(self.in_norm(x))
+        initial = self.in_proj(self.in_norm(x))
+        if self.flow is not None:
+            displacement = self.flow(
+                initial,
+                lambda state, _time: self.out_norm(self._run_layers(state, positions, selected_heads)),
+            )
+            return self.out_proj(displacement)
+        return self.out_proj(self.out_norm(self._run_layers(initial, positions, selected_heads)))
+
+    def _run_layers(
+        self,
+        state: torch.Tensor,
+        positions: torch.Tensor,
+        selected_heads: torch.Tensor,
+    ) -> torch.Tensor:
         for layer in self.layers:
             if self.config.gradient_checkpointing and self.training and torch.is_grad_enabled():
-                h = checkpoint(layer, h, positions, selected_heads, use_reentrant=False)
+                state = checkpoint(layer, state, positions, selected_heads, use_reentrant=False)
             else:
-                h = layer(h, positions, selected_heads)
-        return self.out_proj(self.out_norm(h))
+                state = layer(state, positions, selected_heads)
+        return state
 
     def scaled_update(self, x: torch.Tensor, positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
         delta = self.compute_update(x, positions, selected_heads)
@@ -254,7 +271,13 @@ class GlobalCacheProcessor(nn.Module):
         self.rotary_style = model_config.rotary_style
         self.num_cache_heads = self.num_layers * self.num_kv_heads
         output_dim = self.head_dim if self.config.update_stream == "v" else 2 * self.head_dim
-        self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config, output_dim=output_dim)
+        self.block = CacheProcessor(
+            2 * self.head_dim,
+            self.num_cache_heads,
+            self.config,
+            output_dim=output_dim,
+            flow_config=model_config.flow_processor,
+        )
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
         if self.config.score == "kv_norm" and not select_all:

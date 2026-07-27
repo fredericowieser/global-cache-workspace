@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass
+import math
 from pathlib import Path
 from typing import Any, Literal
 
@@ -99,6 +100,24 @@ class CacheProcessorConfig:
 
 
 @dataclass
+class FlowProcessorConfig:
+    num_steps: int = 1
+    time_conditioning: bool = True
+    eta_max: float = 1.0
+    flow_gate_init: float = -4.0
+
+    def __post_init__(self) -> None:
+        if isinstance(self.num_steps, bool) or not isinstance(self.num_steps, int) or self.num_steps <= 0:
+            raise ValueError("flow_processor.num_steps must be a positive integer")
+        if not isinstance(self.time_conditioning, bool):
+            raise ValueError("flow_processor.time_conditioning must be a boolean")
+        if not math.isfinite(self.eta_max) or self.eta_max <= 0.0:
+            raise ValueError("flow_processor.eta_max must be finite and positive")
+        if not math.isfinite(self.flow_gate_init):
+            raise ValueError("flow_processor.flow_gate_init must be finite")
+
+
+@dataclass
 class ModelConfig:
     variant: Variant = "tf"
     family: Family = "smollm"
@@ -116,6 +135,7 @@ class ModelConfig:
     qk_norm: bool = False
     rotary_style: RotaryStyle = "ppt"
     cache_processor: CacheProcessorConfig | None = None
+    flow_processor: FlowProcessorConfig | None = None
     legacy_bottleneck_generate: bool = False
     layer_types: list[str] | None = None
     processor_layer_indices: list[int] | None = None
@@ -137,6 +157,15 @@ class ModelConfig:
     def __post_init__(self) -> None:
         if isinstance(self.cache_processor, dict):
             self.cache_processor = CacheProcessorConfig(**self.cache_processor)
+        if isinstance(self.flow_processor, dict):
+            self.flow_processor = FlowProcessorConfig(**self.flow_processor)
+        if self.flow_processor is not None:
+            if self.variant not in {"bgt", "icarus", "longshot"}:
+                raise ValueError("flow_processor requires variant 'bgt', 'icarus', or 'longshot'")
+            if self.cache_processor is None:
+                raise ValueError("flow_processor requires cache_processor configuration")
+            if self.variant == "longshot" and self.cache_processor.iteration_mode == "internal" and self.cache_processor.iterations > 1:
+                raise ValueError("Flow-Longshot does not support internal cache_processor iterations greater than one")
         if self.layer_types is not None:
             self.layer_types = list(self.layer_types)
             if len(self.layer_types) != self.num_layers:
@@ -183,6 +212,12 @@ class ModelConfig:
             raise ValueError("partial_rotary_factor must be in (0, 1]")
         if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
+
+    @property
+    def architecture_name(self) -> str:
+        if self.flow_processor is not None:
+            return f"flow_{self.variant}"
+        return self.variant
 
     @property
     def cache_layer_indices(self) -> list[int]:

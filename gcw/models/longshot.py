@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from gcw.config import CacheEncoderMethod, CacheEncoderQuerySource, CacheProcessorConfig, ModelConfig
+from gcw.config import CacheEncoderMethod, CacheEncoderQuerySource, CacheProcessorConfig, FlowProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
 from gcw.models.cache_processor_ops import (
     expand_cache_head_indices,
@@ -20,6 +20,7 @@ from gcw.models.cache_processor_ops import (
     select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.flow import LatentFlow
 from gcw.models.transformer import RMSNorm, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
 
@@ -306,6 +307,7 @@ class CacheProcessor(nn.Module):
         encoder_method: EncoderMethod = "linear",
         encoder_seq_len: int | None = None,
         output_dim: int | None = None,
+        flow_config: FlowProcessorConfig | None = None,
     ):
         super().__init__()
         self.config = config
@@ -335,6 +337,7 @@ class CacheProcessor(nn.Module):
         else:
             self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        self.flow = LatentFlow(config.hidden_size, flow_config) if flow_config is not None else None
         self._selected_head_overlap_totals: dict[int, torch.Tensor] = {}
         self._selected_head_overlap_counts: dict[int, int] = {}
         self.init_weights()
@@ -358,7 +361,14 @@ class CacheProcessor(nn.Module):
             _zero_projection(self.out_proj)
 
     def compute_update(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        h = self._encode_time(self.in_norm(x))  # TODO: add a skip connection here?
+        initial = self._encode_time(self.in_norm(x))
+        if self.flow is not None:
+            displacement = self.flow(
+                initial,
+                lambda state, _time: self.out_norm(self._run_flow_field(state, selected_heads)),
+            )
+            return self.out_proj(displacement)
+        h = initial
         iterations = self.config.iterations if self.config.iteration_mode == "internal" else 1
         for iteration in range(iterations):
             return_attn_scores = iteration + 1 < iterations
@@ -381,6 +391,15 @@ class CacheProcessor(nn.Module):
                 self.record_selected_head_overlap(iteration + 1, selected_heads, next_selected_heads)
                 selected_heads = next_selected_heads
         return self.out_proj(self.out_norm(h))
+
+    def _run_flow_field(self, state: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
+        for module in self.layers:
+            layer = cast(ProcessorLayer, module)
+            result = self._run_layer(layer, state, selected_heads, return_attn_scores=False)
+            if not isinstance(result, torch.Tensor):
+                raise TypeError("flow field unexpectedly returned iteration scores")
+            state = result
+        return state
 
     def _run_layer(
         self,
@@ -485,6 +504,7 @@ class GlobalCacheProcessor(nn.Module):
             encoder_method=encoder_method,
             encoder_seq_len=encoder_seq_len or self.config.encoder_seq_len,
             output_dim=output_dim,
+            flow_config=model_config.flow_processor,
         )
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:

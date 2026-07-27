@@ -82,12 +82,18 @@ def _processor_layer_matmul_params(config: CacheProcessorConfig) -> int:
     )
 
 
-def _processor_block_flops_per_call(input_dim: int, config: CacheProcessorConfig, selected: int) -> float:
-    in_out = input_dim * config.hidden_size + config.hidden_size * input_dim
-    matmul = 2 * selected * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+def _processor_block_flops_per_call(
+    input_dim: int,
+    config: CacheProcessorConfig,
+    selected: int,
+    *,
+    field_evaluations: int = 1,
+) -> float:
+    in_out = 2 * selected * (input_dim * config.hidden_size + config.hidden_size * input_dim)
+    layer_matmul = 2 * selected * config.num_layers * _processor_layer_matmul_params(config)
     head_dim = config.hidden_size // config.num_heads
-    attn = config.num_layers * 4 * config.num_heads * head_dim * selected * selected
-    return float(matmul + attn)
+    attention = config.num_layers * 4 * config.num_heads * head_dim * selected * selected
+    return float(in_out + field_evaluations * (layer_matmul + attention))
 
 
 def _selected_count(valid_tokens: int, process_every: int, topk: int) -> int:
@@ -105,22 +111,42 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
     cache_heads = config.cache_num_heads
     per_layer_dim = cp.stream_factor * config.num_kv_heads * head_dim
     total = 0.0
+    field_evaluations = config.flow_processor.num_steps if config.flow_processor is not None else 1
     for start in range(cp.process_every, seq_len, cp.process_every):
         selected = _selected_count(start, cp.process_every, cp.topk)
         if config.variant == "bt":
             total += cache_layers * _processor_block_flops_per_call(per_layer_dim, cp, selected)
         elif config.variant == "bgt":
-            total += _processor_block_flops_per_call(cache_layers * per_layer_dim, cp, selected)
+            total += _processor_block_flops_per_call(
+                cache_layers * per_layer_dim,
+                cp,
+                selected,
+                field_evaluations=field_evaluations,
+            )
         elif config.variant == "icarus":
             selected_heads = cache_heads if cp.topk_heads <= 0 else min(cp.topk_heads, cache_heads)
             if cp.include_self_head_kv and selected_heads < cache_heads:
                 selected_heads += 1
-            total += _icarus_processor_block_flops_per_call(2 * head_dim, cp, selected, cache_heads, selected_heads)
+            total += _icarus_processor_block_flops_per_call(
+                2 * head_dim,
+                cp,
+                selected,
+                cache_heads,
+                selected_heads,
+                field_evaluations=field_evaluations,
+            )
         elif config.variant == "longshot":
             selected_heads = cache_heads if cp.topk_heads <= 0 else min(cp.topk_heads, cache_heads)
             if cp.include_self_head_kv and selected_heads < cache_heads:
                 selected_heads += 1
-            total += _longshot_processor_block_flops_per_call(2 * head_dim, cp, selected, cache_heads, selected_heads)
+            total += _longshot_processor_block_flops_per_call(
+                2 * head_dim,
+                cp,
+                selected,
+                cache_heads,
+                selected_heads,
+                field_evaluations=field_evaluations,
+            )
     return total
 
 
@@ -130,13 +156,15 @@ def _icarus_processor_block_flops_per_call(
     selected: int,
     cache_heads: int,
     selected_heads: int,
+    *,
+    field_evaluations: int = 1,
 ) -> float:
     output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
-    in_out = input_dim * config.hidden_size + config.hidden_size * output_dim
-    matmul = 2 * selected * cache_heads * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+    in_out = 2 * selected * cache_heads * (input_dim * config.hidden_size + config.hidden_size * output_dim)
+    layer_matmul = 2 * selected * cache_heads * config.num_layers * _processor_layer_matmul_params(config)
     head_dim = config.hidden_size // config.num_heads
-    attn = config.num_layers * 4 * config.num_heads * head_dim * (cache_heads * selected) * (selected_heads * selected)
-    return float(matmul + attn)
+    attention = config.num_layers * 4 * config.num_heads * head_dim * (cache_heads * selected) * (selected_heads * selected)
+    return float(in_out + field_evaluations * (layer_matmul + attention))
 
 
 def _longshot_processor_block_flops_per_call(
@@ -145,6 +173,8 @@ def _longshot_processor_block_flops_per_call(
     selected: int,
     cache_heads: int,
     selected_heads: int,
+    *,
+    field_evaluations: int = 1,
 ) -> float:
     encoder_len = config.encoder_seq_len or config.process_every + max(config.topk, 0)
     encoder_in = input_dim if config.encoder_method == "query_attention" else input_dim * encoder_len
@@ -161,8 +191,8 @@ def _longshot_processor_block_flops_per_call(
     attention = config.num_layers * 4 * config.num_heads * head_dim * cache_heads * selected_heads
     field = layer_matmul + attention
     if config.iteration_mode == "external":
-        return float(config.iterations * (encode + field + decode))
-    return float(encode + config.iterations * field + decode)
+        return float(config.iterations * (encode + field_evaluations * field + decode))
+    return float(encode + config.iterations * field_evaluations * field + decode)
 
 
 def flops_per_token(config: ModelConfig, seq_len: int) -> float:

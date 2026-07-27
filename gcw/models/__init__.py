@@ -2,6 +2,7 @@ from gcw.config import ModelConfig
 from gcw.models.bgt import BGT
 from gcw.models.backbone import build_backbone
 from gcw.models.bt import BT
+from gcw.models.flow import LatentFlow, set_flow_solver_steps
 from gcw.models.icarus import Icarus
 from gcw.models.longshot import Longshot
 from gcw.models.transformer import TF
@@ -21,4 +22,14 @@ def build_model(config: ModelConfig):
     raise ValueError(f"unknown model variant: {config.variant}")
 
 
-__all__ = ["BGT", "BT", "Icarus", "Longshot", "TF", "build_backbone", "build_model"]
+__all__ = [
+    "BGT",
+    "BT",
+    "Icarus",
+    "LatentFlow",
+    "Longshot",
+    "TF",
+    "build_backbone",
+    "build_model",
+    "set_flow_solver_steps",
+]

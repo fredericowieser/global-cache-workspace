@@ -136,6 +136,30 @@ uv run --extra eval python scripts/extract_paper_table.py \
   --csv results/llama32_1b_bgt_paper7.csv
 ```
 
+## Optional latent-flow dynamics
+
+BGT, ICaRUS, and Longshot use the same opt-in latent-flow configuration. Keep the base `variant` unchanged and add:
+
+```yaml
+model:
+  variant: longshot  # or bgt / icarus
+  cache_processor:
+    # existing processor configuration
+  flow_processor:
+    num_steps: 2
+    time_conditioning: true
+    eta_max: 1.0
+    flow_gate_init: -4.0
+```
+
+The solver refines one gathered hidden workspace before decoding and cache writeback. `num_steps` reuses the same processor field, so it changes compute but not model width or field parameters. Flow-Longshot keeps selected heads fixed inside the solver. It may combine flow with `iteration_mode: external`, but rejects internal Longshot iterations greater than one.
+
+Run the accelerator smoke test with:
+
+```bash
+uv run --extra gpu python scripts/flow_smoke.py --device cuda --flow-steps 2
+```
+
 ## Research analysis
 
 The imported cache-head and Longshot analyses share the same checkpoint tokenization and generation semantics as the

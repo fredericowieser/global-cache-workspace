@@ -28,8 +28,9 @@ def estimate_processor_params(config: ModelConfig) -> int:
     per_layer_dim = config.cache_processor.stream_factor * config.num_kv_heads * head_dim
     if config.variant == "bt":
         return cache_layers * _processor_block_params(per_layer_dim, config.cache_processor)
+    flow_params = 1 if config.flow_processor is not None else 0
     if config.variant == "bgt":
-        return _processor_block_params(cache_layers * per_layer_dim, config.cache_processor) + _salience_params(config)
+        return _processor_block_params(cache_layers * per_layer_dim, config.cache_processor) + _salience_params(config) + flow_params
     if config.variant == "icarus":
         projection_count = config.cache_num_heads if config.cache_processor.per_cache_head_projections else 1
         input_dim = 2 * head_dim
@@ -40,9 +41,9 @@ def estimate_processor_params(config: ModelConfig) -> int:
             out_proj_dim=out_proj_dim,
             config=config.cache_processor,
             projection_count=projection_count,
-        )
+        ) + flow_params
     if config.variant == "longshot":
-        return _longshot_processor_params(config)
+        return _longshot_processor_params(config) + flow_params
     return 0
 
 

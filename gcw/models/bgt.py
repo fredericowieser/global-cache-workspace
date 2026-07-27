@@ -18,7 +18,7 @@ class BGT(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = replace(config, variant=self.variant)
-        self.backbone = build_backbone(config)
+        self.backbone = build_backbone(replace(config, flow_processor=None))
         self.cache_processor = self.processor_cls(self.config)
 
     def init_weights(self) -> None:

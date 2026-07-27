@@ -653,7 +653,7 @@ def _init_wandb(config: TrainConfig, run_meta: dict[str, Any]):
     run = wandb.init(**init_kwargs)
     run.define_metric("train/step")
     run.define_metric("*", step_metric="train/step")
-    run.summary["architecture"] = config.model.variant
+    run.summary["architecture"] = config.model.architecture_name
     run.summary["non_embedding_params"] = run_meta["non_embedding_params"]
     run.summary["processor_params"] = run_meta["processor_params"]
     run.summary["total_training_tokens"] = run_meta["total_training_tokens"]
