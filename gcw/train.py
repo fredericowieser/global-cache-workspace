@@ -214,8 +214,22 @@ def _model_runtime_backends(model: torch.nn.Module, device: torch.device) -> dic
 def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
     state = {**base, "step": step}
     if loader is not None:
-        state["loader"] = loader
+        state["loader"] = _json_safe_loader_state(loader)
     return state
+
+
+def _json_safe_loader_state(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return None
+    if isinstance(value, dict):
+        return {k: safe for k, v in value.items() if (safe := _json_safe_loader_state(v)) is not None}
+    if isinstance(value, list):
+        return [safe for item in value if (safe := _json_safe_loader_state(item)) is not None]
+    if isinstance(value, tuple):
+        return [safe for item in value if (safe := _json_safe_loader_state(item)) is not None]
+    if isinstance(value, str | int | float | bool) or value is None:
+        return value
+    return str(value)
 
 
 def _retained_checkpoint_every() -> int | None:
@@ -432,6 +446,8 @@ def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device
 
     layer_classes = _transformer_layer_classes()
     auto_wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=layer_classes)
+    # TODO: Decide whether FSDP should preserve the older DDP precision contract:
+    # fp32 parameter/optimizer storage with bf16 autocast compute.
     mixed_precision = (
         MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
         if config.bf16

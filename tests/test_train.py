@@ -8,7 +8,7 @@ from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
-from gcw.train import _build_training_model, _checkpoint_metadata, _model_loss, train
+from gcw.train import _build_training_model, _checkpoint_metadata, _checkpoint_state, _model_loss, train
 
 
 class FakeRun:
@@ -309,6 +309,16 @@ def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
     assert state["tokenizer_source"] == cfg.data.tokenizer_source
     assert state["tokenizer"] == "hf"
     assert state["backbone_checkpoint"] == cfg.backbone_checkpoint
+
+
+def test_checkpoint_state_drops_runtime_loader_tensors():
+    state = _checkpoint_state(
+        {"world_size": 1},
+        5,
+        {"kind": "sft", "row": 7, "attention_mask": torch.ones(1, 2, dtype=torch.bool)},
+    )
+
+    assert state == {"world_size": 1, "step": 5, "loader": {"kind": "sft", "row": 7}}
 
 
 def test_sft_batch_uses_next_token_targets():
