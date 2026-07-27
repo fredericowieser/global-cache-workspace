@@ -39,12 +39,6 @@ def test_hf_family_eval_requires_tokenizer_source():
 
 
 def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
-    class FakeModel:
-        config = type("Config", (), {"sequence_len": 16, "legacy_bottleneck_generate": False})()
-
-        def eval(self):
-            return self
-
     class FakeTokenizer:
         name_or_path = "qwen-tokenizer"
         eot_id = 0
@@ -53,7 +47,8 @@ def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
             assert tokenize is False
             return f"{chat_history[0]['role']}:{chat_history[0]['content']}:{add_generation_prompt}"
 
-    lm = GCWEvalLM(FakeModel(), FakeTokenizer())
+    lm = GCWEvalLM.__new__(GCWEvalLM)
+    lm.tokenizer = FakeTokenizer()
 
     assert lm.tokenizer_name == "qwen-tokenizer"
     assert lm.apply_chat_template([{"role": "user", "content": "hi"}]) == "user:hi:True"
