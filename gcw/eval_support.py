@@ -24,14 +24,14 @@ def encode_generate_prompt(tokenizer, prompt: str, max_length: int, *, add_speci
 
 def tokenizer_for_checkpoint(config, state):
     source = state.get("source") or state.get("tokenizer_source")
-    if source and config.family in {"llama", "qwen3"}:
+    if source and config.family in {"llama", "qwen3", "qwen3_5_moe"}:
         try:
             from transformers import AutoTokenizer
         except ImportError as exc:
             raise ImportError("Converted HF checkpoints require transformers for eval tokenization.") from exc
         tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
-        return HFTokenizerAdapter(tokenizer)
-    if config.family in {"llama", "qwen3"}:
+        return HFTokenizerAdapter(tokenizer, str(source))
+    if config.family in {"llama", "qwen3", "qwen3_5_moe"}:
         raise ValueError(
             "HF-family checkpoints require train_state.json to include 'source' "
             "or 'tokenizer_source' so eval uses the original tokenizer."
@@ -42,8 +42,9 @@ def tokenizer_for_checkpoint(config, state):
 
 
 class HFTokenizerAdapter:
-    def __init__(self, tokenizer):
+    def __init__(self, tokenizer, name_or_path: str | None = None):
         self.tokenizer = tokenizer
+        self.name_or_path = name_or_path or str(getattr(tokenizer, "name_or_path", ""))
         self.eot_id = tokenizer.eos_token_id or tokenizer.pad_token_id or 0
         self.chat_template = getattr(tokenizer, "chat_template", None)
         self.default_chat_template = getattr(tokenizer, "default_chat_template", None)

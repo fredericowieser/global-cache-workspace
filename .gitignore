@@ -17,6 +17,7 @@ env/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.matplotlib-cache/
 .coverage
 htmlcov/
 
@@ -26,6 +27,7 @@ dist/
 *.egg-info/
 
 # Local training/evaluation outputs
+configs/experiments
 runs/
 checkpoints/
 outputs/
@@ -46,3 +48,6 @@ wandb/
 .DS_Store
 Thumbs.db
 *.swp
+
+# Agents
+AGENTS.md

@@ -2,16 +2,28 @@ import types
 
 import pytest
 import torch
+import torch.nn as nn
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.models import icarus as icarus_module
+from gcw.models import longshot as longshot_module
 from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.cache_processor_ops import (
+    expand_cache_head_indices,
+    gather_per_cache_head_scores,
+    gather_per_cache_head_kv,
+    select_heads_from_per_cache_head_scores,
+    select_per_cache_head_kv_norm_indices_from_scores,
+)
 from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
 from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
 from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
 from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
+from gcw.models.icarus import ProcessorAttention as IcarusProcessorAttention
 from gcw.models.longshot import GlobalCacheProcessor as LongshotGlobalCacheProcessor
+from gcw.models.longshot import CacheProcessor as LongshotCacheProcessor
+from gcw.models.longshot import ProcessorAttention as LongshotProcessorAttention
 from gcw.models.longshot import QueryAttentionTimeEncoder
 from gcw.models.longshot import Longshot
 from gcw.models.transformer import _matches_stop_sequence, apply_rotary
@@ -46,6 +58,49 @@ def tiny_config(variant="tf", **processor_overrides):
     )
 
 
+def tiny_qwen35_moe_config(variant="tf", **processor_overrides):
+    cp = None
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
+        cp = CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=1,
+            num_kv_heads=1,
+            **processor_overrides,
+        )
+    return ModelConfig(
+        variant=variant,
+        family="qwen3_5_moe",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=8,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        moe_intermediate_size=8,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=8,
+        cache_processor=cp,
+    )
+
+
 def test_tiny_models_forward_backward():
     for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         model = build_model(tiny_config(variant))
@@ -58,13 +113,172 @@ def test_tiny_models_forward_backward():
         assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
 
 
+def test_tiny_qwen35_moe_forward_backward_and_cache_layers():
+    model = build_model(tiny_qwen35_moe_config())
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.config.cache_layer_indices == [1, 3]
+    assert model.config.cache_num_heads == 2
+    assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_tiny_qwen35_moe_linear_attention_reports_effective_backends():
+    model = build_model(tiny_qwen35_moe_config())
+    linear_layer = model.layers[0].linear_attn
+    backends = linear_layer.effective_backends(torch.device("cpu"))
+
+    assert backends["causal_conv"] == "torch-conv1d"
+    assert backends["gated_delta"] == "transformers-torch"
+
+
+def test_tiny_qwen35_moe_experts_use_transformers_grouped_mm_backend(monkeypatch):
+    pytest.importorskip("transformers.integrations.moe")
+    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
+    calls = []
+
+    def fake_grouped_mm(module, hidden_states, top_k_index, top_k_weights):
+        calls.append((module.config._experts_implementation, top_k_index.shape, top_k_weights.shape))
+        return torch.zeros_like(hidden_states)
+
+    monkeypatch.setitem(ALL_EXPERTS_FUNCTIONS, "grouped_mm", fake_grouped_mm)
+    model = build_model(tiny_qwen35_moe_config())
+    flat = torch.randn(3, model.config.hidden_size)
+    selected = torch.tensor([[0, 1], [1, 2], [2, 3]])
+    weights = torch.full((3, 2), 0.5)
+
+    out = model.layers[1].mlp.experts(flat, selected, weights)
+
+    assert out.shape == flat.shape
+    assert calls == [("grouped_mm", selected.shape, weights.shape)]
+
+
+def test_tiny_qwen35_moe_router_aux_loss_is_added_to_mean_training_loss():
+    model = build_model(tiny_qwen35_moe_config())
+    model.init_weights()
+    x = torch.tensor([[1, 2, 3, 4, 0, 0], [5, 6, 7, 8, 9, 10]])
+    y = x.clone()
+    y[:, -2:] = -100
+
+    model.config.router_aux_loss_coef = 0.0
+    ce_loss = model(x, y)
+    model.config.router_aux_loss_coef = 0.1
+    loss_with_aux = model(x, y)
+
+    assert loss_with_aux > ce_loss
+
+
+def test_tiny_qwen35_moe_router_aux_uses_explicit_attention_mask(monkeypatch):
+    from gcw.models import qwen3 as qwen3_module
+
+    cfg = ModelConfig(
+        variant="tf",
+        family="qwen3_5_moe",
+        vocab_size=32,
+        hidden_size=8,
+        intermediate_size=4,
+        num_layers=1,
+        num_heads=1,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=8,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["full_attention"],
+        processor_layer_indices=[0],
+        partial_rotary_factor=0.5,
+        moe_intermediate_size=4,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=4,
+        router_aux_loss_coef=0.1,
+    )
+    captured = {}
+
+    def fake_aux(router_logits, *, num_experts, top_k, attention_mask=None):
+        captured["attention_mask"] = attention_mask
+        return torch.zeros((), device=router_logits[0].device)
+
+    monkeypatch.setattr(qwen3_module, "qwen35_moe_load_balancing_loss", fake_aux)
+    model = build_model(cfg)
+    model.init_weights()
+    x = torch.tensor([[0, 2, 3, 0]])
+    y = torch.tensor([[-100, 2, 3, -100]])
+    attention_mask = torch.tensor([[True, True, True, False]])
+
+    model(x, y, attention_mask=attention_mask)
+
+    assert captured["attention_mask"] is attention_mask
+
+
+def test_tiny_qwen35_moe_static_chunk_matches_dynamic_chunk():
+    torch.manual_seed(7)
+    model = build_model(tiny_qwen35_moe_config()).eval()
+    model.init_weights()
+    x = torch.randint(1, 128, (2, 5))
+    cache = StaticCacheState.allocate(
+        batch_size=x.shape[0],
+        num_layers=model.config.cache_num_layers,
+        num_kv_heads=model.config.num_kv_heads,
+        max_seq_len=8,
+        head_dim=int(model.config.head_dim),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    with torch.no_grad():
+        dynamic_logits, _ = model.forward_chunk(x, 0)
+        static_logits, _ = model.forward_chunk_static(x, 0, cache)
+
+    assert torch.allclose(static_logits, dynamic_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_qwen35_moe_chunked_cache_tracks_full_attention_layers_only():
+    torch.manual_seed(5)
+    model = build_model(tiny_qwen35_moe_config()).eval()
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    with torch.no_grad():
+        logits, cache = model.forward_windowed(x, process_every=4)
+    assert logits.shape == (2, 9, 128)
+    assert cache.num_layers == 2
+    assert len(cache.keys) == 2
+    assert cache.keys[0].shape == (2, 1, 9, 8)
+    assert cache.linear_states is not None
+    assert sorted(cache.linear_states) == [0, 2]
+
+
+def test_qwen35_moe_processors_use_full_attention_cache_heads_only():
+    for variant in ("bt", "bgt", "icarus", "longshot"):
+        model = build_model(tiny_qwen35_moe_config(variant, encoder_seq_len=6))
+        assert model.config.cache_num_layers == 2
+        if variant == "bt":
+            assert len(model.cache_processor.blocks) == 2
+        else:
+            assert model.cache_processor.num_cache_heads == 2
+
+
 def test_tiny_icarus_uses_icarus_processor():
     model = build_model(tiny_config("icarus"))
     assert isinstance(model, Icarus)
     assert isinstance(model.cache_processor, IcarusGlobalCacheProcessor)
+    x = torch.randn(2, 4, 6, 16)
+    positions = torch.arange(6).view(1, 1, 6).expand(2, 4, -1)
+    selected_heads = torch.tensor([[0, 2], [1, 3]])
+    assert model.cache_processor.block(x, positions, selected_heads).shape == (2, 4, 6, 16)
+
+    value_only = build_model(tiny_config("icarus", update_stream="v"))
+    assert value_only.cache_processor.block.input_dim == 16
+    assert value_only.cache_processor.block.output_dim == 8
+    assert value_only.cache_processor.block(x, positions, selected_heads).shape == (2, 4, 6, 8)
+
     model.init_weights()
-    x = torch.randint(0, 128, (2, 9))
-    loss = model(x, x)
+    tokens = torch.randint(0, 128, (2, 9))
+    loss = model(tokens, tokens)
     loss.backward()
     assert torch.isfinite(loss)
     assert any(p.grad is not None for p in model.cache_processor.parameters())
@@ -79,6 +293,10 @@ def test_tiny_longshot_uses_longshot_processor_and_configured_encoder():
     selected_heads = torch.tensor([[0, 2], [1, 3]])
     out = linear.cache_processor.block(x, selected_heads)
     assert out.shape == (2, 4, 16)
+
+    value_only = build_model(tiny_config("longshot", encoder_seq_len=6, update_stream="v"))
+    value_out = value_only.cache_processor.block(x, selected_heads)
+    assert value_out.shape == (2, 4, 8)
 
     query = build_model(tiny_config("longshot", encoder_method="query_attention"))
     assert query.cache_processor.block.encoder_method == "query_attention"
@@ -115,7 +333,7 @@ def test_icarus_gradient_checkpointing_is_config_gated(monkeypatch):
 
     def build_processor(gradient_checkpointing: bool) -> IcarusCacheProcessor:
         config = CacheProcessorConfig(
-            topk_heads=0,
+            topk_heads=1,
             hidden_size=8,
             intermediate_size=16,
             num_layers=2,
@@ -127,14 +345,47 @@ def test_icarus_gradient_checkpointing_is_config_gated(monkeypatch):
 
     monkeypatch.setattr(icarus_module, "checkpoint", fake_checkpoint)
     x = torch.randn(1, 2, 3, 16, requires_grad=True)
-    positions = torch.arange(3).unsqueeze(0)
-    selected_heads = torch.empty(1, 0, dtype=torch.long)
+    positions = torch.arange(3).view(1, 1, 3).expand(1, 2, -1)
+    selected_heads = torch.tensor([[0]])
 
     build_processor(False).compute_update(x, positions, selected_heads).sum().backward()
     assert calls == []
 
     build_processor(True).compute_update(x, positions, selected_heads).sum().backward()
     assert calls == [{"use_reentrant": False}, {"use_reentrant": False}]
+
+
+def test_longshot_iterative_checkpointing_includes_score_collection(monkeypatch):
+    calls = []
+
+    def fake_checkpoint(fn, *args, **kwargs):
+        calls.append(kwargs)
+        return fn(*args)
+
+    config = CacheProcessorConfig(
+        topk_heads=1,
+        hidden_size=8,
+        intermediate_size=16,
+        num_layers=2,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_seq_len=3,
+        iterations=2,
+        gradient_checkpointing=True,
+    )
+    block = LongshotCacheProcessor(16, 2, config).train()
+    monkeypatch.setattr(longshot_module, "checkpoint", fake_checkpoint)
+    x = torch.randn(1, 2, 3, 16, requires_grad=True)
+    selected_heads = torch.tensor([[0]])
+
+    block.compute_update(x, selected_heads).sum().backward()
+
+    assert calls == [
+        {"use_reentrant": False},
+        {"use_reentrant": False},
+        {"use_reentrant": False},
+        {"use_reentrant": False},
+    ]
 
 
 def test_tiny_models_bf16_autocast_forward_backward():
@@ -339,6 +590,97 @@ def test_icarus_gathers_cache_heads_per_batch():
     assert torch.equal(gathered[1], x[1, [0, 2]])
 
 
+def test_per_cache_head_kv_norm_indices_select_independent_history():
+    keys = [torch.zeros(1, 2, 6, 3)]
+    values = [torch.zeros(1, 2, 6, 3)]
+    keys[0][0, 0, 1] = 10.0
+    values[0][0, 1, 2] = 9.0
+    cache = CacheState(keys, values, torch.zeros(1, 6))
+
+    all_indices = expand_cache_head_indices(cache.all_indices(), cache.num_layers * keys[0].shape[1])
+    scores = gather_per_cache_head_kv(cache, all_indices).float().pow(2).sum(dim=-1)
+    indices = select_per_cache_head_kv_norm_indices_from_scores(scores, process_every=2, topk=1)
+
+    assert indices.tolist() == [[[1, 4, 5], [2, 4, 5]]]
+
+
+def test_score_based_cache_head_selection_matches_merged_kv_norms():
+    cache = _random_cache(tiny_config("icarus"))
+    all_indices = expand_cache_head_indices(cache.all_indices(), cache.num_layers * cache.keys[0].shape[1])
+    full_merged = gather_per_cache_head_kv(cache, all_indices)
+    scores = full_merged.float().pow(2).sum(dim=-1)
+    indices = select_per_cache_head_kv_norm_indices_from_scores(scores, process_every=4, topk=2)
+
+    selected_scores = gather_per_cache_head_scores(scores, indices)
+    merged = gather_per_cache_head_kv(cache, indices)
+
+    assert torch.equal(
+        select_heads_from_per_cache_head_scores(selected_scores, topk=2),
+        _select_heads_from_merged(merged, topk=2),
+    )
+
+
+def test_icarus_and_longshot_pass_per_head_positions_to_block():
+    for variant in ("icarus", "longshot"):
+        model = build_model(tiny_config(variant, score="kv_norm"))
+        cache = _random_cache(model.config)
+        for layer_idx in range(model.config.num_layers):
+            cache.keys[layer_idx].zero_()
+            cache.values[layer_idx].zero_()
+        cache.keys[0][0, 0, 0] = 10.0
+        cache.keys[0][0, 1, 1] = 10.0
+        cache.keys[1][0, 0, 1] = 10.0
+        cache.keys[1][0, 1, 2] = 10.0
+        calls = []
+
+        def forward(self, *args):
+            if variant == "icarus":
+                x, positions, selected_heads = args
+                calls.append((positions.clone(), selected_heads.clone()))
+                return x
+            x, selected_heads = args
+            calls.append((x.clone(), selected_heads.clone()))
+            return x[:, :, -1, :]
+
+        model.cache_processor.block.forward = types.MethodType(forward, model.cache_processor.block)
+        model.cache_processor(cache)
+
+        assert len(calls) == 1
+        if variant == "icarus":
+            positions = calls[0][0]
+            assert positions.shape == (2, 4, 6)
+            assert not torch.equal(positions[0, 0], positions[0, 3])
+        else:
+            merged = calls[0][0]
+            assert merged.shape == (2, 4, 6, 16)
+
+
+def test_icarus_and_longshot_default_attn_l2_uses_shared_token_positions():
+    for variant in ("icarus", "longshot"):
+        model = build_model(tiny_config(variant))
+        cache = _random_cache(model.config)
+        calls = []
+
+        def forward(self, *args):
+            if variant == "icarus":
+                x, positions, selected_heads = args
+                calls.append((positions.clone(), selected_heads.clone()))
+                return x
+            x, selected_heads = args
+            calls.append((x.clone(), selected_heads.clone()))
+            return x[:, :, -1, :]
+
+        model.cache_processor.block.forward = types.MethodType(forward, model.cache_processor.block)
+        model.cache_processor(cache)
+
+        expected = expand_cache_head_indices(cache.select_indices(4, 2), model.cache_processor.num_cache_heads)
+        if variant == "icarus":
+            assert torch.equal(calls[0][0], expected)
+        else:
+            expected_merged = gather_per_cache_head_kv(cache, expected)
+            assert torch.equal(calls[0][0], expected_merged)
+
+
 def test_icarus_cache_processor_matches_windowed_cache_path_and_updates_latest_only():
     model = build_model(tiny_config("icarus"))
     model.init_weights()
@@ -368,6 +710,51 @@ def test_icarus_cache_processor_matches_static_cache_path():
     _assert_cache_close(_cache_state_from_static(static), expected)
 
 
+def test_icarus_value_only_updates_only_latest_values():
+    model = build_model(tiny_config("icarus", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    actual = _clone_cache(cache)
+    indices = cache.select_indices(4, 2)
+
+    model.cache_processor(actual)
+
+    _assert_keys_unchanged(cache, actual)
+    _assert_cache_positions_unchanged(cache, actual, _not_latest_mask(cache, indices))
+    value_delta = sum((new_value - old_value).abs().sum() for old_value, new_value in zip(cache.values, actual.values))
+    assert value_delta > 0
+
+
+def test_icarus_value_only_matches_windowed_cache_path():
+    model = build_model(tiny_config("icarus", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    actual = WindowedCache.from_cache_state(_clone_cache(cache))
+
+    model.cache_processor(expected)
+    model.cache_processor(actual)
+
+    actual_state = actual.to_cache_state()
+    _assert_cache_close(actual_state, expected)
+    _assert_keys_unchanged(cache, actual_state)
+
+
+def test_icarus_value_only_matches_static_cache_path():
+    model = build_model(tiny_config("icarus", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    static = _static_cache_from_state(cache)
+
+    model.cache_processor(expected)
+    model.cache_processor(static)
+
+    actual = _cache_state_from_static(static)
+    _assert_cache_close(actual, expected)
+    _assert_keys_unchanged(cache, actual)
+
+
 def test_icarus_select_all_uses_all_indices_and_heads():
     model = build_model(tiny_config("icarus"))
     cache = _random_cache(model.config)
@@ -381,20 +768,23 @@ def test_icarus_select_all_uses_all_indices_and_heads():
     model.cache_processor(cache, select_all=True)
 
     assert len(calls) == 1
-    assert torch.equal(calls[0][0], cache.all_indices())
+    expected_indices = cache.all_indices()[:, None, :].expand(-1, model.cache_processor.num_cache_heads, -1)
+    assert torch.equal(calls[0][0], expected_indices)
     assert torch.equal(calls[0][1], cache.all_heads())
 
 
 def test_icarus_rejects_unsupported_cache_processor_modes():
-    with pytest.raises(ValueError, match="update_stream"):
-        build_model(tiny_config("icarus", update_stream="v"))
+    model = build_model(tiny_config("icarus", update_stream="v"))
+    assert model.cache_processor.block.input_dim == 16
+    assert model.cache_processor.block.output_dim == 8
     with pytest.raises(ValueError, match="processor_mode"):
         build_model(tiny_config("icarus", processor_mode="workspace_broadcast"))
 
 
 def test_longshot_rejects_unsupported_cache_processor_modes():
-    with pytest.raises(ValueError, match="update_stream"):
-        build_model(tiny_config("longshot", update_stream="v"))
+    model = build_model(tiny_config("longshot", update_stream="v"))
+    assert model.cache_processor.block.input_dim == 16
+    assert model.cache_processor.block.output_dim == 8
     with pytest.raises(ValueError, match="processor_mode"):
         build_model(tiny_config("longshot", processor_mode="workspace_broadcast"))
 
@@ -496,7 +886,133 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.writer_head_fraction == 1.0
     assert cp.salience_temperature == 1.0
     assert cp.unrope_keys is False
+    assert cp.include_self_head_kv is False
+    assert cp.iterations == 1
+    assert cp.iteration_mode == "internal"
+    assert cp.internal_iteration_score == "attn_l2"
     assert cp.stream_factor == 2
+
+
+def test_cache_processor_iterations_must_be_positive():
+    with pytest.raises(ValueError, match="iterations"):
+        CacheProcessorConfig(iterations=0)
+
+
+def test_cache_processor_topk_heads_must_be_positive():
+    with pytest.raises(ValueError, match="topk_heads"):
+        CacheProcessorConfig(topk_heads=0)
+
+
+def test_cache_processor_iteration_mode_must_be_known():
+    with pytest.raises(ValueError, match="iteration_mode"):
+        CacheProcessorConfig(iteration_mode="outer")
+
+
+def test_cache_processor_internal_iteration_score_must_be_known():
+    with pytest.raises(ValueError, match="internal_iteration_score"):
+        CacheProcessorConfig(internal_iteration_score="attention")
+
+
+def test_cache_processor_internal_iteration_score_accepts_kv_norm():
+    cp = CacheProcessorConfig(internal_iteration_score="kv_norm")
+    assert cp.internal_iteration_score == "kv_norm"
+
+
+def test_self_head_kv_attention_is_config_gated_at_init():
+    default_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=False,
+    )
+    enabled_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=True,
+    )
+
+    for attention_cls in (IcarusProcessorAttention, LongshotProcessorAttention):
+        default_attn = attention_cls(default_config)
+        enabled_attn = attention_cls(enabled_config)
+
+        if isinstance(default_attn, LongshotProcessorAttention):
+            assert default_attn.include_self_head_kv is False
+            assert enabled_attn.include_self_head_kv is True
+        else:
+            assert default_attn.forward.__func__ is default_attn.forward_selected_head_kv.__func__
+            assert enabled_attn.forward.__func__ is enabled_attn.forward_with_self_head_kv.__func__
+
+
+def test_longshot_cache_head_attention_score_forward_is_config_gated_at_init():
+    default_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=False,
+        internal_iteration_score="cache_head_attention",
+    )
+    enabled_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=True,
+        internal_iteration_score="cache_head_attention",
+    )
+
+    default_attn = LongshotProcessorAttention(default_config)
+    enabled_attn = LongshotProcessorAttention(enabled_config)
+
+    assert default_attn.include_self_head_kv is False
+    assert default_attn.internal_iteration_score == "cache_head_attention"
+    assert enabled_attn.include_self_head_kv is True
+    assert enabled_attn.internal_iteration_score == "cache_head_attention"
+
+
+def test_longshot_kv_norm_score_forward_is_config_gated_at_init():
+    default_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=False,
+        internal_iteration_score="kv_norm",
+    )
+    enabled_config = CacheProcessorConfig(
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        include_self_head_kv=True,
+        internal_iteration_score="kv_norm",
+    )
+
+    default_attn = LongshotProcessorAttention(default_config)
+    enabled_attn = LongshotProcessorAttention(enabled_config)
+
+    assert default_attn.include_self_head_kv is False
+    assert default_attn.internal_iteration_score == "kv_norm"
+    assert enabled_attn.include_self_head_kv is True
+    assert enabled_attn.internal_iteration_score == "kv_norm"
+
+
+def test_self_head_kv_attention_can_be_enabled_from_config_dict():
+    cfg = ModelConfig(
+        variant="icarus",
+        cache_processor={
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "num_heads": 1,
+            "num_kv_heads": 1,
+            "include_self_head_kv": True,
+        },
+    )
+
+    assert cfg.cache_processor.include_self_head_kv is True
 
 
 def test_cache_processor_forward_is_residual_scaled_update():
@@ -509,6 +1025,173 @@ def test_cache_processor_forward_is_residual_scaled_update():
     positions = torch.arange(5).unsqueeze(0).expand(2, -1)
 
     assert torch.allclose(block(x, positions), x + block.scaled_update(x, positions))
+
+
+def test_longshot_iterative_processor_reselects_heads_between_iterations():
+    class RecordingLayer(nn.Module):
+        def __init__(self, scores: torch.Tensor):
+            super().__init__()
+            self.register_buffer("scores", scores)
+            self.calls = []
+
+        def forward(self, x, selected_heads, return_attn_scores=False):
+            self.calls.append(selected_heads.detach().clone())
+            x = x + 1.0
+            if return_attn_scores:
+                return x, self.scores[None, :].expand(x.shape[0], -1)
+            return x
+
+    config = CacheProcessorConfig(
+        process_every=4,
+        topk=2,
+        topk_heads=2,
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_seq_len=3,
+        iterations=3,
+    )
+    block = LongshotCacheProcessor(16, 4, config)
+    layer = RecordingLayer(torch.tensor([0.0, 4.0, 1.0, 3.0]))
+    block.layers = nn.ModuleList([layer])
+    x = torch.randn(1, 4, 3, 16)
+
+    out = block.compute_update(x, torch.tensor([[0, 2]]))
+
+    assert out.shape == (1, 4, 16)
+    assert len(layer.calls) == 3
+    assert torch.equal(layer.calls[0], torch.tensor([[0, 2]]))
+    assert torch.equal(layer.calls[1], torch.tensor([[1, 3]]))
+    assert torch.equal(layer.calls[2], torch.tensor([[1, 3]]))
+    assert block.pop_iteration_metrics() == {
+        "cache_processor/selected_head_overlap_after_iter_1": 0.0,
+        "cache_processor/selected_head_overlap_after_iter_2": 1.0,
+    }
+    assert block.pop_iteration_metrics() == {}
+
+
+def test_longshot_iterative_processor_can_reselect_from_cache_head_attention_scores():
+    class RecordingAttention(nn.Module):
+        def __init__(self, scores: torch.Tensor):
+            super().__init__()
+            self.register_buffer("scores", scores)
+            self.calls = []
+
+        def forward(self, x, selected_heads, return_attn_scores=False):
+            assert return_attn_scores is False
+            self.calls.append((selected_heads.detach().clone(), return_attn_scores))
+            return torch.zeros_like(x)
+
+        def forward_with_iteration_scores(self, x, selected_heads):
+            self.calls.append((selected_heads.detach().clone(), True))
+            x = torch.zeros_like(x)
+            return x, self.scores[None, :].expand(x.shape[0], -1)
+
+    config = CacheProcessorConfig(
+        process_every=4,
+        topk=2,
+        topk_heads=2,
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_seq_len=3,
+        iterations=2,
+        include_self_head_kv=True,
+        internal_iteration_score="cache_head_attention",
+    )
+    block = LongshotCacheProcessor(16, 4, config)
+    attention = RecordingAttention(torch.tensor([0.0, 4.0, 1.0, 3.0]))
+    block.layers[0].attn = attention
+    x = torch.randn(1, 4, 3, 16)
+
+    out = block.compute_update(x, torch.tensor([[0, 2]]))
+
+    assert out.shape == (1, 4, 16)
+    assert len(attention.calls) == 2
+    assert torch.equal(attention.calls[0][0], torch.tensor([[0, 2]]))
+    assert attention.calls[0][1] is True
+    assert torch.equal(attention.calls[1][0], torch.tensor([[1, 3]]))
+    assert attention.calls[1][1] is False
+    assert block.pop_iteration_metrics() == {"cache_processor/selected_head_overlap_after_iter_1": 0.0}
+
+
+def test_longshot_external_iteration_repeats_forward_once_and_preserves_select_all():
+    model_config = tiny_config("longshot", iterations=3, iteration_mode="external")
+    processor = LongshotGlobalCacheProcessor(model_config)
+    cache = _random_cache(model_config)
+    calls = []
+    selected_heads = torch.tensor([[0, 1], [1, 2]])
+
+    def fake_forward_once(self, cache, *, select_all=False):
+        calls.append(select_all)
+        return cache, selected_heads
+
+    processor._forward_once = types.MethodType(fake_forward_once, processor)
+
+    assert processor(cache, select_all=True) is cache
+    assert calls == [True, True, True]
+
+
+def test_longshot_external_iteration_runs_one_block_iteration_per_global_call():
+    class RecordingLayer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def forward(self, x, selected_heads, return_attn_scores=False):
+            self.calls += 1
+            assert return_attn_scores is False
+            return x
+
+    model_config = tiny_config("longshot", iterations=3, iteration_mode="external")
+    processor = LongshotGlobalCacheProcessor(model_config)
+    layer = RecordingLayer()
+    processor.block.layers = nn.ModuleList([layer])
+    cache = _random_cache(model_config)
+
+    processor(cache)
+
+    assert layer.calls == 3
+
+
+def test_longshot_external_iteration_logs_selected_head_overlap_between_calls():
+    processor = LongshotGlobalCacheProcessor(tiny_config("longshot", iterations=3, iteration_mode="external"))
+    cache = _random_cache(tiny_config("longshot"))
+    selections = iter(
+        [
+            torch.tensor([[0, 1], [0, 2]]),
+            torch.tensor([[1, 2], [2, 3]]),
+            torch.tensor([[2, 3], [0, 3]]),
+        ]
+    )
+
+    def fake_forward_once(self, cache, *, select_all=False):
+        return cache, next(selections)
+
+    processor._forward_once = types.MethodType(fake_forward_once, processor)
+
+    processor(cache)
+
+    assert processor.block.pop_iteration_metrics() == {
+        "cache_processor/selected_head_overlap_after_iter_1": 0.5,
+        "cache_processor/selected_head_overlap_after_iter_2": 0.5,
+    }
+
+
+def test_longshot_external_single_iteration_logs_no_selected_head_overlap():
+    processor = LongshotGlobalCacheProcessor(tiny_config("longshot", iterations=1, iteration_mode="external"))
+    cache = _random_cache(tiny_config("longshot"))
+
+    def fake_forward_once(self, cache, *, select_all=False):
+        return cache, torch.tensor([[0, 1], [1, 2]])
+
+    processor._forward_once = types.MethodType(fake_forward_once, processor)
+
+    processor(cache)
+
+    assert processor.block.pop_iteration_metrics() == {}
 
 
 def test_zero_out_direct_gate_starts_as_identity():
@@ -590,6 +1273,51 @@ def test_value_only_cache_processor_matches_windowed_cache_path():
         _assert_keys_unchanged(cache, actual_state)
 
 
+def test_longshot_value_only_updates_only_latest_values():
+    model = build_model(tiny_config("longshot", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    actual = _clone_cache(cache)
+    indices = cache.select_indices(4, 2)
+
+    model.cache_processor(actual)
+
+    _assert_keys_unchanged(cache, actual)
+    _assert_cache_positions_unchanged(cache, actual, _not_latest_mask(cache, indices))
+    value_delta = sum((new_value - old_value).abs().sum() for old_value, new_value in zip(cache.values, actual.values))
+    assert value_delta > 0
+
+
+def test_longshot_value_only_matches_windowed_cache_path():
+    model = build_model(tiny_config("longshot", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    actual = WindowedCache.from_cache_state(_clone_cache(cache))
+
+    model.cache_processor(expected)
+    model.cache_processor(actual)
+
+    actual_state = actual.to_cache_state()
+    _assert_cache_close(actual_state, expected)
+    _assert_keys_unchanged(cache, actual_state)
+
+
+def test_longshot_value_only_matches_static_cache_path():
+    model = build_model(tiny_config("longshot", update_stream="v", gate_mode="direct", gate_init=1.0))
+    model.init_weights()
+    cache = _random_cache(model.config)
+    expected = _clone_cache(cache)
+    static = _static_cache_from_state(cache)
+
+    model.cache_processor(expected)
+    model.cache_processor(static)
+
+    actual = _cache_state_from_static(static)
+    _assert_cache_close(actual, expected)
+    _assert_keys_unchanged(cache, actual)
+
+
 def test_experimental_value_only_forward_backward():
     for variant in ("bt", "bgt"):
         model = build_model(
@@ -607,6 +1335,42 @@ def test_experimental_value_only_forward_backward():
 
         assert torch.isfinite(loss)
         assert any(p.grad is not None for p in model.cache_processor.parameters())
+
+
+def test_icarus_value_only_forward_backward():
+    model = build_model(
+        tiny_config(
+            "icarus",
+            update_stream="v",
+            out_proj_init="zero",
+            gate_mode="direct",
+            gate_init=1.0,
+        )
+    )
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in model.cache_processor.parameters())
+
+
+def test_longshot_value_only_forward_backward():
+    model = build_model(
+        tiny_config(
+            "longshot",
+            update_stream="v",
+            out_proj_init="zero",
+            gate_mode="direct",
+            gate_init=1.0,
+        )
+    )
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert any(p.grad is not None for p in model.cache_processor.parameters())
 
 
 def test_workspace_broadcast_zero_out_starts_as_identity():
@@ -974,6 +1738,7 @@ def _reference_windowed_loss(
     processor,
     process_every: int,
     loss_reduction: str = "mean",
+    attention_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
     loss_sum = input_ids.new_zeros((), dtype=torch.float32)
@@ -1045,7 +1810,8 @@ def _assert_unselected_unchanged(original: CacheState, actual: CacheState, indic
 
 def _not_latest_mask(cache: CacheState, indices: torch.Tensor) -> torch.Tensor:
     mask = torch.ones(cache.scores.shape, dtype=torch.bool)
-    mask.scatter_(1, indices[:, -1:].cpu(), False)
+    latest = indices[:, -1:] if indices.ndim == 2 else indices[:, :1, -1]
+    mask.scatter_(1, latest.cpu(), False)
     return mask
 
 

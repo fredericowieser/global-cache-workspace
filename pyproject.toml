@@ -5,6 +5,7 @@ description = "Minimal CE-only workspace for TF, BT, and BGT cache-processor exp
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "matplotlib>=3.9",
     "numpy>=1.26",
     "pyyaml>=6.0",
     "safetensors>=0.4",
@@ -28,8 +29,9 @@ gcw = "gcw.cli:main"
 cpu = ["torch>=2.7"]
 gpu = ["torch>=2.7"]
 rocm = ["torch>=2.7", "pytorch-triton-rocm"]
-eval = ["lm-eval>=0.4", "transformers>=4.40", "pillow>=10.0", "accelerate>=1.0"]
-convert = ["transformers>=4.40"]
+eval = ["lm-eval>=0.4", "transformers>=5,<6", "pillow>=10.0", "accelerate>=1.0"]
+convert = ["transformers>=5,<6"]
+qwen35 = ["causal-conv1d>=1.5.0", "flash-linear-attention>=0.5.1", "transformers>=5,<6"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]

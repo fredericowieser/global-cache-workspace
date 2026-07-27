@@ -49,9 +49,9 @@ run_eval() {
   fi
 
   if [[ "$SUITE" != "fineweb" && "$ngpu" -gt 1 ]]; then
-    "${UV_RUN[@]}" torchrun --standalone --nproc-per-node="$ngpu" -m gcw.cli "${gcw_args[@]}"
+    "${UV_RUN[@]}" torchrun --standalone --nproc-per-node="$ngpu" -m gcw.cli "${gcw_args[@]}" || return $?
   else
-    "${UV_RUN[@]}" gcw "${gcw_args[@]}"
+    "${UV_RUN[@]}" gcw "${gcw_args[@]}" || return $?
   fi
   if [[ -n "$out" ]]; then
     echo "Wrote $out"

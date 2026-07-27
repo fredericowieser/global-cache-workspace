@@ -3,6 +3,7 @@ import pytest
 
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.config import ModelConfig
+from gcw.eval import GCWEvalLM
 from gcw.eval_support import tokenizer_for_checkpoint
 from gcw.models import build_model
 
@@ -35,3 +36,24 @@ def test_hf_family_eval_requires_tokenizer_source():
 
     with pytest.raises(ValueError, match="tokenizer"):
         tokenizer_for_checkpoint(cfg, {})
+
+
+def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
+    class FakeModel:
+        config = type("Config", (), {"sequence_len": 16, "legacy_bottleneck_generate": False})()
+
+        def eval(self):
+            return self
+
+    class FakeTokenizer:
+        name_or_path = "qwen-tokenizer"
+        eot_id = 0
+
+        def apply_chat_template(self, chat_history, tokenize=False, add_generation_prompt=True):
+            assert tokenize is False
+            return f"{chat_history[0]['role']}:{chat_history[0]['content']}:{add_generation_prompt}"
+
+    lm = GCWEvalLM(FakeModel(), FakeTokenizer())
+
+    assert lm.tokenizer_name == "qwen-tokenizer"
+    assert lm.apply_chat_template([{"role": "user", "content": "hi"}]) == "user:hi:True"

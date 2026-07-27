@@ -8,14 +8,17 @@ import yaml
 
 
 Variant = Literal["tf", "bt", "bgt", "icarus", "longshot"]
-Family = Literal["smollm", "llama", "qwen3"]
+Family = Literal["smollm", "llama", "qwen3", "qwen3_5_moe"]
 RotaryStyle = Literal["llama", "ppt"]
+MoeExpertsImplementation = Literal["grouped_mm"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
 CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broadcast"]
 CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
+CacheProcessorIterationMode = Literal["internal", "external"]
+CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention", "kv_norm"]
 
 
 @dataclass
@@ -47,12 +50,16 @@ class CacheProcessorConfig:
     encoder_seq_len: int | None = None
     encoder_query_source: CacheEncoderQuerySource = "learned"
     unrope_keys: bool = False
+    include_self_head_kv: bool = False
+    iterations: int = 1
+    iteration_mode: CacheProcessorIterationMode = "internal"
+    internal_iteration_score: CacheProcessorInternalIterationScore = "attn_l2"
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("cache_processor.score must be 'attn_l2' or 'kv_norm'")
-        if self.topk_heads < 0:
-            raise ValueError("cache_processor.topk_heads must be non-negative")
+        if self.topk_heads <= 0:
+            raise ValueError("cache_processor.topk_heads must be positive")
         if self.update_stream not in {"kv", "v"}:
             raise ValueError("cache_processor.update_stream must be 'kv' or 'v'")
         if self.out_proj_init not in {"normal", "zero"}:
@@ -73,6 +80,14 @@ class CacheProcessorConfig:
             raise ValueError("cache_processor.encoder_seq_len must be positive when set")
         if self.encoder_query_source not in {"learned", "final_token"}:
             raise ValueError("cache_processor.encoder_query_source must be 'learned' or 'final_token'")
+        if self.iterations < 1:
+            raise ValueError("cache_processor.iterations must be positive")
+        if self.iteration_mode not in {"internal", "external"}:
+            raise ValueError("cache_processor.iteration_mode must be 'internal' or 'external'")
+        if self.internal_iteration_score not in {"attn_l2", "cache_head_attention", "kv_norm"}:
+            raise ValueError(
+                "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', or 'kv_norm'"
+            )
 
     @property
     def stream_factor(self) -> int:
@@ -102,18 +117,92 @@ class ModelConfig:
     rotary_style: RotaryStyle = "ppt"
     cache_processor: CacheProcessorConfig | None = None
     legacy_bottleneck_generate: bool = False
+    layer_types: list[str] | None = None
+    processor_layer_indices: list[int] | None = None
+    partial_rotary_factor: float = 1.0
+    linear_conv_kernel_dim: int = 4
+    linear_key_head_dim: int | None = None
+    linear_value_head_dim: int | None = None
+    linear_num_key_heads: int | None = None
+    linear_num_value_heads: int | None = None
+    moe_intermediate_size: int | None = None
+    num_experts: int = 0
+    num_experts_per_tok: int = 0
+    shared_expert_intermediate_size: int | None = None
+    hidden_act: str = "silu"
+    moe_experts_implementation: MoeExpertsImplementation = "grouped_mm"
+    router_aux_loss_coef: float = 0.0
+    output_router_logits: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.cache_processor, dict):
             self.cache_processor = CacheProcessorConfig(**self.cache_processor)
+        if self.layer_types is not None:
+            self.layer_types = list(self.layer_types)
+            if len(self.layer_types) != self.num_layers:
+                raise ValueError("layer_types must have length num_layers")
+            unknown = sorted(set(self.layer_types) - {"full_attention", "linear_attention"})
+            if unknown:
+                raise ValueError(f"unsupported layer_types: {unknown}")
+        if self.processor_layer_indices is not None:
+            self.processor_layer_indices = [int(i) for i in self.processor_layer_indices]
+            if any(i < 0 or i >= self.num_layers for i in self.processor_layer_indices):
+                raise ValueError("processor_layer_indices entries must be valid layer indices")
+            if self.layer_types is not None:
+                non_cache = [i for i in self.processor_layer_indices if self.layer_types[i] != "full_attention"]
+                if non_cache:
+                    raise ValueError("processor_layer_indices must reference full_attention layers")
+        if self.family == "qwen3_5_moe":
+            if self.moe_experts_implementation != "grouped_mm":
+                raise ValueError("qwen3_5_moe supports only moe_experts_implementation='grouped_mm'")
+            if self.layer_types is None:
+                raise ValueError("qwen3_5_moe requires layer_types")
+            if self.moe_intermediate_size is None:
+                self.moe_intermediate_size = self.intermediate_size
+            if self.shared_expert_intermediate_size is None:
+                self.shared_expert_intermediate_size = self.moe_intermediate_size
+            if self.linear_key_head_dim is None:
+                self.linear_key_head_dim = int(self.head_dim or self.hidden_size // self.num_heads)
+            if self.linear_value_head_dim is None:
+                self.linear_value_head_dim = self.linear_key_head_dim
+            if self.linear_num_key_heads is None:
+                self.linear_num_key_heads = self.num_kv_heads
+            if self.linear_num_value_heads is None:
+                self.linear_num_value_heads = self.num_heads
+            if self.num_experts <= 0:
+                raise ValueError("qwen3_5_moe requires num_experts")
+            if self.num_experts_per_tok <= 0:
+                raise ValueError("qwen3_5_moe requires num_experts_per_tok")
         if self.head_dim is None:
             self.head_dim = self.hidden_size // self.num_heads
         if self.head_dim <= 0:
             raise ValueError("head_dim must be positive")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads")
+        if not 0.0 < self.partial_rotary_factor <= 1.0:
+            raise ValueError("partial_rotary_factor must be in (0, 1]")
         if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
+
+    @property
+    def cache_layer_indices(self) -> list[int]:
+        if self.processor_layer_indices is not None:
+            return self.processor_layer_indices
+        if self.layer_types is not None:
+            return [i for i, layer_type in enumerate(self.layer_types) if layer_type == "full_attention"]
+        return list(range(self.num_layers))
+
+    @property
+    def cache_num_layers(self) -> int:
+        return len(self.cache_layer_indices)
+
+    @property
+    def cache_num_heads(self) -> int:
+        return self.cache_num_layers * self.num_kv_heads
+
+    @property
+    def _experts_implementation(self) -> str:
+        return self.moe_experts_implementation
 
 
 @dataclass

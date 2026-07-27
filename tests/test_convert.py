@@ -1,4 +1,6 @@
+import pytest
 import torch
+from types import SimpleNamespace
 from transformers import LlamaConfig, LlamaForCausalLM, Qwen3Config, Qwen3ForCausalLM
 
 from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_checkpoint
@@ -138,6 +140,97 @@ def test_tiny_qwen3_logits_match_transformers():
         hf_logits = hf(x).logits
         native_logits = native(x)
     assert torch.allclose(native_logits, hf_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_tiny_qwen35_moe_logits_match_transformers():
+    pytest.importorskip("transformers.models.qwen3_5_moe.modeling_qwen3_5_moe")
+    from transformers import Qwen3_5MoeForCausalLM, Qwen3_5MoeTextConfig
+
+    hf_cfg = Qwen3_5MoeTextConfig(
+        vocab_size=32,
+        hidden_size=16,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=8,
+        max_position_embeddings=16,
+        tie_word_embeddings=False,
+        rope_parameters={"rope_theta": 10000.0, "rope_type": "default", "partial_rotary_factor": 0.5},
+        partial_rotary_factor=0.5,
+        layer_types=["full_attention", "linear_attention"],
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        moe_intermediate_size=8,
+        shared_expert_intermediate_size=8,
+        num_experts=4,
+        num_experts_per_tok=2,
+        output_router_logits=False,
+    )
+    torch.manual_seed(0)
+    hf = Qwen3_5MoeForCausalLM(hf_cfg).eval()
+    native = build_model(config_from_hf(hf_cfg, family="qwen3_5_moe")).eval()
+    load_hf_state(native, hf.state_dict(), family="qwen3_5_moe")
+    x = torch.tensor([[1, 2, 3, 4]])
+    with torch.no_grad():
+        hf_logits = hf(x, use_cache=False).logits
+        native_logits = native(x)
+    assert torch.allclose(native_logits, hf_logits.float(), atol=1e-5, rtol=1e-5)
+
+
+def test_qwen35_moe_hf_text_config_uses_full_attention_processor_layers():
+    text = SimpleNamespace(
+        num_attention_heads=2,
+        hidden_size=16,
+        head_dim=8,
+        num_key_value_heads=1,
+        max_position_embeddings=32,
+        vocab_size=128,
+        num_hidden_layers=4,
+        rms_norm_eps=1e-6,
+        tie_word_embeddings=False,
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        rope_parameters={"rope_theta": 10000000.0, "partial_rotary_factor": 0.5},
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        moe_intermediate_size=8,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=8,
+        hidden_act="silu",
+        router_aux_loss_coef=0.001,
+        output_router_logits=False,
+    )
+    cfg = config_from_hf(SimpleNamespace(text_config=text), family="qwen3_5_moe")
+
+    assert cfg.family == "qwen3_5_moe"
+    assert cfg.layer_types == text.layer_types
+    assert cfg.processor_layer_indices == [1, 3]
+    assert cfg.cache_num_heads == 2
+    assert cfg.hidden_act == "silu"
+
+
+def test_qwen35_moe_hf_mapping_loads_multimodal_language_model_prefix():
+    model = build_model(_tiny_qwen35_moe_config())
+    hf = _prefixed_state_like(model.state_dict(), "language_model.")
+
+    load_hf_state(model, hf, family="qwen3_5_moe")
+
+    assert torch.equal(model.embed_tokens.weight, hf["language_model.model.embed_tokens.weight"])
+    assert torch.equal(
+        model.layers[1].self_attn.q_proj.weight,
+        hf["language_model.model.layers.1.self_attn.q_proj.weight"],
+    )
+    assert torch.equal(
+        model.layers[0].linear_attn.in_proj_qkv.weight,
+        hf["language_model.model.layers.0.linear_attn.in_proj_qkv.weight"],
+    )
 
 
 def test_ppt_state_mapping_loads_native_smollm():
@@ -340,6 +433,54 @@ def _tiny_bottleneck_config(variant: str) -> ModelConfig:
             num_kv_heads=1,
         ),
     )
+
+
+def _tiny_qwen35_moe_config() -> ModelConfig:
+    return ModelConfig(
+        variant="tf",
+        family="qwen3_5_moe",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=8,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        moe_intermediate_size=8,
+        num_experts=4,
+        num_experts_per_tok=2,
+        shared_expert_intermediate_size=8,
+    )
+
+
+def _prefixed_state_like(state: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
+    out = {}
+    for key, value in state.items():
+        if key == "embed_tokens.weight":
+            remote = f"{prefix}model.embed_tokens.weight"
+        elif key == "norm.weight":
+            remote = f"{prefix}model.norm.weight"
+        elif key == "lm_head.weight":
+            remote = f"{prefix}lm_head.weight"
+        else:
+            remote = f"{prefix}model.{key}"
+        if value.is_floating_point():
+            out[remote] = torch.randn_like(value)
+        else:
+            out[remote] = torch.zeros_like(value)
+    return out
 
 
 def _legacy_state_from_native(native_state: dict[str, torch.Tensor], variant: str) -> dict[str, torch.Tensor]:

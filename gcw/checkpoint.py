@@ -13,13 +13,14 @@ from gcw.models import build_model
 
 def save_checkpoint(
     path: str | Path,
-    model: torch.nn.Module,
+    model: torch.nn.Module | dict[str, torch.Tensor],
     model_config: ModelConfig,
     train_state: dict[str, Any] | None = None,
 ) -> None:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
-    state = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+    state = model if isinstance(model, dict) else model.state_dict()
+    state = {k: v.detach().cpu() for k, v in state.items()}
     save_file(state, path / "model.safetensors")
     with open(path / "config.json", "w", encoding="utf-8") as f:
         json.dump({"model": to_dict(model_config)}, f, indent=2)

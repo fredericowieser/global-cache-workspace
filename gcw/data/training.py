@@ -16,6 +16,7 @@ from gcw.data.tokenizers import get_tokenizer
 class TrainingBatch:
     x: torch.Tensor
     y: torch.Tensor
+    attention_mask: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -184,12 +185,13 @@ class SFTBatchStream:
     def __next__(self) -> TrainingBatch:
         rank_start = self._cursor.row + self.rank * self.batch_size
         batch_rows = [self.rows[(rank_start + offset) % len(self.rows)] for offset in range(self.batch_size)]
-        x, y = sft_batch(
+        x, y, attention_mask = sft_batch(
             batch_rows,
             self.tokenizer,
             self.sequence_len,
             device=self.device,
             response_prefix=self.response_prefix,
+            return_attention_mask=True,
         )
         global_rows = self.batch_size * self.world_size
         absolute_next = self._cursor.row + global_rows
@@ -197,7 +199,7 @@ class SFTBatchStream:
             epoch=self._cursor.epoch + absolute_next // len(self.rows),
             row=absolute_next % len(self.rows),
         )
-        return TrainingBatch(x=x, y=y)
+        return TrainingBatch(x=x, y=y, attention_mask=attention_mask)
 
 
 def build_training_stream(

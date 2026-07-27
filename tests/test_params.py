@@ -39,6 +39,7 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
     )
     for cp in (
         base_cp,
+        replace(base_cp, update_stream="v"),
         replace(base_cp, encoder_method="query_attention"),
         replace(base_cp, encoder_method="query_attention", encoder_query_source="final_token"),
         replace(
@@ -62,6 +63,20 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
         model = build_model(cfg)
 
         assert processor_params(cfg) == sum(p.numel() for p in model.cache_processor.parameters())
+
+    kv_cfg = ModelConfig(
+        variant="longshot",
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        cache_processor=base_cp,
+    )
+    v_cfg = replace(kv_cfg, cache_processor=replace(base_cp, update_stream="v"))
+    assert processor_params(v_cfg) < processor_params(kv_cfg)
 
 
 def test_matched_total_uses_one_backbone_under_tf_target():
@@ -154,6 +169,17 @@ def test_value_only_processor_params_use_smaller_cache_stream():
     kv = replace(backbone, variant="bt", cache_processor=kv_cp)
     v = replace(backbone, variant="bt", cache_processor=replace(kv_cp, update_stream="v"))
 
+    assert processor_params(v) < processor_params(kv)
+
+
+def test_icarus_value_only_writeback_params_keep_kv_input_but_reduce_output():
+    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
+    kv_cp = CacheProcessorConfig(hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)
+    kv = replace(backbone, variant="icarus", cache_processor=kv_cp)
+    v = replace(backbone, variant="icarus", cache_processor=replace(kv_cp, update_stream="v"))
+    model = build_model(v)
+
+    assert processor_params(v) == sum(p.numel() for p in model.cache_processor.parameters())
     assert processor_params(v) < processor_params(kv)
 
 

@@ -81,8 +81,19 @@ class GCWEvalLM(TemplateLM):
         self.add_special_tokens_for_generate = _legacy_generate_add_special_tokens(model)
 
     @property
+    def tokenizer_name(self) -> str:
+        return getattr(self.tokenizer, "name_or_path", self.tokenizer.__class__.__name__)
+
+    @property
     def eot_token_id(self) -> int:
         return self.tokenizer.eot_id
+
+    def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt=True) -> str:
+        return self.tokenizer.apply_chat_template(
+            chat_history,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+        )
 
     def tok_encode(self, string: str, **kwargs) -> list[int]:
         return self.tokenizer.encode(string)
@@ -368,7 +379,7 @@ def _legacy_generate_add_special_tokens(model) -> bool:
     config = getattr(model, "config", None)
     return bool(
         getattr(config, "legacy_bottleneck_generate", False)
-        and getattr(config, "family", None) in {"llama", "qwen3"}
+        and getattr(config, "family", None) in {"llama", "qwen3", "qwen3_5_moe"}
     )
 
 
@@ -386,6 +397,7 @@ class _NoopAccelerator:
     @staticmethod
     def gather(x):
         return x
+
 
 
 def _normalize_until(until) -> tuple[str, ...]:

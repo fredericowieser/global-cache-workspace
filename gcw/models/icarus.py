@@ -7,7 +7,16 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.bgt import BGT
-from gcw.models.cache_processor_ops import rotary_for_indices, rotate_cache_keys
+from gcw.models.cache_processor_ops import (
+    expand_cache_head_indices,
+    gather_per_cache_head_scores,
+    gather_per_cache_head_kv,
+    latest_shared_indices,
+    rotary_for_indices,
+    rotate_cache_keys,
+    select_heads_from_per_cache_head_scores,
+    select_per_cache_head_kv_norm_indices_from_scores,
+)
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.transformer import RMSNorm, apply_rotary, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
@@ -30,18 +39,29 @@ class ProcessorAttention(nn.Module):
         self.k_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
         self.v_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        if config.include_self_head_kv:
+            self.forward = self.forward_with_self_head_kv
+        else:
+            self.forward = self.forward_selected_head_kv
 
-    def forward(self, x: torch.Tensor, positions: torch.Tensor, theta: float, selected_heads: torch.Tensor) -> torch.Tensor:
+    def forward_selected_head_kv(
+        self,
+        x: torch.Tensor,
+        positions: torch.Tensor,
+        theta: float,
+        selected_heads: torch.Tensor,
+    ) -> torch.Tensor:
         batch, cache_heads, seq, _ = x.shape
-        if selected_heads.shape[-1] == 0:
-            return torch.zeros_like(x)
+        assert selected_heads.shape[-1] > 0, "selected_heads must include at least one cache head"
         q = self.q_proj(x).view(batch, cache_heads, seq, self.num_heads, self.head_dim)
         selected_x = _gather_cache_heads(x, selected_heads)
+        selected_positions = _gather_cache_head_positions(positions, selected_heads)
         k = self.k_proj(selected_x).view(batch, selected_heads.shape[-1], seq, self.num_kv_heads, self.head_dim)
         v = self.v_proj(selected_x).view(batch, selected_heads.shape[-1], seq, self.num_kv_heads, self.head_dim)
-        cos, sin = rotary_for_indices(positions, self.head_dim, theta, q.dtype)
-        q = apply_rotary(q, cos.unsqueeze(1), sin.unsqueeze(1))
-        k = apply_rotary(k, cos.unsqueeze(1), sin.unsqueeze(1))
+        q_cos, q_sin = rotary_for_indices(positions, self.head_dim, theta, q.dtype)
+        k_cos, k_sin = rotary_for_indices(selected_positions, self.head_dim, theta, k.dtype)
+        q = apply_rotary(q, q_cos, q_sin)
+        k = apply_rotary(k, k_cos, k_sin)
         q = q.permute(0, 3, 1, 2, 4).reshape(batch, self.num_heads, cache_heads * seq, self.head_dim)
         k, v = (
             t.permute(0, 3, 1, 2, 4).reshape(batch, self.num_kv_heads, selected_heads.shape[-1] * seq, self.head_dim)
@@ -57,6 +77,59 @@ class ProcessorAttention(nn.Module):
         )
         y = y.view(batch, self.num_heads, cache_heads, seq, self.head_dim)
         y = y.permute(0, 2, 3, 1, 4).contiguous().view(batch, cache_heads, seq, -1)
+        return self.o_proj(y)
+
+    def forward_with_self_head_kv(
+        self,
+        x: torch.Tensor,
+        positions: torch.Tensor,
+        theta: float,
+        selected_heads: torch.Tensor,
+    ) -> torch.Tensor:
+        batch, cache_heads, seq, _ = x.shape
+        selected_count = selected_heads.shape[-1]
+        assert selected_count > 0, "selected_heads must include at least one cache head"
+        groups = self.num_heads // self.num_kv_heads
+
+        q = self.q_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, groups, self.head_dim)
+        k_all = self.k_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
+        v_all = self.v_proj(x).view(batch, cache_heads, seq, self.num_kv_heads, self.head_dim)
+        q_cos, q_sin = rotary_for_indices(positions, self.head_dim, theta, q.dtype)
+        k_cos, k_sin = rotary_for_indices(positions, self.head_dim, theta, k_all.dtype)
+        q = apply_rotary(q, q_cos.unsqueeze(-2), q_sin.unsqueeze(-2))
+        k_all = apply_rotary(k_all, k_cos, k_sin)
+
+        gather_index = selected_heads[:, :, None, None, None].expand(-1, -1, seq, self.num_kv_heads, self.head_dim)
+        k_sel = torch.gather(k_all, dim=1, index=gather_index)
+        v_sel = torch.gather(v_all, dim=1, index=gather_index)
+
+        q, k_sel, k_all = q.to(v_all.dtype), k_sel.to(v_all.dtype), k_all.to(v_all.dtype)
+        scale = self.head_dim**-0.5
+        selected_logits = torch.einsum("bcnkgd,bsmkd->bcnkgsm", q, k_sel) * scale
+        selected_logits = selected_logits.reshape(batch, cache_heads, seq, self.num_kv_heads, groups, selected_count * seq)
+        self_logits = torch.einsum("bcnkgd,bcmkd->bcnkgm", q, k_all) * scale
+        query_heads = torch.arange(cache_heads, device=x.device)
+        self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
+        self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None, None], float("-inf"))
+
+        logits = torch.cat([selected_logits, self_logits], dim=-1)
+        attn = torch.softmax(logits, dim=-1)
+        if self.training and self.dropout > 0.0:
+            attn = F.dropout(attn, p=self.dropout, training=True)
+
+        selected_attn = attn[..., : selected_count * seq].reshape(
+            batch,
+            cache_heads,
+            seq,
+            self.num_kv_heads,
+            groups,
+            selected_count,
+            seq,
+        )
+        self_attn = attn[..., selected_count * seq :]
+        y = torch.einsum("bcnkgsm,bsmkd->bcnkgd", selected_attn, v_sel)
+        y = y + torch.einsum("bcnkgm,bcmkd->bcnkgd", self_attn, v_all)
+        y = y.contiguous().view(batch, cache_heads, seq, self.num_heads * self.head_dim)
         return self.o_proj(y)
 
 
@@ -91,9 +164,18 @@ class PerCacheHeadLinear(nn.Module):
 
 
 class CacheProcessor(nn.Module):
-    def __init__(self, input_dim: int, num_cache_heads: int, config: CacheProcessorConfig):
+    def __init__(
+        self,
+        input_dim: int,
+        num_cache_heads: int,
+        config: CacheProcessorConfig,
+        *,
+        output_dim: int | None = None,
+    ):
         super().__init__()
         self.config = config
+        self.input_dim = input_dim
+        self.output_dim = output_dim or input_dim
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
         self.in_proj: nn.Module
         if config.per_cache_head_projections:
@@ -104,9 +186,9 @@ class CacheProcessor(nn.Module):
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
         self.out_proj: nn.Module
         if config.per_cache_head_projections:
-            self.out_proj = PerCacheHeadLinear(num_cache_heads, config.hidden_size, input_dim)
+            self.out_proj = PerCacheHeadLinear(num_cache_heads, config.hidden_size, self.output_dim)
         else:
-            self.out_proj = nn.Linear(config.hidden_size, input_dim)
+            self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
         self.init_weights()
 
@@ -140,7 +222,8 @@ class CacheProcessor(nn.Module):
         return delta * self._gate_scale(delta.dtype)
 
     def forward(self, x: torch.Tensor, positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        return x + self.scaled_update(x, positions, selected_heads)
+        residual = x[..., -self.output_dim :]
+        return residual + self.scaled_update(x, positions, selected_heads)
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
         if self.config.gate_mode == "sigmoid":
@@ -158,11 +241,11 @@ class GlobalCacheProcessor(nn.Module):
         self.config = model_config.cache_processor
         if self.config.processor_mode != "standard":
             raise ValueError("Icarus supports only cache_processor.processor_mode='standard'")
-        if self.config.update_stream != "kv":
-            raise ValueError("Icarus supports only cache_processor.update_stream='kv'")
-        if self.config.score != "attn_l2":
-            raise ValueError("Icarus supports only cache_processor.score='attn_l2'")
-        self.num_layers = model_config.num_layers
+        if self.config.update_stream not in {"kv", "v"}:
+            raise ValueError("Icarus supports only cache_processor.update_stream='kv' or 'v'")
+        if self.config.score not in {"attn_l2", "kv_norm"}:
+            raise ValueError("Icarus supports only cache_processor.score='attn_l2' or 'kv_norm'")
+        self.num_layers = model_config.cache_num_layers
         self.num_kv_heads = model_config.num_kv_heads
         if model_config.head_dim is None:
             raise ValueError("Icarus requires a resolved model head_dim")
@@ -170,27 +253,68 @@ class GlobalCacheProcessor(nn.Module):
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
         self.num_cache_heads = self.num_layers * self.num_kv_heads
-        self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config)
+        output_dim = self.head_dim if self.config.update_stream == "v" else 2 * self.head_dim
+        self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config, output_dim=output_dim)
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
-        indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
+        if self.config.score == "kv_norm" and not select_all:
+            all_indices = expand_cache_head_indices(cache.all_indices(), self.num_cache_heads)
+            merged = gather_per_cache_head_kv(
+                cache,
+                all_indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+            )
+            indices, selected_heads = self._select_indices_and_heads(cache, merged, select_all)
+            if indices.shape[-1] == 0:
+                return cache
+            index = indices[..., None].expand(-1, -1, -1, merged.shape[-1])
+            merged = torch.gather(merged, dim=2, index=index)
+        else:
+            indices, selected_heads = self._select_indices_and_heads(cache, None, select_all)
+            if indices.shape[-1] == 0:
+                return cache
+            merged = gather_per_cache_head_kv(
+                cache,
+                indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+            )
         if indices.shape[-1] == 0:
             return cache
-        merged = _gather_merged(
-            cache,
-            indices,
-            unrope_keys=self.config.unrope_keys,
-            rope_theta=self.rope_theta,
-            rotary_style=self.rotary_style,
-        )
-        selected_heads = cache.all_heads() if select_all else _select_heads_from_merged(merged, self.config.topk_heads)
+        if selected_heads is None:
+            selected_heads = _select_heads_from_merged(merged, self.config.topk_heads)
         updated = self.block(merged, indices, selected_heads)
-        latest = indices[:, -1:]
+        latest = latest_shared_indices(indices)
         latest_update = updated[:, :, -1:].contiguous()
+        if self.config.update_stream == "v":
+            values = _split_merged_values(latest_update, self.num_layers, self.num_kv_heads, self.head_dim)
+            return _scatter_latest_values(cache, latest, values)
         keys, values = _split_merged(latest_update, self.num_layers, self.num_kv_heads, self.head_dim)
         if self.config.unrope_keys:
             keys = rotate_cache_keys(keys, latest, theta=self.rope_theta, rotary_style=self.rotary_style)
         return _scatter_latest(cache, latest, keys, values)
+
+    def _select_indices_and_heads(
+        self,
+        cache: CacheLike,
+        merged: torch.Tensor | None,
+        select_all: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if select_all:
+            return expand_cache_head_indices(cache.all_indices(), self.num_cache_heads), cache.all_heads()
+        if self.config.score == "kv_norm":
+            if merged is None:
+                raise ValueError("merged cache is required for kv_norm selection")
+            scores = merged.float().pow(2).sum(dim=-1)
+            indices = select_per_cache_head_kv_norm_indices_from_scores(scores, self.config.process_every, self.config.topk)
+            selected_scores = gather_per_cache_head_scores(scores, indices)
+            selected_heads = select_heads_from_per_cache_head_scores(selected_scores, self.config.topk_heads)
+            return indices, selected_heads
+        indices = expand_cache_head_indices(cache.select_indices(self.config.process_every, self.config.topk), self.num_cache_heads)
+        return indices, None
 
 
 class Icarus(BGT):
@@ -204,35 +328,6 @@ def _zero_projection(module: nn.Module) -> None:
     nn.init.zeros_(module.weight)
     if module.bias is not None:
         nn.init.zeros_(module.bias)
-
-
-def _cache_tensors(cache: CacheLike) -> tuple[torch.Tensor, torch.Tensor]:
-    if isinstance(cache, WindowedCache):
-        return cache.keys, cache.values
-    if isinstance(cache, StaticCacheState):
-        keys = [cache.layer_view(i, cache.length)[0] for i in range(cache.num_layers)]
-        values = [cache.layer_view(i, cache.length)[1] for i in range(cache.num_layers)]
-        return torch.stack(keys, dim=0), torch.stack(values, dim=0)
-    return torch.stack(cache.keys, dim=0), torch.stack(cache.values, dim=0)
-
-
-def _gather_merged(
-    cache: CacheLike,
-    indices: torch.Tensor,
-    *,
-    unrope_keys: bool = False,
-    rope_theta: float = 10000.0,
-    rotary_style: str = "llama",
-) -> torch.Tensor:
-    keys, values = _cache_tensors(cache)
-    index = indices[None, :, None, :, None].expand(keys.shape[0], -1, keys.shape[2], -1, keys.shape[4])
-    keys = torch.gather(keys, 3, index)
-    values = torch.gather(values, 3, index)
-    if unrope_keys:
-        keys = rotate_cache_keys(keys, indices, theta=rope_theta, rotary_style=rotary_style, inverse=True)
-    return torch.cat([keys, values], dim=-1).permute(1, 0, 2, 3, 4).reshape(
-        keys.shape[1], keys.shape[0] * keys.shape[2], keys.shape[3], 2 * keys.shape[4]
-    )
 
 
 def _scatter_latest(cache: CacheLike, indices: torch.Tensor, keys: torch.Tensor, values: torch.Tensor) -> CacheLike:
@@ -250,6 +345,23 @@ def _scatter_latest(cache: CacheLike, indices: torch.Tensor, keys: torch.Tensor,
     return cache
 
 
+def _scatter_latest_values(cache: CacheLike, indices: torch.Tensor, values: torch.Tensor) -> CacheLike:
+    if isinstance(cache, WindowedCache):
+        index = indices[None, :, None, :, None].expand_as(values)
+        cache.values = cache.values.scatter(3, index, values.to(cache.values.dtype))
+        return cache
+    if isinstance(cache, StaticCacheState):
+        for layer_idx in range(cache.num_layers):
+            target = cache.values[layer_idx][:, :, : cache.length, :]
+            index = indices[:, None, :, None].expand_as(values[layer_idx])
+            target.scatter_(2, index, values[layer_idx].to(target.dtype))
+        return cache
+    for layer_idx in range(cache.num_layers):
+        index = indices[:, None, :, None].expand_as(values[layer_idx])
+        cache.values[layer_idx] = cache.values[layer_idx].scatter(2, index, values[layer_idx].to(cache.values[layer_idx].dtype))
+    return cache
+
+
 def _split_merged(
     x: torch.Tensor,
     num_layers: int,
@@ -263,6 +375,16 @@ def _split_merged(
     return keys, values
 
 
+def _split_merged_values(
+    x: torch.Tensor,
+    num_layers: int,
+    num_heads: int,
+    head_dim: int,
+) -> torch.Tensor:
+    batch, cache_heads, seq, _ = x.shape
+    return x.view(batch, num_layers, num_heads, seq, head_dim).permute(1, 0, 2, 3, 4).contiguous()
+
+
 def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
     if selected_heads.ndim != 2:
         raise ValueError("selected_heads must have shape (batch, selected_heads)")
@@ -272,10 +394,17 @@ def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.
     return torch.gather(x, dim=1, index=index)
 
 
+def _gather_cache_head_positions(positions: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
+    if positions.ndim != 3:
+        raise ValueError("positions must have shape (batch, cache_heads, seq)")
+    if selected_heads.ndim != 2:
+        raise ValueError("selected_heads must have shape (batch, selected_heads)")
+    index = selected_heads[:, :, None].expand(-1, -1, positions.shape[2])
+    return torch.gather(positions, dim=1, index=index)
+
+
 def _select_heads_from_merged(x: torch.Tensor, topk: int) -> torch.Tensor:
-    batch = x.shape[0]
-    if topk <= 0:
-        return torch.empty(batch, 0, dtype=torch.long, device=x.device)
+    assert topk > 0, "topk must select at least one cache head"
     scores = x.float().flatten(start_dim=2).norm(dim=-1)
     k = min(topk, scores.shape[-1])
     _, indices = torch.topk(scores, k=k, dim=-1)

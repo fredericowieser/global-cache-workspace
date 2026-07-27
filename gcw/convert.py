@@ -30,7 +30,7 @@ def convert_hf(
     dtype: str = "bfloat16",
 ) -> None:
     try:
-        from transformers import AutoConfig, AutoModelForCausalLM
+        from transformers import AutoConfig
     except ImportError as exc:
         raise ImportError("Install the convert extra: uv sync --extra convert") from exc
 
@@ -40,7 +40,7 @@ def convert_hf(
     if variant in {"bt", "bgt", "icarus", "longshot"}:
         cfg = replace(cfg, cache_processor=CacheProcessorConfig())
     torch_dtype = _resolve_dtype(dtype)
-    hf = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+    hf = _load_hf_model(model_id, torch_dtype=torch_dtype, family=family)
     model_dtype = _infer_model_dtype(hf)
     native = build_model(cfg).to(dtype=model_dtype)
     native.init_weights()
@@ -177,7 +177,7 @@ def _step_from_path(path: Path) -> int | None:
 
 
 def _validated_family(value: str) -> Family:
-    if value not in {"smollm", "llama", "qwen3"}:
+    if value not in {"smollm", "llama", "qwen3", "qwen3_5_moe"}:
         raise ValueError(f"unsupported model family: {value}")
     return cast(Family, value)
 
@@ -188,34 +188,92 @@ def _validated_variant(value: str) -> Variant:
     return cast(Variant, value)
 
 
+def _load_hf_model(model_id: str, *, torch_dtype, family: str):
+    from transformers import AutoModelForCausalLM
+
+    if family == "qwen3_5_moe":
+        try:
+            from transformers import AutoModelForMultimodalLM
+        except ImportError:
+            pass
+        else:
+            return AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+    return AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+
+
 def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     model_family = _validated_family(family)
     model_variant = _validated_variant(variant)
-    layer_types = getattr(hf_cfg, "layer_types", None)
-    if family == "qwen3" and layer_types and any(t != "full_attention" for t in layer_types):
+    hf_text_cfg = getattr(hf_cfg, "text_config", hf_cfg)
+    layer_types = getattr(hf_text_cfg, "layer_types", None)
+    if model_family == "qwen3" and layer_types and any(t != "full_attention" for t in layer_types):
         raise NotImplementedError("Qwen3 sliding attention is not implemented in gcw yet.")
-    heads = int(hf_cfg.num_attention_heads)
-    hidden = int(hf_cfg.hidden_size)
-    head_dim = int(getattr(hf_cfg, "head_dim", hidden // heads))
-    rope_theta = getattr(hf_cfg, "rope_theta", None)
+    if model_family == "qwen3_5_moe":
+        return _qwen35_moe_config_from_hf_text(hf_text_cfg, model_variant)
+    heads = int(hf_text_cfg.num_attention_heads)
+    hidden = int(hf_text_cfg.hidden_size)
+    head_dim = int(getattr(hf_text_cfg, "head_dim", hidden // heads))
+    rope_theta = getattr(hf_text_cfg, "rope_theta", None)
     if rope_theta is None:
-        rope_theta = getattr(hf_cfg, "rope_parameters", {}).get("rope_theta", 10000.0)
+        rope_theta = getattr(hf_text_cfg, "rope_parameters", {}).get("rope_theta", 10000.0)
     return ModelConfig(
         variant=model_variant,
         family=model_family,
+        sequence_len=int(getattr(hf_text_cfg, "max_position_embeddings", 2048)),
+        vocab_size=int(hf_text_cfg.vocab_size),
+        hidden_size=hidden,
+        intermediate_size=int(hf_text_cfg.intermediate_size),
+        num_layers=int(hf_text_cfg.num_hidden_layers),
+        num_heads=heads,
+        num_kv_heads=int(getattr(hf_text_cfg, "num_key_value_heads", heads)),
+        head_dim=head_dim,
+        rope_theta=float(rope_theta),
+        norm_eps=float(getattr(hf_text_cfg, "rms_norm_eps", 1e-5)),
+        tie_embeddings=bool(getattr(hf_text_cfg, "tie_word_embeddings", False)),
+        qk_norm=model_family == "qwen3",
+        rotary_style="llama",
+    )
+
+
+def _qwen35_moe_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
+    model_variant = _validated_variant(variant)
+    heads = int(hf_cfg.num_attention_heads)
+    hidden = int(hf_cfg.hidden_size)
+    head_dim = int(getattr(hf_cfg, "head_dim", hidden // heads))
+    rope = getattr(hf_cfg, "rope_parameters", {}) or {}
+    layer_types = list(getattr(hf_cfg, "layer_types"))
+    processor_layer_indices = [i for i, layer_type in enumerate(layer_types) if layer_type == "full_attention"]
+    return ModelConfig(
+        variant=model_variant,
+        family="qwen3_5_moe",
         sequence_len=int(getattr(hf_cfg, "max_position_embeddings", 2048)),
         vocab_size=int(hf_cfg.vocab_size),
         hidden_size=hidden,
-        intermediate_size=int(hf_cfg.intermediate_size),
+        intermediate_size=int(getattr(hf_cfg, "moe_intermediate_size", getattr(hf_cfg, "intermediate_size", 0))),
         num_layers=int(hf_cfg.num_hidden_layers),
         num_heads=heads,
         num_kv_heads=int(getattr(hf_cfg, "num_key_value_heads", heads)),
         head_dim=head_dim,
-        rope_theta=float(rope_theta),
-        norm_eps=float(getattr(hf_cfg, "rms_norm_eps", 1e-5)),
+        rope_theta=float(rope.get("rope_theta", getattr(hf_cfg, "rope_theta", 10000.0))),
+        norm_eps=float(getattr(hf_cfg, "rms_norm_eps", 1e-6)),
         tie_embeddings=bool(getattr(hf_cfg, "tie_word_embeddings", False)),
-        qk_norm=family == "qwen3",
+        qk_norm=True,
         rotary_style="llama",
+        layer_types=layer_types,
+        processor_layer_indices=processor_layer_indices,
+        partial_rotary_factor=float(getattr(hf_cfg, "partial_rotary_factor", rope.get("partial_rotary_factor", 1.0))),
+        linear_conv_kernel_dim=int(getattr(hf_cfg, "linear_conv_kernel_dim", 4)),
+        linear_key_head_dim=int(getattr(hf_cfg, "linear_key_head_dim", head_dim)),
+        linear_value_head_dim=int(getattr(hf_cfg, "linear_value_head_dim", head_dim)),
+        linear_num_key_heads=int(getattr(hf_cfg, "linear_num_key_heads", heads)),
+        linear_num_value_heads=int(getattr(hf_cfg, "linear_num_value_heads", heads)),
+        moe_intermediate_size=int(getattr(hf_cfg, "moe_intermediate_size")),
+        num_experts=int(getattr(hf_cfg, "num_experts")),
+        num_experts_per_tok=int(getattr(hf_cfg, "num_experts_per_tok")),
+        shared_expert_intermediate_size=int(getattr(hf_cfg, "shared_expert_intermediate_size")),
+        hidden_act=str(getattr(hf_cfg, "hidden_act", "silu")),
+        router_aux_loss_coef=float(getattr(hf_cfg, "router_aux_loss_coef", 0.0)),
+        output_router_logits=bool(getattr(hf_cfg, "output_router_logits", False)),
     )
 
 
@@ -394,6 +452,8 @@ def _map_processor_subkey(sub: str, transformer_prefix: str) -> str:
 
 def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llama") -> None:
     target = native.backbone if hasattr(native, "backbone") else native
+    if family == "qwen3_5_moe":
+        return _load_qwen35_moe_hf_state(target, hf_state)
     state = target.state_dict()
     mapped = {}
     pairs = {
@@ -440,6 +500,97 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
         raise KeyError(f"missing HF weights for native keys: {missing[:8]}")
     if unexpected:
         raise KeyError(f"unexpected native keys: {unexpected[:8]}")
+
+
+def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
+    state = target.state_dict()
+    mapped: dict[str, torch.Tensor] = {}
+    direct_pairs = {
+        "embed_tokens.weight": [
+            "model.language_model.model.embed_tokens.weight",
+            "language_model.model.embed_tokens.weight",
+            "model.embed_tokens.weight",
+            "embed_tokens.weight",
+        ],
+        "norm.weight": [
+            "model.language_model.model.norm.weight",
+            "language_model.model.norm.weight",
+            "model.norm.weight",
+            "norm.weight",
+        ],
+        "lm_head.weight": ["model.language_model.lm_head.weight", "language_model.lm_head.weight", "lm_head.weight"],
+    }
+    for local, remotes in direct_pairs.items():
+        if local in state:
+            key = _first_existing(hf_state, remotes)
+            if key is not None:
+                mapped[local] = hf_state[key]
+    for i, layer in enumerate(target.layers):
+        prefix = f"layers.{i}"
+        remote = f"model.layers.{i}"
+        base = {
+            f"{prefix}.input_layernorm.weight": f"{remote}.input_layernorm.weight",
+            f"{prefix}.post_attention_layernorm.weight": f"{remote}.post_attention_layernorm.weight",
+            f"{prefix}.mlp.gate.weight": f"{remote}.mlp.gate.weight",
+            f"{prefix}.mlp.experts.gate_up_proj": f"{remote}.mlp.experts.gate_up_proj",
+            f"{prefix}.mlp.experts.down_proj": f"{remote}.mlp.experts.down_proj",
+            f"{prefix}.mlp.shared_expert.gate_proj.weight": f"{remote}.mlp.shared_expert.gate_proj.weight",
+            f"{prefix}.mlp.shared_expert.up_proj.weight": f"{remote}.mlp.shared_expert.up_proj.weight",
+            f"{prefix}.mlp.shared_expert.down_proj.weight": f"{remote}.mlp.shared_expert.down_proj.weight",
+            f"{prefix}.mlp.shared_expert_gate.weight": f"{remote}.mlp.shared_expert_gate.weight",
+        }
+        if layer.layer_type == "full_attention":
+            base.update(
+                {
+                    f"{prefix}.self_attn.q_proj.weight": f"{remote}.self_attn.q_proj.weight",
+                    f"{prefix}.self_attn.k_proj.weight": f"{remote}.self_attn.k_proj.weight",
+                    f"{prefix}.self_attn.v_proj.weight": f"{remote}.self_attn.v_proj.weight",
+                    f"{prefix}.self_attn.o_proj.weight": f"{remote}.self_attn.o_proj.weight",
+                    f"{prefix}.self_attn.q_norm.weight": f"{remote}.self_attn.q_norm.weight",
+                    f"{prefix}.self_attn.k_norm.weight": f"{remote}.self_attn.k_norm.weight",
+                }
+            )
+        else:
+            base.update(
+                {
+                    f"{prefix}.linear_attn.conv1d.weight": f"{remote}.linear_attn.conv1d.weight",
+                    f"{prefix}.linear_attn.dt_bias": f"{remote}.linear_attn.dt_bias",
+                    f"{prefix}.linear_attn.A_log": f"{remote}.linear_attn.A_log",
+                    f"{prefix}.linear_attn.norm.weight": f"{remote}.linear_attn.norm.weight",
+                    f"{prefix}.linear_attn.out_proj.weight": f"{remote}.linear_attn.out_proj.weight",
+                    f"{prefix}.linear_attn.in_proj_qkv.weight": f"{remote}.linear_attn.in_proj_qkv.weight",
+                    f"{prefix}.linear_attn.in_proj_z.weight": f"{remote}.linear_attn.in_proj_z.weight",
+                    f"{prefix}.linear_attn.in_proj_b.weight": f"{remote}.linear_attn.in_proj_b.weight",
+                    f"{prefix}.linear_attn.in_proj_a.weight": f"{remote}.linear_attn.in_proj_a.weight",
+                }
+            )
+        for local, remote_key in base.items():
+            key = _first_existing(hf_state, [f"model.language_model.{remote_key}", f"language_model.{remote_key}", remote_key])
+            if key is not None:
+                mapped[local] = hf_state[key]
+    missing = sorted(set(state) - set(mapped))
+    if missing:
+        raise KeyError(f"missing Qwen3.5-MoE HF text weights for native keys: {missing[:8]}")
+    loadable = {}
+    for key, tensor in mapped.items():
+        expected = state[key]
+        if expected.shape == tensor.shape:
+            loadable[key] = tensor.to(dtype=expected.dtype)
+            continue
+        if key in {"embed_tokens.weight", "lm_head.weight"} and expected.ndim == tensor.ndim == 2 and expected.shape[1:] == tensor.shape[1:]:
+            padded = expected.clone()
+            padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
+            loadable[key] = padded
+            continue
+        raise ValueError(f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}")
+    target.load_state_dict(loadable, strict=True)
+
+
+def _first_existing(state: dict[str, torch.Tensor], keys: list[str]) -> str | None:
+    for key in keys:
+        if key in state:
+            return key
+    return None
 
 
 def load_ppt_state(native, ppt_state: dict[str, torch.Tensor]) -> None:

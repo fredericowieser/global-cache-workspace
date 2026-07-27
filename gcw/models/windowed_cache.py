@@ -12,6 +12,7 @@ class WindowedCache:
     keys: torch.Tensor
     values: torch.Tensor
     scores: torch.Tensor
+    linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None = None
 
     @classmethod
     def from_lists(
@@ -19,12 +20,13 @@ class WindowedCache:
         keys: list[torch.Tensor],
         values: list[torch.Tensor],
         scores: torch.Tensor,
+        linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None = None,
     ) -> "WindowedCache":
-        return cls(torch.stack(keys, dim=0), torch.stack(values, dim=0), scores)
+        return cls(torch.stack(keys, dim=0), torch.stack(values, dim=0), scores, linear_states)
 
     @classmethod
     def from_cache_state(cls, cache: CacheState) -> "WindowedCache":
-        return cls.from_lists(cache.keys, cache.values, cache.scores)
+        return cls.from_lists(cache.keys, cache.values, cache.scores, cache.linear_states)
 
     @property
     def batch_size(self) -> int:
@@ -66,4 +68,4 @@ class WindowedCache:
         self.values = torch.cat([self.values[:layer_idx], new_values.unsqueeze(0), self.values[layer_idx + 1 :]], dim=0)
 
     def to_cache_state(self) -> CacheState:
-        return CacheState(list(self.keys.unbind(0)), list(self.values.unbind(0)), self.scores)
+        return CacheState(list(self.keys.unbind(0)), list(self.values.unbind(0)), self.scores, self.linear_states)

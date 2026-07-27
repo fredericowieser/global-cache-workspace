@@ -46,7 +46,7 @@ backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama31_8b
 output_dir: runs/bottleneck_llm/llama31_8b_icarus_from_sft_unfrozen
 batch_size: 4
 sequence_len: 512
-max_steps: 3000
+max_steps: 1000
 total_batch_size: 65536
 learning_rate: 0.0001
 adam_beta2: 0.999

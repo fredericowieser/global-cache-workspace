@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal, overload
 from pathlib import Path
 from typing import Iterable
 
@@ -71,13 +72,36 @@ def _prompt_answer(row: dict) -> tuple[str, str]:
     return str(prompt).strip(), str(answer).strip()
 
 
+@overload
 def sft_batch(
     rows: list[dict],
     tokenizer,
     max_length: int,
     device: torch.device | str = "cpu",
     response_prefix: str = "",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    return_attention_mask: Literal[False] = False,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+
+@overload
+def sft_batch(
+    rows: list[dict],
+    tokenizer,
+    max_length: int,
+    device: torch.device | str = "cpu",
+    response_prefix: str = "",
+    return_attention_mask: Literal[True] = True,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
+
+
+def sft_batch(
+    rows: list[dict],
+    tokenizer,
+    max_length: int,
+    device: torch.device | str = "cpu",
+    response_prefix: str = "",
+    return_attention_mask: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     ids = []
     targets = []
     for row in rows:
@@ -93,7 +117,13 @@ def sft_batch(
     width = min(max_length, max(len(x) for x in ids))
     x = torch.zeros(len(ids), width, dtype=torch.long)
     y = torch.full((len(ids), width), -100, dtype=torch.long)
+    attention_mask = torch.zeros(len(ids), width, dtype=torch.bool)
     for i, (seq, target) in enumerate(zip(ids, targets)):
         x[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
         y[i, : len(target)] = torch.tensor(target, dtype=torch.long)
-    return x.to(device), y.to(device)
+        attention_mask[i, : len(seq)] = True
+    x = x.to(device)
+    y = y.to(device)
+    if return_attention_mask:
+        return x, y, attention_mask.to(device)
+    return x, y

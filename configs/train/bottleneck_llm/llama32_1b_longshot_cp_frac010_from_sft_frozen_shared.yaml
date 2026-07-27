@@ -18,21 +18,22 @@ model:
     process_every: 64
     topk: 32
     topk_heads: 32
-    score: attn_l2
-    hidden_size: 960
-    intermediate_size: 3840
-    num_layers: 1
-    num_heads: 15
-    num_kv_heads: 15
+    score: kv_norm
+    hidden_size: 1408
+    intermediate_size: 5632
+    num_layers: 3
+    num_heads: 22
+    num_kv_heads: 22
     norm_eps: 1.0e-06
     rope_theta: 10000.0
     gate_init: -5.0
     attention_dropout: 0.0
-    per_cache_head_projections: true
+    per_cache_head_projections: false
     gradient_checkpointing: true
     encoder_method: query_attention
     encoder_query_source: final_token
-    unrope_keys: false
+    unrope_keys: true
+  legacy_bottleneck_generate: true
 data:
   kind: sft
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
@@ -40,15 +41,17 @@ data:
   tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model
   sft_skip_rows: 128000
   sft_take_rows: 128000
-  response_prefix: "\n"
+  response_prefix: '
+
+    '
 mode: sft
 distributed: ddp
 freeze_backbone: true
 backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf
-output_dir: runs/bottleneck_llm/llama32_1b_longshot_final_token_from_sft_frozen
+output_dir: runs/bottleneck_llm/llama32_1b_longshot_query_final_token_unrope_kv_norm_cp_frac010_from_sft_frozen_shared
 batch_size: 16
 sequence_len: 512
-max_steps: 3000
+max_steps: 1000
 total_batch_size: 65536
 learning_rate: 0.0001
 adam_beta2: 0.999
@@ -62,19 +65,25 @@ save_every: 100
 wandb:
   enabled: true
   project: global-cache-workspace
-  name: llama32-1b-longshot-final-token-from-sft-frozen
+  name: llama32-1b-longshot-query-final-token-unrope-kv-norm-cp-frac-010-from-sft-frozen-shared
   group: bottleneck-llm-reproduction
   tags:
-    - bottleneck-llm
-    - longshot
-    - final-token-query
-    - llama-3.2-1b
-    - openmath
-    - frozen-backbone
+  - bottleneck-llm
+  - longshot
+  - final-token-query
+  - llama-3.2-1b
+  - openmath
+  - frozen-backbone
+  - shared-projection
+  - unrope-keys
+  - kv-norm
+  - per-head-token-selection
+  - cp-frac-010
+  - target-processor-fraction-0.10
 metadata:
   backbone_non_embedding_params: 973146112
-  processor_params: 48461569
-  total_non_embedding_params: 1021607681
-  processor_fraction: 0.04979886206440498
-  target_processor_fraction: 0.05
-  target_processor_params: 48657306
+  processor_params: 95559425
+  total_non_embedding_params: 1068705537
+  processor_fraction: 0.09819637957922603
+  target_processor_fraction: 0.1
+  target_processor_params: 97314611

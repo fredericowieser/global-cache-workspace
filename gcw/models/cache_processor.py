@@ -141,7 +141,7 @@ class PerLayerCacheProcessor(nn.Module):
         if model_config.head_dim is None:
             raise ValueError("BT requires a resolved model head_dim")
         layer_dim = self.config.stream_factor * model_config.num_kv_heads * model_config.head_dim
-        self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.num_layers))
+        self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.cache_num_layers))
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
         indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
@@ -173,9 +173,10 @@ class GlobalCacheProcessor(nn.Module):
         if model_config.head_dim is None:
             raise ValueError("BGT requires a resolved model head_dim")
         per_layer = self.config.stream_factor * model_config.num_kv_heads * model_config.head_dim
-        self.num_layers = model_config.num_layers
+        self.num_layers = model_config.cache_num_layers
         self.num_kv_heads = model_config.num_kv_heads
         self.head_dim = model_config.head_dim
+        self.num_cache_heads = self.num_layers * self.num_kv_heads
         self.block = CacheProcessor(self.num_layers * per_layer, self.config)
         if self.config.score == "kv_norm":
             init = torch.tensor([self.config.kv_score_init_k, self.config.kv_score_init_v], dtype=torch.float32)

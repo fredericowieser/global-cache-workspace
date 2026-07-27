@@ -6,15 +6,15 @@ import torch
 import torch.nn as nn
 
 from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.models.backbone import build_backbone
 from gcw.models.cache_processor import PerLayerCacheProcessor
-from gcw.models.transformer import TF
 
 
 class BT(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.config = replace(config, variant="bt")
-        self.backbone = TF(config)
+        self.backbone = build_backbone(config)
         self.cache_processor = PerLayerCacheProcessor(self.config)
 
     def init_weights(self) -> None:
@@ -29,9 +29,22 @@ class BT(nn.Module):
             raise RuntimeError("BT model has no cache processor configuration")
         return config
 
-    def forward(self, input_ids: torch.Tensor, targets: torch.Tensor | None = None, loss_reduction: str = "mean") -> torch.Tensor:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        targets: torch.Tensor | None = None,
+        loss_reduction: str = "mean",
+        attention_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         cp = self._cache_processor_config()
-        return self.backbone(input_ids, targets, loss_reduction, processor=self.cache_processor, process_every=cp.process_every)
+        return self.backbone(
+            input_ids,
+            targets,
+            loss_reduction,
+            processor=self.cache_processor,
+            process_every=cp.process_every,
+            attention_mask=attention_mask,
+        )
 
     @torch.no_grad()
     def generate(self, input_ids: torch.Tensor, max_new_tokens: int, eos_token_id: int | None = None) -> torch.Tensor:
