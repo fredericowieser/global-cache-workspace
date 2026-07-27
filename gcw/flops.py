@@ -35,7 +35,9 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
 
 def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> int:
     attention_layers = (
-        config.layer_types.count("full_attention") if config.layer_types is not None else config.num_layers
+        config.layer_types.count("full_attention")
+        if config.family == "qwen3_5_moe" and config.layer_types is not None
+        else config.num_layers
     )
     return attention_layers * 4 * config.num_heads * _head_dim(config) * seq_len
 

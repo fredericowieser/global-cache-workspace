@@ -47,6 +47,21 @@ def test_processor_layer_subset_does_not_reduce_backbone_attention_flops():
     )
 
 
+def test_non_qwen_layer_types_do_not_change_backbone_attention_flops():
+    dense = ModelConfig(
+        family="smollm",
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+    )
+    misleading = replace(dense, layer_types=["full_attention", "linear_attention"])
+
+    assert backbone_flops_per_token(misleading, 16) == backbone_flops_per_token(dense, 16)
+
+
 def test_qwen35_moe_flops_count_active_routed_experts_per_token():
     top1 = ModelConfig(
         family="qwen3_5_moe",

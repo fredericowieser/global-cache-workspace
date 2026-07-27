@@ -171,6 +171,35 @@ def test_tiny_qwen35_moe_router_aux_loss_is_added_to_mean_training_loss():
     assert loss_with_aux > ce_loss
 
 
+def test_qwen35_router_aux_mask_changes_real_load_balancing_loss():
+    from gcw.models.qwen3 import qwen35_moe_load_balancing_loss
+
+    router_logits = (
+        torch.tensor(
+            [
+                [8.0, -8.0],
+                [-8.0, 8.0],
+                [8.0, -8.0],
+                [8.0, -8.0],
+            ]
+        ),
+    )
+    attention_mask = torch.tensor([[True, True, False, False]])
+    masked = qwen35_moe_load_balancing_loss(
+        router_logits,
+        num_experts=2,
+        top_k=1,
+        attention_mask=attention_mask,
+    )
+    unmasked = qwen35_moe_load_balancing_loss(
+        router_logits,
+        num_experts=2,
+        top_k=1,
+    )
+
+    assert not torch.allclose(masked, unmasked)
+
+
 def test_qwen35_bottleneck_windowed_loss_adds_masked_router_aux(monkeypatch):
     from gcw.models import qwen3 as qwen3_module
 

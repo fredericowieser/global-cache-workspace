@@ -194,7 +194,9 @@ def test_flow_uses_default_cache_processor_configuration(variant: str):
         ("eta_max", 0.0),
         ("eta_max", float("nan")),
         ("eta_max", float("inf")),
+        ("eta_max", 1e-46),
         ("eta_max", 1e39),
+        ("eta_max", 10**1000),
         ("flow_gate_init", False),
         ("flow_gate_init", "-4"),
         ("flow_gate_init", float("nan")),
@@ -240,7 +242,8 @@ def test_flow_longshot_rejects_internal_recurrence_but_allows_external_recurrenc
 @pytest.mark.parametrize("variant", FLOW_VARIANTS)
 def test_flow_gradient_checkpointing_forward_backward(variant: str):
     config = tiny_config(variant, flow=FlowProcessorConfig(num_steps=3))
-    config.gradient_checkpointing = True
+    assert config.cache_processor is not None
+    config.cache_processor.gradient_checkpointing = True
     model = build_model(config)
     model.init_weights()
     input_ids = torch.randint(0, config.vocab_size, (2, 8))
