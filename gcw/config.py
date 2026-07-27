@@ -8,7 +8,7 @@ import yaml
 
 
 Variant = Literal["tf", "bt", "bgt", "icarus", "longshot"]
-Family = Literal["smollm", "llama", "qwen3", "qwen3_5_moe"]
+Family = Literal["smollm", "llama", "qwen3", "qwen3_5", "qwen3_5_moe"]
 RotaryStyle = Literal["llama", "ppt"]
 MoeExpertsImplementation = Literal["grouped_mm"]
 CacheUpdateStream = Literal["kv", "v"]
@@ -152,15 +152,9 @@ class ModelConfig:
                 non_cache = [i for i in self.processor_layer_indices if self.layer_types[i] != "full_attention"]
                 if non_cache:
                     raise ValueError("processor_layer_indices must reference full_attention layers")
-        if self.family == "qwen3_5_moe":
-            if self.moe_experts_implementation != "grouped_mm":
-                raise ValueError("qwen3_5_moe supports only moe_experts_implementation='grouped_mm'")
+        if self.family in {"qwen3_5", "qwen3_5_moe"}:
             if self.layer_types is None:
-                raise ValueError("qwen3_5_moe requires layer_types")
-            if self.moe_intermediate_size is None:
-                self.moe_intermediate_size = self.intermediate_size
-            if self.shared_expert_intermediate_size is None:
-                self.shared_expert_intermediate_size = self.moe_intermediate_size
+                raise ValueError(f"{self.family} requires layer_types")
             if self.linear_key_head_dim is None:
                 self.linear_key_head_dim = int(self.head_dim or self.hidden_size // self.num_heads)
             if self.linear_value_head_dim is None:
@@ -169,6 +163,13 @@ class ModelConfig:
                 self.linear_num_key_heads = self.num_kv_heads
             if self.linear_num_value_heads is None:
                 self.linear_num_value_heads = self.num_heads
+        if self.family == "qwen3_5_moe":
+            if self.moe_experts_implementation != "grouped_mm":
+                raise ValueError("qwen3_5_moe supports only moe_experts_implementation='grouped_mm'")
+            if self.moe_intermediate_size is None:
+                self.moe_intermediate_size = self.intermediate_size
+            if self.shared_expert_intermediate_size is None:
+                self.shared_expert_intermediate_size = self.moe_intermediate_size
             if self.num_experts <= 0:
                 raise ValueError("qwen3_5_moe requires num_experts")
             if self.num_experts_per_tok <= 0:

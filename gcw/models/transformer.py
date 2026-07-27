@@ -574,6 +574,8 @@ class TF(nn.Module):
 
 
 def estimate_non_embedding_params(config: ModelConfig) -> int:
+    if config.family == "qwen3_5":
+        return _estimate_qwen35_non_embedding_params(config)
     if config.family == "qwen3_5_moe":
         return _estimate_qwen35_moe_non_embedding_params(config)
     head_dim = int(config.head_dim or config.hidden_size // config.num_heads)
@@ -586,7 +588,7 @@ def estimate_non_embedding_params(config: ModelConfig) -> int:
     return config.num_layers * (attn + mlp + norms) + config.hidden_size + qk
 
 
-def _estimate_qwen35_moe_non_embedding_params(config: ModelConfig) -> int:
+def _estimate_qwen35_attention_params(config: ModelConfig, layer_type: str) -> int:
     head_dim = int(config.head_dim or config.hidden_size // config.num_heads)
     full_q_dim = config.num_heads * head_dim
     full_kv_dim = config.num_kv_heads * head_dim
@@ -594,21 +596,40 @@ def _estimate_qwen35_moe_non_embedding_params(config: ModelConfig) -> int:
     linear_value_heads = int(config.linear_num_value_heads or config.num_heads)
     linear_value_dim = linear_value_heads * int(config.linear_value_head_dim or head_dim)
     linear_conv_dim = 2 * linear_key_dim + linear_value_dim
+    if layer_type == "full_attention":
+        return (
+            config.hidden_size * full_q_dim * 2
+            + 2 * config.hidden_size * full_kv_dim
+            + full_q_dim * config.hidden_size
+            + 2 * head_dim
+        )
+    return (
+        config.hidden_size * linear_conv_dim
+        + config.hidden_size * linear_value_dim
+        + 2 * config.hidden_size * linear_value_heads
+        + linear_conv_dim * config.linear_conv_kernel_dim
+        + linear_value_heads * 2
+        + int(config.linear_value_head_dim or head_dim)
+        + linear_value_dim * config.hidden_size
+    )
+
+
+def _estimate_qwen35_non_embedding_params(config: ModelConfig) -> int:
+    total = config.hidden_size
+    for layer_type in config.layer_types or []:
+        attn = _estimate_qwen35_attention_params(config, layer_type)
+        mlp = 3 * config.hidden_size * config.intermediate_size
+        norms = 2 * config.hidden_size
+        total += attn + mlp + norms
+    return total
+
+
+def _estimate_qwen35_moe_non_embedding_params(config: ModelConfig) -> int:
     moe_hidden = int(config.moe_intermediate_size or config.intermediate_size)
     shared_hidden = int(config.shared_expert_intermediate_size or moe_hidden)
     total = config.hidden_size
     for layer_type in config.layer_types or []:
-        if layer_type == "full_attention":
-            attn = config.hidden_size * full_q_dim * 2 + 2 * config.hidden_size * full_kv_dim + full_q_dim * config.hidden_size
-            attn += 2 * head_dim
-        else:
-            attn = config.hidden_size * linear_conv_dim
-            attn += config.hidden_size * linear_value_dim
-            attn += 2 * config.hidden_size * linear_value_heads
-            attn += linear_conv_dim * config.linear_conv_kernel_dim
-            attn += linear_value_heads * 2
-            attn += int(config.linear_value_head_dim or head_dim)
-            attn += linear_value_dim * config.hidden_size
+        attn = _estimate_qwen35_attention_params(config, layer_type)
         moe = config.num_experts * (2 * moe_hidden * config.hidden_size + config.hidden_size * moe_hidden)
         moe += config.hidden_size * config.num_experts
         moe += 3 * config.hidden_size * shared_hidden

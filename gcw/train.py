@@ -462,8 +462,9 @@ def _fsdp_param_init_fn(device: torch.device):
 def _transformer_layer_classes() -> set[type[torch.nn.Module]]:
     classes: set[type[torch.nn.Module]] = {Block}
     try:
-        from gcw.models.qwen3 import Qwen35MoeBlock
+        from gcw.models.qwen3 import Qwen35Block, Qwen35MoeBlock
 
+        classes.add(Qwen35Block)
         classes.add(Qwen35MoeBlock)
     except Exception:
         pass

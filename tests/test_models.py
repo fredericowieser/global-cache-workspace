@@ -102,6 +102,45 @@ def tiny_qwen35_moe_config(variant="tf", **processor_overrides):
     )
 
 
+def tiny_qwen35_config(variant="tf", **processor_overrides):
+    cp = None
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
+        cp = CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=1,
+            num_kv_heads=1,
+            **processor_overrides,
+        )
+    return ModelConfig(
+        variant=variant,
+        family="qwen3_5",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        cache_processor=cp,
+    )
+
+
 def test_tiny_models_forward_backward():
     for variant in ("tf", "bt", "bgt", "icarus"):
         model = build_model(tiny_config(variant))
@@ -112,6 +151,65 @@ def test_tiny_models_forward_backward():
         loss.backward()
         assert torch.isfinite(loss)
         assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_tiny_qwen35_forward_backward_and_cache_layers():
+    model = build_model(tiny_qwen35_config())
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.config.cache_layer_indices == [1, 3]
+    assert model.config.cache_num_heads == 2
+    assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_tiny_qwen35_static_chunk_matches_dynamic_chunk():
+    torch.manual_seed(7)
+    model = build_model(tiny_qwen35_config()).eval()
+    model.init_weights()
+    x = torch.randint(1, 128, (2, 5))
+    cache = StaticCacheState.allocate(
+        batch_size=x.shape[0],
+        num_layers=model.config.cache_num_layers,
+        num_kv_heads=model.config.num_kv_heads,
+        max_seq_len=8,
+        head_dim=int(model.config.head_dim),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    with torch.no_grad():
+        dynamic_logits, _ = model.forward_chunk(x, 0)
+        static_logits, _ = model.forward_chunk_static(x, 0, cache)
+
+    assert torch.allclose(static_logits, dynamic_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_qwen35_chunked_cache_tracks_full_attention_layers_only():
+    torch.manual_seed(5)
+    model = build_model(tiny_qwen35_config()).eval()
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    with torch.no_grad():
+        logits, cache = model.forward_windowed(x, process_every=4)
+    assert logits.shape == (2, 9, 128)
+    assert cache.num_layers == 2
+    assert len(cache.keys) == 2
+    assert cache.keys[0].shape == (2, 1, 9, 8)
+    assert cache.linear_states is not None
+    assert sorted(cache.linear_states) == [0, 2]
+
+
+def test_qwen35_processors_use_full_attention_cache_heads_only():
+    for variant in ("bt", "bgt", "icarus", "longshot"):
+        model = build_model(tiny_qwen35_config(variant, encoder_seq_len=6))
+        assert model.config.cache_num_layers == 2
+        if variant == "bt":
+            assert len(model.cache_processor.blocks) == 2
+        else:
+            assert model.cache_processor.num_cache_heads == 2
 
 
 def test_tiny_qwen35_moe_forward_backward_and_cache_layers():

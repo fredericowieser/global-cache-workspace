@@ -29,7 +29,7 @@ def convert_hf(
     dtype: str = "bfloat16",
 ) -> None:
     try:
-        from transformers import AutoConfig, AutoModelForCausalLM
+        from transformers import AutoConfig
     except ImportError as exc:
         raise ImportError("Install the convert extra: uv sync --extra convert") from exc
 
@@ -193,6 +193,8 @@ def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     layer_types = getattr(hf_text_cfg, "layer_types", None)
     if family == "qwen3" and layer_types and any(t != "full_attention" for t in layer_types):
         raise NotImplementedError("Qwen3 sliding attention is not implemented in gcw yet.")
+    if family == "qwen3_5":
+        return _qwen35_config_from_hf_text(hf_text_cfg, variant)
     if family == "qwen3_5_moe":
         return _qwen35_moe_config_from_hf_text(hf_text_cfg, variant)
     heads = int(hf_text_cfg.num_attention_heads)
@@ -220,20 +222,20 @@ def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     )
 
 
-def _qwen35_moe_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
+def _qwen35_shared_config_kwargs(hf_cfg, variant: str, family: str, intermediate_size: int) -> dict:
     heads = int(hf_cfg.num_attention_heads)
     hidden = int(hf_cfg.hidden_size)
     head_dim = int(getattr(hf_cfg, "head_dim", hidden // heads))
     rope = getattr(hf_cfg, "rope_parameters", {}) or {}
     layer_types = list(getattr(hf_cfg, "layer_types"))
     processor_layer_indices = [i for i, layer_type in enumerate(layer_types) if layer_type == "full_attention"]
-    return ModelConfig(
+    return dict(
         variant=variant,
-        family="qwen3_5_moe",
+        family=family,
         sequence_len=int(getattr(hf_cfg, "max_position_embeddings", 2048)),
         vocab_size=int(hf_cfg.vocab_size),
         hidden_size=hidden,
-        intermediate_size=int(getattr(hf_cfg, "moe_intermediate_size", getattr(hf_cfg, "intermediate_size", 0))),
+        intermediate_size=intermediate_size,
         num_layers=int(hf_cfg.num_hidden_layers),
         num_heads=heads,
         num_kv_heads=int(getattr(hf_cfg, "num_key_value_heads", heads)),
@@ -249,13 +251,35 @@ def _qwen35_moe_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
         linear_conv_kernel_dim=int(getattr(hf_cfg, "linear_conv_kernel_dim", 4)),
         linear_key_head_dim=int(getattr(hf_cfg, "linear_key_head_dim", head_dim)),
         linear_value_head_dim=int(getattr(hf_cfg, "linear_value_head_dim", head_dim)),
-        linear_num_key_heads=int(getattr(hf_cfg, "linear_num_key_heads", heads)),
+        linear_num_key_heads=int(getattr(hf_cfg, "linear_num_key_heads", getattr(hf_cfg, "num_key_value_heads", heads))),
         linear_num_value_heads=int(getattr(hf_cfg, "linear_num_value_heads", heads)),
+        hidden_act=str(getattr(hf_cfg, "hidden_act", "silu")),
+    )
+
+
+def _qwen35_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
+    return ModelConfig(
+        **_qwen35_shared_config_kwargs(
+            hf_cfg,
+            variant,
+            "qwen3_5",
+            int(getattr(hf_cfg, "intermediate_size")),
+        )
+    )
+
+
+def _qwen35_moe_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
+    return ModelConfig(
+        **_qwen35_shared_config_kwargs(
+            hf_cfg,
+            variant,
+            "qwen3_5_moe",
+            int(getattr(hf_cfg, "moe_intermediate_size", getattr(hf_cfg, "intermediate_size", 0))),
+        ),
         moe_intermediate_size=int(getattr(hf_cfg, "moe_intermediate_size")),
         num_experts=int(getattr(hf_cfg, "num_experts")),
         num_experts_per_tok=int(getattr(hf_cfg, "num_experts_per_tok")),
         shared_expert_intermediate_size=int(getattr(hf_cfg, "shared_expert_intermediate_size")),
-        hidden_act=str(getattr(hf_cfg, "hidden_act", "silu")),
         router_aux_loss_coef=float(getattr(hf_cfg, "router_aux_loss_coef", 0.0)),
         output_router_logits=bool(getattr(hf_cfg, "output_router_logits", False)),
     )
@@ -435,6 +459,8 @@ def _map_processor_subkey(sub: str, transformer_prefix: str) -> str:
 
 def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llama") -> None:
     target = native.backbone if hasattr(native, "backbone") else native
+    if family == "qwen3_5":
+        return _load_qwen35_hf_state(target, hf_state)
     if family == "qwen3_5_moe":
         return _load_qwen35_moe_hf_state(target, hf_state)
     state = target.state_dict()
@@ -485,7 +511,11 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
         raise KeyError(f"unexpected native keys: {unexpected[:8]}")
 
 
-def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
+def _qwen35_remote_candidates(remote_key: str) -> list[str]:
+    return [f"model.language_model.{remote_key}", f"language_model.{remote_key}", remote_key]
+
+
+def _map_qwen35_shared_hf_state(target, hf_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     state = target.state_dict()
     mapped: dict[str, torch.Tensor] = {}
     direct_pairs = {
@@ -511,19 +541,12 @@ def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None
     for i, layer in enumerate(target.layers):
         prefix = f"layers.{i}"
         remote = f"model.layers.{i}"
-        base = {
+        pairs = {
             f"{prefix}.input_layernorm.weight": f"{remote}.input_layernorm.weight",
             f"{prefix}.post_attention_layernorm.weight": f"{remote}.post_attention_layernorm.weight",
-            f"{prefix}.mlp.gate.weight": f"{remote}.mlp.gate.weight",
-            f"{prefix}.mlp.experts.gate_up_proj": f"{remote}.mlp.experts.gate_up_proj",
-            f"{prefix}.mlp.experts.down_proj": f"{remote}.mlp.experts.down_proj",
-            f"{prefix}.mlp.shared_expert.gate_proj.weight": f"{remote}.mlp.shared_expert.gate_proj.weight",
-            f"{prefix}.mlp.shared_expert.up_proj.weight": f"{remote}.mlp.shared_expert.up_proj.weight",
-            f"{prefix}.mlp.shared_expert.down_proj.weight": f"{remote}.mlp.shared_expert.down_proj.weight",
-            f"{prefix}.mlp.shared_expert_gate.weight": f"{remote}.mlp.shared_expert_gate.weight",
         }
         if layer.layer_type == "full_attention":
-            base.update(
+            pairs.update(
                 {
                     f"{prefix}.self_attn.q_proj.weight": f"{remote}.self_attn.q_proj.weight",
                     f"{prefix}.self_attn.k_proj.weight": f"{remote}.self_attn.k_proj.weight",
@@ -534,7 +557,7 @@ def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None
                 }
             )
         else:
-            base.update(
+            pairs.update(
                 {
                     f"{prefix}.linear_attn.conv1d.weight": f"{remote}.linear_attn.conv1d.weight",
                     f"{prefix}.linear_attn.dt_bias": f"{remote}.linear_attn.dt_bias",
@@ -547,15 +570,21 @@ def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None
                     f"{prefix}.linear_attn.in_proj_a.weight": f"{remote}.linear_attn.in_proj_a.weight",
                 }
             )
-        for local, remote_key in base.items():
-            key = _first_existing(hf_state, [f"model.language_model.{remote_key}", f"language_model.{remote_key}", remote_key])
+        for local, remote_key in pairs.items():
+            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
             if key is not None:
                 mapped[local] = hf_state[key]
-    missing = sorted(set(state) - set(mapped))
+    return mapped
+
+
+def _load_mapped_qwen35_state(target, mapped: dict[str, torch.Tensor], missing_message: str) -> None:
+    state = target.state_dict()
+    optional = {"lm_head.weight"}
+    missing = sorted(set(state) - set(mapped) - optional)
     if missing:
-        raise KeyError(f"missing Qwen3.5-MoE HF text weights for native keys: {missing[:8]}")
+        raise KeyError(f"{missing_message}: {missing[:8]}")
     loadable = {}
-    for key, tensor in mapped.items():
+    for key, tensor in {**state, **mapped}.items():
         expected = state[key]
         if expected.shape == tensor.shape:
             loadable[key] = tensor.to(dtype=expected.dtype)
@@ -567,6 +596,42 @@ def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None
             continue
         raise ValueError(f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}")
     target.load_state_dict(loadable, strict=True)
+
+
+def _load_qwen35_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
+    mapped = _map_qwen35_shared_hf_state(target, hf_state)
+    for i in range(target.config.num_layers):
+        prefix = f"layers.{i}"
+        remote = f"model.layers.{i}.mlp"
+        for local, remote_key in {
+            f"{prefix}.mlp.gate_proj.weight": f"{remote}.gate_proj.weight",
+            f"{prefix}.mlp.up_proj.weight": f"{remote}.up_proj.weight",
+            f"{prefix}.mlp.down_proj.weight": f"{remote}.down_proj.weight",
+        }.items():
+            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            if key is not None:
+                mapped[local] = hf_state[key]
+    _load_mapped_qwen35_state(target, mapped, "missing Qwen3.5 HF text weights for native keys")
+
+
+def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
+    mapped = _map_qwen35_shared_hf_state(target, hf_state)
+    for i in range(target.config.num_layers):
+        prefix = f"layers.{i}"
+        remote = f"model.layers.{i}.mlp"
+        for local, remote_key in {
+            f"{prefix}.mlp.gate.weight": f"{remote}.gate.weight",
+            f"{prefix}.mlp.experts.gate_up_proj": f"{remote}.experts.gate_up_proj",
+            f"{prefix}.mlp.experts.down_proj": f"{remote}.experts.down_proj",
+            f"{prefix}.mlp.shared_expert.gate_proj.weight": f"{remote}.shared_expert.gate_proj.weight",
+            f"{prefix}.mlp.shared_expert.up_proj.weight": f"{remote}.shared_expert.up_proj.weight",
+            f"{prefix}.mlp.shared_expert.down_proj.weight": f"{remote}.shared_expert.down_proj.weight",
+            f"{prefix}.mlp.shared_expert_gate.weight": f"{remote}.shared_expert_gate.weight",
+        }.items():
+            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            if key is not None:
+                mapped[local] = hf_state[key]
+    _load_mapped_qwen35_state(target, mapped, "missing Qwen3.5-MoE HF text weights for native keys")
 
 
 def _first_existing(state: dict[str, torch.Tensor], keys: list[str]) -> str | None:

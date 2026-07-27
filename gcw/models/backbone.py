@@ -5,6 +5,10 @@ from gcw.models.transformer import TF
 
 
 def build_backbone(config: ModelConfig):
+    if config.family == "qwen3_5":
+        from gcw.models.qwen3 import Qwen35TF
+
+        return Qwen35TF(config)
     if config.family == "qwen3_5_moe":
         from gcw.models.qwen3 import Qwen35MoeTF
 

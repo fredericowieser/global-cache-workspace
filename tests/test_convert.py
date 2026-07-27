@@ -142,6 +142,103 @@ def test_tiny_qwen3_logits_match_transformers():
     assert torch.allclose(native_logits, hf_logits, atol=1e-5, rtol=1e-5)
 
 
+def test_tiny_qwen35_logits_match_transformers():
+    pytest.importorskip("transformers.models.qwen3_5.modeling_qwen3_5")
+    import transformers
+
+    config_cls = getattr(transformers, "Qwen3_5TextConfig", None) or getattr(transformers, "Qwen3_5Config", None)
+    model_cls = getattr(transformers, "Qwen3_5ForCausalLM", None)
+    if config_cls is None or model_cls is None:
+        pytest.skip("installed Transformers does not expose dense Qwen3.5 CausalLM classes")
+
+    try:
+        hf_cfg = config_cls(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            head_dim=8,
+            max_position_embeddings=16,
+            tie_word_embeddings=False,
+            rope_parameters={"rope_theta": 10000.0, "rope_type": "default", "partial_rotary_factor": 0.5},
+            partial_rotary_factor=0.5,
+            layer_types=["full_attention", "linear_attention"],
+            linear_conv_kernel_dim=3,
+            linear_key_head_dim=4,
+            linear_value_head_dim=4,
+            linear_num_key_heads=1,
+            linear_num_value_heads=2,
+        )
+        torch.manual_seed(0)
+        hf = model_cls(hf_cfg).eval()
+    except Exception as exc:
+        pytest.skip(f"installed Transformers cannot instantiate dense Qwen3.5: {exc}")
+
+    native = build_model(config_from_hf(hf_cfg, family="qwen3_5")).eval()
+    load_hf_state(native, hf.state_dict(), family="qwen3_5")
+    x = torch.tensor([[1, 2, 3, 4]])
+    with torch.no_grad():
+        hf_logits = hf(x, use_cache=False).logits
+        native_logits = native(x)
+    assert torch.allclose(native_logits, hf_logits.float(), atol=1e-5, rtol=1e-5)
+
+
+def test_qwen35_hf_text_config_uses_full_attention_processor_layers_without_moe_fields():
+    text = SimpleNamespace(
+        num_attention_heads=2,
+        hidden_size=16,
+        intermediate_size=32,
+        head_dim=8,
+        num_key_value_heads=1,
+        max_position_embeddings=32,
+        vocab_size=128,
+        num_hidden_layers=4,
+        rms_norm_eps=1e-6,
+        tie_word_embeddings=False,
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        rope_parameters={"rope_theta": 10000000.0, "partial_rotary_factor": 0.5},
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        hidden_act="silu",
+    )
+    cfg = config_from_hf(SimpleNamespace(text_config=text), family="qwen3_5")
+
+    assert cfg.family == "qwen3_5"
+    assert cfg.intermediate_size == 32
+    assert cfg.layer_types == text.layer_types
+    assert cfg.processor_layer_indices == [1, 3]
+    assert cfg.cache_num_heads == 2
+    assert cfg.num_experts == 0
+    assert cfg.moe_intermediate_size is None
+
+
+def test_qwen35_hf_mapping_loads_language_model_prefix():
+    model = build_model(_tiny_qwen35_config())
+    hf = _prefixed_state_like(model.state_dict(), "language_model.")
+
+    load_hf_state(model, hf, family="qwen3_5")
+
+    assert torch.equal(model.embed_tokens.weight, hf["language_model.model.embed_tokens.weight"])
+    assert torch.equal(
+        model.layers[1].self_attn.q_proj.weight,
+        hf["language_model.model.layers.1.self_attn.q_proj.weight"],
+    )
+    assert torch.equal(
+        model.layers[0].linear_attn.in_proj_qkv.weight,
+        hf["language_model.model.layers.0.linear_attn.in_proj_qkv.weight"],
+    )
+    assert torch.equal(
+        model.layers[1].mlp.gate_proj.weight,
+        hf["language_model.model.layers.1.mlp.gate_proj.weight"],
+    )
+
+
 def test_tiny_qwen35_moe_logits_match_transformers():
     pytest.importorskip("transformers.models.qwen3_5_moe.modeling_qwen3_5_moe")
     from transformers import Qwen3_5MoeForCausalLM, Qwen3_5MoeTextConfig
@@ -432,6 +529,32 @@ def _tiny_bottleneck_config(variant: str) -> ModelConfig:
             num_heads=1,
             num_kv_heads=1,
         ),
+    )
+
+
+def _tiny_qwen35_config() -> ModelConfig:
+    return ModelConfig(
+        variant="tf",
+        family="qwen3_5",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
     )
 
 

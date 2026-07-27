@@ -365,7 +365,7 @@ def _legacy_generate_add_special_tokens(model) -> bool:
     config = getattr(model, "config", None)
     return bool(
         getattr(config, "legacy_bottleneck_generate", False)
-        and getattr(config, "family", None) in {"llama", "qwen3", "qwen3_5_moe"}
+        and getattr(config, "family", None) in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe"}
     )
 
 
@@ -406,14 +406,14 @@ class _NoopAccelerator:
 
 def _tokenizer_for(config, state):
     source = state.get("source") or state.get("tokenizer_source")
-    if source and config.family in {"llama", "qwen3", "qwen3_5_moe"}:
+    if source and config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe"}:
         try:
             from transformers import AutoTokenizer
         except ImportError as exc:
             raise ImportError("Converted HF checkpoints require transformers for eval tokenization.") from exc
         tok = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
         return _HFTokenizerAdapter(tok, str(source))
-    if config.family in {"llama", "qwen3", "qwen3_5_moe"}:
+    if config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe"}:
         raise ValueError(
             "HF-family checkpoints require train_state.json to include 'source' "
             "or 'tokenizer_source' so eval uses the original tokenizer."

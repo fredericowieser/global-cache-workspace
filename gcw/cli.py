@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> None:
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
     hf = convert_sub.add_parser("hf")
-    hf.add_argument("--family", choices=["llama", "qwen3", "qwen3_5_moe"], required=True)
+    hf.add_argument("--family", choices=["llama", "qwen3", "qwen3_5", "qwen3_5_moe"], required=True)
     hf.add_argument("--model", required=True)
     hf.add_argument("--variant", choices=["tf", "bt", "bgt", "icarus", "longshot"], default="tf")
     hf.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
