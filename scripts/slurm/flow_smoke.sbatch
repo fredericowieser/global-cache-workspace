@@ -27,3 +27,8 @@ print("cuda_tensor", value.item(), flush=True)
 PY
 
 srun "$PYTHON" scripts/flow_smoke.py --device cuda --flow-steps 2
+
+SUCCESS_PATH="$GCW_PROJECT_DIR/gpu-smoke-$SLURM_JOB_ID.ok"
+set -o noclobber
+printf 'source_commit=%s completed=%s\n' "$GCW_SOURCE_COMMIT" "$(date -u +%FT%TZ)" > "$SUCCESS_PATH"
+printf 'success_marker=%s\n' "$SUCCESS_PATH"
