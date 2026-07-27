@@ -1,7 +1,12 @@
 from dataclasses import replace
 
 from gcw.config import CacheProcessorConfig, ModelConfig
-from gcw.flops import processor_forward_flops_per_sequence, total_training_flops, training_flops_per_token
+from gcw.flops import (
+    backbone_flops_per_token,
+    processor_forward_flops_per_sequence,
+    total_training_flops,
+    training_flops_per_token,
+)
 from gcw.params import fit_processor_config, smollm360m_backbone
 
 
@@ -16,6 +21,30 @@ def test_training_flops_include_processor_work():
     assert processor_forward_flops_per_sequence(icarus, 128) > 0.0
     assert training_flops_per_token(bt, 128) > training_flops_per_token(tf, 128)
     assert total_training_flops(bgt, tokens=1024, seq_len=128) == training_flops_per_token(bgt, 128) * 1024
+
+
+def test_processor_layer_subset_does_not_reduce_backbone_attention_flops():
+    backbone = replace(
+        smollm360m_backbone(num_layers=4),
+        hidden_size=128,
+        num_heads=2,
+        num_kv_heads=1,
+    )
+    cp = CacheProcessorConfig(
+        process_every=32,
+        topk=8,
+        hidden_size=64,
+        intermediate_size=256,
+        num_heads=1,
+        num_kv_heads=1,
+    )
+    all_layers = replace(backbone, variant="bgt", cache_processor=cp)
+    subset = replace(all_layers, processor_layer_indices=[0])
+
+    assert backbone_flops_per_token(subset, 128) == backbone_flops_per_token(all_layers, 128)
+    assert processor_forward_flops_per_sequence(subset, 128) < processor_forward_flops_per_sequence(
+        all_layers, 128
+    )
 
 
 def test_qwen35_moe_flops_count_active_routed_experts_per_token():
@@ -114,3 +143,32 @@ def test_self_head_kv_processor_flops_include_appended_self_head():
         self_head = replace(backbone, variant=variant, cache_processor=replace(cp, include_self_head_kv=True))
 
         assert processor_forward_flops_per_sequence(self_head, 128) > processor_forward_flops_per_sequence(base, 128)
+
+
+def test_self_head_kv_flops_include_slot_when_all_heads_are_selected():
+    backbone = replace(
+        smollm360m_backbone(num_layers=2),
+        hidden_size=128,
+        num_heads=2,
+        num_kv_heads=1,
+    )
+    cp = CacheProcessorConfig(
+        process_every=32,
+        topk=8,
+        topk_heads=2,
+        hidden_size=64,
+        intermediate_size=256,
+        num_heads=1,
+        num_kv_heads=1,
+    )
+
+    for variant in ("icarus", "longshot"):
+        base = replace(backbone, variant=variant, cache_processor=cp)
+        self_head = replace(
+            backbone,
+            variant=variant,
+            cache_processor=replace(cp, include_self_head_kv=True),
+        )
+        assert processor_forward_flops_per_sequence(self_head, 128) > processor_forward_flops_per_sequence(
+            base, 128
+        )

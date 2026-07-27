@@ -34,7 +34,10 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
 
 
 def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> int:
-    return config.cache_num_layers * 4 * config.num_heads * _head_dim(config) * seq_len
+    attention_layers = (
+        config.layer_types.count("full_attention") if config.layer_types is not None else config.num_layers
+    )
+    return attention_layers * 4 * config.num_heads * _head_dim(config) * seq_len
 
 
 def _qwen35_moe_backbone_matmul_params(config: ModelConfig) -> int:
@@ -125,7 +128,7 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
             )
         elif config.variant == "icarus":
             selected_heads = cache_heads if cp.topk_heads <= 0 else min(cp.topk_heads, cache_heads)
-            if cp.include_self_head_kv and selected_heads < cache_heads:
+            if cp.include_self_head_kv:
                 selected_heads += 1
             total += _icarus_processor_block_flops_per_call(
                 2 * head_dim,
@@ -137,7 +140,7 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
             )
         elif config.variant == "longshot":
             selected_heads = cache_heads if cp.topk_heads <= 0 else min(cp.topk_heads, cache_heads)
-            if cp.include_self_head_kv and selected_heads < cache_heads:
+            if cp.include_self_head_kv:
                 selected_heads += 1
             total += _longshot_processor_block_flops_per_call(
                 2 * head_dim,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass
 import math
+from numbers import Real
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,6 +21,19 @@ CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
 CacheProcessorIterationMode = Literal["internal", "external"]
 CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention", "kv_norm"]
+
+_FLOAT32_MAX = 3.4028234663852886e38
+
+
+def _validated_float32(name: str, value: object, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be a real number")
+    result = float(value)
+    if not math.isfinite(result) or abs(result) > _FLOAT32_MAX:
+        raise ValueError(f"{name} must be finite and representable as float32")
+    if positive and result <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return result
 
 
 @dataclass
@@ -111,10 +125,8 @@ class FlowProcessorConfig:
             raise ValueError("flow_processor.num_steps must be a positive integer")
         if not isinstance(self.time_conditioning, bool):
             raise ValueError("flow_processor.time_conditioning must be a boolean")
-        if not math.isfinite(self.eta_max) or self.eta_max <= 0.0:
-            raise ValueError("flow_processor.eta_max must be finite and positive")
-        if not math.isfinite(self.flow_gate_init):
-            raise ValueError("flow_processor.flow_gate_init must be finite")
+        self.eta_max = _validated_float32("flow_processor.eta_max", self.eta_max, positive=True)
+        self.flow_gate_init = _validated_float32("flow_processor.flow_gate_init", self.flow_gate_init)
 
 
 @dataclass
@@ -159,6 +171,8 @@ class ModelConfig:
             self.cache_processor = CacheProcessorConfig(**self.cache_processor)
         if isinstance(self.flow_processor, dict):
             self.flow_processor = FlowProcessorConfig(**self.flow_processor)
+        if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
+            self.cache_processor = CacheProcessorConfig()
         if self.flow_processor is not None:
             if self.variant not in {"bgt", "icarus", "longshot"}:
                 raise ValueError("flow_processor requires variant 'bgt', 'icarus', or 'longshot'")
@@ -177,6 +191,8 @@ class ModelConfig:
             self.processor_layer_indices = [int(i) for i in self.processor_layer_indices]
             if any(i < 0 or i >= self.num_layers for i in self.processor_layer_indices):
                 raise ValueError("processor_layer_indices entries must be valid layer indices")
+            if self.processor_layer_indices != sorted(set(self.processor_layer_indices)):
+                raise ValueError("processor_layer_indices must be sorted and unique")
             if self.layer_types is not None:
                 non_cache = [i for i in self.processor_layer_indices if self.layer_types[i] != "full_attention"]
                 if non_cache:
@@ -210,9 +226,6 @@ class ModelConfig:
             raise ValueError("num_heads must be divisible by num_kv_heads")
         if not 0.0 < self.partial_rotary_factor <= 1.0:
             raise ValueError("partial_rotary_factor must be in (0, 1]")
-        if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
-            self.cache_processor = CacheProcessorConfig()
-
     @property
     def architecture_name(self) -> str:
         if self.flow_processor is not None:

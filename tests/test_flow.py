@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 import torch
 
+from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig
 from gcw.flops import processor_forward_flops_per_sequence
 from gcw.models import LatentFlow, build_model, set_flow_solver_steps
@@ -63,6 +64,13 @@ def test_flow_models_forward_backward_and_checkpoint_roundtrip(variant: str):
     assert len(flows) == 1
     assert flows[0].flow_gate.grad is not None
     assert torch.isfinite(flows[0].flow_gate.grad).all()
+    processor_gradients = [
+        parameter.grad
+        for parameter in model.cache_processor.parameters()
+        if parameter.requires_grad
+    ]
+    assert processor_gradients
+    assert all(gradient is not None and torch.isfinite(gradient).all() for gradient in processor_gradients)
 
     clone = build_model(config)
     clone.load_state_dict(model.state_dict(), strict=True)
@@ -91,6 +99,18 @@ def test_flow_steps_increase_compute_not_parameters(variant: str):
     assert processor_forward_flops_per_sequence(three, 8) > processor_forward_flops_per_sequence(one, 8)
 
 
+@pytest.mark.parametrize("variant", ("bgt", "icarus"))
+def test_each_additional_flow_step_adds_one_field_evaluation(variant: str):
+    one = tiny_config(variant, flow=FlowProcessorConfig(num_steps=1))
+    two = replace(one, flow_processor=FlowProcessorConfig(num_steps=2))
+    three = replace(one, flow_processor=FlowProcessorConfig(num_steps=3))
+    one_flops = processor_forward_flops_per_sequence(one, 8)
+    two_flops = processor_forward_flops_per_sequence(two, 8)
+    three_flops = processor_forward_flops_per_sequence(three, 8)
+
+    assert two_flops - one_flops == three_flops - two_flops
+
+
 def test_latent_flow_integrates_shared_field_and_returns_displacement():
     flow = LatentFlow(4, FlowProcessorConfig(num_steps=4, time_conditioning=False, eta_max=1.0, flow_gate_init=0.0))
     initial = torch.zeros(2, 3, 4)
@@ -113,8 +133,10 @@ def test_latent_flow_rejects_field_shape_change():
 
 
 def test_solver_step_override_updates_every_flow_without_adding_parameters():
-    model = build_model(tiny_config("icarus", flow=FlowProcessorConfig(num_steps=1)))
+    config = tiny_config("icarus", flow=FlowProcessorConfig(num_steps=1))
+    model = build_model(config)
     before = sum(parameter.numel() for parameter in model.parameters())
+    before_flops = processor_forward_flops_per_sequence(config, 8)
 
     set_flow_solver_steps(model, 5)
 
@@ -122,13 +144,67 @@ def test_solver_step_override_updates_every_flow_without_adding_parameters():
     assert flow.config.num_steps == 5
     assert model.config.flow_processor is not None
     assert model.config.flow_processor.num_steps == 5
+    assert config.flow_processor is not None
+    assert config.flow_processor.num_steps == 5
+    assert processor_forward_flops_per_sequence(config, 8) > before_flops
     assert sum(parameter.numel() for parameter in model.parameters()) == before
+
+
+def test_solver_step_override_persists_through_disk_checkpoint(tmp_path):
+    config = tiny_config("bgt", flow=FlowProcessorConfig(num_steps=1))
+    model = build_model(config)
+    set_flow_solver_steps(model, 4)
+
+    save_checkpoint(tmp_path, model, config)
+    loaded_model, loaded_config, _ = load_checkpoint(tmp_path)
+
+    assert loaded_config.flow_processor is not None
+    assert loaded_config.flow_processor.num_steps == 4
+    loaded_flow = next(module for module in loaded_model.modules() if isinstance(module, LatentFlow))
+    assert loaded_flow.config.num_steps == 4
+
+
+def test_checkpoint_rejects_stale_solver_config(tmp_path):
+    config = tiny_config("bgt", flow=FlowProcessorConfig(num_steps=1))
+    model = build_model(config)
+    set_flow_solver_steps(model, 4)
+    stale = replace(config, flow_processor=FlowProcessorConfig(num_steps=1))
+
+    with pytest.raises(ValueError, match="runtime config"):
+        save_checkpoint(tmp_path, model, stale)
 
 
 def test_solver_step_override_rejects_non_flow_model():
     model = build_model(tiny_config("bgt"))
     with pytest.raises(ValueError, match="flow-enabled"):
         set_flow_solver_steps(model, 2)
+
+
+@pytest.mark.parametrize("variant", FLOW_VARIANTS)
+def test_flow_uses_default_cache_processor_configuration(variant: str):
+    config = ModelConfig(variant=variant, flow_processor=FlowProcessorConfig())  # type: ignore[arg-type]
+    assert isinstance(config.cache_processor, CacheProcessorConfig)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("eta_max", True),
+        ("eta_max", "1.0"),
+        ("eta_max", 0.0),
+        ("eta_max", float("nan")),
+        ("eta_max", float("inf")),
+        ("eta_max", 1e39),
+        ("flow_gate_init", False),
+        ("flow_gate_init", "-4"),
+        ("flow_gate_init", float("nan")),
+        ("flow_gate_init", float("inf")),
+        ("flow_gate_init", 1e39),
+    ),
+)
+def test_flow_config_rejects_invalid_float32_scalars(field: str, value: object):
+    with pytest.raises(ValueError):
+        FlowProcessorConfig(**{field: value})  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("variant", ("tf", "bt"))
@@ -148,9 +224,33 @@ def test_flow_longshot_rejects_internal_recurrence_but_allows_external_recurrenc
         iteration_mode="external",
     )
     model = build_model(config)
-    assert config.architecture_name == "flow_longshot"
-    assert isinstance(next(module for module in model.modules() if isinstance(module, LatentFlow)), LatentFlow)
+    model.init_weights()
+    input_ids = torch.randint(0, config.vocab_size, (2, 8))
+    loss = model(input_ids, input_ids)
+    loss.backward()
 
+    assert torch.isfinite(loss)
+    assert config.architecture_name == "flow_longshot"
+    flow = next(module for module in model.modules() if isinstance(module, LatentFlow))
+    assert flow.flow_gate.grad is not None
+    assert torch.isfinite(flow.flow_gate.grad).all()
+
+
+
+@pytest.mark.parametrize("variant", FLOW_VARIANTS)
+def test_flow_gradient_checkpointing_forward_backward(variant: str):
+    config = tiny_config(variant, flow=FlowProcessorConfig(num_steps=3))
+    config.gradient_checkpointing = True
+    model = build_model(config)
+    model.init_weights()
+    input_ids = torch.randint(0, config.vocab_size, (2, 8))
+
+    loss = model(input_ids, input_ids)
+    loss.backward()
+
+    flow = next(module for module in model.modules() if isinstance(module, LatentFlow))
+    assert flow.flow_gate.grad is not None
+    assert torch.isfinite(flow.flow_gate.grad).all()
 
 
 @pytest.mark.parametrize("variant", FLOW_VARIANTS)

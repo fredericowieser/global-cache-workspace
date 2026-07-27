@@ -1,6 +1,6 @@
 import pytest
 
-from gcw.config import ResumeConfig, TrainConfig, WandbConfig, load_train_config
+from gcw.config import ModelConfig, ResumeConfig, TrainConfig, WandbConfig, load_train_config
 
 
 def test_train_config_builds_explicit_resume_and_wandb_state():
@@ -41,3 +41,9 @@ def test_resume_configs_use_versioned_resume_interface(path, topology):
     assert config.resume.topology == topology
     assert config.wandb.id
     assert config.wandb.resume == "must"
+
+
+@pytest.mark.parametrize("indices", ([1, 0], [0, 0]))
+def test_processor_layer_indices_must_be_sorted_and_unique(indices):
+    with pytest.raises(ValueError, match="sorted and unique"):
+        ModelConfig(num_layers=2, processor_layer_indices=indices)

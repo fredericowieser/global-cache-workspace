@@ -89,6 +89,11 @@ def test_sft_stream_partitions_global_rows_between_ranks():
 
     assert rank0.cursor == rank1.cursor
     assert not torch.equal(batch0.x, batch1.x)
+    for batch in (batch0, batch1):
+        assert batch.attention_mask is not None
+        assert batch.attention_mask.dtype == torch.bool
+        assert batch.attention_mask.shape == batch.x.shape
+        assert batch.attention_mask.all()
 
 
 def test_sft_stream_rejects_a_global_batch_larger_than_the_dataset():

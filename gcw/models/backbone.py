@@ -4,7 +4,7 @@ from gcw.config import ModelConfig
 from gcw.models.transformer import TF
 
 
-def build_backbone(config: ModelConfig):
+def build_backbone(config: ModelConfig) -> TF:
     if config.family == "qwen3_5_moe":
         from gcw.models.qwen3 import Qwen35MoeTF
 

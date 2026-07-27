@@ -19,6 +19,10 @@ def save_checkpoint(
 ) -> None:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
+    if not isinstance(model, dict):
+        runtime_config = getattr(model, "config", None)
+        if isinstance(runtime_config, ModelConfig) and to_dict(runtime_config) != to_dict(model_config):
+            raise ValueError("checkpoint model_config does not match the model's runtime config")
     state = model if isinstance(model, dict) else model.state_dict()
     state = {k: v.detach().cpu() for k, v in state.items()}
     save_file(state, path / "model.safetensors")

@@ -171,6 +171,35 @@ def test_tiny_qwen35_moe_router_aux_loss_is_added_to_mean_training_loss():
     assert loss_with_aux > ce_loss
 
 
+def test_qwen35_bottleneck_windowed_loss_adds_masked_router_aux(monkeypatch):
+    from gcw.models import qwen3 as qwen3_module
+
+    config = tiny_qwen35_moe_config("bgt")
+    config.router_aux_loss_coef = 0.1
+    model = build_model(config)
+    model.init_weights()
+    x = torch.tensor([[1, 2, 3, 4, 0, 0, 0, 0], [5, 6, 7, 8, 9, 10, 11, 12]])
+    y = x.clone()
+    y[0, 4:] = -100
+    attention_mask = y >= 0
+    model.backbone.config.router_aux_loss_coef = 0.0
+    ce_loss = model(x, y, attention_mask=attention_mask)
+    captured = {}
+
+    def fake_aux(router_logits, *, num_experts, top_k, attention_mask=None):
+        captured["router_shapes"] = [tuple(logits.shape) for logits in router_logits]
+        captured["attention_mask"] = attention_mask
+        return torch.ones((), device=router_logits[0].device)
+
+    monkeypatch.setattr(qwen3_module, "qwen35_moe_load_balancing_loss", fake_aux)
+    model.backbone.config.router_aux_loss_coef = 0.1
+    loss_with_aux = model(x, y, attention_mask=attention_mask)
+
+    assert torch.allclose(loss_with_aux, ce_loss + 0.1)
+    assert captured["attention_mask"] is attention_mask
+    assert captured["router_shapes"] == [(x.numel(), config.num_experts)] * config.num_layers
+
+
 def test_tiny_qwen35_moe_router_aux_uses_explicit_attention_mask(monkeypatch):
     from gcw.models import qwen3 as qwen3_module
 

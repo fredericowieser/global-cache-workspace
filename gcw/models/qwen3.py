@@ -10,7 +10,9 @@ import torch.nn.functional as F
 from gcw.config import ModelConfig
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.transformer import (
+    CacheLike,
     Linear,
+    ProcessorFn,
     RotaryCache,
     TF,
     _autocast_dtype,
@@ -599,6 +601,48 @@ class Qwen35MoeTF(TF):
             return loss
         return self.logits_from_hidden(x)
 
+    def forward_windowed_loss(
+        self,
+        input_ids: torch.Tensor,
+        targets: torch.Tensor,
+        *,
+        processor: ProcessorFn,
+        process_every: int,
+        loss_reduction: str = "mean",
+        attention_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+        hidden_chunks: list[torch.Tensor] = []
+        router_chunks: list[list[torch.Tensor]] = [[] for _ in self.layers]
+        for start in range(0, input_ids.shape[1], process_every):
+            if start > 0:
+                cache = cast(CacheLike, processor(cache))
+            end = min(start + process_every, input_ids.shape[1])
+            hidden, cache, chunk_router_logits = self._forward_chunk_with_router_logits(
+                input_ids[:, start:end],
+                start,
+                cache,
+                logits=False,
+                cache_format="windowed",
+            )
+            hidden_chunks.append(hidden)
+            for layer_chunks, layer_logits in zip(router_chunks, chunk_router_logits, strict=True):
+                layer_chunks.append(layer_logits.view(input_ids.shape[0], end - start, -1))
+        loss = self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction)
+        if loss_reduction == "mean" and self.config.router_aux_loss_coef:
+            router_logits = tuple(
+                torch.cat(layer_chunks, dim=1).reshape(-1, self.config.num_experts)
+                for layer_chunks in router_chunks
+            )
+            aux_loss = qwen35_moe_load_balancing_loss(
+                router_logits,
+                num_experts=self.config.num_experts,
+                top_k=self.config.num_experts_per_tok,
+                attention_mask=attention_mask,
+            )
+            loss = loss + self.config.router_aux_loss_coef * aux_loss.to(loss.device)
+        return loss
+
     def forward_chunk(
         self,
         input_ids: torch.Tensor,
@@ -608,6 +652,24 @@ class Qwen35MoeTF(TF):
         logits: bool = True,
         cache_format: str = "list",
     ) -> tuple[torch.Tensor, CacheState | WindowedCache]:
+        out, updated_cache, _ = self._forward_chunk_with_router_logits(
+            input_ids,
+            start_pos,
+            cache,
+            logits=logits,
+            cache_format=cache_format,
+        )
+        return out, updated_cache
+
+    def _forward_chunk_with_router_logits(
+        self,
+        input_ids: torch.Tensor,
+        start_pos: int,
+        cache: CacheState | WindowedCache | None = None,
+        *,
+        logits: bool = True,
+        cache_format: str = "list",
+    ) -> tuple[torch.Tensor, CacheState | WindowedCache, tuple[torch.Tensor, ...]]:
         x = self.embed_tokens(input_ids)
         cos_sin = self.rotary.get_range(
             start_pos,
@@ -618,6 +680,7 @@ class Qwen35MoeTF(TF):
         keys: list[torch.Tensor] = []
         values: list[torch.Tensor] = []
         layer_scores: list[torch.Tensor] = []
+        router_logits: list[torch.Tensor] = []
         old_scores = input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32) if cache is None else cache.scores
         has_cache = cache is not None and cache.scores.numel() > 0
         linear_states = {} if cache is None or cache.linear_states is None else dict(cache.linear_states)
@@ -631,25 +694,38 @@ class Qwen35MoeTF(TF):
                     past = cache.layer(cache_idx)
                 else:
                     past = None
-                x, key, value, scores, _, _ = layer(x, cos_sin, past, None)
+                x, key, value, scores, _, layer_router_logits = layer(x, cos_sin, past, None)
                 if key is None or value is None:
                     raise RuntimeError("full-attention layer did not return KV tensors")
                 keys.append(key)
                 values.append(value)
                 cache_idx += 1
             else:
-                x, _, _, scores, new_state, _ = layer(x, cos_sin, None, linear_states.get(layer.layer_idx))
+                x, _, _, scores, new_state, layer_router_logits = layer(
+                    x,
+                    cos_sin,
+                    None,
+                    linear_states.get(layer.layer_idx),
+                )
                 if new_state is None:
                     raise RuntimeError("linear-attention layer did not return recurrent state")
                 linear_states[layer.layer_idx] = new_state
             layer_scores.append(scores)
+            router_logits.append(layer_router_logits)
         x = self.norm(x)
         out = self.logits_from_hidden(x) if logits else x
         chunk_scores = torch.stack(layer_scores).mean(dim=0)
         new_scores = chunk_scores if old_scores.numel() == 0 else torch.cat([old_scores, chunk_scores], dim=1)
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
-            return out, WindowedCache.from_lists(keys, values, new_scores, linear_states)
-        return out, CacheState(keys, values, new_scores, linear_states)
+            updated_cache: CacheState | WindowedCache = WindowedCache.from_lists(
+                keys,
+                values,
+                new_scores,
+                linear_states,
+            )
+        else:
+            updated_cache = CacheState(keys, values, new_scores, linear_states)
+        return out, updated_cache, tuple(router_logits)
 
     def forward_chunk_static(
         self,
