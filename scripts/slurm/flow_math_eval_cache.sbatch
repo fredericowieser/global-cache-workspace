@@ -71,8 +71,10 @@ import hashlib
 import json
 import os
 import sys
+from gcw.flow_math_experiment import materialize_internal_symlinks
 root = Path(sys.argv[1])
 inventory_path = Path(sys.argv[2])
+symlinks = materialize_internal_symlinks(root)
 paths = sorted(root.rglob("*"))
 locks = []
 for path in paths:
@@ -95,6 +97,7 @@ payload = {
     "evaluation_source_commit": sys.argv[4],
     "quiescence": "warmup evaluator exited before lock inventory and cleanup",
     "locks": locks,
+    "symlinks": symlinks,
 }
 inventory_path.parent.mkdir(parents=True, exist_ok=True)
 fd = os.open(inventory_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o444)

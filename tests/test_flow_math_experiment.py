@@ -28,6 +28,7 @@ from gcw.flow_math_experiment import (
     checkpoint_metadata_sha256,
     extract_primary_metrics,
     load_matrix_file,
+    materialize_internal_symlinks,
     probe_flow_dynamics,
     summarise_metric_markers,
     verify_completed_flow_math_run,
@@ -441,6 +442,35 @@ def test_verify_execution_context_binds_manifest_git_lock_and_artifacts(tmp_path
             manifest_path=manifest_path,
             approved_manifest_sha256=approved_sha,
         )
+
+
+def test_materialize_internal_cache_symlinks_rejects_external_targets(tmp_path):
+    cache = tmp_path / "cache"
+    blob = cache / "blobs" / "payload"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"cached")
+    snapshot = cache / "snapshots" / "payload"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.symlink_to(blob)
+
+    records = materialize_internal_symlinks(cache)
+    assert not snapshot.is_symlink()
+    assert snapshot.read_bytes() == b"cached"
+    assert records == [{
+        "path": "snapshots/payload",
+        "link_target": str(blob),
+        "resolved_path": "blobs/payload",
+        "size": 6,
+        "sha256": hashlib.sha256(b"cached").hexdigest(),
+    }]
+
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"forbidden")
+    bad = cache / "bad-link"
+    bad.symlink_to(outside)
+    with pytest.raises(ValueError, match="outside cache"):
+        materialize_internal_symlinks(cache)
+    assert bad.is_symlink()
 
 
 def test_cache_payload_copy_allows_transient_locks_but_rejects_persistent_changes(tmp_path):

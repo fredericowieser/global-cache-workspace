@@ -544,6 +544,7 @@ def _eval_cache_evidence(args: argparse.Namespace) -> dict[str, Any]:
         or inventory.get("training_source_commit") != args.training_source_commit
         or inventory.get("evaluation_source_commit") != args.evaluation_source_commit
         or not isinstance(inventory.get("locks"), list)
+        or not isinstance(inventory.get("symlinks"), list)
     ):
         raise ValueError("cache lock inventory differs from approved quiescent-cleanup evidence")
     warmup = load_json_strict(args.warmup_result)
@@ -565,6 +566,7 @@ def _eval_cache_evidence(args: argparse.Namespace) -> dict[str, Any]:
         "warmup_result_sha256": sha256_file(args.warmup_result),
         "lock_inventory": str(args.lock_inventory.resolve()),
         "lock_inventory_sha256": sha256_file(args.lock_inventory),
+        "materialized_symlinks": len(inventory["symlinks"]),
         "warmup_metrics": metrics,
         "limit": 1,
     }

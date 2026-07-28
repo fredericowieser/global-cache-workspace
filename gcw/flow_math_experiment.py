@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
 import statistics
 import subprocess
+import tempfile
 from typing import Any
 
 from safetensors import safe_open
@@ -228,6 +230,52 @@ def verify_execution_context(
                 ):
                     raise ValueError(f"config runtime artifacts are not canonical: {config_path}")
     return manifest
+
+
+def materialize_internal_symlinks(cache_dir: Path) -> list[dict[str, Any]]:
+    root = cache_dir.resolve(strict=True)
+    planned: list[tuple[Path, Path, dict[str, Any]]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_symlink():
+            continue
+        try:
+            resolved = path.resolve(strict=True)
+            resolved_relative = resolved.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"evaluation cache symlink resolves outside cache: {path}") from exc
+        if not resolved.is_file() or resolved.is_symlink():
+            raise ValueError(f"evaluation cache symlink target is not a regular file: {path}")
+        record = {
+            "path": path.relative_to(root).as_posix(),
+            "link_target": os.readlink(path),
+            "resolved_path": resolved_relative.as_posix(),
+            "size": resolved.stat().st_size,
+            "sha256": sha256_file(resolved),
+        }
+        planned.append((path, resolved, record))
+
+    for path, resolved, _record in planned:
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".materializing",
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as destination, resolved.open("rb") as source:
+                shutil.copyfileobj(source, destination)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.chmod(temporary, resolved.stat().st_mode & 0o7777)
+            os.replace(temporary, path)
+            directory_descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return [record for _path, _resolved, record in planned]
 
 
 def build_directory_manifest(root: Path, *, strict: bool = False) -> dict[str, Any]:
