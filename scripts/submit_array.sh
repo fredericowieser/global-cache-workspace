@@ -20,6 +20,8 @@ MEM="${MEM:-180G}"
 WANDB_MODE="${WANDB_MODE:-online}"
 PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 UV_EXTRAS="${UV_EXTRAS:---extra gpu --extra eval}"
+TRAIN_UV_EXTRAS="${TRAIN_UV_EXTRAS:-$UV_EXTRAS}"
+EVAL_UV_EXTRAS="${EVAL_UV_EXTRAS:---extra gpu --extra eval}"
 EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-1}"
 EVAL_ONLY="${EVAL_ONLY:-0}"
 EVAL_SUITE="${EVAL_SUITE:-paper7}"
@@ -46,7 +48,7 @@ Options:
 
 Common environment overrides:
   JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
-  EXCLUDE
+  EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, OUT_DIR
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
 EOF
@@ -78,12 +80,13 @@ config_max_steps() {
 }
 
 worker_uv_run_train() {
-  read -r -a uv_extra_args <<< "$UV_EXTRAS"
+  read -r -a uv_extra_args <<< "$TRAIN_UV_EXTRAS"
   uv run --locked "${uv_extra_args[@]}" "$@"
 }
 
 worker_uv_run_eval() {
-  uv run --locked --extra gpu --extra eval "$@"
+  read -r -a uv_extra_args <<< "$EVAL_UV_EXTRAS"
+  uv run --locked "${uv_extra_args[@]}" "$@"
 }
 
 run_eval() {
@@ -135,8 +138,6 @@ run_one_config() {
 
   require_path "$config"
   require_path "$OPENMATH_DATA"
-  require_path "$SFT_BACKBONE"
-  require_path "$TOKENIZER_DIR"
 
   output_dir="$(config_output_dir "$config")"
   if [[ -z "$output_dir" ]]; then
@@ -169,6 +170,9 @@ run_one_config() {
 
   export PATH="$HOME/.local/bin:$PATH"
   export GCW_STRICT_FLASH="${GCW_STRICT_FLASH:-1}"
+  if [[ -d "$PWD/.venv/include/python3.12" ]]; then
+    export CPATH="$PWD/.venv/include/python3.12:$PWD/.venv/include${CPATH:+:$CPATH}"
+  fi
   export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
   export WANDB_MODE
   export PYTORCH_CUDA_ALLOC_CONF
@@ -381,7 +385,7 @@ launcher_main() {
     --mem="$MEM"
     --array="$workers_arg"
     --output="slurm_out/${JOB_NAME}-%A_%a.out"
-    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
+    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS,EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
   )
   if [[ -n "$EXCLUDE" ]]; then
     sbatch_cmd+=(--exclude="$EXCLUDE")

@@ -59,6 +59,8 @@ def train(config: TrainConfig) -> None:
     flops_per_tok = training_flops_per_token(config.model, config.sequence_len)
     run_meta = {
         "step": 0,
+        "batch_size": config.batch_size,
+        "sequence_len": config.sequence_len,
         "micro_tokens_per_step": micro_tokens,
         "grad_accum_steps": grad_accum_steps,
         "tokens_per_step": tokens_per_step,
@@ -95,6 +97,13 @@ def train(config: TrainConfig) -> None:
         loss_total = 0.0
         for micro_step in range(grad_accum_steps):
             x, y, last_state = next(loader)
+            if step == 0 and micro_step == 0:
+                _validate_train_batch(x, y, config)
+                print0(
+                    "first microbatch: "
+                    f"x_shape={tuple(x.shape)} y_shape={tuple(y.shape)} "
+                    f"configured_batch_size={config.batch_size} configured_sequence_len={config.sequence_len}"
+                )
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
@@ -304,6 +313,17 @@ def _attention_mask_from_state(state: dict[str, Any] | Any) -> torch.Tensor | No
         if isinstance(mask, torch.Tensor):
             return mask
     return None
+
+
+def _validate_train_batch(x: torch.Tensor, y: torch.Tensor, config: TrainConfig) -> None:
+    if x.shape != y.shape:
+        raise ValueError(f"input and target batch shapes must match; got x={tuple(x.shape)} y={tuple(y.shape)}")
+    if x.ndim != 2:
+        raise ValueError(f"training batches must be 2D token tensors; got shape={tuple(x.shape)}")
+    if x.shape[0] != config.batch_size:
+        raise ValueError(f"loader batch size {x.shape[0]} does not match config.batch_size {config.batch_size}")
+    if x.shape[1] > config.sequence_len:
+        raise ValueError(f"loader sequence length {x.shape[1]} exceeds config.sequence_len {config.sequence_len}")
 
 
 def _model_loss(

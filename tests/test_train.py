@@ -8,7 +8,7 @@ from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
-from gcw.train import _build_training_model, _checkpoint_metadata, _checkpoint_state, _model_loss, train
+from gcw.train import _build_training_model, _checkpoint_metadata, _checkpoint_state, _loader, _model_loss, _validate_train_batch, train
 
 
 class FakeRun:
@@ -178,6 +178,33 @@ def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
     model = _build_training_model(cfg, torch.device("cpu"), rank=1, use_fsdp=True)
 
     assert all(param.is_meta for param in model.parameters())
+
+
+def test_loader_uses_configured_batch_size_for_random_data(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.batch_size = 5
+    cfg.sequence_len = 7
+
+    x, y, state = next(_loader(cfg, torch.device("cpu")))
+
+    assert state["kind"] == "random"
+    assert x.shape == (5, 7)
+    assert y.shape == (5, 7)
+
+
+def test_validate_train_batch_rejects_batch_size_mismatch(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.batch_size = 4
+
+    x = torch.zeros(3, cfg.sequence_len, dtype=torch.long)
+    y = torch.zeros_like(x)
+
+    try:
+        _validate_train_batch(x, y, cfg)
+    except ValueError as exc:
+        assert "config.batch_size 4" in str(exc)
+    else:
+        raise AssertionError("expected batch size mismatch to fail")
 
 
 def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step(monkeypatch, tmp_path):
