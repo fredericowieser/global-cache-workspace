@@ -10,22 +10,36 @@ ACTION="${1:-}"
 shift || true
 UV="$HOME/.local/bin/uv"
 EXPERIMENT_ROOT="/mnt/jfs-01/shared/gcw/experiments/flow_math_llama32_1b_v1"
+SLURM_LOG_DIR="${SLURM_LOG_DIR:-$HOME/slurm_out/global-cache-workspace}"
 
-mkdir -p slurm_out
+mkdir -p "$SLURM_LOG_DIR"
 
 submit() {
   local job_name="$1"
   shift
+  local output_pattern="%x-%j.out"
+  local error_pattern="%x-%j.err"
+  local argument
+  for argument in "$@"; do
+    if [[ "$argument" == --array=* ]]; then
+      output_pattern="%x-%A_%a.out"
+      error_pattern="%x-%A_%a.err"
+      break
+    fi
+  done
   if [[ -n "$(squeue -h -u "$USER" -n "$job_name" -o '%i')" ]]; then
     printf 'Refusing duplicate active job name: %s\n' "$job_name" >&2
     exit 2
   fi
   if [[ "$DRY_RUN" == "1" ]]; then
-    printf 'DRY_RUN sbatch --job-name=%q ' "$job_name"
+    printf 'DRY_RUN sbatch --job-name=%q --output=%q --error=%q ' \
+      "$job_name" "$SLURM_LOG_DIR/$output_pattern" "$SLURM_LOG_DIR/$error_pattern"
     printf '%q ' "$@"
     printf '\n'
   else
-    sbatch --parsable --job-name="$job_name" "$@"
+    sbatch --parsable --job-name="$job_name" \
+      --output="$SLURM_LOG_DIR/$output_pattern" \
+      --error="$SLURM_LOG_DIR/$error_pattern" "$@"
   fi
 }
 

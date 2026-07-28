@@ -181,7 +181,11 @@ def test_flow_math_submission_wrapper_precreates_logs_and_bounds_arrays():
     subprocess.run([BASH, "-n", str(SUBMIT)], check=True)
     text = SUBMIT.read_text()
 
-    assert "mkdir -p slurm_out" in text
+    assert 'SLURM_LOG_DIR="${SLURM_LOG_DIR:-$HOME/slurm_out/global-cache-workspace}"' in text
+    assert 'mkdir -p "$SLURM_LOG_DIR"' in text
+    assert '--output="$SLURM_LOG_DIR/$output_pattern"' in text
+    assert '--error="$SLURM_LOG_DIR/$error_pattern"' in text
+    assert "mkdir -p slurm_out" not in text
     assert "Refusing duplicate active job name" in text
     assert "--array=0-8%3" in text
     assert '0-3%2|4-7%2|8-9%2|[0-9]' in text
