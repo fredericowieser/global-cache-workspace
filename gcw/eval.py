@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import os
+import tempfile
 import time
 
 import torch
@@ -39,7 +41,16 @@ PPT_FEWSHOT = {"lambada_openai": 0, "hellaswag": 0, "piqa": 0, "winogrande": 5, 
 ACC_NORM_TASKS = {"hellaswag", "piqa", "arc_easy", "arc_challenge"}
 MATH_TASKS = ["gsm8k_openmath", "hendrycks_math", "svamp", "theoremqa", "logiqa", "agieval_gaokao_mathqa", "gsm8k_hard"]
 PAPER7_TASKS = ["gsm8k_openmath", "svamp", "theoremqa", "logiqa", "agieval_gaokao_mathqa", "gsm8k_hard"]
-MATH_RUNS = [(MATH_TASKS, 0)]
+MATH_RUNS = [([task], 0) for task in MATH_TASKS]
+HENDRYCKS_MATH_LEAF_TASKS = {
+    "hendrycks_math_algebra",
+    "hendrycks_math_counting_and_prob",
+    "hendrycks_math_geometry",
+    "hendrycks_math_intermediate_algebra",
+    "hendrycks_math_num_theory",
+    "hendrycks_math_prealgebra",
+    "hendrycks_math_precalc",
+}
 PAPER7_RUNS = [([task], 0) for task in PAPER7_TASKS]
 PPT_RUNS = [
     (["lambada_openai", "hellaswag", "piqa"], 0),
@@ -298,11 +309,11 @@ def run_task_groups(
     lm = GCWEvalLM(model, tokenizer, batch_size=batch_size)
     apply_chat_template = bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
     task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
-    merged = _load_partial_results() or _empty_eval_results()
+    merged = _load_partial_results(runs) or _empty_eval_results()
     _write_progress(_new_progress(runs), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
         progress = _update_progress(run_idx, "running", runs, merged)
-        if all(task in merged["results"] for task in tasks):
+        if _run_is_complete(tasks, merged):
             _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress, skipped=True), merged)
             continue
         if world_size > 1 and dist_state is not None:
@@ -415,32 +426,121 @@ def _trim_until(text: str, until: tuple[str, ...]) -> str:
     return text
 
 
+def _run_is_complete(tasks: list[str], merged: dict) -> bool:
+    results = merged.get("results", {})
+    groups = merged.get("groups", {})
+    for task in tasks:
+        if task == "hendrycks_math":
+            if task not in groups or not HENDRYCKS_MATH_LEAF_TASKS.issubset(results):
+                return False
+        elif task not in results and task not in groups:
+            return False
+    return True
+
+
+def _json_safe(payload: dict) -> dict:
+    safe = json.loads(json.dumps(payload, sort_keys=True, default=str))
+    if not isinstance(safe, dict):
+        raise ValueError("authenticated JSON payload must be an object")
+    return safe
+
+
+def _payload_sha256(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _atomic_write_authenticated_json(path: Path, *, kind: str, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    safe = _json_safe(payload)
+    document = {
+        "schema_version": 1,
+        "kind": kind,
+        "payload": safe,
+        "payload_sha256": _payload_sha256(safe),
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(document, handle, sort_keys=True, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _load_authenticated_json(path: Path, *, kind: str) -> dict:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"authenticated {kind} JSON is unreadable") from exc
+    if not isinstance(document, dict) or set(document) != {
+        "schema_version", "kind", "payload", "payload_sha256"
+    }:
+        raise ValueError(f"authenticated {kind} JSON schema differs")
+    payload = document.get("payload")
+    if (
+        document.get("schema_version") != 1
+        or document.get("kind") != kind
+        or not isinstance(payload, dict)
+        or document.get("payload_sha256") != _payload_sha256(payload)
+    ):
+        raise ValueError(f"authenticated {kind} JSON integrity check failed")
+    return payload
+
+
 def _write_partial_results(results: dict) -> None:
     if not is_main_process():
         return
     partial_dir = os.environ.get("GCW_EVAL_PARTIAL_DIR")
     if not partial_dir:
         return
-    path = Path(partial_dir) / "partial.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(results, indent=2, default=str))
+    _atomic_write_authenticated_json(
+        Path(partial_dir) / "partial.json",
+        kind="flow_math_eval_partial_results",
+        payload=results,
+    )
 
 
 def _empty_eval_results() -> dict:
     return {"results": {}, "groups": {}, "n-samples": {}, "n-shot": {}, "versions": {}, "higher_is_better": {}}
 
 
-def _load_partial_results() -> dict | None:
+def _validate_partial_results(payload: dict, runs: list[tuple[list[str], int]]) -> dict:
+    expected_keys = set(_empty_eval_results())
+    if set(payload) != expected_keys or any(not isinstance(payload[key], dict) for key in expected_keys):
+        raise ValueError("authenticated partial results schema differs")
+    requested = {task for tasks, _fewshot in runs for task in tasks}
+    for section in ("results", "groups"):
+        for task in payload[section]:
+            if not any(task == requested_task or task.startswith(f"{requested_task}_") for requested_task in requested):
+                raise ValueError(f"authenticated partial results contain unexpected task: {task}")
+    return payload
+
+
+def _load_partial_results(runs: list[tuple[list[str], int]]) -> dict | None:
     partial_dir = os.environ.get("GCW_EVAL_PARTIAL_DIR")
     if not partial_dir:
         return None
     path = Path(partial_dir) / "partial.json"
     if not path.exists():
         return None
-    payload = json.loads(path.read_text())
-    if isinstance(payload, dict) and isinstance(payload.get("results"), dict):
-        return {**_empty_eval_results(), **payload}
-    return None
+    payload = _load_authenticated_json(path, kind="flow_math_eval_partial_results")
+    return _validate_partial_results(payload, runs)
 
 
 def _progress_path() -> Path | None:
@@ -451,18 +551,47 @@ def _progress_path() -> Path | None:
     return None
 
 
+def _validate_progress(payload: dict, runs: list[tuple[list[str], int]]) -> dict:
+    if set(payload) != {
+        "started_at", "started_time", "updated_at", "total_runs", "completed_runs",
+        "completed_tasks", "elapsed_sec", "eta_sec", "runs",
+    }:
+        raise ValueError("authenticated progress schema differs")
+    entries = payload.get("runs")
+    if not isinstance(entries, list) or len(entries) != len(runs):
+        raise ValueError("authenticated progress run list differs")
+    allowed_entry_keys = {
+        "tasks", "fewshot", "status", "start_time", "end_time", "started_at",
+        "ended_at", "duration_sec", "skipped", "error",
+    }
+    expected_runs = [{"tasks": tasks, "fewshot": fewshot} for tasks, fewshot in runs]
+    actual_runs = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not set(entry).issubset(allowed_entry_keys):
+            raise ValueError("authenticated progress entry schema differs")
+        if not {"tasks", "fewshot", "status", "start_time", "end_time"}.issubset(entry):
+            raise ValueError("authenticated progress entry is incomplete")
+        actual_runs.append({"tasks": entry["tasks"], "fewshot": entry["fewshot"]})
+    if payload.get("total_runs") != len(runs) or actual_runs != expected_runs:
+        raise ValueError("authenticated progress does not match requested evaluation runs")
+    return payload
+
+
 def _new_progress(runs: list[tuple[list[str], int]]) -> dict:
     path = _progress_path()
     if path is not None and path.exists():
-        payload = json.loads(path.read_text())
-        if isinstance(payload, dict) and isinstance(payload.get("runs"), list):
-            return payload
+        payload = _load_authenticated_json(path, kind="flow_math_eval_progress")
+        return _validate_progress(payload, runs)
     now = time.time()
     return {
         "started_at": _format_time(now),
         "started_time": now,
         "updated_at": _format_time(now),
         "total_runs": len(runs),
+        "completed_runs": 0,
+        "completed_tasks": [],
+        "elapsed_sec": 0.0,
+        "eta_sec": None,
         "runs": [
             {"tasks": tasks, "fewshot": fewshot, "status": "pending", "start_time": None, "end_time": None}
             for tasks, fewshot in runs
@@ -517,9 +646,8 @@ def _write_progress(progress: dict, merged: dict) -> None:
     path = _progress_path()
     if path is None:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
     progress["completed_tasks"] = sorted(merged.get("results", {}))
-    path.write_text(json.dumps(progress, indent=2, default=str))
+    _atomic_write_authenticated_json(path, kind="flow_math_eval_progress", payload=progress)
 
 
 def _format_time(timestamp: float) -> str:

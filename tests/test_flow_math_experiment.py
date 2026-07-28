@@ -8,6 +8,8 @@ import subprocess
 import sys
 
 import pytest
+
+import gcw.flow_math_experiment as flow_math_experiment
 import torch
 from safetensors.torch import save_file
 
@@ -15,7 +17,12 @@ from gcw.config import load_train_config, to_dict
 from gcw.flow_math_experiment import (
     EXPECTED_EVAL_SAMPLE_COUNTS,
     EXPECTED_EVAL_VERSIONS,
+    EVALUATION_ARTIFACT_ROLES,
     HENDRYCKS_MATH_SAMPLE_COUNTS,
+    REQUIRED_TRAINING_MANIFEST_SHA256,
+    REQUIRED_TRAINING_SOURCE_COMMIT,
+    build_evaluation_ledger,
+    build_evaluation_manifest,
     build_experiment_manifest,
     build_directory_manifest,
     checkpoint_metadata_sha256,
@@ -24,13 +31,17 @@ from gcw.flow_math_experiment import (
     probe_flow_dynamics,
     summarise_metric_markers,
     verify_completed_flow_math_run,
+    verify_cache_payload_copy,
     verify_directory_manifest,
+    verify_evaluation_context,
     verify_execution_context,
+    verify_required_training_identity,
     verify_run_marker,
     verify_training_audit,
 )
 from gcw.models import build_model
-from scripts.flow_math_experiment import _validate_dynamics_payload
+from scripts.flow_math_experiment import _parser, _validate_dynamics_payload
+from scripts.flow_math_eval_runner import build_eval_command, build_runtime_evidence
 from scripts.flow_smoke import smoke_config
 
 
@@ -96,6 +107,176 @@ def test_build_experiment_manifest_authenticates_configs_and_external_artifacts(
     assert manifest["evaluation"]["sample_counts"] == EXPECTED_EVAL_SAMPLE_COUNTS
 
 
+def test_evaluation_ledger_binds_cache_pilot_and_exact_ten_markers(tmp_path):
+    training_source = REQUIRED_TRAINING_SOURCE_COMMIT
+    training_manifest = REQUIRED_TRAINING_MANIFEST_SHA256
+    evaluation_source = "c" * 40
+    evaluation_manifest = "d" * 64
+    cache_sha = "e" * 64
+
+    def write_marker(name, kind, target=None):
+        path = tmp_path / name
+        payload = {
+            "kind": kind,
+            "training_source_commit": training_source,
+            "training_experiment_manifest_sha256": training_manifest,
+            "evaluation_source_commit": evaluation_source,
+            "evaluation_manifest_sha256": evaluation_manifest,
+            "eval_cache_manifest_sha256": cache_sha,
+        }
+        if target is not None:
+            payload["target"] = target
+        path.write_text(json.dumps(payload))
+        return path
+
+    cache = write_marker("cache.json", "flow_math_eval_cache")
+    pilot = write_marker("pilot.json", "flow_math_eval_pilot")
+    targets = ["tf-backbone"] + [
+        f"{variant}-seed{seed}"
+        for variant in ("bgt", "icarus", "longshot")
+        for seed in (24, 25, 26)
+    ]
+    markers = [write_marker(f"{target}.json", "flow_math_eval_result", target) for target in targets]
+    ledger = build_evaluation_ledger(
+        cache_marker=cache,
+        pilot_marker=pilot,
+        metric_markers=markers,
+        training_source_commit=training_source,
+        training_experiment_manifest_sha256=training_manifest,
+        evaluation_source_commit=evaluation_source,
+        evaluation_manifest_sha256=evaluation_manifest,
+        eval_cache_manifest_sha256=cache_sha,
+    )
+    assert set(ledger["metric_marker_sha256"]) == set(targets)
+    assert ledger["cache_marker_sha256"] == _sha256(cache)
+    markers[0].write_text("{}")
+    with pytest.raises(ValueError, match="wrong kind"):
+        build_evaluation_ledger(
+            cache_marker=cache,
+            pilot_marker=pilot,
+            metric_markers=markers,
+            training_source_commit=training_source,
+            training_experiment_manifest_sha256=training_manifest,
+            evaluation_source_commit=evaluation_source,
+            evaluation_manifest_sha256=evaluation_manifest,
+            eval_cache_manifest_sha256=cache_sha,
+        )
+
+
+def test_required_training_identity_is_fixed_to_completed_matrix():
+    verify_required_training_identity(
+        REQUIRED_TRAINING_SOURCE_COMMIT,
+        REQUIRED_TRAINING_MANIFEST_SHA256,
+    )
+    with pytest.raises(ValueError, match="required completed training identity"):
+        verify_required_training_identity("f" * 40, REQUIRED_TRAINING_MANIFEST_SHA256)
+    with pytest.raises(ValueError, match="required completed training identity"):
+        verify_required_training_identity(REQUIRED_TRAINING_SOURCE_COMMIT, "f" * 64)
+
+
+def test_flow_math_cli_exposes_split_evaluation_manifest_commands(tmp_path):
+    parser = _parser()
+    build_args = parser.parse_args(
+        [
+            "build-evaluation-manifest",
+            "--evaluation-source-commit",
+            "b" * 40,
+            "--training-source-commit",
+            "a" * 40,
+            "--training-experiment-manifest",
+            str(tmp_path / "training.json"),
+            "--training-experiment-manifest-sha256",
+            "c" * 64,
+            "--out",
+            str(tmp_path / "evaluation.json"),
+        ]
+    )
+    verify_args = parser.parse_args(
+        [
+            "verify-evaluation-context",
+            "--evaluation-manifest",
+            str(tmp_path / "evaluation.json"),
+            "--evaluation-manifest-sha256",
+            "d" * 64,
+            "--evaluation-source-commit",
+            "b" * 40,
+            "--training-experiment-manifest",
+            str(tmp_path / "training.json"),
+            "--training-experiment-manifest-sha256",
+            "c" * 64,
+            "--training-source-commit",
+            "a" * 40,
+        ]
+    )
+
+    assert build_args.command == "build-evaluation-manifest"
+    assert verify_args.command == "verify-evaluation-context"
+
+
+def test_build_evaluation_manifest_binds_new_evaluator_to_immutable_training_identity(tmp_path, monkeypatch):
+    repo_root = Path(__file__).resolve().parents[1]
+    training_source_commit = "a" * 40
+    evaluation_source_commit = "b" * 40
+    training_manifest = tmp_path / "training-manifest.json"
+    training_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "experiment_id": "flow_math_llama32_1b_v1",
+                "source_commit": training_source_commit,
+            },
+            sort_keys=True,
+        )
+    )
+    artifact = tmp_path / "model.safetensors"
+    artifact.write_bytes(b"model")
+    monkeypatch.setattr(
+        flow_math_experiment,
+        "CANONICAL_ARTIFACT_SPECS",
+        {
+            role: {"path": str(artifact), "sha256": _sha256(artifact), "size_bytes": artifact.stat().st_size}
+            for role in EVALUATION_ARTIFACT_ROLES
+        },
+    )
+
+    manifest = build_evaluation_manifest(
+        repo_root=repo_root,
+        evaluation_source_commit=evaluation_source_commit,
+        training_manifest_path=training_manifest,
+        approved_training_manifest_sha256=_sha256(training_manifest),
+        training_source_commit=training_source_commit,
+        artifacts={role: (artifact, _sha256(artifact)) for role in EVALUATION_ARTIFACT_ROLES},
+    )
+
+    assert manifest["manifest_kind"] == "flow_math_evaluation"
+    assert manifest["evaluation_source_commit"] == evaluation_source_commit
+    assert manifest["training_provenance"] == {
+        "source_commit": training_source_commit,
+        "experiment_manifest_sha256": _sha256(training_manifest),
+    }
+    assert manifest["evaluation"]["protocol"]["world_size"] == 1
+    assert "scripts/slurm/flow_math_eval_array.sbatch" in manifest["evaluation"]["evaluation_code_sha256"]
+    assert "scripts/slurm/flow_math_eval_cache.sbatch" in manifest["evaluation"]["evaluation_code_sha256"]
+    assert "scripts/flow_math_eval_runner.py" in manifest["evaluation"]["evaluation_code_sha256"]
+
+
+def test_build_evaluation_manifest_rejects_wrong_training_manifest_digest(tmp_path):
+    training_manifest = tmp_path / "training-manifest.json"
+    training_manifest.write_text(json.dumps({"experiment_id": "flow_math_llama32_1b_v1", "source_commit": "a" * 40}))
+    artifact = tmp_path / "model.safetensors"
+    artifact.write_bytes(b"model")
+
+    with pytest.raises(ValueError, match="training manifest differs"):
+        build_evaluation_manifest(
+            repo_root=Path(__file__).resolve().parents[1],
+            evaluation_source_commit="b" * 40,
+            training_manifest_path=training_manifest,
+            approved_training_manifest_sha256="0" * 64,
+            training_source_commit="a" * 40,
+            artifacts={role: (artifact, _sha256(artifact)) for role in EVALUATION_ARTIFACT_ROLES},
+        )
+
+
 def test_build_experiment_manifest_rejects_artifact_hash_mismatch(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     artifact = tmp_path / "artifact"
@@ -105,6 +286,112 @@ def test_build_experiment_manifest_rejects_artifact_hash_mismatch(tmp_path):
             repo_root=repo_root,
             source_commit="a" * 40,
             artifacts={"backbone": (artifact, "0" * 64)},
+        )
+
+
+def test_verify_evaluation_context_accepts_new_head_with_old_training_manifest(tmp_path, monkeypatch):
+    git = shutil.which("git")
+    assert git is not None
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run([git, "init", "-q"], cwd=repo, check=True)
+    subprocess.run([git, "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run([git, "config", "user.name", "Test"], cwd=repo, check=True)
+    (repo / "uv.lock").write_text("locked\n")
+    artifact = repo / "model.safetensors"
+    artifact.write_bytes(b"model")
+    evaluation_code = repo / "eval.py"
+    evaluation_code.write_text("VERSION = 1\n")
+    subprocess.run([git, "add", "."], cwd=repo, check=True)
+    subprocess.run([git, "commit", "-qm", "training"], cwd=repo, check=True)
+    training_source_commit = subprocess.check_output([git, "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+
+    training_manifest_path = tmp_path / "training-manifest.json"
+    training_manifest_path.write_text(
+        json.dumps({"experiment_id": "flow_math_llama32_1b_v1", "source_commit": training_source_commit})
+    )
+    training_manifest_sha = _sha256(training_manifest_path)
+
+    evaluation_code.write_text("VERSION = 2\n")
+    subprocess.run([git, "add", "eval.py"], cwd=repo, check=True)
+    subprocess.run([git, "commit", "-qm", "evaluation"], cwd=repo, check=True)
+    evaluation_source_commit = subprocess.check_output([git, "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    evaluation_manifest_path = tmp_path / "evaluation-manifest.json"
+    evaluation_manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "manifest_kind": "flow_math_evaluation",
+                "experiment_id": "flow_math_llama32_1b_v1",
+                "evaluation_source_commit": evaluation_source_commit,
+                "training_provenance": {
+                    "source_commit": training_source_commit,
+                    "experiment_manifest_sha256": training_manifest_sha,
+                },
+                "uv_lock_sha256": _sha256(repo / "uv.lock"),
+                "artifacts": {
+                    "backbone": {
+                        "path": str(artifact),
+                        "size_bytes": artifact.stat().st_size,
+                        "sha256": _sha256(artifact),
+                    }
+                },
+                "evaluation": {
+                    "evaluation_code_sha256": {"eval.py": _sha256(evaluation_code)},
+                    "protocol": {
+                        "num_fewshot": 0,
+                        "batch_size_per_rank": 16,
+                        "world_size": 1,
+                        "limit": None,
+                        "offline_datasets": True,
+                    },
+                    "excluded_tasks": ["theoremqa"],
+                },
+            },
+            sort_keys=True,
+        )
+    )
+
+    monkeypatch.setattr(flow_math_experiment, "REQUIRED_TRAINING_SOURCE_COMMIT", training_source_commit)
+    monkeypatch.setattr(flow_math_experiment, "REQUIRED_TRAINING_MANIFEST_SHA256", training_manifest_sha)
+    canonical = json.loads(evaluation_manifest_path.read_text())
+    monkeypatch.setattr(flow_math_experiment, "build_evaluation_manifest", lambda **_: canonical)
+
+    verified = verify_evaluation_context(
+        repo_root=repo,
+        evaluation_manifest_path=evaluation_manifest_path,
+        approved_evaluation_manifest_sha256=_sha256(evaluation_manifest_path),
+        training_manifest_path=training_manifest_path,
+        approved_training_manifest_sha256=training_manifest_sha,
+        training_source_commit=training_source_commit,
+    )
+
+    assert verified["evaluation_source_commit"] == evaluation_source_commit
+    assert verified["training_provenance"]["source_commit"] == training_source_commit
+
+    (repo / "torch.py").write_text("raise RuntimeError('shadow')\n")
+    with pytest.raises(ValueError, match="tracked or untracked"):
+        verify_evaluation_context(
+            repo_root=repo,
+            evaluation_manifest_path=evaluation_manifest_path,
+            approved_evaluation_manifest_sha256=_sha256(evaluation_manifest_path),
+            training_manifest_path=training_manifest_path,
+            approved_training_manifest_sha256=training_manifest_sha,
+            training_source_commit=training_source_commit,
+        )
+
+
+def test_verify_evaluation_context_rejects_two_process_protocol(tmp_path):
+    manifest = tmp_path / "evaluation.json"
+    manifest.write_text("{}")
+    with pytest.raises(ValueError):
+        verify_evaluation_context(
+            repo_root=tmp_path,
+            evaluation_manifest_path=manifest,
+            approved_evaluation_manifest_sha256=_sha256(manifest),
+            training_manifest_path=manifest,
+            approved_training_manifest_sha256=_sha256(manifest),
+            training_source_commit="a" * 40,
         )
 
 
@@ -155,6 +442,58 @@ def test_verify_execution_context_binds_manifest_git_lock_and_artifacts(tmp_path
             approved_manifest_sha256=approved_sha,
         )
 
+
+def test_cache_payload_copy_allows_transient_locks_but_rejects_persistent_changes(tmp_path):
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    payload_file = frozen / "dataset.arrow"
+    payload_file.write_bytes(b"payload")
+    payload_file.chmod(0o444)
+    frozen.chmod(0o555)
+    manifest = tmp_path / "cache-manifest.json"
+    manifest.write_text(json.dumps(build_directory_manifest(frozen, strict=True)))
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    copied = scratch / "dataset.arrow"
+    copied.write_bytes(b"payload")
+    (scratch / "dataset_builder.lock").write_text("transient")
+    assert verify_cache_payload_copy(cache_dir=scratch, manifest_path=manifest)["files"] == 1
+
+    (scratch / "unexpected.json").write_text("{}")
+    with pytest.raises(ValueError, match="payload differs"):
+        verify_cache_payload_copy(cache_dir=scratch, manifest_path=manifest)
+
+
+def test_build_directory_manifest_strict_rejects_symlinks_locks_and_mode_changes(tmp_path):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    target = cache / "target.bin"
+    target.write_bytes(b"x")
+    (cache / "alias.bin").symlink_to(target)
+    with pytest.raises(ValueError, match="symlink"):
+        build_directory_manifest(cache, strict=True)
+    (cache / "alias.bin").unlink()
+    lock = cache / "download.lock"
+    lock.write_text("lock evidence")
+    with pytest.raises(ValueError, match="lock"):
+        build_directory_manifest(cache, strict=True)
+    lock.unlink()
+    target.chmod(0o444)
+    cache.chmod(0o555)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(build_directory_manifest(cache, strict=True)))
+    digest = _sha256(manifest)
+    verify_directory_manifest(
+        root=cache, manifest_path=manifest, approved_manifest_sha256=digest,
+        require_read_only=True, strict=True,
+    )
+    target.chmod(0o400)
+    with pytest.raises(ValueError, match="contents differ"):
+        verify_directory_manifest(
+            root=cache, manifest_path=manifest, approved_manifest_sha256=digest,
+            require_read_only=True, strict=True,
+        )
 
 def test_directory_manifest_rejects_mutated_eval_cache(tmp_path):
     cache = tmp_path / "cache"
@@ -291,9 +630,11 @@ def test_extract_primary_metrics_requires_exact_math_suite_without_theoremqa():
 
 
 def test_summarise_metric_markers_reports_seed_mean_sd_and_secondary_macros(tmp_path):
-    source_commit = "b" * 40
-    manifest_sha = "c" * 64
-    cache_sha = "d" * 64
+    training_source_commit = "a" * 40
+    training_manifest_sha = "b" * 64
+    evaluation_source_commit = "c" * 40
+    evaluation_manifest_sha = "d" * 64
+    cache_sha = "e" * 64
 
     def marker(target, metrics):
         result = tmp_path / f"{target}-result.json"
@@ -304,9 +645,13 @@ def test_summarise_metric_markers_reports_seed_mean_sd_and_secondary_macros(tmp_
         (checkpoint.parent / "config.json").write_text("{}")
         (checkpoint.parent / "train_state.json").write_text("{}")
         return {
+            "schema_version": 2,
+            "kind": "flow_math_eval_result",
             "target": target,
-            "source_commit": source_commit,
-            "experiment_manifest_sha256": manifest_sha,
+            "training_source_commit": training_source_commit,
+            "training_experiment_manifest_sha256": training_manifest_sha,
+            "evaluation_source_commit": evaluation_source_commit,
+            "evaluation_manifest_sha256": evaluation_manifest_sha,
             "eval_cache_manifest_sha256": cache_sha,
             "checkpoint": str(checkpoint.parent),
             "checkpoint_sha256": _sha256(checkpoint),
@@ -325,12 +670,30 @@ def test_summarise_metric_markers_reports_seed_mean_sd_and_secondary_macros(tmp_
 
     summary = summarise_metric_markers(
         markers,
-        source_commit=source_commit,
-        experiment_manifest_sha256=manifest_sha,
+        training_source_commit=training_source_commit,
+        training_experiment_manifest_sha256=training_manifest_sha,
+        evaluation_source_commit=evaluation_source_commit,
+        evaluation_manifest_sha256=evaluation_manifest_sha,
         eval_cache_manifest_sha256=cache_sha,
     )
 
+    assert summary["schema_version"] == 2
+    assert summary["training_provenance"] == {
+        "source_commit": training_source_commit,
+        "experiment_manifest_sha256": training_manifest_sha,
+    }
+    assert summary["evaluation_provenance"] == {
+        "source_commit": evaluation_source_commit,
+        "manifest_sha256": evaluation_manifest_sha,
+    }
     assert len(summary["runs"]) == 9
+    assert set(summary["runs"][0]["evidence"]) == {
+        "result", "result_sha256", "runtime_evidence", "runtime_evidence_sha256",
+        "cache_copy_evidence", "cache_copy_evidence_sha256",
+        "partial_identity", "partial_identity_sha256", "partial_manifest", "partial_manifest_sha256",
+        "checkpoint", "checkpoint_sha256",
+        "checkpoint_metadata_sha256", "training_marker", "training_marker_sha256",
+    }
     assert summary["baseline"]["target"] == "tf-backbone"
     assert summary["architectures"]["bgt"]["gsm8k_openmath"] == {
         "mean": pytest.approx(0.01),
@@ -340,15 +703,118 @@ def test_summarise_metric_markers_reports_seed_mean_sd_and_secondary_macros(tmp_
     assert summary["architectures"]["icarus"]["historical_macro"]["mean"] == pytest.approx(0.11)
     assert summary["architectures"]["longshot"]["math_only_macro"]["mean"] == pytest.approx(0.21)
 
-    tampered = [dict(marker) for marker in markers]
-    tampered[0]["metrics"] = {**tampered[0]["metrics"], "gsm8k_openmath": 0.99}
-    with pytest.raises(ValueError, match="raw results"):
+    tampered = [dict(item) for item in markers]
+    tampered[0]["evaluation_source_commit"] = "f" * 40
+    with pytest.raises(ValueError, match="evaluation source commit"):
         summarise_metric_markers(
             tampered,
-            source_commit=source_commit,
-            experiment_manifest_sha256=manifest_sha,
+            training_source_commit=training_source_commit,
+            training_experiment_manifest_sha256=training_manifest_sha,
+            evaluation_source_commit=evaluation_source_commit,
+            evaluation_manifest_sha256=evaluation_manifest_sha,
             eval_cache_manifest_sha256=cache_sha,
         )
+
+
+def test_extract_metrics_writes_dual_provenance_runtime_bound_marker(tmp_path):
+    metrics = {task: 0.25 for task in EXPECTED_EVAL_SAMPLE_COUNTS}
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(_raw_eval_payload(metrics)))
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    model = checkpoint / "model.safetensors"
+    model.write_bytes(b"model")
+    (checkpoint / "config.json").write_text("{}")
+    (checkpoint / "train_state.json").write_text("{}")
+    partial_dir = tmp_path / "partial"
+    partial_dir.mkdir()
+    partial_identity = partial_dir / "identity.json"
+    partial_identity.write_text('{"identity": 1}\n')
+    partial_identity.chmod(0o444)
+    partial_identity.parent.chmod(0o555)
+    partial_manifest = tmp_path / "partial-manifest.json"
+    partial_manifest.write_text(json.dumps(build_directory_manifest(partial_identity.parent, strict=True)))
+    temporary_output = tmp_path / ".result.json.test.tmp.json"
+    command = build_eval_command(
+        python=Path(sys.executable), checkpoint=checkpoint, batch_size=16, limit=None, out=temporary_output
+    )
+    runtime_payload = build_runtime_evidence(
+        target="bgt-seed24",
+        command=command,
+        checkpoint=checkpoint,
+        output=result,
+        temporary_output=temporary_output,
+        partial_identity=partial_identity,
+        eval_cache_dir=tmp_path / "cache",
+        expected_array_task_id=1,
+        batch_size=16,
+        limit=None,
+        cuda_device_count=1,
+        environ={
+            "CUDA_VISIBLE_DEVICES": "0",
+            "WORLD_SIZE": "1", "LOCAL_RANK": "0", "RANK": "0",
+            "SLURM_JOB_ID": "123", "SLURM_ARRAY_JOB_ID": "120", "SLURM_ARRAY_TASK_ID": "1",
+            "SLURM_NTASKS": "1", "SLURM_CPUS_PER_TASK": "16",
+            "GCW_STRICT_FLASH": "1", "WANDB_MODE": "offline",
+            "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+            "GCW_EVAL_PARTIAL_DIR": str(partial_dir.resolve()), "GCW_EVAL_SKIP_TASKS": "theoremqa",
+            "GCW_EVAL_REFERENCE_GENERATE": "0", "PYTHONPATH": "",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "HF_HOME": str((tmp_path / "cache/huggingface").resolve()),
+            "HF_DATASETS_CACHE": str((tmp_path / "cache/huggingface/datasets").resolve()),
+            "HF_HUB_CACHE": str((tmp_path / "cache/huggingface/hub").resolve()),
+        },
+    )
+    runtime = tmp_path / "runtime.json"
+    runtime.write_text(json.dumps(runtime_payload))
+    training_marker = tmp_path / "train.json"
+    training_marker.write_text("{}")
+    cache_copy_evidence = tmp_path / "cache-copy.json"
+    cache_copy_evidence.write_text(json.dumps({
+        "schema_version": 1,
+        "kind": "flow_math_eval_cache_copy",
+        "target": "bgt-seed24",
+        "eval_cache_manifest_sha256": "e" * 64,
+        "files": 1,
+        "content_sha256": "f" * 64,
+        "post_evaluation_verified": True,
+    }))
+    out = tmp_path / "marker.json"
+    args = _parser().parse_args(
+        [
+            "extract-metrics",
+            "--result", str(result),
+            "--target", "bgt-seed24",
+            "--training-source-commit", "a" * 40,
+            "--training-experiment-manifest-sha256", "b" * 64,
+            "--evaluation-source-commit", "c" * 40,
+            "--evaluation-manifest-sha256", "d" * 64,
+            "--eval-cache-manifest-sha256", "e" * 64,
+            "--eval-cache-dir", str(tmp_path / "cache"),
+            "--array-task-id", "1",
+            "--cache-copy-evidence", str(cache_copy_evidence),
+            "--checkpoint", str(checkpoint),
+            "--checkpoint-sha256", _sha256(model),
+            "--checkpoint-metadata-sha256", checkpoint_metadata_sha256(checkpoint),
+            "--runtime-evidence", str(runtime),
+            "--partial-identity", str(partial_identity),
+            "--partial-manifest", str(partial_manifest),
+            "--training-marker", str(training_marker),
+            "--out", str(out),
+        ]
+    )
+    args.func(args)
+    marker = json.loads(out.read_text())
+
+    assert marker["schema_version"] == 2
+    assert marker["kind"] == "flow_math_eval_result"
+    assert marker["training_source_commit"] == "a" * 40
+    assert marker["training_experiment_manifest_sha256"] == "b" * 64
+    assert marker["evaluation_source_commit"] == "c" * 40
+    assert marker["evaluation_manifest_sha256"] == "d" * 64
+    assert marker["runtime_evidence_sha256"] == _sha256(runtime)
+    assert marker["partial_identity_sha256"] == _sha256(partial_identity)
+    assert marker["training_marker_sha256"] == _sha256(training_marker)
 
 
 def test_probe_flow_dynamics_detects_nontrivial_solver_behavior():
