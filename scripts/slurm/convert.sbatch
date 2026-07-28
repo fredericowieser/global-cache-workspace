@@ -15,12 +15,12 @@
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 
-REPO_ROOT="${REPO_ROOT:-/mnt/jfs-00/team-agent/home/f50056118/global-cache-workspace}"
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)}"
 cd "$REPO_ROOT"
 mkdir -p slurm_out
 
 DTYPE="${DTYPE:-bfloat16}"
-export HF_HOME="${HF_HOME:-/mnt/jfs-00/team-agent/home/f50056118/.cache/huggingface}"
+export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 
 if [ "${SOURCE:?SOURCE is required}" = "hf" ]; then
   uv run --extra cpu --extra convert gcw convert hf \
