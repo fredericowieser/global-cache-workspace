@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -114,7 +115,8 @@ def test_verify_execution_context_binds_manifest_git_lock_and_artifacts(tmp_path
     lock.write_text("locked\n")
     artifact = tmp_path / "artifact.bin"
     artifact.write_bytes(b"approved")
-    git = "/run/current-system/sw/bin/git"
+    git = shutil.which("git")
+    assert git is not None
     subprocess.run([git, "init", "-q"], cwd=repo, check=True)
     subprocess.run([git, "add", "uv.lock"], cwd=repo, check=True)
     subprocess.run(

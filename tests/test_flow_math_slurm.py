@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BASH = shutil.which("bash") or "/bin/bash"
 TRAIN = ROOT / "scripts/slurm/flow_math_train_array.sbatch"
 PILOT = ROOT / "scripts/slurm/flow_math_pilot.sbatch"
 EVAL = ROOT / "scripts/slurm/flow_math_eval_array.sbatch"
@@ -17,7 +19,7 @@ SUBMIT = ROOT / "scripts/submit_flow_math.sh"
 @pytest.mark.parametrize("path", [TRAIN, PILOT])
 def test_flow_math_slurm_scripts_are_bounded_bash(path):
     assert path.is_file()
-    subprocess.run(["/run/current-system/sw/bin/bash", "-n", str(path)], check=True)
+    subprocess.run([BASH, "-n", str(path)], check=True)
     text = path.read_text()
 
     assert "#SBATCH --partition=agent-long-15,agent-long" in text
@@ -66,7 +68,7 @@ def test_flow_math_pilot_requires_an_explicit_approved_config():
 
 def test_flow_math_eval_array_is_full_math_without_theoremqa():
     assert EVAL.is_file()
-    subprocess.run(["/run/current-system/sw/bin/bash", "-n", str(EVAL)], check=True)
+    subprocess.run([BASH, "-n", str(EVAL)], check=True)
     text = EVAL.read_text()
 
     assert "#SBATCH --partition=agent-long-15,agent-long" in text
@@ -93,7 +95,7 @@ def test_flow_math_eval_array_is_full_math_without_theoremqa():
 
 def test_flow_math_eval_pilot_is_two_target_all_task_gate():
     assert EVAL_PILOT.is_file()
-    subprocess.run(["/run/current-system/sw/bin/bash", "-n", str(EVAL_PILOT)], check=True)
+    subprocess.run([BASH, "-n", str(EVAL_PILOT)], check=True)
     text = EVAL_PILOT.read_text()
     assert "tf-backbone" in text
     assert "bgt-seed24" in text
@@ -107,7 +109,7 @@ def test_flow_math_eval_pilot_is_two_target_all_task_gate():
 
 def test_flow_math_submission_wrapper_precreates_logs_and_bounds_arrays():
     assert SUBMIT.is_file()
-    subprocess.run(["/run/current-system/sw/bin/bash", "-n", str(SUBMIT)], check=True)
+    subprocess.run([BASH, "-n", str(SUBMIT)], check=True)
     text = SUBMIT.read_text()
 
     assert "mkdir -p slurm_out" in text
