@@ -163,6 +163,8 @@ def test_flow_math_eval_pilot_is_two_target_all_task_gate():
     assert 'export PYTHONPATH=' in text
     assert 'tf-backbone-train-${TRAINING_SOURCE_COMMIT:0:12}-eval-${EVALUATION_SOURCE_COMMIT:0:12}.json' in text
     assert 'bgt-seed24-train-${TRAINING_SOURCE_COMMIT:0:12}-eval-${EVALUATION_SOURCE_COMMIT:0:12}.json' in text
+    assert 'tf-backbone-runtime-train-${TRAINING_SOURCE_COMMIT:0:12}-eval-${EVALUATION_SOURCE_COMMIT:0:12}.json' in text
+    assert 'bgt-seed24-runtime-train-${TRAINING_SOURCE_COMMIT:0:12}-eval-${EVALUATION_SOURCE_COMMIT:0:12}.json' in text
     assert '--target "tf-backbone"' in text
     assert '--target "bgt-seed24"' in text
     assert text.count("--limit 16") == 2
