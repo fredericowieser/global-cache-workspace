@@ -26,6 +26,7 @@ from gcw.flow_math_experiment import (
     build_experiment_manifest,
     build_directory_manifest,
     checkpoint_metadata_sha256,
+    extract_pilot_metrics,
     extract_primary_metrics,
     load_matrix_file,
     materialize_internal_symlinks,
@@ -50,7 +51,7 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _raw_eval_payload(metrics: dict[str, float]) -> dict:
+def _raw_eval_payload(metrics: dict[str, float], *, limit: int | None = None) -> dict:
     results = {
         "gsm8k_openmath": {"exact_match,flexible": metrics["gsm8k_openmath"]},
         "svamp": {"exact_match,flexible": metrics["svamp"]},
@@ -60,20 +61,60 @@ def _raw_eval_payload(metrics: dict[str, float]) -> dict:
     }
     for task in HENDRYCKS_MATH_SAMPLE_COUNTS:
         results[task] = {"exact_match,none": metrics["hendrycks_math"]}
+    group = {"exact_match,none": metrics["hendrycks_math"]}
+    results["hendrycks_math"] = group
     return {
         "results": results,
-        "groups": {"hendrycks_math": {"exact_match,none": metrics["hendrycks_math"]}},
+        "groups": {"hendrycks_math": group},
         "n-samples": {
             task: {
-                "effective": HENDRYCKS_MATH_SAMPLE_COUNTS[task]
-                if task in HENDRYCKS_MATH_SAMPLE_COUNTS
-                else EXPECTED_EVAL_SAMPLE_COUNTS[task]
+                "effective": min(
+                    limit if limit is not None else EXPECTED_EVAL_SAMPLE_COUNTS["hendrycks_math"],
+                    HENDRYCKS_MATH_SAMPLE_COUNTS[task]
+                    if task in HENDRYCKS_MATH_SAMPLE_COUNTS
+                    else EXPECTED_EVAL_SAMPLE_COUNTS[task],
+                )
             }
             for task in EXPECTED_EVAL_VERSIONS
         },
-        "versions": EXPECTED_EVAL_VERSIONS,
-        "n-shot": {task: 0 for task in EXPECTED_EVAL_VERSIONS},
+        "versions": {**EXPECTED_EVAL_VERSIONS, "hendrycks_math": "1.0"},
+        "n-shot": {task: 0 for task in (*EXPECTED_EVAL_VERSIONS, "hendrycks_math")},
     }
+
+
+def test_extract_pilot_metrics_accepts_real_lm_eval_group_rows():
+    metrics = {task: 0.25 for task in EXPECTED_EVAL_SAMPLE_COUNTS}
+
+    extracted = extract_pilot_metrics(_raw_eval_payload(metrics), limit=5000)
+
+    assert extracted == metrics
+
+
+def test_extract_pilot_metrics_weights_math_leaves_by_effective_samples():
+    metrics = {task: 0.0 for task in EXPECTED_EVAL_SAMPLE_COUNTS}
+    payload = _raw_eval_payload(metrics)
+    weighted_total = 0.0
+    sample_total = 0
+    for index, (task, count) in enumerate(HENDRYCKS_MATH_SAMPLE_COUNTS.items(), start=1):
+        score = index / 10.0
+        payload["results"][task]["exact_match,none"] = score
+        weighted_total += score * count
+        sample_total += count
+    expected = weighted_total / sample_total
+    payload["results"]["hendrycks_math"]["exact_match,none"] = expected
+    payload["groups"]["hendrycks_math"]["exact_match,none"] = expected
+
+    extracted = extract_pilot_metrics(payload, limit=5000)
+
+    assert extracted["hendrycks_math"] == pytest.approx(expected)
+
+
+def test_extract_cache_warmup_metrics_accepts_exact_limit_one_payload():
+    metrics = {task: 0.25 for task in EXPECTED_EVAL_SAMPLE_COUNTS}
+
+    extracted = flow_math_experiment.extract_cache_warmup_metrics(_raw_eval_payload(metrics, limit=1))
+
+    assert extracted == metrics
 
 
 def test_build_experiment_manifest_authenticates_configs_and_external_artifacts(tmp_path):
@@ -626,12 +667,14 @@ def test_extract_primary_metrics_requires_exact_math_suite_without_theoremqa():
             "gsm8k_hard": 1319,
         }.items()
     }
+    group = {"exact_match,none": 0.40}
+    results["hendrycks_math"] = group
     payload = {
         "results": results,
-        "groups": {"hendrycks_math": {"exact_match,none": 0.40}},
+        "groups": {"hendrycks_math": group},
         "n-samples": sample_counts,
         "versions": {
-            task: 1.1 if task == "gsm8k_openmath" else 1.0
+            task: "1.0" if task == "hendrycks_math" else (1.1 if task == "gsm8k_openmath" else 1.0)
             for task in results
         },
         "n-shot": {task: 0 for task in results},
@@ -655,7 +698,7 @@ def test_extract_primary_metrics_requires_exact_math_suite_without_theoremqa():
     payload["n-samples"]["unexpected_task"] = {"effective": 1}
     payload["versions"]["unexpected_task"] = 1.0
     payload["n-shot"]["unexpected_task"] = 0
-    with pytest.raises(ValueError, match="exactly the approved leaf tasks"):
+    with pytest.raises(ValueError, match="exactly the approved leaves and MATH group row"):
         extract_primary_metrics(payload)
 
 

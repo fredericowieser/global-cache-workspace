@@ -26,6 +26,7 @@ from gcw.flow_math_experiment import (
     build_experiment_manifest,
     checkpoint_metadata_sha256,
     build_directory_manifest,
+    extract_cache_warmup_metrics,
     extract_pilot_metrics,
     extract_primary_metrics,
     load_json_strict,
@@ -550,7 +551,7 @@ def _eval_cache_evidence(args: argparse.Namespace) -> dict[str, Any]:
     warmup = load_json_strict(args.warmup_result)
     if not isinstance(warmup, dict):
         raise ValueError("cache warm-up result must be a JSON object")
-    metrics = extract_pilot_metrics(warmup, limit=1)
+    metrics = extract_cache_warmup_metrics(warmup)
     return {
         "schema_version": 1,
         "kind": "flow_math_eval_cache",

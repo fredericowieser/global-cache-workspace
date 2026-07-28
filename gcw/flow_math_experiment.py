@@ -717,15 +717,20 @@ def build_experiment_manifest(
 
 def extract_pilot_metrics(payload: dict[str, Any], *, limit: int) -> dict[str, float]:
     results = payload.get("results")
-    if not isinstance(results, dict) or set(results) != set(EXPECTED_EVAL_LEAF_TASKS):
-        raise ValueError("evaluation pilot must contain the exact approved leaf-task set")
+    expected_result_tasks = {*EXPECTED_EVAL_LEAF_TASKS, "hendrycks_math"}
+    if not isinstance(results, dict) or set(results) != expected_result_tasks:
+        raise ValueError("evaluation pilot must contain the exact approved leaf tasks and MATH group row")
+    groups = payload.get("groups")
+    if not isinstance(groups, dict) or set(groups) != {"hendrycks_math"}:
+        raise ValueError("evaluation pilot must contain exactly the approved MATH group")
     if "theoremqa" in results:
         raise ValueError("TheoremQA is excluded from the evaluation pilot")
     versions = payload.get("versions")
-    if versions != EXPECTED_EVAL_VERSIONS:
+    expected_versions = {**EXPECTED_EVAL_VERSIONS, "hendrycks_math": "1.0"}
+    if versions != expected_versions:
         raise ValueError("evaluation pilot task versions differ from the approved versions")
     n_shot = payload.get("n-shot")
-    if n_shot != {task: 0 for task in EXPECTED_EVAL_LEAF_TASKS}:
+    if n_shot != {task: 0 for task in expected_result_tasks}:
         raise ValueError("evaluation pilot must be zero-shot")
     sample_counts = payload.get("n-samples")
     if not isinstance(sample_counts, dict) or set(sample_counts) != set(EXPECTED_EVAL_LEAF_TASKS):
@@ -752,7 +757,8 @@ def extract_pilot_metrics(payload: dict[str, Any], *, limit: int) -> dict[str, f
         if not 0.0 <= float(value) <= 1.0:
             raise ValueError(f"evaluation pilot metric is outside [0, 1] for {task}")
         metrics[task] = float(value)
-    math_scores = []
+    math_weighted_total = 0.0
+    math_sample_total = 0
     for task in HENDRYCKS_MATH_SAMPLE_COUNTS:
         row = results[task]
         value = row.get("exact_match,none") if isinstance(row, dict) else None
@@ -760,9 +766,41 @@ def extract_pilot_metrics(payload: dict[str, Any], *, limit: int) -> dict[str, f
             raise ValueError(f"evaluation pilot MATH metric is non-finite for {task}")
         if not 0.0 <= float(value) <= 1.0:
             raise ValueError(f"evaluation pilot MATH metric is outside [0, 1] for {task}")
-        math_scores.append(float(value))
-    metrics["hendrycks_math"] = statistics.fmean(math_scores)
+        effective_count = sample_counts[task]["effective"]
+        math_weighted_total += float(value) * effective_count
+        math_sample_total += effective_count
+    leaf_aggregate = math_weighted_total / math_sample_total
+    group_row = groups["hendrycks_math"]
+    result_group_row = results["hendrycks_math"]
+    group_value = group_row.get("exact_match,none") if isinstance(group_row, dict) else None
+    result_group_value = result_group_row.get("exact_match,none") if isinstance(result_group_row, dict) else None
+    if (
+        isinstance(group_value, bool)
+        or not isinstance(group_value, (int, float))
+        or not math.isfinite(float(group_value))
+    ):
+        raise ValueError("evaluation pilot MATH group metric is non-finite")
+    if (
+        isinstance(result_group_value, bool)
+        or not isinstance(result_group_value, (int, float))
+        or not math.isfinite(float(result_group_value))
+    ):
+        raise ValueError("evaluation pilot MATH group metric is non-finite")
+    group_score = float(group_value)
+    result_group_score = float(result_group_value)
+    if not 0.0 <= group_score <= 1.0 or not 0.0 <= result_group_score <= 1.0:
+        raise ValueError("evaluation pilot MATH group metric is outside [0, 1]")
+    if not math.isclose(group_score, result_group_score, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("evaluation pilot MATH group rows disagree")
+    if not math.isclose(group_score, leaf_aggregate, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("evaluation pilot MATH group score differs from the weighted leaf aggregate")
+    metrics["hendrycks_math"] = group_score
     return metrics
+
+
+def extract_cache_warmup_metrics(payload: dict[str, Any]) -> dict[str, float]:
+    """Validate exact all-task limit-1 cache coverage without passing the pilot gate."""
+    return extract_pilot_metrics(payload, limit=1)
 
 
 def build_evaluation_ledger(
@@ -1341,11 +1379,15 @@ def extract_primary_metrics(payload: dict[str, Any]) -> dict[str, float]:
     all_names = {str(name).lower() for mapping in (results, groups, sample_counts) for name in mapping}
     if any("theoremqa" in name for name in all_names):
         raise ValueError("theoremqa must be absent from evaluation outputs")
-    if set(results) != EXPECTED_EVAL_LEAF_TASKS or set(sample_counts) != EXPECTED_EVAL_LEAF_TASKS:
-        raise ValueError("evaluation output must contain exactly the approved leaf tasks")
-    if versions != EXPECTED_EVAL_VERSIONS:
+    expected_result_tasks = {*EXPECTED_EVAL_LEAF_TASKS, "hendrycks_math"}
+    if set(results) != expected_result_tasks or set(sample_counts) != EXPECTED_EVAL_LEAF_TASKS:
+        raise ValueError("evaluation output must contain exactly the approved leaves and MATH group row")
+    if set(groups) != {"hendrycks_math"}:
+        raise ValueError("evaluation output must contain exactly the approved MATH group")
+    expected_versions = {**EXPECTED_EVAL_VERSIONS, "hendrycks_math": "1.0"}
+    if versions != expected_versions:
         raise ValueError("evaluation task versions differ from the approved versions")
-    if n_shot != {task: 0 for task in EXPECTED_EVAL_LEAF_TASKS}:
+    if n_shot != {task: 0 for task in expected_result_tasks}:
         raise ValueError("evaluation tasks must all use the approved zero-shot setting")
 
     for task, expected in HENDRYCKS_MATH_SAMPLE_COUNTS.items():
@@ -1364,7 +1406,12 @@ def extract_primary_metrics(payload: dict[str, Any]) -> dict[str, float]:
             raise ValueError(f"unexpected sample count for {task}")
         metrics[task] = _metric(results[task], PRIMARY_METRICS[task], task)
 
-    hendrycks = groups.get("hendrycks_math")
-    metrics["hendrycks_math"] = _metric(hendrycks, PRIMARY_METRICS["hendrycks_math"], "hendrycks_math")
+    hendrycks = groups["hendrycks_math"]
+    hendrycks_result = results["hendrycks_math"]
+    group_metric = _metric(hendrycks, PRIMARY_METRICS["hendrycks_math"], "hendrycks_math")
+    result_metric = _metric(hendrycks_result, PRIMARY_METRICS["hendrycks_math"], "hendrycks_math result row")
+    if not math.isclose(group_metric, result_metric, rel_tol=0.0, abs_tol=1e-12):
+        raise ValueError("Hendrycks MATH result and group metrics disagree")
+    metrics["hendrycks_math"] = group_metric
 
     return {task: metrics[task] for task in EXPECTED_EVAL_SAMPLE_COUNTS}
