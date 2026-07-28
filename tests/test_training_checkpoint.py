@@ -4,6 +4,7 @@ import json
 import shutil
 
 import pytest
+from safetensors.torch import load_file, save_file
 import torch
 
 from gcw.checkpoint import save_checkpoint
@@ -18,6 +19,7 @@ from gcw.training_checkpoint import (
     TrainingCheckpointError,
     UnsupportedTopologyError,
     save_training_checkpoint,
+    verify_training_checkpoint_files,
 )
 
 
@@ -74,6 +76,58 @@ def test_training_checkpoint_restores_model_optimizer_and_resume_state(tmp_path)
     for expected, actual in zip(model.parameters(), restored_model.parameters(), strict=True):
         assert torch.equal(expected, actual)
     _assert_nested_equal(expected_optimizer, restored_optimizer.state_dict())
+
+
+def test_training_checkpoint_persists_exact_source_backbone_dtype_and_values(tmp_path):
+    class FrozenModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.backbone = torch.nn.Linear(2, 2, bias=False)
+            self.cache_processor = torch.nn.Linear(2, 2, bias=False)
+
+    config = tiny_model_config()
+    model = FrozenModel()
+    model.backbone.weight.requires_grad_(False)
+    optimizer = torch.optim.AdamW(model.cache_processor.parameters(), lr=1e-3)
+    source_tensor = torch.tensor([[1.0, -2.0], [3.0, -4.0]], dtype=torch.bfloat16)
+    source = tmp_path / "source.safetensors"
+    save_file({"weight": source_tensor}, source)
+    resume = ResumeState(
+        step=1,
+        smooth_loss=1.0,
+        loader_cursor=RandomCursor(rng_state=(1, 2, 3)),
+        saved_world_size=1,
+        exact_topology=True,
+    )
+    checkpoint = tmp_path / "checkpoint"
+
+    save_training_checkpoint(
+        checkpoint,
+        model,
+        config,
+        optimizer,
+        resume,
+        {"distributed": "ddp"},
+        backbone_source_path=source,
+    )
+
+    persisted = load_file(checkpoint / "model.safetensors", device="cpu")
+    assert persisted["backbone.weight"].dtype == torch.bfloat16
+    assert torch.equal(persisted["backbone.weight"], source_tensor)
+    assert persisted["cache_processor.weight"].dtype == torch.float32
+
+
+def test_verify_training_checkpoint_files_returns_authenticated_state(tmp_path):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+
+    verified = verify_training_checkpoint_files(path)
+
+    assert verified["path"] == str(path)
+    assert verified["manifest"]["step"] == 1
+    assert verified["train_state"]["step"] == 1
+    assert verified["manifest"]["training_fingerprint"] == fingerprint
 
 
 def test_exact_resume_rejects_legacy_model_only_checkpoint(tmp_path):

@@ -5,7 +5,15 @@ import pytest
 import torch
 
 import gcw.train as train_module
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, ResumeConfig, TrainConfig, WandbConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    FlowProcessorConfig,
+    ModelConfig,
+    ResumeConfig,
+    TrainConfig,
+    WandbConfig,
+)
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
@@ -95,6 +103,56 @@ def test_train_logs_wandb_train_and_validation_metrics(monkeypatch, tmp_path):
     assert all("train/loss" in metrics for _, metrics in logs[1:])
     assert all("val/loss" in metrics for _, metrics in logs[1:])
     assert all("train/tokens" in metrics for _, metrics in logs[1:])
+
+
+def test_train_writes_flow_pilot_gradient_and_runtime_audit(monkeypatch, tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.model = ModelConfig(
+        variant="bgt",
+        family="smollm",
+        sequence_len=16,
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        tie_embeddings=True,
+        cache_processor=CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=16,
+            intermediate_size=32,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=2,
+            encoder_seq_len=4,
+        ),
+        flow_processor=FlowProcessorConfig(num_steps=2),
+    )
+    cfg.freeze_backbone = True
+    cfg.max_steps = 1
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.wandb.enabled = False
+    audit_path = tmp_path / "pilot-audit.json"
+    monkeypatch.setenv("GCW_TRAIN_AUDIT_OUT", str(audit_path))
+    monkeypatch.setenv("GCW_AUDIT_SOURCE_COMMIT", "a" * 40)
+    monkeypatch.setenv("GCW_AUDIT_MANIFEST_SHA256", "b" * 64)
+
+    train(cfg)
+
+    audit = json.loads(audit_path.read_text())
+    assert audit["processor_grad_nonzero"] is True
+    assert audit["flow_gate_grad_nonzero"] is True
+    assert audit["backbone_grad_tensors"] == 0
+    assert audit["nonfinite_grad_tensors"] == 0
+    assert audit["tokens_per_second"] > 0.0
+    assert audit["peak_memory_mib"] >= 0.0
+    assert audit["source_commit"] == "a" * 40
+    assert audit["experiment_manifest_sha256"] == "b" * 64
 
 
 def test_train_passes_explicit_wandb_resume_identity(monkeypatch, tmp_path):
@@ -357,8 +415,25 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
     interrupted.eval_on_start = False
     interrupted.wandb.enabled = False
 
-    def save_then_interrupt(path, model, model_config, optimizer, resume_state, training_fingerprint):
-        real_save_training_checkpoint(path, model, model_config, optimizer, resume_state, training_fingerprint)
+    def save_then_interrupt(
+        path,
+        model,
+        model_config,
+        optimizer,
+        resume_state,
+        training_fingerprint,
+        *,
+        backbone_source_path=None,
+    ):
+        real_save_training_checkpoint(
+            path,
+            model,
+            model_config,
+            optimizer,
+            resume_state,
+            training_fingerprint,
+            backbone_source_path=backbone_source_path,
+        )
         if resume_state.step == 2 and str(path).endswith("checkpoint"):
             raise RuntimeError("simulated interruption")
 

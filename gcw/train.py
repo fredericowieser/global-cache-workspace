@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import time
@@ -39,6 +40,10 @@ def train(config: TrainConfig) -> None:
         raise ValueError(f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}")
     grad_accum_steps = tokens_per_step // micro_tokens
     fingerprint = _training_fingerprint(config, world_size, micro_tokens, tokens_per_step, grad_accum_steps)
+    audit_output = os.environ.get("GCW_TRAIN_AUDIT_OUT")
+    if audit_output is not None and world_size != 1:
+        raise ValueError("training audit currently requires the approved one-GPU topology")
+    audit_gradients: dict[str, Any] | None = None
     use_fsdp = _fsdp_active(config)
     if use_fsdp and config.resume is not None:
         raise ValueError("exact training resume is not supported with FSDP")
@@ -142,6 +147,8 @@ def train(config: TrainConfig) -> None:
                     loss = _model_loss(model, batch.x, batch.y, attention_mask=batch.attention_mask)
                 loss_total += float(loss.detach().cpu())
                 (loss / grad_accum_steps).backward()
+        if audit_output is not None and step + 1 == config.max_steps:
+            audit_gradients = _gradient_audit(model)
         grad_norm = None
         if config.grad_clip:
             grad_norm = _clip_grad_norm(model, params, config.grad_clip, use_fsdp=use_fsdp)
@@ -193,6 +200,21 @@ def train(config: TrainConfig) -> None:
             print0(msg)
             if config.wandb.enabled and step_num % max(1, config.wandb.log_every) == 0:
                 _wandb_log(wandb_run, _compact_metrics(train_metrics), step=step_num)
+            if audit_output is not None and step_num == config.max_steps:
+                if audit_gradients is None:
+                    raise RuntimeError("training audit gradients were not captured")
+                _write_training_audit(
+                    Path(audit_output),
+                    {
+                        **audit_gradients,
+                        "architecture": config.model.architecture_name,
+                        "step": step_num,
+                        "tokens_per_second": train_metrics["timing/tokens_per_second"],
+                        "peak_memory_mib": train_metrics.get("system/vram_allocated_mib", 0.0),
+                        "source_commit": os.environ.get("GCW_AUDIT_SOURCE_COMMIT"),
+                        "experiment_manifest_sha256": os.environ.get("GCW_AUDIT_MANIFEST_SHA256"),
+                    },
+                )
 
         if config.save_every and step_num % config.save_every == 0:
             _save_step_checkpoint(
@@ -250,6 +272,7 @@ def _checkpoint_metadata(config: TrainConfig, run_meta: dict[str, Any]) -> dict[
         **run_meta,
         "data_kind": config.data.kind,
         "tokenizer": config.data.tokenizer,
+        "dtype": "bfloat16" if config.bf16 else "float32",
     }
     if config.data.dataset is not None:
         state["dataset"] = config.data.dataset
@@ -352,7 +375,18 @@ def _save_training_state(
         if rank == 0:
             save_checkpoint(path, model, config.model, {**resume_state.metadata, "step": resume_state.step})
         return
-    save_training_checkpoint(path, model, config.model, optimizer, resume_state, fingerprint)
+    checkpoint_kwargs = {}
+    if config.freeze_backbone:
+        checkpoint_kwargs["backbone_source_path"] = config.backbone_checkpoint
+    save_training_checkpoint(
+        path,
+        model,
+        config.model,
+        optimizer,
+        resume_state,
+        fingerprint,
+        **checkpoint_kwargs,
+    )
 
 
 def _save_step_checkpoint(
@@ -504,6 +538,60 @@ def _random_loader(config: TrainConfig, device: torch.device):
         x = torch.randint(0, vocab, (config.batch_size, config.sequence_len), device=device)
         y = torch.roll(x, shifts=-1, dims=1)
         yield x, y, {"kind": "random"}
+
+
+def _gradient_audit(model: torch.nn.Module) -> dict[str, Any]:
+    processor_grad_nonzero = False
+    flow_gate_grad_nonzero = False
+    backbone_grad_tensors = 0
+    processor_grad_tensors = 0
+    flow_gate_grad_tensors = 0
+    nonfinite_grad_tensors = 0
+    for name, parameter in _unwrap(model).named_parameters():
+        gradient = parameter.grad
+        is_backbone = name.startswith("backbone.")
+        if is_backbone:
+            if gradient is not None:
+                backbone_grad_tensors += 1
+            continue
+        if not parameter.requires_grad or gradient is None:
+            continue
+        processor_grad_tensors += 1
+        if not torch.isfinite(gradient).all().item():
+            nonfinite_grad_tensors += 1
+            continue
+        if torch.count_nonzero(gradient).item() > 0:
+            processor_grad_nonzero = True
+            if name.endswith("flow_gate"):
+                flow_gate_grad_nonzero = True
+        if name.endswith("flow_gate"):
+            flow_gate_grad_tensors += 1
+    return {
+        "processor_grad_nonzero": processor_grad_nonzero,
+        "flow_gate_grad_nonzero": flow_gate_grad_nonzero,
+        "backbone_grad_tensors": backbone_grad_tensors,
+        "processor_grad_tensors": processor_grad_tensors,
+        "flow_gate_grad_tensors": flow_gate_grad_tensors,
+        "nonfinite_grad_tensors": nonfinite_grad_tensors,
+    }
+
+
+def _write_training_audit(path: Path, payload: dict[str, Any]) -> None:
+    if not isinstance(payload.get("source_commit"), str) or not isinstance(
+        payload.get("experiment_manifest_sha256"), str
+    ):
+        raise ValueError("training audit requires source and manifest identities")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _unwrap(model):

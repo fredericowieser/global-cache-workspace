@@ -174,6 +174,19 @@ class TrainingCheckpoint:
         _restore_rng_state(states[rank])
 
 
+def verify_training_checkpoint_files(path: str | Path) -> dict[str, Any]:
+    resolved = _resolve_checkpoint_path(Path(path))
+    manifest = _read_manifest(resolved)
+    _verify_files(resolved, manifest)
+    try:
+        train_state = json.loads((resolved / "train_state.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TrainingCheckpointError(f"invalid checkpoint train state in {resolved}: {exc}") from exc
+    if train_state.get("step") != manifest.get("step"):
+        raise TrainingCheckpointError("checkpoint manifest and train state steps differ")
+    return {"path": str(resolved), "manifest": manifest, "train_state": train_state}
+
+
 def save_training_checkpoint(
     path: str | Path,
     model: torch.nn.Module,
@@ -181,6 +194,8 @@ def save_training_checkpoint(
     optimizer: torch.optim.Optimizer,
     resume_state: ResumeState,
     training_fingerprint: dict[str, Any],
+    *,
+    backbone_source_path: str | Path | None = None,
 ) -> None:
     distributed = dist.is_available() and dist.is_initialized()
     rank = dist.get_rank() if distributed else 0
@@ -203,6 +218,7 @@ def save_training_checkpoint(
                 replace(resume_state, saved_world_size=world_size),
                 training_fingerprint,
                 gathered_runtime or [],
+                backbone_source_path=backbone_source_path,
             )
             status[0] = {"ok": True}
         except Exception as exc:  # broadcast recoverable rank-zero failures before raising
@@ -231,6 +247,25 @@ def save_training_checkpoint(
         raise TrainingCheckpointError(f"checkpoint committed but rollback cleanup failed: {error['type']}: {error['message']}")
 
 
+def _replace_with_source_backbone(model_state: dict[str, torch.Tensor], source_path: Path) -> None:
+    if source_path.is_dir():
+        source_path = source_path / "model.safetensors"
+    source_state = load_file(str(source_path), device="cpu")
+    replacements: dict[str, torch.Tensor] = {}
+    for source_key, tensor in source_state.items():
+        trained_key = source_key if source_key.startswith("backbone.") else f"backbone.{source_key}"
+        if trained_key not in model_state:
+            raise TrainingCheckpointError(f"source backbone tensor is absent from model state: {trained_key}")
+        if model_state[trained_key].shape != tensor.shape:
+            raise TrainingCheckpointError(f"source backbone tensor shape mismatch: {trained_key}")
+        replacements[trained_key] = tensor.detach().cpu().contiguous()
+    backbone_keys = {key for key in model_state if key.startswith("backbone.")}
+    if set(replacements) != backbone_keys:
+        missing = sorted(backbone_keys - set(replacements))
+        raise TrainingCheckpointError(f"source backbone is incomplete for model state: {missing[:3]}")
+    model_state.update(replacements)
+
+
 def _write_checkpoint(
     path: Path,
     model: torch.nn.Module,
@@ -239,6 +274,8 @@ def _write_checkpoint(
     resume_state: ResumeState,
     training_fingerprint: dict[str, Any],
     runtime_states: list[dict[str, Any]],
+    *,
+    backbone_source_path: str | Path | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = Path(tempfile.mkdtemp(prefix=f".{path.name}.tmp-", dir=path.parent))
@@ -246,6 +283,8 @@ def _write_checkpoint(
     moved_previous = False
     try:
         model_state = {key: value.detach().cpu().contiguous() for key, value in model.state_dict().items()}
+        if backbone_source_path is not None:
+            _replace_with_source_backbone(model_state, Path(backbone_source_path))
         save_file(model_state, temp_path / "model.safetensors")
         torch.save(optimizer.state_dict(), temp_path / "optimizer.pt")
         torch.save([state["rng"] for state in runtime_states], temp_path / "rng.pt")

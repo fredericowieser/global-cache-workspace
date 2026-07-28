@@ -36,15 +36,19 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
     path = Path(path)
     with open(path / "config.json", "r", encoding="utf-8") as f:
         cfg = ModelConfig(**json.load(f)["model"])
+    state_path = path / "train_state.json"
+    train_state = json.loads(state_path.read_text()) if state_path.exists() else {}
     weights = load_file(path / "model.safetensors", device=str(device))
     model = build_model(cfg)
-    dtype = _infer_floating_dtype(weights)
+    dtype_name = train_state.get("dtype")
+    recorded_dtype = {"bfloat16": torch.bfloat16, "float32": torch.float32}.get(
+        dtype_name if isinstance(dtype_name, str) else ""
+    )
+    dtype = recorded_dtype or _infer_floating_dtype(weights)
     if dtype is not None:
         model.to(dtype=dtype)
     model.load_state_dict(weights, strict=True)
     model.to(device)
-    state_path = path / "train_state.json"
-    train_state = json.loads(state_path.read_text()) if state_path.exists() else {}
     return model, cfg, train_state
 
 
