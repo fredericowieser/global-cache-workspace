@@ -200,8 +200,10 @@ def flash_sdpa(
     dropout_p: float = 0.0,
     is_causal: bool = False,
     enable_gqa: bool = False,
+    scale: float | None = None,
+    try_flash: bool = True,
 ) -> torch.Tensor:
-    if q.is_cuda and q.dtype in {torch.float16, torch.bfloat16} and sdpa_kernel is not None:
+    if try_flash and q.is_cuda and q.dtype in {torch.float16, torch.bfloat16} and sdpa_kernel is not None:
         try:
             with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 return F.scaled_dot_product_attention(
@@ -212,6 +214,7 @@ def flash_sdpa(
                     dropout_p=dropout_p,
                     is_causal=is_causal,
                     enable_gqa=enable_gqa,
+                    scale=scale,
                 )
         except RuntimeError:
             if os.environ.get("GCW_STRICT_FLASH") == "1":
@@ -224,6 +227,7 @@ def flash_sdpa(
         dropout_p=dropout_p,
         is_causal=is_causal,
         enable_gqa=enable_gqa,
+        scale=scale,
     )
 
 
@@ -578,6 +582,8 @@ def estimate_non_embedding_params(config: ModelConfig) -> int:
         return _estimate_qwen35_non_embedding_params(config)
     if config.family == "qwen3_5_moe":
         return _estimate_qwen35_moe_non_embedding_params(config)
+    if config.family == "gemma4":
+        return _estimate_gemma4_non_embedding_params(config)
     head_dim = int(config.head_dim or config.hidden_size // config.num_heads)
     attn = config.hidden_size * (config.num_heads * head_dim)
     attn += 2 * config.hidden_size * (config.num_kv_heads * head_dim)
@@ -636,6 +642,39 @@ def _estimate_qwen35_moe_non_embedding_params(config: ModelConfig) -> int:
         moe += config.hidden_size
         norms = 2 * config.hidden_size
         total += attn + moe + norms
+    return total
+
+
+def _estimate_gemma4_attention_params(config: ModelConfig, layer_idx: int) -> int:
+    head_dim = config.head_dim_for_layer(layer_idx)
+    kv_heads = config.kv_heads_for_layer(layer_idx)
+    q_dim = config.num_heads * head_dim
+    kv_dim = kv_heads * head_dim
+    total = config.hidden_size * q_dim + q_dim * config.hidden_size + head_dim
+    first_shared = config.num_layers - config.num_kv_shared_layers
+    if layer_idx < first_shared:
+        total += config.hidden_size * kv_dim
+        if not (config.attention_k_eq_v and config.layer_types[layer_idx] == "full_attention"):
+            total += config.hidden_size * kv_dim
+        total += head_dim
+    return total
+
+
+def _estimate_gemma4_non_embedding_params(config: ModelConfig) -> int:
+    total = config.hidden_size
+    ple = int(config.hidden_size_per_layer_input)
+    if ple:
+        total += int(config.vocab_size_per_layer_input or config.vocab_size) * config.num_layers * ple
+        total += config.hidden_size * config.num_layers * ple
+        total += ple
+    first_shared = config.num_layers - config.num_kv_shared_layers
+    for i in range(config.num_layers):
+        total += _estimate_gemma4_attention_params(config, i)
+        intermediate = config.intermediate_size * (2 if config.use_double_wide_mlp and i >= first_shared > 0 else 1)
+        total += 3 * config.hidden_size * intermediate
+        total += 4 * config.hidden_size
+        if ple:
+            total += config.hidden_size * ple + ple * config.hidden_size + config.hidden_size
     return total
 
 

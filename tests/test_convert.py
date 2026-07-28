@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from transformers import LlamaConfig, LlamaForCausalLM, Qwen3Config, Qwen3ForCausalLM
 
 from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_checkpoint
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, ModelConfig, gemma4_default_layer_types
 from gcw.convert import (
     config_from_bottleneck,
     config_from_hf,
@@ -330,6 +330,162 @@ def test_qwen35_moe_hf_mapping_loads_multimodal_language_model_prefix():
     )
 
 
+def test_tiny_gemma4_logits_match_transformers():
+    pytest.importorskip("transformers.models.gemma4.modeling_gemma4")
+    import transformers
+
+    config_cls = getattr(transformers, "Gemma4TextConfig", None)
+    model_cls = getattr(transformers, "Gemma4ForCausalLM", None)
+    if config_cls is None or model_cls is None:
+        pytest.skip("installed Transformers does not expose Gemma4 CausalLM classes")
+
+    try:
+        hf_cfg = config_cls(
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_hidden_layers=2,
+            num_attention_heads=2,
+            num_key_value_heads=1,
+            head_dim=8,
+            max_position_embeddings=16,
+            tie_word_embeddings=False,
+            layer_types=["full_attention", "full_attention"],
+            sliding_window=4,
+            global_head_dim=8,
+            num_kv_shared_layers=0,
+            hidden_size_per_layer_input=0,
+            vocab_size_per_layer_input=32,
+            final_logit_softcapping=None,
+            rope_parameters={
+                "full_attention": {"rope_type": "default", "rope_theta": 10000.0},
+                "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+            },
+        )
+        torch.manual_seed(0)
+        hf = model_cls(hf_cfg).eval()
+    except Exception as exc:
+        pytest.skip(f"installed Transformers cannot instantiate dense Gemma4: {exc}")
+
+    native = build_model(config_from_hf(hf_cfg, family="gemma4")).eval()
+    load_hf_state(native, hf.state_dict(), family="gemma4")
+    x = torch.tensor([[1, 2, 3, 4]])
+    with torch.no_grad():
+        hf_logits = hf(x, use_cache=False).logits
+        native_logits = native(x)
+    assert torch.allclose(native_logits, hf_logits.float(), atol=1e-5, rtol=1e-5)
+
+
+def test_gemma4_hf_text_config_maps_dense_fields_and_cache_layers():
+    text = SimpleNamespace(
+        num_attention_heads=2,
+        hidden_size=16,
+        intermediate_size=32,
+        head_dim=8,
+        num_key_value_heads=1,
+        max_position_embeddings=32,
+        vocab_size=128,
+        num_hidden_layers=4,
+        rms_norm_eps=1e-6,
+        tie_word_embeddings=True,
+        layer_types=["sliding_attention", "full_attention", "sliding_attention", "full_attention"],
+        rope_parameters={
+            "full_attention": {"rope_type": "proportional", "partial_rotary_factor": 0.25, "rope_theta": 1000000.0},
+            "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+        },
+        sliding_window=4,
+        global_head_dim=8,
+        num_global_key_value_heads=None,
+        attention_k_eq_v=False,
+        num_kv_shared_layers=2,
+        hidden_size_per_layer_input=4,
+        vocab_size_per_layer_input=128,
+        final_logit_softcapping=30.0,
+        hidden_activation="gelu_pytorch_tanh",
+        use_double_wide_mlp=False,
+        enable_moe_block=False,
+        attention_bias=False,
+    )
+    cfg = config_from_hf(SimpleNamespace(text_config=text), family="gemma4")
+
+    assert cfg.family == "gemma4"
+    assert cfg.layer_types == text.layer_types
+    assert cfg.cache_layer_indices == [0, 1]
+    assert cfg.hidden_size_per_layer_input == 4
+    assert cfg.final_logit_softcapping == 30.0
+    assert cfg.hidden_act == "gelu_pytorch_tanh"
+
+
+def test_gemma4_hf_text_config_uses_shared_default_layer_types():
+    text = SimpleNamespace(
+        num_attention_heads=2,
+        hidden_size=16,
+        intermediate_size=32,
+        head_dim=8,
+        num_key_value_heads=1,
+        max_position_embeddings=32,
+        vocab_size=128,
+        num_hidden_layers=7,
+        rms_norm_eps=1e-6,
+        tie_word_embeddings=True,
+        rope_parameters=None,
+        sliding_window=4,
+        global_head_dim=8,
+        num_global_key_value_heads=None,
+        attention_k_eq_v=False,
+        num_kv_shared_layers=0,
+        hidden_size_per_layer_input=0,
+        vocab_size_per_layer_input=128,
+        final_logit_softcapping=None,
+        hidden_activation="gelu_pytorch_tanh",
+        use_double_wide_mlp=False,
+        enable_moe_block=False,
+        attention_bias=False,
+    )
+
+    cfg = config_from_hf(SimpleNamespace(text_config=text), family="gemma4")
+
+    assert cfg.layer_types == gemma4_default_layer_types(7)
+
+
+def test_gemma4_hf_config_rejects_moe():
+    text = SimpleNamespace(
+        enable_moe_block=True,
+        attention_bias=False,
+        num_hidden_layers=1,
+    )
+    with pytest.raises(NotImplementedError, match="Gemma4 MoE"):
+        config_from_hf(text, family="gemma4")
+
+
+def test_gemma4_hf_mapping_loads_language_model_prefix():
+    model = build_model(_tiny_gemma4_config())
+    hf = _prefixed_state_like(model.state_dict(), "language_model.")
+
+    load_hf_state(model, hf, family="gemma4")
+
+    assert torch.equal(model.embed_tokens.weight, hf["language_model.model.embed_tokens.weight"])
+    assert torch.equal(
+        model.layers[1].self_attn.q_proj.weight,
+        hf["language_model.model.layers.1.self_attn.q_proj.weight"],
+    )
+    assert torch.equal(
+        model.embed_tokens_per_layer.weight,
+        hf["language_model.model.embed_tokens_per_layer.weight"],
+    )
+
+
+def test_gemma4_hf_mapping_defaults_missing_layer_scalar():
+    model = build_model(_tiny_gemma4_config())
+    hf = _prefixed_state_like(model.state_dict(), "language_model.")
+    hf = {key: value for key, value in hf.items() if not key.endswith(".layer_scalar")}
+
+    load_hf_state(model, hf, family="gemma4")
+
+    for layer in model.layers:
+        assert torch.equal(layer.layer_scalar, torch.ones_like(layer.layer_scalar))
+
+
 def test_ppt_state_mapping_loads_native_smollm():
     meta = {
         "model_config": {
@@ -585,6 +741,31 @@ def _tiny_qwen35_moe_config() -> ModelConfig:
         num_experts=4,
         num_experts_per_tok=2,
         shared_expert_intermediate_size=8,
+    )
+
+
+def _tiny_gemma4_config() -> ModelConfig:
+    return ModelConfig(
+        variant="tf",
+        family="gemma4",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=True,
+        rotary_style="llama",
+        layer_types=["sliding_attention", "full_attention", "sliding_attention", "full_attention"],
+        sliding_window=4,
+        global_head_dim=8,
+        num_kv_shared_layers=0,
+        hidden_size_per_layer_input=4,
+        vocab_size_per_layer_input=128,
+        final_logit_softcapping=30.0,
+        hidden_act="gelu_pytorch_tanh",
     )
 
 

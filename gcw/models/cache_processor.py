@@ -131,6 +131,7 @@ class CacheProcessor(nn.Module):
 class PerLayerCacheProcessor(nn.Module):
     def __init__(self, model_config: ModelConfig):
         super().__init__()
+        model_config.ensure_uniform_stored_cache_shape("BT")
         if model_config.cache_processor is None:
             raise ValueError("BT requires cache_processor config")
         self.config = model_config.cache_processor
@@ -138,7 +139,8 @@ class PerLayerCacheProcessor(nn.Module):
             raise ValueError(f"cache_processor.processor_mode='{self.config.processor_mode}' is currently BGT-only")
         if self.config.score != "attn_l2":
             raise ValueError("cache_processor.score='kv_norm' is currently BGT-only")
-        layer_dim = self.config.stream_factor * model_config.num_kv_heads * int(model_config.head_dim)
+        num_kv_heads, head_dim = model_config.stored_cache_shape
+        layer_dim = self.config.stream_factor * num_kv_heads * head_dim
         self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.cache_num_layers))
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
@@ -157,6 +159,7 @@ class PerLayerCacheProcessor(nn.Module):
 class GlobalCacheProcessor(nn.Module):
     def __init__(self, model_config: ModelConfig):
         super().__init__()
+        model_config.ensure_uniform_stored_cache_shape("BGT")
         if model_config.cache_processor is None:
             raise ValueError("BGT requires cache_processor config")
         self.config = model_config.cache_processor
@@ -168,10 +171,11 @@ class GlobalCacheProcessor(nn.Module):
             raise ValueError("head_mask_broadcast requires cache_processor.update_stream='kv'")
         if self.config.processor_mode == "head_mask_broadcast" and self.config.score != "kv_norm":
             raise ValueError("head_mask_broadcast requires cache_processor.score='kv_norm'")
-        per_layer = self.config.stream_factor * model_config.num_kv_heads * int(model_config.head_dim)
+        num_kv_heads, head_dim = model_config.stored_cache_shape
+        per_layer = self.config.stream_factor * num_kv_heads * head_dim
         self.num_layers = model_config.cache_num_layers
-        self.num_kv_heads = model_config.num_kv_heads
-        self.head_dim = int(model_config.head_dim)
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
         self.num_cache_heads = self.num_layers * self.num_kv_heads
         self.block = CacheProcessor(self.num_layers * per_layer, self.config)
         if self.config.score == "kv_norm":

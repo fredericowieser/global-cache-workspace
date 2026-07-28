@@ -13,4 +13,8 @@ def build_backbone(config: ModelConfig):
         from gcw.models.qwen3 import Qwen35MoeTF
 
         return Qwen35MoeTF(config)
+    if config.family == "gemma4":
+        from gcw.models.gemma4 import Gemma4TF
+
+        return Gemma4TF(config)
     return TF(config)

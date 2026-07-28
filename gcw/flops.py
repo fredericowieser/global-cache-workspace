@@ -15,6 +15,8 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
         return _qwen35_backbone_matmul_params(config)
     if config.family == "qwen3_5_moe":
         return _qwen35_moe_backbone_matmul_params(config)
+    if config.family == "gemma4":
+        return _gemma4_backbone_matmul_params(config)
     head_dim = int(config.head_dim)
     q_dim = config.num_heads * head_dim
     kv_dim = config.num_kv_heads * head_dim
@@ -30,6 +32,12 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
 
 
 def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> int:
+    if config.family == "gemma4":
+        total = 0
+        for i in range(config.num_layers):
+            window = min(seq_len, int(config.sliding_window or seq_len)) if config.layer_types[i] == "sliding_attention" else seq_len
+            total += 4 * config.num_heads * config.head_dim_for_layer(i) * window
+        return total
     return config.cache_num_layers * 4 * config.num_heads * int(config.head_dim) * seq_len
 
 
@@ -73,6 +81,35 @@ def _qwen35_moe_backbone_matmul_params(config: ModelConfig) -> int:
         total += config.hidden_size * config.num_experts
         total += 3 * config.hidden_size * shared_hidden
         total += config.hidden_size
+    return total
+
+
+def _gemma4_attention_matmul_params(config: ModelConfig, layer_idx: int) -> int:
+    head_dim = config.head_dim_for_layer(layer_idx)
+    kv_heads = config.kv_heads_for_layer(layer_idx)
+    q_dim = config.num_heads * head_dim
+    kv_dim = kv_heads * head_dim
+    total = config.hidden_size * q_dim + q_dim * config.hidden_size
+    first_shared = config.num_layers - config.num_kv_shared_layers
+    if layer_idx < first_shared:
+        total += config.hidden_size * kv_dim
+        if not (config.attention_k_eq_v and config.layer_types[layer_idx] == "full_attention"):
+            total += config.hidden_size * kv_dim
+    return total
+
+
+def _gemma4_backbone_matmul_params(config: ModelConfig) -> int:
+    total = config.hidden_size * _padded_vocab(config.vocab_size)
+    ple = int(config.hidden_size_per_layer_input)
+    if ple:
+        total += config.hidden_size * config.num_layers * ple
+    first_shared = config.num_layers - config.num_kv_shared_layers
+    for i in range(config.num_layers):
+        total += _gemma4_attention_matmul_params(config, i)
+        intermediate = config.intermediate_size * (2 if config.use_double_wide_mlp and i >= first_shared > 0 else 1)
+        total += 3 * config.hidden_size * intermediate
+        if ple:
+            total += config.hidden_size * ple + ple * config.hidden_size
     return total
 
 

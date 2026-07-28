@@ -498,8 +498,10 @@ def _fsdp_param_init_fn(device: torch.device):
 def _transformer_layer_classes() -> set[type[torch.nn.Module]]:
     classes: set[type[torch.nn.Module]] = {Block}
     try:
+        from gcw.models.gemma4 import Gemma4Block
         from gcw.models.qwen3 import Qwen35Block, Qwen35MoeBlock
 
+        classes.add(Gemma4Block)
         classes.add(Qwen35Block)
         classes.add(Qwen35MoeBlock)
     except Exception:

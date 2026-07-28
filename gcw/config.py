@@ -8,7 +8,7 @@ import yaml
 
 
 Variant = Literal["tf", "bt", "bgt", "icarus", "longshot"]
-Family = Literal["smollm", "llama", "qwen3", "qwen3_5", "qwen3_5_moe"]
+Family = Literal["smollm", "llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"]
 RotaryStyle = Literal["llama", "ppt"]
 MoeExpertsImplementation = Literal["grouped_mm"]
 CacheUpdateStream = Literal["kv", "v"]
@@ -19,6 +19,13 @@ CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
 CacheProcessorIterationMode = Literal["internal", "external"]
 CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention", "kv_norm"]
+
+
+def gemma4_default_layer_types(num_layers: int) -> list[str]:
+    layer_types = ["sliding_attention" if bool((i + 1) % 6) else "full_attention" for i in range(num_layers)]
+    if layer_types:
+        layer_types[-1] = "full_attention"
+    return layer_types
 
 
 @dataclass
@@ -133,25 +140,44 @@ class ModelConfig:
     moe_experts_implementation: MoeExpertsImplementation = "grouped_mm"
     router_aux_loss_coef: float = 0.0
     output_router_logits: bool = False
+    sliding_window: int | None = None
+    num_global_key_value_heads: int | None = None
+    global_head_dim: int | None = None
+    attention_k_eq_v: bool = False
+    num_kv_shared_layers: int = 0
+    hidden_size_per_layer_input: int = 0
+    vocab_size_per_layer_input: int | None = None
+    final_logit_softcapping: float | None = None
+    rope_parameters: dict[str, Any] | None = None
+    use_double_wide_mlp: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.cache_processor, dict):
             self.cache_processor = CacheProcessorConfig(**self.cache_processor)
+        if self.family == "gemma4" and self.layer_types is None:
+            self.layer_types = gemma4_default_layer_types(self.num_layers)
         if self.layer_types is not None:
             self.layer_types = list(self.layer_types)
             if len(self.layer_types) != self.num_layers:
                 raise ValueError("layer_types must have length num_layers")
-            unknown = sorted(set(self.layer_types) - {"full_attention", "linear_attention"})
+            allowed = {"full_attention", "linear_attention", "sliding_attention"} if self.family == "gemma4" else {
+                "full_attention",
+                "linear_attention",
+            }
+            unknown = sorted(set(self.layer_types) - allowed)
             if unknown:
                 raise ValueError(f"unsupported layer_types: {unknown}")
+            if self.family == "gemma4" and self.layer_types[-1] != "full_attention":
+                self.layer_types[-1] = "full_attention"
         if self.processor_layer_indices is not None:
             self.processor_layer_indices = [int(i) for i in self.processor_layer_indices]
             if any(i < 0 or i >= self.num_layers for i in self.processor_layer_indices):
                 raise ValueError("processor_layer_indices entries must be valid layer indices")
             if self.layer_types is not None:
-                non_cache = [i for i in self.processor_layer_indices if self.layer_types[i] != "full_attention"]
+                cache_layers = set(self._default_cache_layer_indices())
+                non_cache = [i for i in self.processor_layer_indices if i not in cache_layers]
                 if non_cache:
-                    raise ValueError("processor_layer_indices must reference full_attention layers")
+                    raise ValueError("processor_layer_indices must reference cache-bearing layers")
         if self.family in {"qwen3_5", "qwen3_5_moe"}:
             if self.layer_types is None:
                 raise ValueError(f"{self.family} requires layer_types")
@@ -174,6 +200,28 @@ class ModelConfig:
                 raise ValueError("qwen3_5_moe requires num_experts")
             if self.num_experts_per_tok <= 0:
                 raise ValueError("qwen3_5_moe requires num_experts_per_tok")
+        if self.family == "gemma4":
+            if self.layer_types is None:
+                raise ValueError("gemma4 requires layer_types")
+            if any(layer_type == "linear_attention" for layer_type in self.layer_types):
+                raise ValueError("gemma4 does not support linear_attention layers")
+            if self.sliding_window is None:
+                self.sliding_window = 512
+            if self.global_head_dim is None:
+                self.global_head_dim = self.head_dim
+            if self.vocab_size_per_layer_input is None:
+                self.vocab_size_per_layer_input = self.vocab_size
+            if self.num_kv_shared_layers < 0 or self.num_kv_shared_layers > self.num_layers:
+                raise ValueError("num_kv_shared_layers must be in [0, num_layers]")
+            if self.rope_parameters is None:
+                self.rope_parameters = {
+                    "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+                    "full_attention": {
+                        "rope_type": "proportional",
+                        "partial_rotary_factor": 0.25,
+                        "rope_theta": 1000000.0,
+                    },
+                }
         if self.head_dim is None:
             self.head_dim = self.hidden_size // self.num_heads
         if self.head_dim <= 0:
@@ -189,7 +237,17 @@ class ModelConfig:
     def cache_layer_indices(self) -> list[int]:
         if self.processor_layer_indices is not None:
             return self.processor_layer_indices
+        return self._default_cache_layer_indices()
+
+    def _default_cache_layer_indices(self) -> list[int]:
         if self.layer_types is not None:
+            if self.family == "gemma4":
+                first_shared = self.num_layers - self.num_kv_shared_layers
+                return [
+                    i
+                    for i, layer_type in enumerate(self.layer_types)
+                    if layer_type in {"full_attention", "sliding_attention"} and i < first_shared
+                ]
             return [i for i, layer_type in enumerate(self.layer_types) if layer_type == "full_attention"]
         return list(range(self.num_layers))
 
@@ -199,7 +257,44 @@ class ModelConfig:
 
     @property
     def cache_num_heads(self) -> int:
+        if self.family == "gemma4":
+            return sum(self.kv_heads_for_layer(i) for i in self.cache_layer_indices)
         return self.cache_num_layers * self.num_kv_heads
+
+    @property
+    def stored_cache_shapes(self) -> list[tuple[int, int]]:
+        return [(self.kv_heads_for_layer(i), self.head_dim_for_layer(i)) for i in self.cache_layer_indices]
+
+    @property
+    def stored_cache_shape(self) -> tuple[int, int]:
+        shapes = self.stored_cache_shapes
+        if not shapes:
+            return self.num_kv_heads, int(self.head_dim)
+        unique = set(shapes)
+        if len(unique) > 1:
+            raise ValueError("stored cache layers do not have a uniform KV shape")
+        return shapes[0]
+
+    def ensure_uniform_stored_cache_shape(self, owner: str) -> None:
+        if self.family != "gemma4":
+            return
+        if len(set(self.stored_cache_shapes)) > 1:
+            raise ValueError(f"{owner} requires uniform stored KV shapes for Gemma4 cache processing")
+
+    def kv_heads_for_layer(self, layer_idx: int) -> int:
+        if (
+            self.family == "gemma4"
+            and self.layer_types is not None
+            and self.layer_types[layer_idx] == "full_attention"
+            and self.attention_k_eq_v
+        ):
+            return int(self.num_global_key_value_heads or self.num_kv_heads)
+        return self.num_kv_heads
+
+    def head_dim_for_layer(self, layer_idx: int) -> int:
+        if self.family == "gemma4" and self.layer_types is not None and self.layer_types[layer_idx] == "full_attention":
+            return int(self.global_head_dim or self.head_dim)
+        return int(self.head_dim)
 
     @property
     def _experts_implementation(self) -> str:
