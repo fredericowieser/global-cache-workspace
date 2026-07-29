@@ -17,7 +17,7 @@ model:
   cache_processor:
     process_every: 64
     topk: 32
-    topk_heads: 32
+    topk_heads: 64
     score: kv_norm
     hidden_size: 2496
     intermediate_size: 9984
