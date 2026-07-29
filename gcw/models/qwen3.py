@@ -325,7 +325,10 @@ class Qwen35GatedDeltaNet(nn.Module):
         use_fla = query.device.type == "cuda" and _has_fla_gated_delta_rule()
         if not use_fla and not _has_hf_torch_gated_delta_rule():
             raise RuntimeError("CPU Qwen3.5 gated-delta execution requires Transformers' torch fallback.")
-        if query.shape[1] == 1:
+        needs_grad = torch.is_grad_enabled() and any(
+            t is not None and t.requires_grad for t in (query, key, value, g, beta, initial_state)
+        )
+        if query.shape[1] == 1 and not needs_grad:
             recurrent_impl = _fla_recurrent_gated_delta_rule if use_fla else _hf_torch_recurrent_gated_delta_rule
             return recurrent_impl(
                 query,
