@@ -26,7 +26,7 @@ model:
     num_kv_heads: 8
     norm_eps: 1.0e-06
     rope_theta: 10000.0
-    gate_init: -5.0
+    gate_init: -2.0
     attention_dropout: 0.0
     per_cache_head_projections: false
     gradient_checkpointing: true
@@ -80,7 +80,7 @@ distributed: ddp
 freeze_backbone: true
 backbone_checkpoint: runs/bottleneck_llm/qwen35_2b_base_tf_sft/checkpoint-2000
 output_dir: runs/bottleneck_llm/qwen35_2b_longshot_query_final_token_unrope_kv_norm_cp_frac005_from_sft_step2000_frozen_shared
-batch_size: 8
+batch_size: 16
 sequence_len: 512
 max_steps: 2000
 total_batch_size: 65536

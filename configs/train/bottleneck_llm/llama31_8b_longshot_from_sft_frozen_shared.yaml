@@ -43,11 +43,11 @@ data:
   sft_take_rows: 128000
   response_prefix: "\n"
 mode: sft
-distributed: ddp
+distributed: fsdp
 freeze_backbone: true
 backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama31_8b/tf
 output_dir: runs/bottleneck_llm/llama31_8b_longshot_query_final_token_unrope_kv_norm_from_sft_frozen_shared
-batch_size: 4
+batch_size: 16
 sequence_len: 512
 max_steps: 1000
 total_batch_size: 65536
