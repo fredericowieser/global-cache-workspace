@@ -39,7 +39,7 @@ def train(config: TrainConfig) -> None:
         for p in model.backbone.parameters():
             p.requires_grad_(False)
     if use_fsdp:
-        _apply_activation_checkpointing(model)
+        _apply_activation_checkpointing(model, family=config.model.family)
     if not use_fsdp:
         model = maybe_compile(model)
     if config.distributed == "ddp" and torch.distributed.is_initialized():
@@ -464,7 +464,7 @@ def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device
     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
     from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-    layer_classes = _transformer_layer_classes()
+    layer_classes = _transformer_layer_classes(config.model.family)
     auto_wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=layer_classes)
     # TODO: Decide whether FSDP should preserve the older DDP precision contract:
     # fp32 parameter/optimizer storage with bf16 autocast compute.
@@ -495,21 +495,21 @@ def _fsdp_param_init_fn(device: torch.device):
     return init_fn
 
 
-def _transformer_layer_classes() -> set[type[torch.nn.Module]]:
+def _transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
     classes: set[type[torch.nn.Module]] = {Block}
-    try:
+    if family == "gemma4":
         from gcw.models.gemma4 import Gemma4Block
-        from gcw.models.qwen3 import Qwen35Block, Qwen35MoeBlock
 
         classes.add(Gemma4Block)
+    elif family in {"qwen3_5", "qwen3_5_moe"}:
+        from gcw.models.qwen3 import Qwen35Block, Qwen35MoeBlock
+
         classes.add(Qwen35Block)
         classes.add(Qwen35MoeBlock)
-    except Exception:
-        pass
     return classes
 
 
-def _apply_activation_checkpointing(model: torch.nn.Module) -> None:
+def _apply_activation_checkpointing(model: torch.nn.Module, *, family: str) -> None:
     enabled = os.environ.get("GCW_FSDP_ACTIVATION_CHECKPOINTING", "1").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return
@@ -521,7 +521,7 @@ def _apply_activation_checkpointing(model: torch.nn.Module) -> None:
         )
     except ImportError:
         return
-    layer_classes = _transformer_layer_classes()
+    layer_classes = _transformer_layer_classes(family)
     wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
     apply_activation_checkpointing(model, checkpoint_wrapper_fn=wrapper, check_fn=lambda module: type(module) in layer_classes)
 

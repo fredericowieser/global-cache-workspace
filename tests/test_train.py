@@ -8,7 +8,16 @@ from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
-from gcw.train import _build_training_model, _checkpoint_metadata, _checkpoint_state, _loader, _model_loss, _validate_train_batch, train
+from gcw.train import (
+    _build_training_model,
+    _checkpoint_metadata,
+    _checkpoint_state,
+    _loader,
+    _model_loss,
+    _transformer_layer_classes,
+    _validate_train_batch,
+    train,
+)
 
 
 class FakeRun:
@@ -170,6 +179,14 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp
     _, metrics = fake.run.logs[0]
     assert "cache_processor/selected_head_overlap_after_iter_1" in metrics
     assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
+
+
+def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
+    monkeypatch.setitem(sys.modules, "gcw.models.qwen3", None)
+
+    classes = _transformer_layer_classes("llama")
+
+    assert classes
 
 
 def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):

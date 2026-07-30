@@ -32,13 +32,19 @@ gpu = ["torch>=2.10,<2.11"]
 rocm = ["torch>=2.7", "pytorch-triton-rocm"]
 eval = ["lm-eval>=0.4", "transformers>=5,<6", "pillow>=10.0", "accelerate>=1.0"]
 convert = ["transformers>=5,<6"]
-qwen35 = ["causal-conv1d==1.6.2.post1", "flash-linear-attention>=0.5.1", "transformers>=5,<6"]
+qwen35 = [
+    "causal-conv1d==1.6.2.post1",
+    "flash-linear-attention>=0.5.1",
+    "tilelang==0.1.12",
+    "transformers>=5,<6",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
 
 [tool.uv]
 default-groups = []
+python-preference = "only-managed"
 conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "rocm" }]]
 constraint-dependencies = [
     "nvidia-cublas<0",
