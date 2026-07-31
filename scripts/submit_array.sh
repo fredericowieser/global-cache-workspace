@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Submit a small Slurm worker array that consumes a list of configs.
+# Submit a small worker array that consumes a list of configs.
 #
-# This keeps Slurm submission count low: one sbatch call creates N array workers,
-# and each worker runs train followed by eval inline for every config it claims.
+# The Slurm backend uses one array submission. The local backend starts detached,
+# GPU-pinned process groups and records their PIDs. With either backend, each worker
+# runs train followed by eval inline for every config it claims.
 
 repo_root="${GCW_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
+script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 cd "$repo_root"
 
 JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
+BACKEND="${BACKEND:-auto}"
 PARTITION="${PARTITION:-agent-xlong-15,agent-xlong}"
 ARRAY_WORKERS="${ARRAY_WORKERS:-1}"
 ARRAY_TIME="${ARRAY_TIME:-5-00:00:00}"
@@ -36,22 +39,44 @@ OUT_DIR="${OUT_DIR:-results}"
 OPENMATH_DATA="${OPENMATH_DATA:-/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl}"
 SFT_BACKBONE="${SFT_BACKBONE:-/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf/model.safetensors}"
 TOKENIZER_DIR="${TOKENIZER_DIR:-/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model}"
+LOCAL_GPUS="${LOCAL_GPUS:-}"
+LOCAL_STATE_ROOT="${LOCAL_STATE_ROOT:-$repo_root/slurm_out/.local-array}"
+LOCAL_STOP_WHEN_IDLE="${LOCAL_STOP_WHEN_IDLE:-1}"
+LOCAL_IDLE_CHECK_INTERVAL="${LOCAL_IDLE_CHECK_INTERVAL:-30}"
+NEBIUS_INSTANCE_ID_FILE="${NEBIUS_INSTANCE_ID_FILE:-/mnt/cloud-metadata/instance-id}"
+NEBIUS_STOP_PROFILE="${NEBIUS_STOP_PROFILE:-gpu-self-stop}"
+DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  scripts/submit_array.sh [--workers N] [--configs-file FILE] [--dry-run] CONFIG [CONFIG ...]
+  scripts/submit_array.sh [--backend auto|slurm|local] [--workers N] [--local-gpus LIST]
+                          [--configs-file FILE] [--dry-run] CONFIG [CONFIG ...]
+  scripts/submit_array.sh status STATE_DIR
+  scripts/submit_array.sh cancel [--force] STATE_DIR
 
 Options:
-  --workers N          Number of Slurm array workers to submit. Default: ARRAY_WORKERS or 1.
+  --backend BACKEND    Submission backend. Default: BACKEND or auto (Slurm when sbatch exists).
+  --workers N          Maximum number of array workers. Default: ARRAY_WORKERS or 1.
+  --local-gpus LIST    Comma-separated GPU IDs available to local workers. By default, uses
+                       GPU indices reported by nvidia-smi.
   --configs-file FILE  File containing one config path per line. Blank lines and # comments are ignored.
-  --dry-run            Print the sbatch command without submitting.
+  --dry-run            Print the submission plan without starting workers.
 
 Common environment overrides:
-  JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
+  BACKEND, JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
   EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, OUT_DIR
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
+  LOCAL_GPUS, LOCAL_STATE_ROOT, LOCAL_STOP_WHEN_IDLE, LOCAL_IDLE_CHECK_INTERVAL
+  NEBIUS_INSTANCE_ID_FILE, NEBIUS_STOP_PROFILE
+
+Local backend notes:
+  Workers are detached; use the printed status/cancel commands to manage them.
+  GPU reservations prevent overlap between local submissions from this repository.
+  ARRAY_TIME, CPUS_PER_TASK, and MEM are not enforced locally.
+  By default, the VM is stopped after all local workers finish and no GPU compute
+  processes remain. Set LOCAL_STOP_WHEN_IDLE=0 to disable this behavior.
 EOF
 }
 
@@ -72,6 +97,97 @@ positive_int() {
   fi
 }
 
+validate_backend() {
+  case "$1" in
+    auto|slurm|local) ;;
+    *)
+      echo "Backend must be auto, slurm, or local; got '$1'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+process_start_ticks() {
+  local pid="$1"
+  awk '{print $22}' "/proc/$pid/stat" 2>/dev/null
+}
+
+process_matches() {
+  local pid="$1"
+  local expected_start="$2"
+  local actual_start
+
+  if ! [[ "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+    return 1
+  fi
+  actual_start="$(process_start_ticks "$pid")"
+  [[ -n "$actual_start" && "$actual_start" == "$expected_start" ]]
+}
+
+read_pid_file() {
+  local pid_file="$1"
+  WORKER_PID=""
+  WORKER_START_TICKS=""
+  WORKER_GPUS=""
+  if [[ -r "$pid_file" ]]; then
+    IFS=$'\t' read -r WORKER_PID WORKER_START_TICKS WORKER_GPUS < "$pid_file" || true
+  fi
+}
+
+load_discord_webhook() {
+  local env_file value
+
+  [[ -n "$DISCORD_WEBHOOK_URL" ]] && return 0
+  env_file="$repo_root/.env"
+  [[ -r "$env_file" ]] || return 0
+  value="$(sed -n 's/^DISCORD_WEBHOOK_URL=//p' "$env_file" | tail -n 1)"
+  value="${value%$'\r'}"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  if [[ -n "$value" ]]; then
+    DISCORD_WEBHOOK_URL="$value"
+    export DISCORD_WEBHOOK_URL
+  fi
+  return 0
+}
+
+discord_json_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf "%s" "$value"
+}
+
+discord_notify() {
+  local message="$1"
+  local escaped payload
+
+  load_discord_webhook
+  if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
+    echo "Discord webhook is not configured; notification skipped" >&2
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is unavailable; Discord notification skipped" >&2
+    return 1
+  fi
+  escaped="$(discord_json_escape "$message")"
+  payload="{\"content\":\"$escaped\"}"
+  if curl --fail --silent --show-error \
+      -H "Content-Type: application/json" \
+      --data "$payload" \
+      --config <(printf 'url = "%s"\n' "$DISCORD_WEBHOOK_URL"); then
+    return 0
+  fi
+  echo "Discord notification failed" >&2
+  return 1
+}
 config_output_dir() {
   awk '$1 == "output_dir:" {print $2; exit}' "$1"
 }
@@ -310,6 +426,470 @@ write_config_list() {
   fi
 }
 
+discover_local_gpus() {
+  local raw="$LOCAL_GPUS"
+  local gpu
+  local -A seen=()
+
+  LOCAL_GPU_POOL=()
+  if [[ -z "$raw" ]]; then
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+      echo "Cannot detect local GPUs: nvidia-smi is unavailable. Set --local-gpus LIST." >&2
+      return 1
+    fi
+    mapfile -t LOCAL_GPU_POOL < <(nvidia-smi --query-gpu=index --format=csv,noheader)
+  else
+    IFS=',' read -r -a LOCAL_GPU_POOL <<< "$raw"
+  fi
+
+  for gpu in "${LOCAL_GPU_POOL[@]}"; do
+    gpu="${gpu//[[:space:]]/}"
+    if [[ -z "$gpu" || "$gpu" == *$'\t'* ]]; then
+      echo "Invalid GPU ID in LOCAL_GPUS='$raw'" >&2
+      return 1
+    fi
+    if [[ -n "${seen[$gpu]:-}" ]]; then
+      echo "Duplicate GPU ID '$gpu' in LOCAL_GPUS='$raw'" >&2
+      return 1
+    fi
+    seen[$gpu]=1
+    LOCAL_GPU_POOL[${#seen[@]}-1]="$gpu"
+  done
+
+  if [[ "${#LOCAL_GPU_POOL[@]}" -eq 0 ]]; then
+    echo "No local GPUs detected. Set --local-gpus LIST." >&2
+    return 1
+  fi
+}
+
+clean_reservations_locked() {
+  local registry="$LOCAL_STATE_ROOT/gpu-reservations.tsv"
+  local tmp="$registry.tmp.$$"
+  local gpu pid start_ticks reserved_state worker_id
+
+  : > "$tmp"
+  if [[ -r "$registry" ]]; then
+    while IFS=$'\t' read -r gpu pid start_ticks reserved_state worker_id; do
+      if process_matches "$pid" "$start_ticks"; then
+        printf "%s\t%s\t%s\t%s\t%s\n" "$gpu" "$pid" "$start_ticks" "$reserved_state" "$worker_id" >> "$tmp"
+      fi
+    done < "$registry"
+  fi
+  mv "$tmp" "$registry"
+}
+
+gpu_is_reserved_locked() {
+  local wanted="$1"
+  local gpu pid start_ticks reserved_state worker_id
+  while IFS=$'\t' read -r gpu pid start_ticks reserved_state worker_id; do
+    [[ "$gpu" == "$wanted" ]] && return 0
+  done < "$LOCAL_STATE_ROOT/gpu-reservations.tsv"
+  return 1
+}
+
+current_boot_id() {
+  tr -d '\n' < /proc/sys/kernel/random/boot_id
+}
+
+stop_marker_is_current_boot() {
+  local marker="$LOCAL_STATE_ROOT/vm-stop-requested"
+  local marker_boot_id current
+  [[ -r "$marker" ]] || return 1
+  read -r marker_boot_id < "$marker" || return 1
+  current="$(current_boot_id)"
+  [[ -n "$current" && "$marker_boot_id" == "$current" ]]
+}
+
+vm_stop_is_inhibited_for_current_boot() {
+  local marker="$LOCAL_STATE_ROOT/vm-stop-inhibited"
+  local marker_boot_id current
+  [[ -r "$marker" ]] || return 1
+  read -r marker_boot_id < "$marker" || return 1
+  current="$(current_boot_id)"
+  [[ -n "$current" && "$marker_boot_id" == "$current" ]]
+}
+
+gpu_compute_is_active() {
+  local pids
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "Cannot confirm GPU idleness because nvidia-smi is unavailable; not stopping the VM" >&2
+    return 0
+  fi
+  if ! pids="$(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null)"; then
+    echo "Cannot query active GPU processes; not stopping the VM" >&2
+    return 0
+  fi
+  [[ -n "${pids//[[:space:]]/}" ]]
+}
+
+notify_job_finished() {
+  local state_dir="$1"
+  local marker="$state_dir/discord-job-finished.attempted"
+  local completed=0 failed=0
+  local host
+
+  [[ -e "$marker" ]] && return
+  if [[ -r "$state_dir/completed_configs" ]]; then
+    completed="$(awk 'END { print NR + 0 }' "$state_dir/completed_configs")"
+  fi
+  if [[ -r "$state_dir/failed_configs.tsv" ]]; then
+    failed="$(awk 'END { print NR + 0 }' "$state_dir/failed_configs.tsv")"
+  fi
+  host="$(hostname 2>/dev/null || printf unknown)"
+  discord_notify "GCW local job finished on $host: $JOB_NAME ($completed completed configs, $failed failed)." || true
+  : > "$marker"
+}
+
+notify_auto_stop() {
+  local state_dir="$1"
+  local vm_id="$2"
+  local marker="$state_dir/discord-auto-stop.attempted"
+  local host
+
+  [[ -e "$marker" ]] && return
+  host="$(hostname 2>/dev/null || printf unknown)"
+  discord_notify "GCW local jobs are complete and GPU-idle on $host; auto-stopping Nebius instance $vm_id." || true
+  : > "$marker"
+}
+
+idle_monitor_main() {
+  local state_dir="${IDLE_MONITOR_STATE_DIR:?IDLE_MONITOR_STATE_DIR is required}"
+  local rc vm_id boot_id
+  local registry="$LOCAL_STATE_ROOT/gpu-reservations.tsv"
+  local stop_marker="$LOCAL_STATE_ROOT/vm-stop-requested"
+
+  positive_int LOCAL_IDLE_CHECK_INTERVAL "$LOCAL_IDLE_CHECK_INTERVAL"
+  mkdir -p "$LOCAL_STATE_ROOT"
+  echo "Idle-stop monitor started for $state_dir"
+
+  while true; do
+    if (
+      flock -x 9
+      clean_reservations_locked
+      if vm_stop_is_inhibited_for_current_boot; then
+        echo "VM auto-stop inhibited by a user cancellation; keeping the node running"
+        exit 0
+      fi
+
+      if [[ -s "$registry" ]]; then
+        exit 10
+      fi
+      notify_job_finished "$state_dir"
+      if stop_marker_is_current_boot; then
+        echo "VM stop has already been requested during this boot"
+        exit 0
+      fi
+      if gpu_compute_is_active; then
+        exit 10
+      fi
+      if [[ ! -r "$NEBIUS_INSTANCE_ID_FILE" ]]; then
+        echo "Cannot read Nebius instance ID from $NEBIUS_INSTANCE_ID_FILE; will retry" >&2
+        exit 11
+      fi
+      vm_id="$(cat "$NEBIUS_INSTANCE_ID_FILE")"
+      if [[ -z "$vm_id" ]]; then
+        echo "Nebius instance ID is empty in $NEBIUS_INSTANCE_ID_FILE; will retry" >&2
+        exit 11
+      fi
+      if ! command -v nebius >/dev/null 2>&1; then
+        echo "nebius CLI is unavailable; will retry" >&2
+        exit 11
+      fi
+
+      notify_auto_stop "$state_dir" "$vm_id"
+      echo "No local workers or GPU compute processes remain; stopping Nebius instance $vm_id"
+      sync
+      if nebius compute instance stop \
+          --id "$vm_id" \
+          --profile "$NEBIUS_STOP_PROFILE" \
+          --async; then
+        boot_id="$(current_boot_id)"
+        printf "%s\n" "$boot_id" > "$stop_marker"
+        echo "Nebius stop request submitted"
+        exit 0
+      fi
+      echo "Nebius stop request failed; will retry" >&2
+      exit 11
+    ) 9> "$LOCAL_STATE_ROOT/manager.lock"; then
+      return
+    else
+      rc="$?"
+    fi
+
+    case "$rc" in
+      10|11) sleep "$LOCAL_IDLE_CHECK_INTERVAL" ;;
+      *)
+        echo "Idle-stop monitor encountered unexpected status $rc; will retry" >&2
+        sleep "$LOCAL_IDLE_CHECK_INTERVAL"
+        ;;
+    esac
+  done
+}
+
+start_local_worker() {
+  local worker_id="$1"
+  local gpu_group="$2"
+  local log_file="$STATE_DIR/local-worker-$worker_id.out"
+  local exit_file="$STATE_DIR/worker-$worker_id.exit"
+  local pid start_ticks gpu
+  local -a reserved_gpus
+  local worker_env=(
+    "GCW_ARRAY_MODE=worker"
+    "GCW_REPO_ROOT=$repo_root"
+    "CONFIG_LIST=$CONFIG_LIST"
+    "STATE_DIR=$STATE_DIR"
+    "WORKER_EXIT_FILE=$exit_file"
+    "SLURM_ARRAY_TASK_ID=$worker_id"
+    "CUDA_VISIBLE_DEVICES=$gpu_group"
+    "JOB_NAME=$JOB_NAME"
+    "GPUS=$GPUS"
+    "EVAL_GPUS=$EVAL_GPUS"
+    "EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN"
+    "EVAL_ONLY=$EVAL_ONLY"
+    "EVAL_SUITE=$EVAL_SUITE"
+    "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE"
+    "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS"
+    "WANDB_MODE=$WANDB_MODE"
+    "PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF"
+    "UV_EXTRAS=$UV_EXTRAS"
+    "TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS"
+    "EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS"
+    "KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS"
+    "KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY"
+    "OUT_DIR=$OUT_DIR"
+    "OPENMATH_DATA=$OPENMATH_DATA"
+    "SFT_BACKBONE=$SFT_BACKBONE"
+    "TOKENIZER_DIR=$TOKENIZER_DIR"
+  )
+
+  setsid env "${worker_env[@]}" "$script_path" > "$log_file" 2>&1 < /dev/null 9>&- &
+  pid=$!
+  start_ticks="$(process_start_ticks "$pid")"
+  if [[ -z "$start_ticks" ]]; then
+    echo "Local worker $worker_id exited before its PID could be recorded. See $log_file" >&2
+    return 1
+  fi
+  printf "%s\t%s\t%s\n" "$pid" "$start_ticks" "$gpu_group" > "$STATE_DIR/worker-$worker_id.pid"
+  IFS=',' read -r -a reserved_gpus <<< "$gpu_group"
+  for gpu in "${reserved_gpus[@]}"; do
+    printf "%s\t%s\t%s\t%s\t%s\n" "$gpu" "$pid" "$start_ticks" "$STATE_DIR" "$worker_id" >> "$LOCAL_STATE_ROOT/gpu-reservations.tsv"
+  done
+  echo "Worker $worker_id: pid=$pid GPUs=$gpu_group log=$log_file"
+}
+start_idle_monitor() {
+  local state_dir="$1"
+  local log_file="$state_dir/idle-stop-monitor.out"
+  local pid start_ticks
+
+  if [[ "$LOCAL_STOP_WHEN_IDLE" != "1" ]]; then
+    return
+  fi
+
+  setsid env \
+    "GCW_ARRAY_MODE=idle-monitor" \
+    "GCW_REPO_ROOT=$repo_root" \
+    "LOCAL_STATE_ROOT=$LOCAL_STATE_ROOT" \
+    "LOCAL_IDLE_CHECK_INTERVAL=$LOCAL_IDLE_CHECK_INTERVAL" \
+    "NEBIUS_INSTANCE_ID_FILE=$NEBIUS_INSTANCE_ID_FILE" \
+    "JOB_NAME=$JOB_NAME" \
+    "NEBIUS_STOP_PROFILE=$NEBIUS_STOP_PROFILE" \
+    "IDLE_MONITOR_STATE_DIR=$state_dir" \
+    "$script_path" > "$log_file" 2>&1 < /dev/null 9>&- &
+  pid=$!
+  start_ticks="$(process_start_ticks "$pid")"
+  if [[ -z "$start_ticks" ]]; then
+    echo "Idle-stop monitor exited before its PID could be recorded. See $log_file" >&2
+    return 1
+  fi
+  printf "%s\t%s\n" "$pid" "$start_ticks" > "$state_dir/idle-stop-monitor.pid"
+  echo "Idle-stop monitor: pid=$pid log=$log_file"
+}
+
+
+local_launcher() {
+  local state_dir="$1"
+  local config_list="$2"
+  local alloc_gpus="$3"
+  local dry_run="$4"
+  local gpu group worker available_count capacity worker_count start_index
+  local -a available_gpus=()
+
+  STATE_DIR="$state_dir"
+  CONFIG_LIST="$config_list"
+  discover_local_gpus || return $?
+  mkdir -p "$LOCAL_STATE_ROOT"
+
+  (
+    flock -x 9
+    if stop_marker_is_current_boot; then
+      echo "A Nebius stop has already been requested during this boot; refusing to start new workers" >&2
+      return 1
+    fi
+    if [[ -e "$LOCAL_STATE_ROOT/vm-stop-requested" ]]; then
+      rm -f "$LOCAL_STATE_ROOT/vm-stop-requested"
+    fi
+    if [[ "$dry_run" != "1" && "$LOCAL_STOP_WHEN_IDLE" == "1" ]]; then
+      rm -f "$LOCAL_STATE_ROOT/vm-stop-inhibited"
+    fi
+
+    clean_reservations_locked
+
+    for gpu in "${LOCAL_GPU_POOL[@]}"; do
+      if ! gpu_is_reserved_locked "$gpu"; then
+        available_gpus+=("$gpu")
+      fi
+    done
+
+    available_count="${#available_gpus[@]}"
+    capacity=$((available_count / alloc_gpus))
+    if [[ "$capacity" -le 0 ]]; then
+      echo "No unreserved local GPU group of size $alloc_gpus is available from: ${LOCAL_GPU_POOL[*]}" >&2
+      return 1
+    fi
+    worker_count="$ARRAY_WORKERS"
+    if [[ "$worker_count" -gt "$capacity" ]]; then
+      worker_count="$capacity"
+      echo "Only $worker_count worker(s) fit on $available_count unreserved GPU(s); all configs will still be consumed."
+    fi
+
+    echo "Backend: local"
+    echo "Config list: $config_list"
+    echo "State directory: $state_dir"
+    echo "Starting $worker_count local worker(s), with $alloc_gpus GPU(s) per worker"
+    echo "Stop VM when idle: $LOCAL_STOP_WHEN_IDLE"
+
+    if [[ "$dry_run" == "1" ]]; then
+      for ((worker = 0; worker < worker_count; worker += 1)); do
+        start_index=$((worker * alloc_gpus))
+        group="${available_gpus[$start_index]}"
+        for ((gpu = 1; gpu < alloc_gpus; gpu += 1)); do
+          group+=",${available_gpus[$((start_index + gpu))]}"
+        done
+        echo "Worker $worker: assigned GPUs $group"
+      done
+      return
+    fi
+
+    printf "local\n" > "$state_dir/backend"
+    printf "%s\n" "$ARRAY_WORKERS" > "$state_dir/requested_workers"
+    printf "%s\n" "$worker_count" > "$state_dir/started_workers"
+    for ((worker = 0; worker < worker_count; worker += 1)); do
+      start_index=$((worker * alloc_gpus))
+      group="${available_gpus[$start_index]}"
+      for ((gpu = 1; gpu < alloc_gpus; gpu += 1)); do
+        group+=",${available_gpus[$((start_index + gpu))]}"
+      done
+      start_local_worker "$worker" "$group"
+    done
+    start_idle_monitor "$state_dir"
+  ) 9> "$LOCAL_STATE_ROOT/manager.lock"
+
+  if [[ "$dry_run" != "1" ]]; then
+    echo "Status: $script_path status $state_dir"
+    echo "Cancel: $script_path cancel $state_dir"
+  fi
+}
+
+status_main() {
+  local state_dir="${1:-}"
+  local pid_file worker_id status rc
+  local running=0 succeeded=0 failed=0 cancelled=0 stopped=0
+  local -a pid_files
+
+  if [[ -z "$state_dir" ]]; then
+    echo "status requires a state directory" >&2
+    return 2
+  fi
+  require_path "$state_dir"
+  shopt -s nullglob
+  pid_files=("$state_dir"/worker-*.pid)
+  shopt -u nullglob
+  if [[ "${#pid_files[@]}" -eq 0 ]]; then
+    echo "No local worker PID files found in $state_dir" >&2
+    return 1
+  fi
+
+  printf "%-8s %-10s %-10s %s\n" WORKER STATUS PID GPUS
+  for pid_file in "${pid_files[@]}"; do
+    worker_id="${pid_file##*/worker-}"
+    worker_id="${worker_id%.pid}"
+    read_pid_file "$pid_file"
+    status="STOPPED"
+    rc="-"
+    if process_matches "$WORKER_PID" "$WORKER_START_TICKS"; then
+      if [[ -e "$state_dir/worker-$worker_id.cancelled" ]]; then
+        status="STOPPING"
+      else
+        status="RUNNING"
+      fi
+      ((running += 1))
+    elif [[ -e "$state_dir/worker-$worker_id.cancelled" ]]; then
+      status="CANCELLED"
+      ((cancelled += 1))
+    elif [[ -r "$state_dir/worker-$worker_id.exit" ]]; then
+      read -r rc < "$state_dir/worker-$worker_id.exit" || true
+      if [[ "$rc" == "0" ]]; then
+        status="SUCCEEDED"
+        ((succeeded += 1))
+      else
+        status="FAILED($rc)"
+        ((failed += 1))
+      fi
+    else
+      ((stopped += 1))
+    fi
+    printf "%-8s %-10s %-10s %s\n" "$worker_id" "$status" "${WORKER_PID:--}" "${WORKER_GPUS:--}"
+  done
+  echo "Summary: $running running, $succeeded succeeded, $failed failed, $cancelled cancelled, $stopped stopped"
+}
+
+
+cancel_main() {
+  local force=0
+  local state_dir=""
+  local signal="TERM"
+  local pid_file worker_id
+  local cancelled_count=0
+  local -a pid_files
+
+  if [[ "${1:-}" == "--force" ]]; then
+    force=1
+    shift
+  fi
+  if [[ "$#" -ne 1 ]]; then
+    echo "cancel requires exactly one state directory" >&2
+    return 2
+  fi
+  state_dir="$1"
+  require_path "$state_dir"
+  if [[ "$force" == "1" ]]; then
+    signal="KILL"
+  fi
+
+  mkdir -p "$LOCAL_STATE_ROOT"
+  printf "%s\n" "$(current_boot_id)" > "$LOCAL_STATE_ROOT/vm-stop-inhibited"
+  echo "VM auto-stop disabled because this job was cancelled"
+  shopt -s nullglob
+  pid_files=("$state_dir"/worker-*.pid)
+  shopt -u nullglob
+  for pid_file in "${pid_files[@]}"; do
+    worker_id="${pid_file##*/worker-}"
+    worker_id="${worker_id%.pid}"
+    read_pid_file "$pid_file"
+    if process_matches "$WORKER_PID" "$WORKER_START_TICKS"; then
+      touch "$state_dir/worker-$worker_id.cancelled"
+      if ! kill "-$signal" -- "-$WORKER_PID" 2>/dev/null; then
+        kill "-$signal" "$WORKER_PID" 2>/dev/null || true
+      fi
+      echo "Sent SIG$signal to worker $worker_id process group $WORKER_PID"
+      ((cancelled_count += 1))
+    fi
+  done
+  if [[ "$cancelled_count" -eq 0 ]]; then
+    echo "No running local workers found in $state_dir"
+  fi
+}
+
 launcher_main() {
   local configs_file="" dry_run=0 state_dir config_list workers_arg
   local alloc_gpus
@@ -317,6 +897,23 @@ launcher_main() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --backend)
+        BACKEND="${2:-}"
+        if [[ -z "$BACKEND" ]]; then
+          echo "--backend requires auto, slurm, or local" >&2
+          exit 1
+        fi
+        validate_backend "$BACKEND"
+        shift 2
+        ;;
+      --local-gpus)
+        LOCAL_GPUS="${2:-}"
+        if [[ -z "$LOCAL_GPUS" ]]; then
+          echo "--local-gpus requires a comma-separated list" >&2
+          exit 1
+        fi
+        shift 2
+        ;;
       --configs-file)
         configs_file="${2:-}"
         if [[ -z "$configs_file" ]]; then
@@ -358,18 +955,55 @@ launcher_main() {
   positive_int ARRAY_WORKERS "$ARRAY_WORKERS"
   positive_int GPUS "$GPUS"
   positive_int EVAL_GPUS "$EVAL_GPUS"
+  validate_backend "$BACKEND"
+  if [[ "$BACKEND" == "auto" ]]; then
+    if command -v sbatch >/dev/null 2>&1; then
+      BACKEND="slurm"
+    else
+      BACKEND="local"
+    fi
+  fi
+  if [[ "$BACKEND" == "local" ]]; then
+    case "$LOCAL_STOP_WHEN_IDLE" in
+      0|1) ;;
+      *)
+        echo "LOCAL_STOP_WHEN_IDLE must be 0 or 1; got '$LOCAL_STOP_WHEN_IDLE'" >&2
+        return 1
+        ;;
+    esac
+    positive_int LOCAL_IDLE_CHECK_INTERVAL "$LOCAL_IDLE_CHECK_INTERVAL"
+  fi
+  if [[ "$BACKEND" == "slurm" && "$dry_run" != "1" ]] && ! command -v sbatch >/dev/null 2>&1; then
+    echo "Slurm backend requested, but sbatch is unavailable" >&2
+    return 1
+  fi
+  if [[ "$BACKEND" == "local" && -n "$DEPENDENCY" ]]; then
+    echo "DEPENDENCY is not supported by the local backend" >&2
+    return 1
+  fi
+  if [[ "$BACKEND" == "local" && -n "$EXCLUDE" ]]; then
+    echo "EXCLUDE is not supported by the local backend" >&2
+    return 1
+  fi
+
   alloc_gpus="$GPUS"
-  if [[ "$EVAL_AFTER_TRAIN" == "1" && "$EVAL_GPUS" -gt "$alloc_gpus" ]]; then
+  if [[ ( "$EVAL_AFTER_TRAIN" == "1" || "$EVAL_ONLY" == "1" ) && "$EVAL_GPUS" -gt "$alloc_gpus" ]]; then
     alloc_gpus="$EVAL_GPUS"
   fi
 
   mkdir -p slurm_out
-  state_dir="$repo_root/slurm_out/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)"
+  state_dir="$repo_root/slurm_out/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
   mkdir -p "$state_dir"
   config_list="$state_dir/configs.txt"
   write_config_list "$config_list" "$configs_file" "${args[@]}"
 
+  if [[ "$BACKEND" == "local" ]]; then
+    local_launcher "$state_dir" "$config_list" "$alloc_gpus" "$dry_run"
+    return
+  fi
+
   workers_arg="0-$((ARRAY_WORKERS - 1))"
+  echo "Backend: slurm"
   echo "Config list: $config_list"
   echo "Submitting $ARRAY_WORKERS worker(s) as array $workers_arg"
 
@@ -394,7 +1028,7 @@ launcher_main() {
   if [[ -n "$EXCLUDE" ]]; then
     sbatch_cmd+=(--exclude="$EXCLUDE")
   fi
-  sbatch_cmd+=("$0")
+  sbatch_cmd+=("$script_path")
 
   if [[ "$dry_run" == "1" ]]; then
     printf '%q ' "${sbatch_cmd[@]}"
@@ -406,8 +1040,32 @@ launcher_main() {
   echo "Submitted array job $job_id"
 }
 
+record_worker_exit() {
+  local rc="$?"
+  local tmp
+  trap - EXIT
+  set +e
+  if [[ -n "${WORKER_EXIT_FILE:-}" ]]; then
+    tmp="$WORKER_EXIT_FILE.tmp.$$"
+    printf "%s\n" "$rc" > "$tmp"
+    mv "$tmp" "$WORKER_EXIT_FILE"
+  fi
+  exit "$rc"
+}
+
 if [[ "${GCW_ARRAY_MODE:-}" == "worker" ]]; then
+  trap record_worker_exit EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
   worker_main
+elif [[ "${GCW_ARRAY_MODE:-}" == "idle-monitor" ]]; then
+  idle_monitor_main
+elif [[ "${1:-}" == "status" ]]; then
+  shift
+  status_main "$@"
+elif [[ "${1:-}" == "cancel" ]]; then
+  shift
+  cancel_main "$@"
 else
   launcher_main "$@"
 fi
