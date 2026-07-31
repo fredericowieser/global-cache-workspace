@@ -84,8 +84,23 @@ def main() -> int:
     if rc != 0:
         print(f"ncclGetVersion failed with return code {rc}", file=sys.stderr)
         return 1
-    if version.value != 22809:
-        print(f"Expected NCCL version code 22809, got {version.value}", file=sys.stderr)
+
+    nccl_package_version = installed_version("nvidia-nccl-cu12")
+    if nccl_package_version is None:
+        print("Could not determine installed nvidia-nccl-cu12 version", file=sys.stderr)
+        return 1
+    try:
+        major, minor, patch = (int(part) for part in nccl_package_version.split(".")[:3])
+    except (TypeError, ValueError):
+        print(f"Could not parse nvidia-nccl-cu12 version {nccl_package_version!r}", file=sys.stderr)
+        return 1
+    expected_nccl_code = major * 10000 + minor * 100 + patch
+    if version.value != expected_nccl_code:
+        print(
+            f"Expected NCCL version code {expected_nccl_code} from nvidia-nccl-cu12=={nccl_package_version}, "
+            f"got {version.value}",
+            file=sys.stderr,
+        )
         return 1
 
     strings = subprocess.run(
