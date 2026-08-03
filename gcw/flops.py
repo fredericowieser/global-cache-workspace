@@ -46,7 +46,12 @@ def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> in
             window = min(seq_len, int(config.sliding_window or seq_len)) if config.layer_types[i] == "sliding_attention" else seq_len
             total += 4 * config.num_heads * config.head_dim_for_layer(i) * window
         return total
-    attention_layers = config.cache_num_layers if config.family in {"qwen3_5", "qwen3_5_moe"} else config.num_layers
+    if config.family in {"qwen3_5", "qwen3_5_moe"}:
+        if config.layer_types is None:
+            raise ValueError(f"{config.family} requires layer_types for attention FLOPs")
+        attention_layers = sum(layer_type == "full_attention" for layer_type in config.layer_types)
+    else:
+        attention_layers = config.num_layers
     return attention_layers * 4 * config.num_heads * _head_dim(config) * seq_len
 
 

@@ -187,3 +187,35 @@ def test_self_head_kv_flops_include_slot_when_all_heads_are_selected():
         assert processor_forward_flops_per_sequence(self_head, 128) > processor_forward_flops_per_sequence(
             base, 128
         )
+
+
+
+def test_qwen35_processor_subset_does_not_reduce_backbone_attention_flops():
+    processor = CacheProcessorConfig(
+        hidden_size=16,
+        intermediate_size=32,
+        num_heads=1,
+        num_kv_heads=1,
+    )
+    all_layers = ModelConfig(
+        variant="bgt",
+        family="qwen3_5",
+        sequence_len=128,
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        layer_types=["full_attention", "linear_attention", "full_attention", "linear_attention"],
+        linear_num_key_heads=1,
+        linear_num_value_heads=1,
+        linear_key_head_dim=8,
+        linear_value_head_dim=8,
+        cache_processor=processor,
+        processor_layer_indices=[0, 2],
+    )
+    subset = replace(all_layers, processor_layer_indices=[0])
+
+    assert backbone_flops_per_token(subset, 128) == backbone_flops_per_token(all_layers, 128)
