@@ -3,9 +3,12 @@ import types
 import pytest
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, ModelConfig, gemma4_default_layer_types
 from gcw.models import build_model
+from gcw.models import gemma4 as gemma4_module
+from gcw.models.gemma4 import _gemma4_attention
 from gcw.models import icarus as icarus_module
 from gcw.models import longshot as longshot_module
 from gcw.models.cache_state import CacheState, StaticCacheState
@@ -101,6 +104,83 @@ def tiny_qwen35_moe_config(variant="tf", **processor_overrides):
     )
 
 
+def tiny_qwen35_config(variant="tf", **processor_overrides):
+    cp = None
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
+        cp = CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=1,
+            num_kv_heads=1,
+            **processor_overrides,
+        )
+    return ModelConfig(
+        variant=variant,
+        family="qwen3_5",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=False,
+        qk_norm=True,
+        rotary_style="llama",
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        partial_rotary_factor=0.5,
+        linear_conv_kernel_dim=3,
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        cache_processor=cp,
+    )
+
+
+def tiny_gemma4_config(variant="tf", *, shared=False, global_head_dim=8, **processor_overrides):
+    cp = None
+    if variant in {"bt", "bgt", "icarus", "longshot"}:
+        cp = CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=1,
+            num_kv_heads=1,
+            **processor_overrides,
+        )
+    return ModelConfig(
+        variant=variant,
+        family="gemma4",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        tie_embeddings=True,
+        rotary_style="llama",
+        layer_types=["sliding_attention", "full_attention", "sliding_attention", "full_attention"],
+        sliding_window=4,
+        global_head_dim=global_head_dim,
+        num_kv_shared_layers=2 if shared else 0,
+        hidden_size_per_layer_input=4,
+        vocab_size_per_layer_input=128,
+        final_logit_softcapping=30.0,
+        hidden_act="gelu_pytorch_tanh",
+        cache_processor=cp,
+    )
+
+
 def test_tiny_models_forward_backward():
     for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         model = build_model(tiny_config(variant))
@@ -111,6 +191,283 @@ def test_tiny_models_forward_backward():
         loss.backward()
         assert torch.isfinite(loss)
         assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_tiny_qwen35_forward_backward_and_cache_layers():
+    model = build_model(tiny_qwen35_config())
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.config.cache_layer_indices == [1, 3]
+    assert model.config.cache_num_heads == 2
+    assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_tiny_gemma4_forward_backward_and_cache_layers():
+    model = build_model(tiny_gemma4_config())
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    loss = model(x, x)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert model.config.cache_layer_indices == [0, 1, 2, 3]
+    assert model.config.cache_num_heads == 4
+    assert any(p.grad is not None for p in model.parameters() if p.requires_grad)
+
+
+def test_gemma4_attention_uses_explicit_unit_scale():
+    torch.manual_seed(13)
+    q = torch.randn(1, 2, 3, 4)
+    k = torch.randn(1, 2, 3, 4)
+    v = torch.randn(1, 2, 3, 4)
+
+    out = _gemma4_attention(q, k, v, None, False, groups=1, scale=1.0, try_flash=True)
+    expected = torch.matmul(torch.softmax(torch.matmul(q, k.transpose(2, 3)), dim=-1), v)
+    default_scaled = F.scaled_dot_product_attention(q, k, v)
+
+    assert torch.allclose(out, expected.transpose(1, 2), atol=1e-6, rtol=1e-6)
+    assert not torch.allclose(out, default_scaled.transpose(1, 2), atol=1e-6, rtol=1e-6)
+
+
+def test_gemma4_full_attention_uses_causal_bias_without_dense_mask(monkeypatch):
+    calls = []
+
+    def fake_flash_sdpa(q, k, v, *, attn_mask=None, is_causal=False, enable_gqa=False, scale=None, try_flash=True, **kwargs):
+        calls.append(
+            {
+                "attn_mask": attn_mask,
+                "is_causal": is_causal,
+                "enable_gqa": enable_gqa,
+                "scale": scale,
+                "try_flash": try_flash,
+            }
+        )
+        return F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            is_causal=is_causal,
+            enable_gqa=enable_gqa,
+            scale=scale,
+        )
+
+    monkeypatch.setattr(gemma4_module, "flash_sdpa", fake_flash_sdpa)
+    model = build_model(
+        ModelConfig(
+            family="gemma4",
+            vocab_size=128,
+            hidden_size=16,
+            intermediate_size=32,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=8,
+            sequence_len=32,
+            tie_embeddings=True,
+            rotary_style="llama",
+            layer_types=["full_attention"],
+            global_head_dim=8,
+            hidden_size_per_layer_input=0,
+        )
+    ).eval()
+    model.init_weights()
+
+    with torch.no_grad():
+        model(torch.randint(0, 128, (1, 5)))
+
+    assert len(calls) == 1
+    assert calls[0]["attn_mask"] is None
+    assert calls[0]["is_causal"] is True
+    assert calls[0]["try_flash"] is True
+    assert calls[0]["scale"] == 1.0
+
+
+def test_gemma4_sliding_attention_skips_forced_flash_for_dense_mask(monkeypatch):
+    calls = []
+
+    def fake_flash_sdpa(q, k, v, *, attn_mask=None, is_causal=False, enable_gqa=False, scale=None, try_flash=True, **kwargs):
+        calls.append({"attn_mask": attn_mask, "is_causal": is_causal, "try_flash": try_flash})
+        return F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            is_causal=is_causal,
+            enable_gqa=enable_gqa,
+            scale=scale,
+        )
+
+    monkeypatch.setattr(gemma4_module, "flash_sdpa", fake_flash_sdpa)
+    model = build_model(
+        ModelConfig(
+            family="gemma4",
+            vocab_size=128,
+            hidden_size=16,
+            intermediate_size=32,
+            num_layers=2,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=8,
+            sequence_len=32,
+            tie_embeddings=True,
+            rotary_style="llama",
+            layer_types=["sliding_attention", "full_attention"],
+            sliding_window=4,
+            hidden_size_per_layer_input=0,
+        )
+    ).eval()
+    model.init_weights()
+
+    with torch.no_grad():
+        model(torch.randint(0, 128, (1, 6)))
+
+    assert len(calls) == 2
+    assert calls[0]["attn_mask"] is not None
+    assert calls[0]["is_causal"] is False
+    assert calls[0]["try_flash"] is False
+
+
+def test_gemma4_default_layer_types_uses_shared_pattern():
+    cfg = ModelConfig(
+        family="gemma4",
+        num_layers=7,
+        hidden_size=16,
+        intermediate_size=32,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+    )
+
+    assert cfg.layer_types == gemma4_default_layer_types(7)
+    assert cfg.layer_types == [
+        "sliding_attention",
+        "sliding_attention",
+        "sliding_attention",
+        "sliding_attention",
+        "sliding_attention",
+        "full_attention",
+        "full_attention",
+    ]
+
+
+def test_gemma4_global_kv_heads_only_apply_to_alternative_attention():
+    cfg = tiny_gemma4_config(global_head_dim=16)
+    cfg.num_global_key_value_heads = 2
+    cfg.attention_k_eq_v = False
+
+    assert cfg.kv_heads_for_layer(1) == cfg.num_kv_heads
+    assert cfg.head_dim_for_layer(1) == 16
+
+    cfg.attention_k_eq_v = True
+    assert cfg.kv_heads_for_layer(1) == 2
+
+
+def test_tiny_gemma4_static_chunk_matches_dynamic_chunk():
+    torch.manual_seed(11)
+    model = build_model(tiny_gemma4_config()).eval()
+    model.init_weights()
+    x = torch.randint(1, 128, (2, 5))
+    cache = StaticCacheState.allocate(
+        batch_size=x.shape[0],
+        num_layers=model.config.cache_num_layers,
+        num_kv_heads=model.config.num_kv_heads,
+        max_seq_len=8,
+        head_dim=int(model.config.head_dim),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    with torch.no_grad():
+        dynamic_logits, _ = model.forward_chunk(x, 0)
+        static_logits, _ = model.forward_chunk_static(x, 0, cache)
+
+    assert torch.allclose(static_logits, dynamic_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_tiny_gemma4_shared_kv_tracks_owner_layers_only():
+    torch.manual_seed(12)
+    model = build_model(tiny_gemma4_config(shared=True)).eval()
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 7))
+
+    with torch.no_grad():
+        logits, cache = model.forward_chunk(x, 0)
+
+    assert logits.shape == (2, 7, 128)
+    assert model.config.cache_layer_indices == [0, 1]
+    assert cache.num_layers == 2
+    assert len(cache.keys) == 2
+
+
+def test_gemma4_processors_require_uniform_stored_cache_shapes():
+    cfg = tiny_gemma4_config("bgt", global_head_dim=16)
+    with pytest.raises(ValueError, match="uniform stored KV shapes"):
+        build_model(cfg)
+
+
+def test_gemma4_processors_build_for_uniform_cache_shapes():
+    for variant in ("bt", "bgt", "icarus", "longshot"):
+        model = build_model(tiny_gemma4_config(variant, encoder_seq_len=6))
+        assert model.config.cache_num_layers == 4
+
+
+def test_gemma4_final_logit_softcapping_bounds_logits():
+    model = build_model(tiny_gemma4_config()).eval()
+    hidden = torch.full((1, 1, model.config.hidden_size), 100.0)
+    with torch.no_grad():
+        model.embed_tokens.weight.fill_(100.0)
+        logits = model.logits_from_hidden(hidden)
+    assert logits.abs().max() <= model.config.final_logit_softcapping
+
+
+def test_tiny_qwen35_static_chunk_matches_dynamic_chunk():
+    torch.manual_seed(7)
+    model = build_model(tiny_qwen35_config()).eval()
+    model.init_weights()
+    x = torch.randint(1, 128, (2, 5))
+    cache = StaticCacheState.allocate(
+        batch_size=x.shape[0],
+        num_layers=model.config.cache_num_layers,
+        num_kv_heads=model.config.num_kv_heads,
+        max_seq_len=8,
+        head_dim=int(model.config.head_dim),
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+
+    with torch.no_grad():
+        dynamic_logits, _ = model.forward_chunk(x, 0)
+        static_logits, _ = model.forward_chunk_static(x, 0, cache)
+
+    assert torch.allclose(static_logits, dynamic_logits, atol=1e-5, rtol=1e-5)
+
+
+def test_qwen35_chunked_cache_tracks_full_attention_layers_only():
+    torch.manual_seed(5)
+    model = build_model(tiny_qwen35_config()).eval()
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+    with torch.no_grad():
+        logits, cache = model.forward_windowed(x, process_every=4)
+    assert logits.shape == (2, 9, 128)
+    assert cache.num_layers == 2
+    assert len(cache.keys) == 2
+    assert cache.keys[0].shape == (2, 1, 9, 8)
+    assert cache.linear_states is not None
+    assert sorted(cache.linear_states) == [0, 2]
+
+
+def test_qwen35_processors_use_full_attention_cache_heads_only():
+    for variant in ("bt", "bgt", "icarus", "longshot"):
+        model = build_model(tiny_qwen35_config(variant, encoder_seq_len=6))
+        assert model.config.cache_num_layers == 2
+        if variant == "bt":
+            assert len(model.cache_processor.blocks) == 2
+        else:
+            assert model.cache_processor.num_cache_heads == 2
 
 
 def test_tiny_qwen35_moe_forward_backward_and_cache_layers():

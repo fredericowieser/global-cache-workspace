@@ -27,17 +27,24 @@ gcw = "gcw.cli:main"
 
 [project.optional-dependencies]
 cpu = ["torch>=2.7"]
-gpu = ["torch>=2.7"]
+# causal-conv1d 1.6.2.post1 publishes CUDA 12 wheels through Torch 2.10.
+gpu = ["torch>=2.10,<2.11"]
 rocm = ["torch>=2.7", "pytorch-triton-rocm"]
 eval = ["lm-eval>=0.4", "transformers>=5,<6", "pillow>=10.0", "accelerate>=1.0"]
 convert = ["transformers>=5,<6"]
-qwen35 = ["causal-conv1d>=1.5.0", "flash-linear-attention>=0.5.1", "transformers>=5,<6"]
+qwen35 = [
+    "causal-conv1d==1.6.2.post1",
+    "flash-linear-attention>=0.5.1",
+    "tilelang==0.1.12",
+    "transformers>=5,<6",
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
 
 [tool.uv]
 default-groups = []
+python-preference = "only-managed"
 conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "rocm" }]]
 constraint-dependencies = [
     "nvidia-cublas<0",
@@ -56,6 +63,10 @@ constraint-dependencies = [
     "nvidia-nvshmem-cu13<0",
     "nvidia-nvtx<0",
 ]
+
+[tool.uv.extra-build-dependencies]
+# Build the extension against the same Torch/CUDA ABI selected by the runtime extra.
+causal-conv1d = [{ requirement = "torch", match-runtime = true }]
 
 [tool.uv.sources]
 torch = [

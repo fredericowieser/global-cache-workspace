@@ -253,6 +253,7 @@ class CacheProcessor(nn.Module):
 class GlobalCacheProcessor(nn.Module):
     def __init__(self, model_config: ModelConfig):
         super().__init__()
+        model_config.ensure_uniform_stored_cache_shape("Icarus")
         if model_config.cache_processor is None:
             raise ValueError("Icarus requires cache_processor config")
         self.config = model_config.cache_processor
@@ -263,10 +264,7 @@ class GlobalCacheProcessor(nn.Module):
         if self.config.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("Icarus supports only cache_processor.score='attn_l2' or 'kv_norm'")
         self.num_layers = model_config.cache_num_layers
-        self.num_kv_heads = model_config.num_kv_heads
-        if model_config.head_dim is None:
-            raise ValueError("Icarus requires a resolved model head_dim")
-        self.head_dim = model_config.head_dim
+        self.num_kv_heads, self.head_dim = model_config.stored_cache_shape
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
         self.num_cache_heads = self.num_layers * self.num_kv_heads

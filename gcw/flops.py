@@ -17,8 +17,12 @@ def _head_dim(config: ModelConfig) -> int:
 
 
 def _backbone_matmul_params(config: ModelConfig) -> int:
+    if config.family == "qwen3_5":
+        return _qwen35_backbone_matmul_params(config)
     if config.family == "qwen3_5_moe":
         return _qwen35_moe_backbone_matmul_params(config)
+    if config.family == "gemma4":
+        return _gemma4_backbone_matmul_params(config)
     head_dim = _head_dim(config)
     q_dim = config.num_heads * head_dim
     kv_dim = config.num_kv_heads * head_dim
@@ -34,39 +38,85 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
 
 
 def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> int:
-    attention_layers = (
-        config.layer_types.count("full_attention")
-        if config.family == "qwen3_5_moe" and config.layer_types is not None
-        else config.num_layers
-    )
+    if config.family == "gemma4":
+        total = 0
+        for i in range(config.num_layers):
+            window = min(seq_len, int(config.sliding_window or seq_len)) if config.layer_types[i] == "sliding_attention" else seq_len
+            total += 4 * config.num_heads * config.head_dim_for_layer(i) * window
+        return total
+    attention_layers = config.cache_num_layers if config.family in {"qwen3_5", "qwen3_5_moe"} else config.num_layers
     return attention_layers * 4 * config.num_heads * _head_dim(config) * seq_len
 
 
-def _qwen35_moe_backbone_matmul_params(config: ModelConfig) -> int:
+def _qwen35_attention_matmul_params(config: ModelConfig, layer_type: str) -> int:
     head_dim = _head_dim(config)
     full_q_dim = config.num_heads * head_dim
     full_kv_dim = config.num_kv_heads * head_dim
     linear_key_dim = int(config.linear_num_key_heads or config.num_kv_heads) * int(config.linear_key_head_dim or head_dim)
     linear_value_dim = int(config.linear_num_value_heads or config.num_heads) * int(config.linear_value_head_dim or head_dim)
     linear_conv_dim = 2 * linear_key_dim + linear_value_dim
+    if layer_type == "full_attention":
+        return (
+            config.hidden_size * full_q_dim * 2
+            + 2 * config.hidden_size * full_kv_dim
+            + full_q_dim * config.hidden_size
+        )
+    return (
+        config.hidden_size * linear_conv_dim
+        + config.hidden_size * linear_value_dim
+        + 2 * config.hidden_size * int(config.linear_num_value_heads or config.num_heads)
+        + linear_conv_dim * config.linear_conv_kernel_dim
+        + linear_value_dim * config.hidden_size
+    )
+
+
+def _qwen35_backbone_matmul_params(config: ModelConfig) -> int:
+    total = config.hidden_size * _padded_vocab(config.vocab_size)
+    for layer_type in config.layer_types or []:
+        total += _qwen35_attention_matmul_params(config, layer_type)
+        total += 3 * config.hidden_size * config.intermediate_size
+    return total
+
+
+def _qwen35_moe_backbone_matmul_params(config: ModelConfig) -> int:
     moe_hidden = int(config.moe_intermediate_size or config.intermediate_size)
     shared_hidden = int(config.shared_expert_intermediate_size or moe_hidden)
     total = config.hidden_size * _padded_vocab(config.vocab_size)
     for layer_type in config.layer_types or []:
-        if layer_type == "full_attention":
-            total += config.hidden_size * full_q_dim * 2
-            total += 2 * config.hidden_size * full_kv_dim
-            total += full_q_dim * config.hidden_size
-        else:
-            total += config.hidden_size * linear_conv_dim
-            total += config.hidden_size * linear_value_dim
-            total += 2 * config.hidden_size * int(config.linear_num_value_heads or config.num_heads)
-            total += linear_conv_dim * config.linear_conv_kernel_dim
-            total += linear_value_dim * config.hidden_size
+        total += _qwen35_attention_matmul_params(config, layer_type)
         total += config.num_experts_per_tok * (2 * moe_hidden * config.hidden_size + config.hidden_size * moe_hidden)
         total += config.hidden_size * config.num_experts
         total += 3 * config.hidden_size * shared_hidden
         total += config.hidden_size
+    return total
+
+
+def _gemma4_attention_matmul_params(config: ModelConfig, layer_idx: int) -> int:
+    head_dim = config.head_dim_for_layer(layer_idx)
+    kv_heads = config.kv_heads_for_layer(layer_idx)
+    q_dim = config.num_heads * head_dim
+    kv_dim = kv_heads * head_dim
+    total = config.hidden_size * q_dim + q_dim * config.hidden_size
+    first_shared = config.num_layers - config.num_kv_shared_layers
+    if layer_idx < first_shared:
+        total += config.hidden_size * kv_dim
+        if not (config.attention_k_eq_v and config.layer_types[layer_idx] == "full_attention"):
+            total += config.hidden_size * kv_dim
+    return total
+
+
+def _gemma4_backbone_matmul_params(config: ModelConfig) -> int:
+    total = config.hidden_size * _padded_vocab(config.vocab_size)
+    ple = int(config.hidden_size_per_layer_input)
+    if ple:
+        total += config.hidden_size * config.num_layers * ple
+    first_shared = config.num_layers - config.num_kv_shared_layers
+    for i in range(config.num_layers):
+        total += _gemma4_attention_matmul_params(config, i)
+        intermediate = config.intermediate_size * (2 if config.use_double_wide_mlp and i >= first_shared > 0 else 1)
+        total += 3 * config.hidden_size * intermediate
+        if ple:
+            total += config.hidden_size * ple + ple * config.hidden_size
     return total
 
 

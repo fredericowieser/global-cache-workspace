@@ -35,3 +35,51 @@ def test_convert_hf_forwards_processor_variants(monkeypatch):
             {"family": "llama", "variant": "longshot", "dtype": "bfloat16"},
         ),
     ]
+
+
+def test_convert_hf_accepts_qwen35_family(monkeypatch):
+    calls = []
+
+    def fake_convert_hf(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(cli, "convert_hf", fake_convert_hf)
+
+    cli.main(
+        [
+            "convert",
+            "hf",
+            "--family",
+            "qwen3_5",
+            "--model",
+            "tiny",
+            "--out",
+            "out",
+        ]
+    )
+
+    assert calls == [(("tiny", "out"), {"family": "qwen3_5", "variant": "tf", "dtype": "bfloat16"})]
+
+
+def test_convert_hf_accepts_gemma4_family(monkeypatch):
+    calls = []
+
+    def fake_convert_hf(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(cli, "convert_hf", fake_convert_hf)
+
+    cli.main(
+        [
+            "convert",
+            "hf",
+            "--family",
+            "gemma4",
+            "--model",
+            "tiny",
+            "--out",
+            "out",
+        ]
+    )
+
+    assert calls == [(("tiny", "out"), {"family": "gemma4", "variant": "tf", "dtype": "bfloat16"})]

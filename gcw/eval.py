@@ -390,7 +390,7 @@ def _legacy_generate_add_special_tokens(model) -> bool:
     config = getattr(model, "config", None)
     return bool(
         getattr(config, "legacy_bottleneck_generate", False)
-        and getattr(config, "family", None) in {"llama", "qwen3", "qwen3_5_moe"}
+        and getattr(config, "family", None) in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}
     )
 
 

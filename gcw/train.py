@@ -83,7 +83,7 @@ def train(config: TrainConfig) -> None:
         for parameter in backbone.parameters():
             parameter.requires_grad_(False)
     if use_fsdp:
-        _apply_activation_checkpointing(model)
+        _apply_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
         model = maybe_compile(model)
@@ -102,6 +102,8 @@ def train(config: TrainConfig) -> None:
     flops_per_tok = training_flops_per_token(config.model, config.sequence_len)
     run_meta = {
         "step": 0,
+        "batch_size": config.batch_size,
+        "sequence_len": config.sequence_len,
         "micro_tokens_per_step": micro_tokens,
         "grad_accum_steps": grad_accum_steps,
         "tokens_per_step": tokens_per_step,
@@ -141,6 +143,8 @@ def train(config: TrainConfig) -> None:
         loss_total = 0.0
         for micro_step in range(grad_accum_steps):
             batch = next(stream)
+            if step == 0 and micro_step == 0:
+                _validate_train_batch(batch.x, batch.y, config)
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
@@ -299,7 +303,7 @@ def _model_runtime_backends(model: torch.nn.Module, device: torch.device) -> dic
 def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
     state = {**base, "step": step}
     if loader is not None:
-        state["loader"] = loader
+        state["loader"] = _json_safe_loader_state(loader)
     return state
 
 
@@ -412,6 +416,20 @@ def _save_step_checkpoint(
     _save_training_state(path, _unwrap(model), optimizer, config, resume_state, fingerprint, rank)
 
 
+def _json_safe_loader_state(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return None
+    if isinstance(value, dict):
+        return {k: safe for k, v in value.items() if (safe := _json_safe_loader_state(v)) is not None}
+    if isinstance(value, list):
+        return [safe for item in value if (safe := _json_safe_loader_state(item)) is not None]
+    if isinstance(value, tuple):
+        return [safe for item in value if (safe := _json_safe_loader_state(item)) is not None]
+    if isinstance(value, str | int | float | bool) or value is None:
+        return value
+    return str(value)
+
+
 def _retained_checkpoint_every() -> int | None:
     keep = os.environ.get("GCW_KEEP_STEP_CHECKPOINTS", "0").lower()
     if keep not in {"1", "true", "yes", "on"}:
@@ -424,6 +442,17 @@ def _retained_checkpoint_every() -> int | None:
     if every <= 0:
         raise ValueError("GCW_STEP_CHECKPOINT_EVERY must be positive")
     return every
+
+
+def _validate_train_batch(x: torch.Tensor, y: torch.Tensor, config: TrainConfig) -> None:
+    if x.shape != y.shape:
+        raise ValueError(f"input and target batch shapes must match; got x={tuple(x.shape)} y={tuple(y.shape)}")
+    if x.ndim != 2:
+        raise ValueError(f"training batches must be 2D token tensors; got shape={tuple(x.shape)}")
+    if x.shape[0] != config.batch_size:
+        raise ValueError(f"loader batch size {x.shape[0]} does not match config.batch_size {config.batch_size}")
+    if x.shape[1] > config.sequence_len:
+        raise ValueError(f"loader sequence length {x.shape[1]} exceeds config.sequence_len {config.sequence_len}")
 
 
 def _model_loss(
@@ -624,8 +653,10 @@ def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device
     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
     from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-    layer_classes = _transformer_layer_classes()
+    layer_classes = _transformer_layer_classes(config.model.family)
     auto_wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=layer_classes)
+    # TODO: Decide whether FSDP should preserve the older DDP precision contract:
+    # fp32 parameter/optimizer storage with bf16 autocast compute.
     mixed_precision = (
         MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
         if config.bf16
@@ -653,18 +684,21 @@ def _fsdp_param_init_fn(device: torch.device):
     return init_fn
 
 
-def _transformer_layer_classes() -> set[type[torch.nn.Module]]:
+def _transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
     classes: set[type[torch.nn.Module]] = {Block}
-    try:
-        from gcw.models.qwen3 import Qwen35MoeBlock
+    if family == "gemma4":
+        from gcw.models.gemma4 import Gemma4Block
 
+        classes.add(Gemma4Block)
+    elif family in {"qwen3_5", "qwen3_5_moe"}:
+        from gcw.models.qwen3 import Qwen35Block, Qwen35MoeBlock
+
+        classes.add(Qwen35Block)
         classes.add(Qwen35MoeBlock)
-    except Exception:
-        pass
     return classes
 
 
-def _apply_activation_checkpointing(model: torch.nn.Module) -> None:
+def _apply_activation_checkpointing(model: torch.nn.Module, *, family: str) -> None:
     enabled = os.environ.get("GCW_FSDP_ACTIVATION_CHECKPOINTING", "1").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return
@@ -676,7 +710,7 @@ def _apply_activation_checkpointing(model: torch.nn.Module) -> None:
         )
     except ImportError:
         return
-    layer_classes = _transformer_layer_classes()
+    layer_classes = _transformer_layer_classes(family)
     wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
     apply_activation_checkpointing(model, checkpoint_wrapper_fn=wrapper, check_fn=lambda module: type(module) in layer_classes)
 

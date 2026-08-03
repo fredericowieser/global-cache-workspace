@@ -16,9 +16,18 @@ from gcw.config import (
 )
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
+from gcw.data.training import build_training_stream
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
-from gcw.train import _build_training_model, _checkpoint_metadata, _model_loss, train
+from gcw.train import (
+    _build_training_model,
+    _checkpoint_metadata,
+    _checkpoint_state,
+    _model_loss,
+    _transformer_layer_classes,
+    _validate_train_batch,
+    train,
+)
 from gcw.training_checkpoint import CheckpointCompatibilityError
 from gcw.training_checkpoint import save_training_checkpoint as real_save_training_checkpoint
 
@@ -246,12 +255,46 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp
     assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
 
 
+def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
+    monkeypatch.setitem(sys.modules, "gcw.models.qwen3", None)
+
+    classes = _transformer_layer_classes("llama")
+
+    assert classes
+
+
 def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
     cfg = tiny_train_config(tmp_path)
 
     model = _build_training_model(cfg, torch.device("cpu"), rank=1, use_fsdp=True)
 
     assert all(param.is_meta for param in model.parameters())
+
+
+def test_loader_uses_configured_batch_size_for_random_data(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.batch_size = 5
+    cfg.sequence_len = 7
+
+    batch = next(build_training_stream(cfg, torch.device("cpu"), rank=0, world_size=1))
+
+    assert batch.x.shape == (5, 7)
+    assert batch.y.shape == (5, 7)
+
+
+def test_validate_train_batch_rejects_batch_size_mismatch(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.batch_size = 4
+
+    x = torch.zeros(3, cfg.sequence_len, dtype=torch.long)
+    y = torch.zeros_like(x)
+
+    try:
+        _validate_train_batch(x, y, cfg)
+    except ValueError as exc:
+        assert "config.batch_size 4" in str(exc)
+    else:
+        raise AssertionError("expected batch size mismatch to fail")
 
 
 def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step(monkeypatch, tmp_path):
@@ -383,6 +426,16 @@ def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
     assert state["tokenizer_source"] == cfg.data.tokenizer_source
     assert state["tokenizer"] == "hf"
     assert state["backbone_checkpoint"] == cfg.backbone_checkpoint
+
+
+def test_checkpoint_state_drops_runtime_loader_tensors():
+    state = _checkpoint_state(
+        {"world_size": 1},
+        5,
+        {"kind": "sft", "row": 7, "attention_mask": torch.ones(1, 2, dtype=torch.bool)},
+    )
+
+    assert state == {"world_size": 1, "step": 5, "loader": {"kind": "sft", "row": 7}}
 
 
 def test_sft_batch_uses_next_token_targets():

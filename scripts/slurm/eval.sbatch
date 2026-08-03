@@ -21,6 +21,9 @@ EVAL_TOKENS="${EVAL_TOKENS:-}"
 OUT="${OUT:-}"
 EVAL_MANIFEST="${EVAL_MANIFEST:-}"
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
+if [[ -d "$PWD/.venv/include/python3.12" ]]; then
+  export CPATH="$PWD/.venv/include/python3.12:$PWD/.venv/include${CPATH:+:$CPATH}"
+fi
 mkdir -p slurm_out
 
 UV_RUN=(uv run --locked --extra gpu --extra eval)
