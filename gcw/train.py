@@ -31,6 +31,11 @@ def train_from_config(path: str | Path) -> None:
 
 
 def train(config: TrainConfig) -> None:
+    if config.mode == "cot_distillation":
+        from gcw.distill.trainer import train_distillation
+
+        train_distillation(config)
+        return
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
     _, rank, _, world_size = dist_info()

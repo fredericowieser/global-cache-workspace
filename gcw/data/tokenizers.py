@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
+from collections.abc import Mapping
 from typing import cast
 
 import torch
@@ -70,6 +73,7 @@ class TransformersTokenizer:
         except ImportError as exc:
             raise ImportError("HF tokenizers require the convert/eval extra with transformers installed") from exc
         self.enc = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
+        self.source = source
         self.eot_id = self.enc.eos_token_id or self.enc.pad_token_id or 0
         self.vocab_size = len(self.enc)
 
@@ -98,12 +102,30 @@ class TransformersTokenizer:
             add_generation_prompt=add_generation_prompt,
             enable_thinking=enable_thinking,
         )
-        if not isinstance(encoded, list) or any(not isinstance(token_id, int) for token_id in encoded):
+        token_ids: object = encoded.get("input_ids") if isinstance(encoded, Mapping) else encoded
+        if not isinstance(token_ids, list) or any(not isinstance(token_id, int) for token_id in token_ids):
             raise TypeError("tokenised chat template must return one list of token IDs")
-        return cast(list[int], encoded)
+        return cast(list[int], token_ids)
 
     def get_vocab_size(self) -> int:
         return self.vocab_size
+
+    def identity_sha256(self) -> str:
+        get_vocab = getattr(self.enc, "get_vocab", None)
+        vocab = get_vocab() if callable(get_vocab) else {}
+        payload = {
+            "source": getattr(self, "source", None),
+            "name_or_path": str(getattr(self.enc, "name_or_path", "")),
+            "vocab": sorted((str(token), int(token_id)) for token, token_id in vocab.items()),
+            "vocab_size": self.vocab_size,
+            "eos_token_id": getattr(self.enc, "eos_token_id", None),
+            "pad_token_id": getattr(self.enc, "pad_token_id", None),
+            "bos_token_id": getattr(self.enc, "bos_token_id", None),
+            "special_tokens_map": getattr(self.enc, "special_tokens_map", {}),
+            "chat_template": getattr(self.enc, "chat_template", None),
+        }
+        encoded = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
 
 def get_token_bytes(device: torch.device | str = "cpu") -> torch.Tensor:

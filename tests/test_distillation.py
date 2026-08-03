@@ -4,16 +4,22 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from gcw.checkpoint import load_checkpoint
 from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, ModelConfig, TrainConfig
+from gcw.distill import trainer as distill_trainer
 from gcw.distill.cache import truncate_last_cache_token
 from gcw.distill.data import iter_openmath_prompts
 from gcw.distill.objective import clipped_forward_kl
+from gcw.distill.pipeline import DistillationExample, distillation_example_loss
 from gcw.distill.prompt import ChatPrompt, format_chat_prompt
 from gcw.distill.session import BGTDecodeSession, sample_next_token
-from gcw.distill.teacher import split_teacher_reasoning, teacher_answer_logits
+from gcw.distill.teacher import sample_backbone_completion, split_teacher_reasoning, teacher_answer_logits
+from gcw.distill.traces import TeacherTraceStore
+from safetensors.torch import save_file
 from gcw.distill.schedule import processor_event_positions
 from gcw.models import build_model
-from gcw.models.cache_state import CacheState
+from gcw.models.bgt import BGT
+from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.data.tokenizers import TransformersTokenizer
 
 
@@ -55,6 +61,7 @@ def _distillation_train_config(**overrides) -> TrainConfig:
         "freeze_backbone": True,
         "backbone_checkpoint": "checkpoint",
         "batch_size": 1,
+        "max_steps": 1,
         "distillation": DistillationConfig(),
     }
     kwargs.update(overrides)
@@ -76,6 +83,7 @@ def test_distillation_config_accepts_explicit_v0_contract():
         ({"freeze_backbone": False}, "frozen backbone"),
         ({"model": ModelConfig()}, "BGT"),
         ({"batch_size": 2}, "batch_size=1"),
+        ({"max_steps": 2}, "max_steps=1"),
     ],
 )
 def test_distillation_config_rejects_unsupported_v0(overrides, message):
@@ -86,7 +94,8 @@ def test_distillation_config_rejects_unsupported_v0(overrides, message):
 def test_processor_event_positions_are_response_relative():
     assert processor_event_positions(max_response_tokens=0, process_every=64) == (0,)
     assert processor_event_positions(max_response_tokens=63, process_every=64) == (0,)
-    assert processor_event_positions(max_response_tokens=64, process_every=64) == (0, 64)
+    assert processor_event_positions(max_response_tokens=64, process_every=64) == (0,)
+    assert processor_event_positions(max_response_tokens=65, process_every=64) == (0, 64)
     assert processor_event_positions(max_response_tokens=130, process_every=64) == (0, 64, 128)
 
 
@@ -186,8 +195,18 @@ class RecordingZeroProcessor(torch.nn.Module):
         super().__init__()
         self.calls: list[tuple[int, bool]] = []
 
-    def forward(self, cache: CacheState, *, select_all: bool = False) -> CacheState:
+    def forward(
+        self,
+        cache: CacheState | StaticCacheState,
+        *,
+        select_all: bool = False,
+    ) -> CacheState | StaticCacheState:
         self.calls.append((cache.seq_len, select_all))
+        if isinstance(cache, StaticCacheState):
+            for key, value in zip(cache.keys, cache.values, strict=True):
+                key.zero_()
+                value.zero_()
+            return cache
         return CacheState(
             [torch.zeros_like(key) for key in cache.keys],
             [torch.zeros_like(value) for value in cache.values],
@@ -338,7 +357,7 @@ class FakeHFTokenizerBackend:
 
     def apply_chat_template(self, messages, **kwargs):
         self.calls.append((messages, kwargs))
-        return [1, 2, 3]
+        return {"input_ids": [1, 2, 3], "attention_mask": [1, 1, 1]}
 
 
 def test_transformers_tokenizer_exposes_thinking_chat_template():
@@ -358,3 +377,447 @@ def test_transformers_tokenizer_exposes_thinking_chat_template():
         "add_generation_prompt": True,
         "enable_thinking": False,
     }
+
+
+
+def test_distillation_example_loss_uses_teacher_cot_and_trains_only_bgt():
+    model = _tiny_bgt()
+    model.backbone.requires_grad_(False)
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1, 2, 3), trigger_ids=(4,)),
+        teacher_prompt=ChatPrompt(base_ids=(1, 2, 3), trigger_ids=(8, 9)),
+        teacher_reasoning_ids=(10, 11, 12),
+        response_ids=(5, 6, 7),
+    )
+
+    result = distillation_example_loss(
+        model,
+        example,
+        BGTDecodeSession(model, process_every=2),
+        temperature=1.1,
+        token_clip=0.05,
+    )
+    result.loss.backward()
+
+    assert torch.isfinite(result.loss)
+    assert result.answer_tokens == 3
+    assert result.event_cache_lengths == (3, 6)
+    assert all(parameter.grad is None for parameter in model.backbone.parameters())
+    assert any(parameter.grad is not None for parameter in model.cache_processor.parameters())
+
+
+
+def test_teacher_sampling_honours_reasoning_stop_sequence():
+    backbone = _tiny_bgt().backbone
+    prompt_ids = (1, 2, 3)
+    full = sample_backbone_completion(
+        backbone,
+        prompt_ids,
+        max_new_tokens=3,
+        eos_token_id=None,
+        stop_ids=None,
+        temperature=1.1,
+        top_p=1.0,
+        top_k=1,
+    )
+    stopped = sample_backbone_completion(
+        backbone,
+        prompt_ids,
+        max_new_tokens=3,
+        eos_token_id=None,
+        stop_ids=(full[0],),
+        temperature=1.1,
+        top_p=1.0,
+        top_k=1,
+    )
+
+    assert len(full) == 3
+    assert stopped == (full[0],)
+
+
+
+def test_teacher_trace_store_round_trips_and_rejects_prompt_drift(tmp_path):
+    path = tmp_path / "teacher-traces.jsonl"
+    store = TeacherTraceStore(path, fingerprint="teacher-v1")
+    store.put(source_index=7, prompt="original", reasoning_ids=(10, 11, 12))
+
+    reopened = TeacherTraceStore(path, fingerprint="teacher-v1")
+    assert reopened.get(source_index=7, prompt="original") == (10, 11, 12)
+    with pytest.raises(ValueError, match="prompt hash"):
+        reopened.get(source_index=7, prompt="changed")
+
+
+def test_teacher_trace_store_rejects_teacher_fingerprint_drift(tmp_path):
+    path = tmp_path / "teacher-traces.jsonl"
+    TeacherTraceStore(path, fingerprint="teacher-v1").put(
+        source_index=0,
+        prompt="p",
+        reasoning_ids=(1, 2),
+    )
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        TeacherTraceStore(path, fingerprint="teacher-v2")
+
+
+
+class TrainingHFBackend:
+    def apply_chat_template(self, messages, **kwargs):
+        base = [1, 2]
+        if not kwargs["add_generation_prompt"]:
+            return base
+        return base + ([8] if kwargs["enable_thinking"] else [3])
+
+    def encode(self, text, add_special_tokens=False):
+        del text, add_special_tokens
+        return [8, 9]
+
+
+def test_distillation_trainer_runs_one_finite_cpu_epoch(tmp_path, monkeypatch):
+    source_model = _tiny_bgt()
+    checkpoint = tmp_path / "backbone"
+    checkpoint.mkdir()
+    save_file(
+        {name: tensor.detach().clone() for name, tensor in source_model.backbone.state_dict().items()},
+        checkpoint / "model.safetensors",
+    )
+    data_path = tmp_path / "prompts.jsonl"
+    data_path.write_text('{"prompt":"solve this"}\n', encoding="utf-8")
+    output_dir = tmp_path / "run"
+
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = TrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    monkeypatch.setattr(distill_trainer, "get_tokenizer", lambda _: tokenizer)
+    monkeypatch.setattr(
+        distill_trainer,
+        "sample_backbone_completion",
+        lambda *args, **kwargs: (8, 9),
+    )
+    config = TrainConfig(
+        model=source_model.config,
+        data=DataConfig(
+            kind="openmath_prompts",
+            data_dir=str(data_path),
+            tokenizer="hf:fake",
+            sft_take_rows=1,
+        ),
+        mode="cot_distillation",
+        freeze_backbone=True,
+        backbone_checkpoint=str(checkpoint),
+        output_dir=str(output_dir),
+        batch_size=1,
+        max_steps=1,
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        distillation=DistillationConfig(
+            max_teacher_reasoning_tokens=2,
+            max_response_tokens=3,
+            top_k=1,
+            response_process_every=2,
+            reasoning_close_text="close",
+        ),
+    )
+
+    distill_trainer.train_distillation(config)
+
+    summary = __import__("json").loads((output_dir / "summary.json").read_text())
+    assert summary["seen_prompts"] == 1
+    assert summary["valid_prompts"] == 1
+    assert summary["skipped_prompts"] == 0
+    assert summary["optimizer_steps"] == 1
+    assert (output_dir / "final" / "model.safetensors").is_file()
+    assert len((output_dir / "metrics.jsonl").read_text().splitlines()) == 1
+    loaded, loaded_config, loaded_state = load_checkpoint(output_dir / "final")
+    assert isinstance(loaded, BGT)
+    assert loaded_config == source_model.config
+    assert loaded_state["valid_prompts"] == 1
+
+
+
+def test_clipped_forward_kl_computes_bfloat16_logits_in_float32():
+    student = torch.tensor([[[0.0, 1.0, -1.0]]], dtype=torch.bfloat16, requires_grad=True)
+    teacher = torch.tensor([[[1.0, 0.0, -1.0]]], dtype=torch.bfloat16)
+    loss = clipped_forward_kl(student, teacher, torch.ones((1, 1), dtype=torch.bool))
+
+    assert loss.dtype == torch.float32
+    assert torch.isfinite(loss)
+
+
+
+def test_blockwise_replay_matches_tokenwise_reference_between_events():
+    model = _tiny_bgt()
+    session = BGTDecodeSession(model, process_every=64)
+    prompt = ChatPrompt(base_ids=(1, 2, 3), trigger_ids=(4,))
+    response = (5, 6, 7, 8, 9)
+
+    next_logits, cache, events = session._start(prompt)
+    tokenwise = []
+    for response_index, token_id in enumerate(response):
+        tokenwise.append(next_logits)
+        consumed = response_index + 1
+        if consumed < len(response):
+            next_logits, cache = session._consume(
+                prompt,
+                token_id,
+                response_index,
+                consumed,
+                cache,
+                events,
+                will_continue=True,
+            )
+
+    blockwise = session.replay(prompt, response)
+    torch.testing.assert_close(blockwise.logits, torch.stack(tokenwise, dim=1), atol=1e-6, rtol=1e-5)
+
+
+
+def test_train_dispatches_distillation_before_distributed_initialisation(monkeypatch):
+    from gcw.train import train
+
+    calls = []
+    monkeypatch.setattr(distill_trainer, "train_distillation", lambda config: calls.append(config))
+    config = _distillation_train_config()
+
+    train(config)
+
+    assert calls == [config]
+
+
+
+def test_sample_next_token_masks_padded_model_vocabulary():
+    logits = torch.tensor([[0.0, 1.0, 100.0]])
+    token = sample_next_token(
+        logits,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        valid_vocab_size=2,
+    )
+    assert token.item() == 1
+
+
+
+def test_native_teacher_incremental_answer_logits_match_full_forward(monkeypatch):
+    backbone = _tiny_bgt().backbone
+    context = (1, 2, 3, 4)
+    response = (5, 6, 7)
+    expected_full = backbone.forward_full(torch.tensor([context + response]))
+    expected = expected_full[:, len(context) - 1 : len(context) - 1 + len(response)]
+    monkeypatch.setattr(
+        backbone,
+        "forward_full",
+        lambda _: (_ for _ in ()).throw(AssertionError("native teacher scoring must not project context logits")),
+    )
+
+    actual = teacher_answer_logits(backbone, context, response)
+
+    torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-5)
+
+
+
+def test_chunked_kl_matches_unchunked_value_and_student_gradient():
+    torch.manual_seed(3)
+    base_student = torch.randn(2, 5, 11)
+    teacher = torch.randn(2, 5, 11)
+    mask = torch.tensor([[True, True, False, True, True], [True, False, True, True, False]])
+    student_full = base_student.clone().requires_grad_(True)
+    student_chunked = base_student.clone().requires_grad_(True)
+
+    full = clipped_forward_kl(
+        student_full,
+        teacher,
+        mask,
+        temperature=1.1,
+        token_clip=0.05,
+        sequence_chunk_size=5,
+    )
+    chunked = clipped_forward_kl(
+        student_chunked,
+        teacher,
+        mask,
+        temperature=1.1,
+        token_clip=0.05,
+        sequence_chunk_size=2,
+    )
+    full.backward()
+    chunked.backward()
+
+    torch.testing.assert_close(chunked, full, atol=1e-7, rtol=1e-6)
+    torch.testing.assert_close(student_chunked.grad, student_full.grad, atol=1e-7, rtol=1e-6)
+
+
+
+@pytest.mark.parametrize(
+    ("processor_overrides", "message"),
+    [
+        ({"attention_dropout": 0.1}, "zero processor attention dropout"),
+        ({"processor_mode": "workspace_broadcast"}, "standard cache processor mode"),
+    ],
+)
+def test_distillation_config_rejects_nondeterministic_or_nonstandard_processor(processor_overrides, message):
+    processor = CacheProcessorConfig(
+        process_every=64,
+        topk=4,
+        hidden_size=16,
+        intermediate_size=32,
+        num_heads=2,
+        **processor_overrides,
+    )
+    model = ModelConfig(
+        variant="bgt",
+        family="qwen3",
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        cache_processor=processor,
+    )
+    with pytest.raises(ValueError, match=message):
+        _distillation_train_config(model=model)
+
+
+def test_openmath_take_zero_yields_no_records(tmp_path):
+    source = tmp_path / "rows.jsonl"
+    source.write_text('{"problem": "unused"}\n')
+    assert list(iter_openmath_prompts(source, take_rows=0)) == []
+
+
+
+def test_teacher_fingerprint_invalidates_seed_limit_and_chat_template(tmp_path):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "model.safetensors").write_bytes(b"frozen-weights")
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = FakeHFTokenizerBackend()
+    tokenizer.enc.chat_template = "template-v1"
+    tokenizer.enc.name_or_path = "fake"
+    tokenizer.enc.eos_token_id = 62
+    tokenizer.enc.pad_token_id = None
+    tokenizer.enc.bos_token_id = 1
+    tokenizer.enc.special_tokens_map = {"eos_token": "<eos>"}
+    tokenizer.enc.get_vocab = lambda: {"a": 0, "<eos>": 62}
+    tokenizer.source = "fake"
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    base = _distillation_train_config(
+        backbone_checkpoint=str(checkpoint),
+        seed=7,
+        distillation=DistillationConfig(max_teacher_reasoning_tokens=8),
+    )
+    baseline = distill_trainer._teacher_fingerprint(base, (8, 9), tokenizer)
+    changed_seed = _distillation_train_config(
+        backbone_checkpoint=str(checkpoint),
+        seed=8,
+        distillation=DistillationConfig(max_teacher_reasoning_tokens=8),
+    )
+    changed_limit = _distillation_train_config(
+        backbone_checkpoint=str(checkpoint),
+        seed=7,
+        distillation=DistillationConfig(max_teacher_reasoning_tokens=9),
+    )
+    assert distill_trainer._teacher_fingerprint(changed_seed, (8, 9), tokenizer) != baseline
+    assert distill_trainer._teacher_fingerprint(changed_limit, (8, 9), tokenizer) != baseline
+    tokenizer.enc.chat_template = "template-v2"
+    assert distill_trainer._teacher_fingerprint(base, (8, 9), tokenizer) != baseline
+
+
+
+def test_bf16_backbone_fp32_processor_rollout_and_replay_under_autocast():
+    model = _tiny_bgt()
+    model.backbone.to(dtype=torch.bfloat16)
+    assert next(model.cache_processor.parameters()).dtype == torch.float32
+    prompt = ChatPrompt(base_ids=(1, 2), trigger_ids=(3,))
+    session = BGTDecodeSession(model, process_every=2, valid_vocab_size=model.config.vocab_size)
+    generator = torch.Generator().manual_seed(4)
+
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        rollout = session.rollout(
+            prompt,
+            max_response_tokens=3,
+            eos_token_id=None,
+            temperature=1.0,
+            top_p=1.0,
+            top_k=1,
+            generator=generator,
+        )
+        replay = session.replay(prompt, rollout.response_ids)
+
+    assert replay.logits.shape[:2] == (1, 3)
+    replay.logits.float().sum().backward()
+    assert any(parameter.grad is not None for parameter in model.cache_processor.parameters())
+
+
+
+def test_bf16_final_checkpoint_round_trips_without_processor_requantisation(tmp_path):
+    model = _tiny_bgt().to(dtype=torch.bfloat16)
+    destination = tmp_path / "final"
+    expected_processor = {
+        name: tensor.detach().clone()
+        for name, tensor in model.cache_processor.state_dict().items()
+        if tensor.is_floating_point()
+    }
+    distill_trainer._publish_checkpoint(
+        destination,
+        model,
+        model.config,
+        {"dtype": "bfloat16", "valid_prompts": 1},
+    )
+
+    loaded, _, state = load_checkpoint(destination)
+
+    assert state["dtype"] == "bfloat16"
+    assert all(parameter.dtype == torch.bfloat16 for parameter in loaded.cache_processor.parameters())
+    for name, expected in expected_processor.items():
+        torch.testing.assert_close(loaded.cache_processor.state_dict()[name], expected, rtol=0, atol=0)
+
+
+
+def test_student_rollout_uses_static_cache(monkeypatch):
+    model = _tiny_bgt()
+    session = BGTDecodeSession(model, process_every=2, valid_vocab_size=model.config.vocab_size)
+    prompt = ChatPrompt(base_ids=(1, 2), trigger_ids=(3,))
+    monkeypatch.setattr(
+        model.backbone,
+        "forward_chunk",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("rollout must use static cache")),
+    )
+
+    rollout = session.rollout(
+        prompt,
+        max_response_tokens=3,
+        eos_token_id=None,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        generator=torch.Generator().manual_seed(5),
+    )
+
+    assert len(rollout.response_ids) == 3
+    assert len(rollout.event_cache_lengths) == 2
+
+
+
+def test_native_teacher_sampling_uses_static_cache(monkeypatch):
+    backbone = _tiny_bgt().backbone
+    monkeypatch.setattr(
+        backbone,
+        "forward_chunk",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("teacher sampling must use static cache")),
+    )
+    generated = sample_backbone_completion(
+        backbone,
+        (1, 2, 3),
+        max_new_tokens=3,
+        eos_token_id=None,
+        stop_ids=(),
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        valid_vocab_size=backbone.config.vocab_size,
+        generator=torch.Generator().manual_seed(6),
+    )
+    assert len(generated) == 3

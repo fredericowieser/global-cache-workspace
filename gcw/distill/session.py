@@ -7,8 +7,9 @@ import torch
 
 from gcw.distill.cache import truncate_last_cache_token
 from gcw.distill.prompt import ChatPrompt
+from gcw.distill.schedule import recurrent_event_due
 from gcw.models.bgt import BGT
-from gcw.models.cache_state import CacheState
+from gcw.models.cache_state import CacheState, StaticCacheState
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ def sample_next_token(
     temperature: float,
     top_p: float,
     top_k: int,
+    valid_vocab_size: int | None = None,
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
     """Sample one token per batch after temperature, top-k and nucleus filtering."""
@@ -40,6 +42,10 @@ def sample_next_token(
         raise ValueError("top_p must be in (0, 1]")
     if top_k < 0:
         raise ValueError("top_k must be non-negative")
+    if valid_vocab_size is not None:
+        if not 0 < valid_vocab_size <= logits.shape[-1]:
+            raise ValueError("valid_vocab_size must be within the model vocabulary")
+        logits = logits[:, :valid_vocab_size]
 
     filtered = logits / temperature
     if top_k:
@@ -54,8 +60,6 @@ def sample_next_token(
         filtered = torch.full_like(filtered, float("-inf")).scatter(-1, sorted_indices, sorted_logits)
 
     probabilities = torch.softmax(filtered, dim=-1)
-    if not bool(torch.isfinite(probabilities).all()) or not bool((probabilities.sum(dim=-1) > 0).all()):
-        raise RuntimeError("sampling produced an invalid probability distribution")
     return torch.multinomial(probabilities, num_samples=1, generator=generator).squeeze(-1)
 
 
@@ -74,6 +78,7 @@ class BGTDecodeSession:
         *,
         process_every: int,
         select_all: bool = False,
+        valid_vocab_size: int | None = None,
     ) -> None:
         if not isinstance(model, BGT):
             raise TypeError("BGTDecodeSession requires a BGT model")
@@ -84,29 +89,56 @@ class BGTDecodeSession:
         self.model = model
         self.process_every = process_every
         self.select_all = select_all
+        if valid_vocab_size is not None and not 0 < valid_vocab_size <= model.config.vocab_size:
+            raise ValueError("valid_vocab_size must be within the model vocabulary")
+        self.valid_vocab_size = valid_vocab_size
 
     def replay(self, prompt: ChatPrompt, response_ids: tuple[int, ...]) -> ReplayResult:
         if not response_ids:
             raise ValueError("replay requires at least one response token")
         self._validate_total_length(prompt, len(response_ids))
         next_logits, cache, event_cache_lengths = self._start(prompt)
-        aligned_logits: list[torch.Tensor] = []
+        aligned_chunks: list[torch.Tensor] = []
+        device = self.model.get_device()
+        response_offset = 0
 
-        for response_index, token_id in enumerate(response_ids):
-            aligned_logits.append(next_logits)
-            consumed = response_index + 1
-            next_logits, cache = self._consume(
-                prompt,
-                token_id,
-                response_index,
-                consumed,
-                cache,
-                event_cache_lengths,
-                will_continue=consumed < len(response_ids),
+        while response_offset < len(response_ids):
+            block_size = min(self.process_every, len(response_ids) - response_offset)
+            block_ids = response_ids[response_offset : response_offset + block_size]
+            aligned_chunks.append(next_logits[:, None, :])
+            event_follows = recurrent_event_due(
+                consumed_response_tokens=response_offset + block_size,
+                process_every=self.process_every,
+                will_continue=response_offset + block_size < len(response_ids),
             )
+            feed_count = block_size if event_follows else block_size - 1
+            if feed_count:
+                tokens = torch.tensor([block_ids[:feed_count]], dtype=torch.long, device=device)
+                token_position = len(prompt.full_ids) + response_offset
+                block_logits, raw_cache = self.model.backbone.forward_chunk(tokens, token_position, cache)
+                cache = self._require_cache_state(raw_cache)
+                aligned_chunks.append(block_logits[:, : block_size - 1, :])
+                next_logits = block_logits[:, -1, :]
 
+            if event_follows:
+                event_cache_lengths.append(cache.seq_len)
+                cache = self._process(cache)
+                last_token = torch.tensor([[block_ids[-1]]], dtype=torch.long, device=device)
+                last_position = len(prompt.full_ids) + response_offset + block_size - 1
+                refreshed_logits, raw_cache = self.model.backbone.forward_chunk(
+                    last_token,
+                    last_position,
+                    truncate_last_cache_token(cache),
+                )
+                cache = self._require_cache_state(raw_cache)
+                next_logits = refreshed_logits[:, -1, :]
+            response_offset += block_size
+
+        logits = torch.cat(aligned_chunks, dim=1)
+        if logits.shape[1] != len(response_ids):
+            raise RuntimeError("student replay logits did not align with every response token")
         return ReplayResult(
-            logits=torch.stack(aligned_logits, dim=1),
+            logits=logits,
             event_cache_lengths=tuple(event_cache_lengths),
         )
 
@@ -125,7 +157,10 @@ class BGTDecodeSession:
         if max_response_tokens <= 0:
             raise ValueError("max_response_tokens must be positive")
         self._validate_total_length(prompt, max_response_tokens)
-        next_logits, cache, event_cache_lengths = self._start(prompt)
+        next_logits, cache, event_cache_lengths = self._start_static(
+            prompt,
+            max_seq_len=len(prompt.full_ids) + max_response_tokens,
+        )
         response_ids: list[int] = []
 
         for response_index in range(max_response_tokens):
@@ -134,6 +169,7 @@ class BGTDecodeSession:
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
+                valid_vocab_size=self.valid_vocab_size,
                 generator=generator,
             )
             if sampled.numel() != 1:
@@ -145,9 +181,9 @@ class BGTDecodeSession:
             will_continue = not finished and consumed < max_response_tokens
             if not will_continue:
                 break
-            next_logits, cache = self._consume(
+            next_logits, cache = self._consume_static(
                 prompt,
-                token_id,
+                sampled[:, None],
                 response_index,
                 consumed,
                 cache,
@@ -159,6 +195,60 @@ class BGTDecodeSession:
             response_ids=tuple(response_ids),
             event_cache_lengths=tuple(event_cache_lengths),
         )
+
+    def _start_static(
+        self,
+        prompt: ChatPrompt,
+        *,
+        max_seq_len: int,
+    ) -> tuple[torch.Tensor, StaticCacheState, list[int]]:
+        device = self.model.get_device()
+        num_kv_heads, head_dim = self.model.config.stored_cache_shape
+        cache = StaticCacheState.allocate(
+            batch_size=1,
+            num_layers=self.model.config.cache_num_layers,
+            num_kv_heads=num_kv_heads,
+            max_seq_len=max_seq_len,
+            head_dim=head_dim,
+            device=device,
+            dtype=self.model.backbone.embed_tokens.weight.dtype,
+        )
+        base_ids = torch.tensor([prompt.base_ids], dtype=torch.long, device=device)
+        trigger_ids = torch.tensor([prompt.trigger_ids], dtype=torch.long, device=device)
+        _, cache = self.model.backbone.forward_chunk_static(base_ids, 0, cache, logits=False)
+        event_cache_lengths = [cache.seq_len]
+        cache = self._process_static(cache)
+        trigger_logits, cache = self.model.backbone.forward_chunk_static(
+            trigger_ids,
+            len(prompt.base_ids),
+            cache,
+        )
+        return trigger_logits[:, -1, :], cache, event_cache_lengths
+
+    def _consume_static(
+        self,
+        prompt: ChatPrompt,
+        token: torch.Tensor,
+        response_index: int,
+        consumed: int,
+        cache: StaticCacheState,
+        event_cache_lengths: list[int],
+        *,
+        will_continue: bool,
+    ) -> tuple[torch.Tensor, StaticCacheState]:
+        token_position = len(prompt.full_ids) + response_index
+        token_logits, cache = self.model.backbone.forward_chunk_static(token, token_position, cache)
+        next_logits = token_logits[:, -1, :]
+        if recurrent_event_due(
+            consumed_response_tokens=consumed,
+            process_every=self.process_every,
+            will_continue=will_continue,
+        ):
+            event_cache_lengths.append(cache.seq_len)
+            cache = self._process_static(cache)
+            refreshed_logits, cache = self.model.backbone.forward_chunk_static(token, token_position, cache)
+            next_logits = refreshed_logits[:, -1, :]
+        return next_logits, cache
 
     def _start(self, prompt: ChatPrompt) -> tuple[torch.Tensor, CacheState, list[int]]:
         device = self.model.get_device()
@@ -196,7 +286,11 @@ class BGTDecodeSession:
         cache = self._require_cache_state(raw_cache)
         next_logits = token_logits[:, -1, :]
 
-        if will_continue and consumed % self.process_every == 0:
+        if recurrent_event_due(
+            consumed_response_tokens=consumed,
+            process_every=self.process_every,
+            will_continue=will_continue,
+        ):
             event_cache_lengths.append(cache.seq_len)
             cache = self._process(cache)
             truncated = truncate_last_cache_token(cache)
@@ -212,6 +306,12 @@ class BGTDecodeSession:
     def _process(self, cache: CacheState) -> CacheState:
         processed = self.model.cache_processor(cache, select_all=self.select_all)
         return self._require_cache_state(processed)
+
+    def _process_static(self, cache: StaticCacheState) -> StaticCacheState:
+        processed = self.model.cache_processor(cache, select_all=self.select_all)
+        if not isinstance(processed, StaticCacheState):
+            raise TypeError("BGT distillation requires StaticCacheState-preserving processing")
+        return processed
 
     def _validate_total_length(self, prompt: ChatPrompt, response_length: int) -> None:
         total_length = len(prompt.full_ids) + response_length

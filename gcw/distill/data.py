@@ -24,6 +24,8 @@ def iter_openmath_prompts(
         raise ValueError("skip_rows must be non-negative")
     if take_rows is not None and take_rows < 0:
         raise ValueError("take_rows must be non-negative or null")
+    if take_rows == 0:
+        return
 
     retained = 0
     for source_index, row in enumerate(_iter_openmath_rows(source)):

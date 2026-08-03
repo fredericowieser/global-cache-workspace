@@ -124,6 +124,14 @@ Run the same configs directly inside an existing Slurm allocation:
 uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml
 ```
 
+Qwen3-0.6B on-policy self-distillation with privileged teacher reasoning has a bounded 128-prompt pilot:
+
+```bash
+uv run --extra gpu --extra convert gcw train --config configs/train/opsd/qwen3_06b_opsd_pilot128.yaml
+```
+
+This mode trains only BGT, excludes teacher reasoning and source solutions from KL positions, and processes cache at the prompt boundary and every 64 answer tokens. See [docs/opsd-distillation.md](docs/opsd-distillation.md).
+
 Icarus OpenMath configs are available for all shared SFT backbones:
 
 ```bash

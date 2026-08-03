@@ -416,8 +416,12 @@ class DistillationConfig:
     top_p: float = 1.0
     top_k: int = 0
     token_clip: float | None = 0.05
+    kl_sequence_chunk_size: int = 32
     response_process_every: int = 64
     boundary_selection: Literal["configured", "all"] = "configured"
+    gradient_accumulation_steps: int = 1
+    reasoning_close_text: str = "</think>\n\n"
+    skip_invalid_traces: bool = True
 
     def __post_init__(self) -> None:
         if self.epochs != 1:
@@ -434,10 +438,16 @@ class DistillationConfig:
             raise ValueError("distillation top_k must be non-negative")
         if self.token_clip is not None and self.token_clip <= 0:
             raise ValueError("distillation token_clip must be positive or null")
+        if self.kl_sequence_chunk_size <= 0:
+            raise ValueError("distillation kl_sequence_chunk_size must be positive")
         if self.response_process_every <= 0:
             raise ValueError("distillation response_process_every must be positive")
         if self.boundary_selection not in {"configured", "all"}:
             raise ValueError("distillation boundary_selection must be 'configured' or 'all'")
+        if self.gradient_accumulation_steps <= 0:
+            raise ValueError("distillation gradient_accumulation_steps must be positive")
+        if not self.reasoning_close_text:
+            raise ValueError("distillation reasoning_close_text must not be empty")
 
 
 @dataclass
@@ -493,6 +503,15 @@ class TrainConfig:
                 raise ValueError("cot_distillation requires distillation configuration")
             if self.model.variant != "bgt":
                 raise ValueError("cot_distillation V0 requires a BGT model")
+            processor = self.model.cache_processor
+            if processor is None:
+                raise ValueError("cot_distillation V0 requires a cache processor")
+            if processor.attention_dropout != 0.0:
+                raise ValueError("cot_distillation V0 requires zero processor attention dropout")
+            if processor.processor_mode != "standard":
+                raise ValueError("cot_distillation V0 requires standard cache processor mode")
+            if self.model.flow_processor is not None:
+                raise ValueError("cot_distillation V0 does not support Flow processors")
             if self.model.family != "qwen3":
                 raise ValueError("cot_distillation V0 supports only the qwen3 family")
             if not self.freeze_backbone:
@@ -505,6 +524,12 @@ class TrainConfig:
                 raise ValueError("cot_distillation requires openmath_prompts data")
             if not self.data.tokenizer.startswith("hf:"):
                 raise ValueError("cot_distillation requires one Hugging Face chat tokenizer")
+            if self.distributed != "none":
+                raise ValueError("cot_distillation V0 supports only single-process training")
+            if self.resume is not None:
+                raise ValueError("cot_distillation V0 does not yet support exact optimiser resume")
+            if self.max_steps != 1:
+                raise ValueError("cot_distillation uses one finite epoch and requires max_steps=1")
 
 
 @dataclass
