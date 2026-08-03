@@ -84,12 +84,16 @@ def split_teacher_reasoning(
     generated_ids: tuple[int, ...],
     *,
     close_ids: tuple[int, ...],
+    eos_token_id: int | None = None,
+    close_at_eos: bool = False,
 ) -> tuple[int, ...]:
     """Keep the teacher trajectory through its first thinking-close separator."""
     if not close_ids:
         raise ValueError("thinking close separator must not be empty")
     stop = _find_subsequence(generated_ids, close_ids)
     if stop is None:
+        if close_at_eos and eos_token_id is not None and generated_ids and generated_ids[-1] == eos_token_id:
+            return generated_ids[:-1] + close_ids
         raise ValueError("teacher generation is missing the thinking close separator")
     return generated_ids[: stop + len(close_ids)]
 

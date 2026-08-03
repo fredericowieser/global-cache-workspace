@@ -422,6 +422,7 @@ class DistillationConfig:
     gradient_accumulation_steps: int = 1
     reasoning_open_text: str = "<think>\n"
     reasoning_close_text: str = "</think>\n\n"
+    close_reasoning_at_eos: bool = True
     skip_invalid_traces: bool = True
 
     def __post_init__(self) -> None:

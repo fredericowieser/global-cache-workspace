@@ -46,6 +46,8 @@ Teacher reasoning is cached in append-only `teacher-traces.jsonl`. Every row bin
 
 A fingerprint or prompt mismatch fails closed. Teacher and student use independent per-row RNG streams, so reusing a cached trace does not change student sampling.
 
+Native teacher `</think>` output is preferred. If a direct-answer SFT checkpoint instead terminates its worked solution with EOT, V0 removes that terminal EOT and appends the configured thinking-close delimiter. Budget-exhausted generations with neither terminator remain invalid.
+
 ## Pilot
 
 The checked-in cluster pilot processes 128 prompts once:

@@ -77,6 +77,7 @@ distillation:
   gradient_accumulation_steps: 1
   reasoning_open_text: "<think>\n"
   reasoning_close_text: "</think>\n\n"
+  close_reasoning_at_eos: true
   skip_invalid_traces: true
 
 wandb:

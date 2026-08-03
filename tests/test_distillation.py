@@ -360,6 +360,17 @@ def test_split_teacher_reasoning_rejects_missing_close_separator():
         split_teacher_reasoning((1, 2, 3), close_ids=(8, 9))
 
 
+def test_teacher_reasoning_closes_terminal_eot_for_direct_answer_checkpoint():
+    reasoning = split_teacher_reasoning(
+        (1, 2, 3, 0),
+        close_ids=(8, 9),
+        eos_token_id=0,
+        close_at_eos=True,
+    )
+
+    assert reasoning == (1, 2, 3, 8, 9)
+
+
 def test_openmath_prompt_reader_ignores_answer_content(tmp_path):
     path = tmp_path / "prompts.jsonl"
     path.write_text(

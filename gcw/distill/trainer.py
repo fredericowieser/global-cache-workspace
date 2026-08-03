@@ -247,7 +247,14 @@ def _build_example(
                 valid_vocab_size=tokenizer.get_vocab_size(),
                 generator=teacher_generator,
             )
-            reasoning_ids = split_teacher_reasoning(generated, close_ids=close_ids)
+            reasoning_ids = split_teacher_reasoning(
+                generated,
+                close_ids=close_ids,
+                eos_token_id=tokenizer.eot_id,
+                close_at_eos=distill.close_reasoning_at_eos,
+            )
+            if len(reasoning_ids) > distill.max_teacher_reasoning_tokens:
+                raise ValueError("closed teacher reasoning exceeds max_teacher_reasoning_tokens")
         except ValueError as exc:
             raise InvalidDistillationExample(str(exc)) from exc
         trace_store.put(
@@ -347,7 +354,7 @@ def _teacher_fingerprint(
         while chunk := handle.read(8 * 1024 * 1024):
             digest.update(chunk)
     payload = {
-        "schema": "gcw.teacher-trace.v3",
+        "schema": "gcw.teacher-trace.v4",
         "checkpoint_sha256": digest.hexdigest(),
         "model": to_dict(config.model),
         "tokenizer": config.data.tokenizer,
@@ -364,6 +371,7 @@ def _teacher_fingerprint(
             "open_ids": list(open_ids),
             "reasoning_close_text": distill.reasoning_close_text,
             "close_ids": list(close_ids),
+            "close_reasoning_at_eos": distill.close_reasoning_at_eos,
         },
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
