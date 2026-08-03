@@ -31,6 +31,31 @@ uv sync --extra gpu --extra convert --extra eval
 
 GPU compute must run inside a Slurm allocation, for example with `srun --jobid=<job> --overlap ...`.
 
+### UV Extras
+
+Use extras according to the code path being run:
+
+| Use case | Extras |
+|---|---|
+| CPU development and tests | `--extra cpu` |
+| CUDA training | `--extra gpu` |
+| Evaluation with `lm-eval`/Transformers | `--extra eval` |
+| Checkpoint conversion | `--extra convert` |
+| Qwen3.5 linear-attention training or eval | `--extra qwen35` |
+
+Qwen3.5 configs require `--extra qwen35` in addition to the normal GPU/eval extras. This installs the optimized
+`causal-conv1d` and `flash-linear-attention` kernels; without it, Qwen3.5 falls back to slower, higher-memory PyTorch
+implementations and may OOM at otherwise valid batch sizes.
+
+`scripts/submit_array.sh` defaults to `UV_EXTRAS="--extra gpu --extra eval"`. Override the training and eval extras
+when submitting Qwen3.5 arrays:
+
+```bash
+TRAIN_UV_EXTRAS="--extra gpu --extra eval --extra qwen35" \
+EVAL_UV_EXTRAS="--extra gpu --extra eval --extra qwen35" \
+scripts/submit_array.sh configs/experiments/qwen35_2b_*.yaml
+```
+
 ## Data
 
 Prepare FineWeb-Edu shards for scratch pretraining:
