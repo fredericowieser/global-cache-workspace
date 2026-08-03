@@ -405,11 +405,46 @@ class WandbConfig:
             raise ValueError("wandb.id is required when wandb.resume='must'")
 
 
+@dataclass(frozen=True)
+class DistillationConfig:
+    epochs: int = 1
+    teacher_thinking: bool = True
+    student_thinking: bool = False
+    max_teacher_reasoning_tokens: int = 1024
+    max_response_tokens: int = 1024
+    temperature: float = 1.1
+    top_p: float = 1.0
+    top_k: int = 0
+    token_clip: float | None = 0.05
+    response_process_every: int = 64
+    boundary_selection: Literal["configured", "all"] = "configured"
+
+    def __post_init__(self) -> None:
+        if self.epochs != 1:
+            raise ValueError("cot_distillation V0 requires exactly one epoch")
+        if not self.teacher_thinking or self.student_thinking:
+            raise ValueError("cot_distillation requires a thinking teacher and thinking-off student")
+        if self.max_teacher_reasoning_tokens <= 0 or self.max_response_tokens <= 0:
+            raise ValueError("distillation token limits must be positive")
+        if self.temperature <= 0:
+            raise ValueError("distillation temperature must be positive")
+        if not 0 < self.top_p <= 1:
+            raise ValueError("distillation top_p must be in (0, 1]")
+        if self.top_k < 0:
+            raise ValueError("distillation top_k must be non-negative")
+        if self.token_clip is not None and self.token_clip <= 0:
+            raise ValueError("distillation token_clip must be positive or null")
+        if self.response_process_every <= 0:
+            raise ValueError("distillation response_process_every must be positive")
+        if self.boundary_selection not in {"configured", "all"}:
+            raise ValueError("distillation boundary_selection must be 'configured' or 'all'")
+
+
 @dataclass
 class TrainConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
-    mode: Literal["pretrain", "sft"] = "pretrain"
+    mode: Literal["pretrain", "sft", "cot_distillation"] = "pretrain"
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     freeze_backbone: bool = False
     backbone_checkpoint: str | None = None
@@ -437,6 +472,7 @@ class TrainConfig:
     eval_batches: int = 10
     eval_on_start: bool = False
     wandb: WandbConfig = field(default_factory=WandbConfig)
+    distillation: DistillationConfig | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -446,10 +482,29 @@ class TrainConfig:
             self.data = DataConfig(**self.data)
         if isinstance(self.wandb, dict):
             self.wandb = WandbConfig(**self.wandb)
+        if isinstance(self.distillation, dict):
+            self.distillation = DistillationConfig(**self.distillation)
         if isinstance(self.resume, dict):
             self.resume = ResumeConfig(**self.resume)
         if self.resume is not None and self.backbone_checkpoint is not None:
             raise ValueError("resume and backbone_checkpoint cannot be configured together")
+        if self.mode == "cot_distillation":
+            if self.distillation is None:
+                raise ValueError("cot_distillation requires distillation configuration")
+            if self.model.variant != "bgt":
+                raise ValueError("cot_distillation V0 requires a BGT model")
+            if self.model.family != "qwen3":
+                raise ValueError("cot_distillation V0 supports only the qwen3 family")
+            if not self.freeze_backbone:
+                raise ValueError("cot_distillation requires a frozen backbone")
+            if self.backbone_checkpoint is None:
+                raise ValueError("cot_distillation requires backbone_checkpoint")
+            if self.batch_size != 1:
+                raise ValueError("cot_distillation V0 requires batch_size=1")
+            if self.data.kind != "openmath_prompts":
+                raise ValueError("cot_distillation requires openmath_prompts data")
+            if not self.data.tokenizer.startswith("hf:"):
+                raise ValueError("cot_distillation requires one Hugging Face chat tokenizer")
 
 
 @dataclass

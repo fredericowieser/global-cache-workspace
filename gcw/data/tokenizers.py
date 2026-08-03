@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+from typing import cast
 
 import torch
 from tokenizers import Tokenizer as HFTokenizer
@@ -80,6 +81,26 @@ class TransformersTokenizer:
         if not isinstance(decoded, str):
             raise TypeError("tokenizer decode returned multiple sequences")
         return decoded
+
+    def apply_chat_template(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        tokenize: bool,
+        add_generation_prompt: bool,
+        enable_thinking: bool,
+    ) -> list[int]:
+        if not tokenize:
+            raise ValueError("training chat templates must be tokenised")
+        encoded = self.enc.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=add_generation_prompt,
+            enable_thinking=enable_thinking,
+        )
+        if not isinstance(encoded, list) or any(not isinstance(token_id, int) for token_id in encoded):
+            raise TypeError("tokenised chat template must return one list of token IDs")
+        return cast(list[int], encoded)
 
     def get_vocab_size(self) -> int:
         return self.vocab_size
