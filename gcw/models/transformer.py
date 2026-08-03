@@ -661,6 +661,8 @@ def _estimate_qwen35_moe_non_embedding_params(config: ModelConfig) -> int:
 
 
 def _estimate_gemma4_attention_params(config: ModelConfig, layer_idx: int) -> int:
+    if config.layer_types is None:
+        raise ValueError("Gemma4 parameter accounting requires layer_types")
     head_dim = config.head_dim_for_layer(layer_idx)
     kv_heads = config.kv_heads_for_layer(layer_idx)
     q_dim = config.num_heads * head_dim

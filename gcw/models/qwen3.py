@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import cast
+from typing import Any, Callable, cast
 
 import torch
 import torch.nn as nn
@@ -22,37 +22,56 @@ from gcw.models.transformer import (
 )
 from gcw.models.windowed_cache import WindowedCache
 
-try:
-    from fla.ops.gated_delta_rule import (
-        chunk_gated_delta_rule as _fla_chunk_gated_delta_rule,
-        fused_recurrent_gated_delta_rule as _fla_recurrent_gated_delta_rule,
-    )
-except Exception:
-    _fla_chunk_gated_delta_rule = None
-    _fla_recurrent_gated_delta_rule = None
+Kernel = Callable[..., Any]
+_fla_chunk_gated_delta_rule: Kernel | None = None
+_fla_recurrent_gated_delta_rule: Kernel | None = None
+_causal_conv1d_fn: Kernel | None = None
+_hf_qwen35_torch_chunk_gated_delta_rule: Kernel | None = None
+_hf_qwen35_torch_recurrent_gated_delta_rule: Kernel | None = None
+_hf_qwen35_moe_torch_chunk_gated_delta_rule: Kernel | None = None
+_hf_qwen35_moe_torch_recurrent_gated_delta_rule: Kernel | None = None
+_HF_ACT2FN: Any = None
+_hf_use_experts_implementation: Kernel | None = None
 
 try:
-    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
+    from fla.ops.gated_delta_rule import (
+        chunk_gated_delta_rule as _imported_fla_chunk_gated_delta_rule,
+        fused_recurrent_gated_delta_rule as _imported_fla_recurrent_gated_delta_rule,
+    )
 except Exception:
-    _causal_conv1d_fn = None
+    pass
+else:
+    _fla_chunk_gated_delta_rule = _imported_fla_chunk_gated_delta_rule
+    _fla_recurrent_gated_delta_rule = _imported_fla_recurrent_gated_delta_rule
+
+try:
+    from causal_conv1d import causal_conv1d_fn as _imported_causal_conv1d_fn
+except Exception:
+    pass
+else:
+    _causal_conv1d_fn = _imported_causal_conv1d_fn
 
 try:
     from transformers.models.qwen3_5.modeling_qwen3_5 import (
-        torch_chunk_gated_delta_rule as _hf_qwen35_torch_chunk_gated_delta_rule,
-        torch_recurrent_gated_delta_rule as _hf_qwen35_torch_recurrent_gated_delta_rule,
+        torch_chunk_gated_delta_rule as _imported_hf_qwen35_torch_chunk_gated_delta_rule,
+        torch_recurrent_gated_delta_rule as _imported_hf_qwen35_torch_recurrent_gated_delta_rule,
     )
 except Exception:
-    _hf_qwen35_torch_chunk_gated_delta_rule = None
-    _hf_qwen35_torch_recurrent_gated_delta_rule = None
+    pass
+else:
+    _hf_qwen35_torch_chunk_gated_delta_rule = _imported_hf_qwen35_torch_chunk_gated_delta_rule
+    _hf_qwen35_torch_recurrent_gated_delta_rule = _imported_hf_qwen35_torch_recurrent_gated_delta_rule
 
 try:
     from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
-        torch_chunk_gated_delta_rule as _hf_qwen35_moe_torch_chunk_gated_delta_rule,
-        torch_recurrent_gated_delta_rule as _hf_qwen35_moe_torch_recurrent_gated_delta_rule,
+        torch_chunk_gated_delta_rule as _imported_hf_qwen35_moe_torch_chunk_gated_delta_rule,
+        torch_recurrent_gated_delta_rule as _imported_hf_qwen35_moe_torch_recurrent_gated_delta_rule,
     )
 except Exception:
-    _hf_qwen35_moe_torch_chunk_gated_delta_rule = None
-    _hf_qwen35_moe_torch_recurrent_gated_delta_rule = None
+    pass
+else:
+    _hf_qwen35_moe_torch_chunk_gated_delta_rule = _imported_hf_qwen35_moe_torch_chunk_gated_delta_rule
+    _hf_qwen35_moe_torch_recurrent_gated_delta_rule = _imported_hf_qwen35_moe_torch_recurrent_gated_delta_rule
 
 _hf_torch_chunk_gated_delta_rule = _hf_qwen35_torch_chunk_gated_delta_rule or _hf_qwen35_moe_torch_chunk_gated_delta_rule
 _hf_torch_recurrent_gated_delta_rule = (
@@ -60,11 +79,13 @@ _hf_torch_recurrent_gated_delta_rule = (
 )
 
 try:
-    from transformers.activations import ACT2FN as _HF_ACT2FN
-    from transformers.integrations import use_experts_implementation as _hf_use_experts_implementation
+    from transformers.activations import ACT2FN as _imported_hf_act2fn
+    from transformers.integrations import use_experts_implementation as _imported_hf_use_experts_implementation
 except Exception:
-    _HF_ACT2FN = None
-    _hf_use_experts_implementation = None
+    pass
+else:
+    _HF_ACT2FN = _imported_hf_act2fn
+    _hf_use_experts_implementation = _imported_hf_use_experts_implementation
 
 
 def _has_fla_gated_delta_rule() -> bool:
@@ -128,7 +149,7 @@ class Qwen35Attention(nn.Module):
         self.cache_idx = cache_idx
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
-        self.head_dim = int(config.head_dim)
+        self.head_dim = config.head_dim_for_layer(layer_idx)
         self.rotary_style = config.rotary_style
         q_dim = self.num_heads * self.head_dim
         kv_dim = self.num_kv_heads * self.head_dim
@@ -215,8 +236,9 @@ class Qwen35GatedDeltaNet(nn.Module):
         self.hidden_size = config.hidden_size
         self.num_v_heads = int(config.linear_num_value_heads or config.num_heads)
         self.num_k_heads = int(config.linear_num_key_heads or config.num_kv_heads)
-        self.head_k_dim = int(config.linear_key_head_dim or config.head_dim)
-        self.head_v_dim = int(config.linear_value_head_dim or config.head_dim)
+        default_head_dim = config.head_dim_for_layer(layer_idx)
+        self.head_k_dim = int(config.linear_key_head_dim or default_head_dim)
+        self.head_v_dim = int(config.linear_value_head_dim or default_head_dim)
         self.key_dim = self.num_k_heads * self.head_k_dim
         self.value_dim = self.num_v_heads * self.head_v_dim
         self.conv_kernel_size = int(config.linear_conv_kernel_dim)
@@ -333,6 +355,8 @@ class Qwen35GatedDeltaNet(nn.Module):
         )
         if query.shape[1] == 1 and not needs_grad:
             recurrent_impl = _fla_recurrent_gated_delta_rule if use_fla else _hf_torch_recurrent_gated_delta_rule
+            if recurrent_impl is None:
+                raise RuntimeError("Qwen3.5 recurrent gated-delta kernel is unavailable")
             return recurrent_impl(
                 query,
                 key,
@@ -344,6 +368,8 @@ class Qwen35GatedDeltaNet(nn.Module):
                 use_qk_l2norm_in_kernel=True,
             )
         chunk_impl = _fla_chunk_gated_delta_rule if use_fla else _hf_torch_chunk_gated_delta_rule
+        if chunk_impl is None:
+            raise RuntimeError("Qwen3.5 chunked gated-delta kernel is unavailable")
         return chunk_impl(
             query,
             key,
@@ -373,6 +399,8 @@ class Qwen35Block(nn.Module):
         self.layer_idx = layer_idx
         self.layer_type = config.layer_types[layer_idx] if config.layer_types is not None else "full_attention"
         self.input_layernorm = Qwen35RMSNorm(config.hidden_size, config.norm_eps)
+        self.linear_attn: Qwen35GatedDeltaNet | None
+        self.self_attn: Qwen35Attention | None
         if self.layer_type == "linear_attention":
             self.linear_attn = Qwen35GatedDeltaNet(config, layer_idx)
             self.self_attn = None
@@ -382,7 +410,7 @@ class Qwen35Block(nn.Module):
             self.self_attn = Qwen35Attention(config, layer_idx, cache_idx)
             self.linear_attn = None
         self.post_attention_layernorm = Qwen35RMSNorm(config.hidden_size, config.norm_eps)
-        self.mlp = Qwen35MLP(config, config.intermediate_size)
+        self.mlp: nn.Module = Qwen35MLP(config, config.intermediate_size)
 
     def forward(
         self,
@@ -399,10 +427,14 @@ class Qwen35Block(nn.Module):
     ]:
         h = self.input_layernorm(x)
         if self.layer_type == "linear_attention":
+            if self.linear_attn is None:
+                raise RuntimeError("linear-attention block has no linear attention module")
             attn_out, new_linear_state = self.linear_attn(h, linear_state)
             keys = values = None
             scores = attn_out.float().norm(dim=-1)
         else:
+            if self.self_attn is None:
+                raise RuntimeError("full-attention block has no attention module")
             attn_out, keys, values, scores = self.self_attn(h, cos_sin, past)
             new_linear_state = None
         x = x + attn_out
@@ -419,12 +451,16 @@ class Qwen35Block(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         h = self.input_layernorm(x)
         if self.layer_type == "linear_attention":
+            if self.linear_attn is None:
+                raise RuntimeError("linear-attention block has no linear attention module")
             states = cache.linear_states or {}
             attn_out, new_state = self.linear_attn(h, states.get(self.layer_idx))
             states[self.layer_idx] = new_state
             cache.linear_states = states
             scores = attn_out.float().norm(dim=-1)
         else:
+            if self.self_attn is None:
+                raise RuntimeError("full-attention block has no attention module")
             attn_out, scores = self.self_attn.forward_static(h, cos_sin, cache, start_pos, end_pos)
         x = x + attn_out
         x = x + self.mlp(self.post_attention_layernorm(x))
@@ -485,9 +521,9 @@ def qwen35_moe_load_balancing_loss(
     num_experts: int,
     top_k: int,
     attention_mask: torch.Tensor | None = None,
-) -> torch.Tensor | int:
+) -> torch.Tensor:
     if not router_logits:
-        return 0
+        raise ValueError("router_logits must contain at least one layer")
     compute_device = router_logits[0].device
     gate_logits = torch.cat([logits.to(compute_device) for logits in router_logits], dim=0)
     routing_weights = F.softmax(gate_logits, dim=-1)
@@ -521,7 +557,8 @@ class Qwen35MoeBlock(Qwen35Block):
         super().__init__(config, layer_idx, cache_idx)
         self.mlp = Qwen35MoeSparseMoeBlock(config)
 
-    def forward(
+    # MoE blocks expose router logits in addition to the dense block outputs.
+    def forward(  # type: ignore[override]
         self,
         x: torch.Tensor,
         cos_sin: tuple[torch.Tensor, torch.Tensor],
@@ -537,10 +574,14 @@ class Qwen35MoeBlock(Qwen35Block):
     ]:
         h = self.input_layernorm(x)
         if self.layer_type == "linear_attention":
+            if self.linear_attn is None:
+                raise RuntimeError("linear-attention block has no linear attention module")
             attn_out, new_linear_state = self.linear_attn(h, linear_state)
             keys = values = None
             scores = attn_out.float().norm(dim=-1)
         else:
+            if self.self_attn is None:
+                raise RuntimeError("full-attention block has no attention module")
             attn_out, keys, values, scores = self.self_attn(h, cos_sin, past)
             new_linear_state = None
         x = x + attn_out
@@ -558,12 +599,16 @@ class Qwen35MoeBlock(Qwen35Block):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         h = self.input_layernorm(x)
         if self.layer_type == "linear_attention":
+            if self.linear_attn is None:
+                raise RuntimeError("linear-attention block has no linear attention module")
             states = cache.linear_states or {}
             attn_out, new_state = self.linear_attn(h, states.get(self.layer_idx))
             states[self.layer_idx] = new_state
             cache.linear_states = states
             scores = attn_out.float().norm(dim=-1)
         else:
+            if self.self_attn is None:
+                raise RuntimeError("full-attention block has no attention module")
             attn_out, scores = self.self_attn.forward_static(h, cos_sin, cache, start_pos, end_pos)
         x = x + attn_out
         mlp_out, _ = self.mlp(self.post_attention_layernorm(x))
@@ -582,8 +627,8 @@ class Qwen35TF(TF):
         self.embed_tokens = nn.Embedding(vocab, config.hidden_size)
         cache_index_by_layer = {layer: idx for idx, layer in enumerate(config.cache_layer_indices)}
         self.layers = nn.ModuleList(self.block_cls(config, i, cache_index_by_layer.get(i)) for i in range(config.num_layers))
-        self.norm = Qwen35RMSNorm(config.hidden_size, config.norm_eps)
-        rotary_dim = int(int(config.head_dim) * config.partial_rotary_factor)
+        self.norm = Qwen35RMSNorm(config.hidden_size, config.norm_eps)  # type: ignore[assignment]
+        rotary_dim = int(config.head_dim_for_layer(0) * config.partial_rotary_factor)
         self.rotary = RotaryCache(config.sequence_len, rotary_dim, config.rope_theta)
         self.lm_head = None if config.tie_embeddings else Linear(config.hidden_size, vocab, bias=False)
 
@@ -600,7 +645,7 @@ class Qwen35TF(TF):
                     nn.init.zeros_(module.bias)
             elif isinstance(module, nn.Embedding):
                 nn.init.normal_(module.weight, 0.0, std)
-            elif isinstance(module, Qwen35MoeExperts):
+            elif isinstance(module, _Qwen35MoeExperts):
                 nn.init.normal_(module.gate_up_proj, 0.0, std)
                 nn.init.normal_(module.down_proj, 0.0, std)
             elif isinstance(module, Qwen35RMSNorm):
@@ -619,7 +664,8 @@ class Qwen35TF(TF):
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
         cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
-        for layer in self.layers:
+        for module in self.layers:
+            layer = cast(Qwen35Block, module)
             x, _, _, _, _ = layer(x, cos_sin, None, None)
         x = self.norm(x)
         if targets is not None:
@@ -649,9 +695,15 @@ class Qwen35TF(TF):
         has_cache = cache is not None and cache.scores.numel() > 0
         linear_states = {} if cache is None or cache.linear_states is None else dict(cache.linear_states)
         cache_idx = 0
-        for layer in self.layers:
+        for module in self.layers:
+            layer = cast(Qwen35Block, module)
             if layer.layer_type == "full_attention":
-                past = None if not has_cache else cache.layer(cache_idx)
+                if has_cache:
+                    if cache is None:
+                        raise RuntimeError("cache state disappeared during cached attention")
+                    past = cache.layer(cache_idx)
+                else:
+                    past = None
                 x, k, v, scores, _ = layer(x, cos_sin, past, None)
                 keys.append(k)
                 values.append(v)
@@ -681,7 +733,8 @@ class Qwen35TF(TF):
         pos = torch.arange(start_pos, end_pos, device=input_ids.device)
         cos_sin = self.rotary.get(pos, x.dtype)
         layer_scores: list[torch.Tensor] = []
-        for layer in self.layers:
+        for module in self.layers:
+            layer = cast(Qwen35Block, module)
             x, scores = layer.forward_static(x, cos_sin, cache, start_pos, end_pos)
             layer_scores.append(scores)
         x = self.norm(x)

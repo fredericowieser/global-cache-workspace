@@ -39,6 +39,8 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
 
 def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> int:
     if config.family == "gemma4":
+        if config.layer_types is None:
+            raise ValueError("Gemma4 FLOP accounting requires layer_types")
         total = 0
         for i in range(config.num_layers):
             window = min(seq_len, int(config.sliding_window or seq_len)) if config.layer_types[i] == "sliding_attention" else seq_len
@@ -92,6 +94,8 @@ def _qwen35_moe_backbone_matmul_params(config: ModelConfig) -> int:
 
 
 def _gemma4_attention_matmul_params(config: ModelConfig, layer_idx: int) -> int:
+    if config.layer_types is None:
+        raise ValueError("Gemma4 FLOP accounting requires layer_types")
     head_dim = config.head_dim_for_layer(layer_idx)
     kv_heads = config.kv_heads_for_layer(layer_idx)
     q_dim = config.num_heads * head_dim

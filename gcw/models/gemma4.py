@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -12,10 +13,14 @@ from gcw.models.transformer import Linear, TF, _autocast_dtype, flash_sdpa
 from gcw.models.transformer import _causal_chunk_bias, _matches_stop_sequence
 from gcw.models.windowed_cache import WindowedCache
 
+_HF_ACT2FN: Any = None
+
 try:
-    from transformers.activations import ACT2FN as _HF_ACT2FN
+    from transformers.activations import ACT2FN as _imported_hf_act2fn
 except Exception:
-    _HF_ACT2FN = None
+    pass
+else:
+    _HF_ACT2FN = _imported_hf_act2fn
 
 
 def _act_fn(name: str):
@@ -57,6 +62,7 @@ class Gemma4ScaledWordEmbedding(nn.Embedding):
     def __init__(self, num_embeddings: int, embedding_dim: int, padding_idx: int | None, embed_scale: float):
         super().__init__(num_embeddings, embedding_dim, padding_idx)
         self.scalar_embed_scale = embed_scale
+        self.embed_scale: torch.Tensor
         self.register_buffer("embed_scale", torch.tensor(embed_scale), persistent=False)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -86,8 +92,12 @@ class Gemma4RotaryCache(nn.Module):
 
     def _head_dim(self, layer_type: str) -> int:
         if layer_type == "full_attention":
-            return int(self.config.global_head_dim or self.config.head_dim)
-        return int(self.config.head_dim)
+            head_dim = self.config.global_head_dim or self.config.head_dim
+        else:
+            head_dim = self.config.head_dim
+        if head_dim is None:
+            raise ValueError("Gemma4 rotary cache requires a resolved head_dim")
+        return head_dim
 
     def _inv_freq(self, layer_type: str, head_dim: int, device: torch.device) -> torch.Tensor:
         params = self.rope_parameters.get(layer_type, {})
@@ -306,6 +316,7 @@ class Gemma4Block(nn.Module):
         self.post_attention_layernorm = Gemma4RMSNorm(config.hidden_size, config.norm_eps)
         self.pre_feedforward_layernorm = Gemma4RMSNorm(config.hidden_size, config.norm_eps)
         self.post_feedforward_layernorm = Gemma4RMSNorm(config.hidden_size, config.norm_eps)
+        self.layer_scalar: torch.Tensor
         self.register_buffer("layer_scalar", torch.ones(1))
         self.hidden_size_per_layer_input = int(config.hidden_size_per_layer_input)
         if self.hidden_size_per_layer_input:
@@ -392,8 +403,8 @@ class Gemma4TF(TF):
         )
         cache_index_by_layer = {layer: idx for idx, layer in enumerate(config.cache_layer_indices)}
         self.layers = nn.ModuleList(self.block_cls(config, i, cache_index_by_layer.get(i)) for i in range(config.num_layers))
-        self.norm = Gemma4RMSNorm(config.hidden_size, config.norm_eps)
-        self.rotary = Gemma4RotaryCache(config)
+        self.norm = Gemma4RMSNorm(config.hidden_size, config.norm_eps)  # type: ignore[assignment]
+        self.rotary = Gemma4RotaryCache(config)  # type: ignore[assignment]
         self.hidden_size_per_layer_input = int(config.hidden_size_per_layer_input)
         if self.hidden_size_per_layer_input:
             self.embed_tokens_per_layer = Gemma4ScaledWordEmbedding(
@@ -460,8 +471,9 @@ class Gemma4TF(TF):
         dtype: torch.dtype,
     ) -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
         positions = torch.arange(start_pos, start_pos + seq_len, device=device)
+        rotary = cast(Gemma4RotaryCache, self.rotary)
         return {
-            layer_type: self.rotary.get(positions, layer_type, dtype)
+            layer_type: rotary.get(positions, layer_type, dtype)
             for layer_type in set(self.config.layer_types or ["full_attention"])
         }
 
@@ -476,7 +488,8 @@ class Gemma4TF(TF):
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
         position_embeddings = self._position_embeddings(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
-        for i, layer in enumerate(self.layers):
+        for i, module in enumerate(self.layers):
+            layer = cast(Gemma4Block, module)
             per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
             x, _, _, _ = layer(x, per_layer_input, position_embeddings[layer.layer_type], None, shared_kv_states, 0)
         x = self.norm(x)
@@ -510,7 +523,8 @@ class Gemma4TF(TF):
         has_cache = cache is not None and cache.scores.numel() > 0
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
         cache_idx = 0
-        for i, layer in enumerate(self.layers):
+        for i, module in enumerate(self.layers):
+            layer = cast(Gemma4Block, module)
             per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
             if layer.self_attn.is_kv_shared_layer:
                 x, _, _, scores = layer(
@@ -522,7 +536,12 @@ class Gemma4TF(TF):
                     start_pos,
                 )
             else:
-                past = None if not has_cache else cache.layer(cache_idx)
+                if has_cache:
+                    if cache is None:
+                        raise RuntimeError("cache state disappeared during cached attention")
+                    past = cache.layer(cache_idx)
+                else:
+                    past = None
                 x, k, v, scores = layer(
                     x,
                     per_layer_input,
@@ -561,7 +580,8 @@ class Gemma4TF(TF):
         position_embeddings = self._position_embeddings(start_pos, input_ids.shape[1], input_ids.device, x.dtype)
         layer_scores: list[torch.Tensor] = []
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
-        for i, layer in enumerate(self.layers):
+        for i, module in enumerate(self.layers):
+            layer = cast(Gemma4Block, module)
             per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
             x, scores = layer.forward_static(
                 x,
@@ -608,7 +628,11 @@ class Gemma4TF(TF):
         out = input_ids[:, -self.config.sequence_len :]
         if out.shape[1] == 0:
             raise ValueError("generate requires at least one input token")
-        cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+        cache: CacheState | WindowedCache = CacheState(
+            [],
+            [],
+            input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32),
+        )
         logits = None
         if process_prefill_windows:
             for start in range(0, out.shape[1], process_every):

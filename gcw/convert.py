@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import json
-from typing import cast
+from typing import Any, cast
 
 import torch
 from safetensors.torch import load_file
@@ -191,21 +191,21 @@ def _validated_variant(value: str) -> Variant:
 def _load_hf_model(model_id: str, *, torch_dtype, family: str):
     from transformers import AutoModelForCausalLM
 
-    if family == "qwen3_5_moe":
+    multimodal_model_cls: Any | None = None
+    if family in {"qwen3_5_moe", "gemma4"}:
         try:
             from transformers import AutoModelForMultimodalLM
         except ImportError:
             pass
         else:
-            return AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
-    if family == "gemma4":
-        try:
-            from transformers import AutoModelForMultimodalLM
-        except ImportError:
-            AutoModelForMultimodalLM = None
-        if AutoModelForMultimodalLM is not None:
+            multimodal_model_cls = AutoModelForMultimodalLM
+    if family == "qwen3_5_moe":
+        if multimodal_model_cls is not None:
+            return multimodal_model_cls.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+    elif family == "gemma4":
+        if multimodal_model_cls is not None:
             try:
-                return AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+                return multimodal_model_cls.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
             except ValueError:
                 pass
     return AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
@@ -254,7 +254,7 @@ def _qwen35_shared_config_kwargs(
     variant: Variant,
     family: Family,
     intermediate_size: int,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     heads = int(hf_cfg.num_attention_heads)
     hidden = int(hf_cfg.hidden_size)
     head_dim = int(getattr(hf_cfg, "head_dim", hidden // heads))
@@ -289,7 +289,7 @@ def _qwen35_shared_config_kwargs(
     )
 
 
-def _qwen35_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
+def _qwen35_config_from_hf_text(hf_cfg, variant: Variant) -> ModelConfig:
     return ModelConfig(
         **_qwen35_shared_config_kwargs(
             hf_cfg,
@@ -300,7 +300,7 @@ def _qwen35_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
     )
 
 
-def _qwen35_moe_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
+def _qwen35_moe_config_from_hf_text(hf_cfg, variant: Variant) -> ModelConfig:
     return ModelConfig(
         **_qwen35_shared_config_kwargs(
             hf_cfg,
@@ -317,7 +317,7 @@ def _qwen35_moe_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
     )
 
 
-def _gemma4_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
+def _gemma4_config_from_hf_text(hf_cfg, variant: Variant) -> ModelConfig:
     if bool(getattr(hf_cfg, "enable_moe_block", False)):
         raise NotImplementedError("Gemma4 MoE blocks are not implemented in gcw yet.")
     if bool(getattr(hf_cfg, "attention_bias", False)):

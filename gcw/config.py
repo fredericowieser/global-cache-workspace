@@ -321,7 +321,9 @@ class ModelConfig:
     def stored_cache_shape(self) -> tuple[int, int]:
         shapes = self.stored_cache_shapes
         if not shapes:
-            return self.num_kv_heads, int(self.head_dim)
+            if self.head_dim is None:
+                raise ValueError("stored cache shape requires a resolved head_dim")
+            return self.num_kv_heads, self.head_dim
         unique = set(shapes)
         if len(unique) > 1:
             raise ValueError("stored cache layers do not have a uniform KV shape")
@@ -345,8 +347,12 @@ class ModelConfig:
 
     def head_dim_for_layer(self, layer_idx: int) -> int:
         if self.family == "gemma4" and self.layer_types is not None and self.layer_types[layer_idx] == "full_attention":
-            return int(self.global_head_dim or self.head_dim)
-        return int(self.head_dim)
+            head_dim = self.global_head_dim or self.head_dim
+        else:
+            head_dim = self.head_dim
+        if head_dim is None:
+            raise ValueError("cache head dimension has not been resolved")
+        return head_dim
 
     @property
     def _experts_implementation(self) -> str:
