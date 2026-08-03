@@ -198,6 +198,7 @@ def train_distillation(config: TrainConfig) -> None:
         "answer_tokens_per_second": answer_tokens / elapsed,
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0,
         "teacher_trace_fingerprint": trace_fingerprint,
+        "tokenizer_source": config.data.tokenizer.removeprefix("hf:"),
         "dtype": "bfloat16" if config.bf16 and device.type == "cuda" else "float32",
     }
     if config.bf16 and device.type == "cuda":

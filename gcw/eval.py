@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 import os
+import subprocess
 import tempfile
 import time
 
@@ -12,7 +14,7 @@ import torch
 from gcw.checkpoint import load_checkpoint
 from gcw.common import base_dir
 from gcw.data.shards import data_loader
-from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, get_token_bytes
+from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, TransformersTokenizer, get_token_bytes
 from gcw.eval_support import (
     encode_generate_prompt,
     stop_token_sequences,
@@ -21,6 +23,7 @@ from gcw.eval_support import (
     truncate_context_continuation,
 )
 from gcw.loss_eval import evaluate_nll_bpb
+from gcw.opsd_eval import OpsdEvalCondition, build_opsd_eval_prompt, greedy_opsd_response
 
 
 _encode_generate_prompt = encode_generate_prompt
@@ -80,7 +83,13 @@ FORGETTING_TASKS = [
 
 
 class GCWEvalLM(TemplateLM):
-    def __init__(self, model, tokenizer, batch_size: int = 8):
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        batch_size: int = 8,
+        opsd_condition: OpsdEvalCondition | None = None,
+    ):
         if not HAS_LM_EVAL:
             raise ImportError("Install the eval extra: uv sync --extra eval")
         super().__init__()
@@ -90,6 +99,8 @@ class GCWEvalLM(TemplateLM):
         self.batch_size = batch_size
         self.max_length = model.config.sequence_len
         self.add_special_tokens_for_generate = _legacy_generate_add_special_tokens(model)
+        self.opsd_condition = opsd_condition
+        self.opsd_generation_records: list[dict] = []
 
     @property
     def tokenizer_name(self) -> str:
@@ -180,6 +191,8 @@ class GCWEvalLM(TemplateLM):
 
     @torch.no_grad()
     def generate_until(self, requests, disable_tqdm: bool = False):
+        if self.opsd_condition is not None:
+            return self._generate_until_opsd(requests)
         if os.environ.get("GCW_EVAL_REFERENCE_GENERATE") == "1":
             return self._generate_until_reference(requests)
         outs: list[str | None] = [None] * len(requests)
@@ -219,6 +232,62 @@ class GCWEvalLM(TemplateLM):
                     tokens = _trim_generated_token_ids(tokens, stop_sequences, self.eot_token_id)
                     text = _trim_until(self.tok_decode(tokens), until)
                     outs[out_idx] = text
+        return outs
+
+    @torch.no_grad()
+    def _generate_until_opsd(self, requests):
+        outs = []
+        condition = self.opsd_condition
+        if condition is None:
+            raise RuntimeError("OPSD generation requires an explicit condition")
+        for req in requests:
+            prompt, kwargs = req.args
+            requested_max_new = int(kwargs.get("max_gen_toks", 256))
+            max_new = condition.max_response_tokens
+            until = _normalize_until(kwargs.get("until"))
+            stop_sequence_lists = _stop_token_sequences(self.tokenizer, until)
+            stop_sequences = tuple(tuple(sequence) for sequence in stop_sequence_lists)
+            chat_prompt = build_opsd_eval_prompt(
+                self.tokenizer,
+                prompt,
+                enable_thinking=condition.enable_thinking,
+                reasoning_open_text=condition.reasoning_open_text,
+            )
+            rollout = greedy_opsd_response(
+                self.model,
+                self.tokenizer,
+                prompt,
+                max_response_tokens=max_new,
+                condition=condition,
+                stop_sequences=stop_sequences,
+            )
+            tokens = _trim_generated_token_ids(
+                list(rollout.response_ids),
+                stop_sequence_lists,
+                self.eot_token_id,
+            )
+            text = _trim_until(self.tok_decode(tokens), until)
+            outs.append(text)
+            self.opsd_generation_records.append(
+                {
+                    "request_index": len(self.opsd_generation_records),
+                    "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                    "base_token_ids_sha256": _token_ids_sha256(chat_prompt.base_ids),
+                    "full_prompt_token_ids_sha256": _token_ids_sha256(chat_prompt.full_ids),
+                    "base_tokens": len(chat_prompt.base_ids),
+                    "trigger_tokens": len(chat_prompt.trigger_ids),
+                    "response_tokens": len(tokens),
+                    "max_response_tokens": max_new,
+                    "task_requested_max_response_tokens": requested_max_new,
+                    "raw_response_tokens": len(rollout.response_ids),
+                    "cache_event_positions": (
+                        [0, *range(64, len(rollout.response_ids), 64)]
+                        if condition.processor_enabled
+                        else []
+                    ),
+                    "cache_event_lengths": list(rollout.event_cache_lengths),
+                }
+            )
         return outs
 
     @torch.no_grad()
@@ -344,6 +413,188 @@ def run_task_groups(
         _write_partial_results(merged)
         _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress), merged)
     return merged
+
+
+def run_opsd_screen(
+    checkpoint: str | Path,
+    *,
+    source_revision: str,
+    tokenizer_source: str,
+    datasets_cache: str,
+    enable_thinking: bool,
+    processor_enabled: bool,
+    tasks: tuple[str, ...] = ("gsm8k_openmath", "svamp", "gsm8k_hard"),
+    limit: int = 64,
+) -> dict:
+    if not HAS_LM_EVAL:
+        raise ImportError("Install the eval extra: uv sync --extra eval")
+    if limit <= 0:
+        raise ValueError("OPSD screen limit must be positive")
+    if len(source_revision) != 40 or any(
+        character not in "0123456789abcdef" for character in source_revision
+    ):
+        raise ValueError("OPSD screen source revision must be a full lowercase Git SHA")
+    _verify_source_revision(source_revision)
+    datasets_cache_path = Path(datasets_cache).resolve()
+    if not datasets_cache_path.is_dir():
+        raise ValueError("OPSD screen datasets cache must be an existing directory")
+    os.environ["HF_DATASETS_CACHE"] = str(datasets_cache_path)
+    allowed_tasks = {"gsm8k_openmath", "svamp", "gsm8k_hard"}
+    if not tasks or not set(tasks) <= allowed_tasks:
+        raise ValueError("OPSD screen tasks must be GSM8K, SVAMP, or GSM-Hard")
+
+    import lm_eval
+    from lm_eval.tasks import TaskManager
+
+    device = _eval_device(0)
+    model, cfg, state = load_checkpoint(checkpoint, device=device)
+    tokenizer = TransformersTokenizer(tokenizer_source.removeprefix("hf:"))
+    condition = OpsdEvalCondition(
+        enable_thinking=enable_thinking,
+        processor_enabled=processor_enabled,
+    )
+    lm = GCWEvalLM(model, tokenizer, batch_size=1, opsd_condition=condition)
+    task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
+    evaluated = lm_eval.simple_evaluate(
+        model=lm,
+        tasks=list(tasks),
+        num_fewshot=0,
+        limit=limit,
+        bootstrap_iters=0,
+        log_samples=True,
+        verbosity="ERROR",
+        task_manager=task_manager,
+        confirm_run_unsafe_code=True,
+        apply_chat_template=False,
+    )
+    if evaluated is None:
+        raise RuntimeError("lm-eval returned no OPSD screen result")
+    checkpoint_path = Path(checkpoint).resolve()
+    sample_manifest = _opsd_sample_manifest(evaluated, tasks)
+    if len(sample_manifest) != len(lm.opsd_generation_records):
+        raise ValueError("OPSD screen lm-eval samples differ from generation records")
+    return {
+        "schema_version": 1,
+        "kind": "opsd_quick_screen_condition",
+        "source_revision": source_revision,
+        "tokenizer_source": tokenizer_source,
+        "tokenizer_identity_sha256": tokenizer.identity_sha256(),
+        "datasets_cache": str(datasets_cache_path),
+        "condition": {
+            "name": condition.name,
+            "enable_thinking": enable_thinking,
+            "processor_enabled": processor_enabled,
+            "process_every": condition.process_every,
+            "select_all": condition.select_all,
+            "reasoning_open_text": condition.reasoning_open_text,
+            "max_response_tokens": condition.max_response_tokens,
+        },
+        "checkpoint": str(checkpoint_path),
+        "checkpoint_sha256": _sha256_file(checkpoint_path / "model.safetensors"),
+        "checkpoint_manifest": _checkpoint_manifest(checkpoint_path),
+        "model_config": asdict(cfg),
+        "train_state": _json_safe(state),
+        "tasks": list(tasks),
+        "task_config_sha256": {
+            task: _sha256_file(Path("configs/tasks") / f"{task}.yaml") for task in tasks
+        },
+        "dataset_files": _opsd_dataset_file_identity(tasks),
+        "limit_per_task": limit,
+        "generation_policy": {
+            "do_sample": False,
+            "temperature": 0.0,
+            "top_k": 1,
+            "fewshot": 0,
+            "apply_chat_template_in_lm_eval": False,
+        },
+        "sample_manifest": sample_manifest,
+        "generation_records": lm.opsd_generation_records,
+        "lm_eval": _json_safe(evaluated),
+    }
+
+
+def _token_ids_sha256(token_ids: tuple[int, ...]) -> str:
+    return hashlib.sha256(
+        json.dumps(token_ids, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _checkpoint_manifest(checkpoint: Path) -> dict[str, object]:
+    files = {}
+    for name in ("model.safetensors", "config.json", "train_state.json"):
+        path = checkpoint / name
+        if not path.is_file():
+            raise ValueError(f"OPSD screen checkpoint is missing {name}")
+        files[name] = {"size_bytes": path.stat().st_size, "sha256": _sha256_file(path)}
+    manifest_sha256 = hashlib.sha256(
+        json.dumps(files, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {"files": files, "manifest_sha256": manifest_sha256}
+
+
+def _opsd_sample_manifest(evaluated: dict, tasks: tuple[str, ...]) -> list[dict[str, object]]:
+    samples = evaluated.get("samples")
+    if not isinstance(samples, dict):
+        raise ValueError("OPSD screen requires lm-eval sample logs")
+    manifest: list[dict[str, object]] = []
+    seen: set[tuple[object, ...]] = set()
+    for task in tasks:
+        rows = samples.get(task)
+        if not isinstance(rows, list):
+            raise ValueError(f"OPSD screen sample logs are missing task {task}")
+        for row in rows:
+            required = ("doc_id", "doc_hash", "prompt_hash", "target_hash")
+            if not isinstance(row, dict) or any(key not in row for key in required):
+                raise ValueError("OPSD screen sample identity fields are incomplete")
+            identity = (task, *(row[key] for key in required))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            manifest.append({"task": task, **{key: row[key] for key in required}})
+    return manifest
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(8 * 1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _opsd_dataset_file_identity(tasks: tuple[str, ...]) -> dict[str, dict[str, str | int]]:
+    cache_root = Path(os.environ.get("HF_DATASETS_CACHE", base_dir() / "hf_datasets_eval_v3"))
+    patterns = {
+        "gsm8k_openmath": "gsm8k-test.arrow",
+        "svamp": "svamp-test.arrow",
+        "gsm8k_hard": "gsm-hard-train.arrow",
+    }
+    identity: dict[str, dict[str, str | int]] = {}
+    for task in tasks:
+        matches = sorted(cache_root.rglob(patterns[task]))
+        if len(matches) != 1:
+            raise ValueError(f"OPSD screen expected one cached dataset file for {task}, got {len(matches)}")
+        path = matches[0].resolve()
+        identity[task] = {
+            "path": str(path),
+            "size_bytes": path.stat().st_size,
+            "sha256": _sha256_file(path),
+        }
+    return identity
+
+
+def _verify_source_revision(expected: str) -> None:
+    repository = Path(__file__).resolve().parents[1]
+    actual = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+    ).strip()
+    if actual != expected:
+        raise ValueError("OPSD screen source revision differs from the live checkout")
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=repository, text=True
+    )
+    if dirty:
+        raise ValueError("OPSD screen requires a clean source checkout")
 
 
 def _filter_skipped_tasks(runs: list[tuple[list[str], int]]) -> list[tuple[list[str], int]]:

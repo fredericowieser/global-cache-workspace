@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -79,6 +80,7 @@ class BGTDecodeSession:
         process_every: int,
         select_all: bool = False,
         valid_vocab_size: int | None = None,
+        processor_enabled: bool = True,
     ) -> None:
         if not isinstance(model, BGT):
             raise TypeError("BGTDecodeSession requires a BGT model")
@@ -89,6 +91,7 @@ class BGTDecodeSession:
         self.model = model
         self.process_every = process_every
         self.select_all = select_all
+        self.processor_enabled = processor_enabled
         if valid_vocab_size is not None and not 0 < valid_vocab_size <= model.config.vocab_size:
             raise ValueError("valid_vocab_size must be within the model vocabulary")
         self.valid_vocab_size = valid_vocab_size
@@ -120,7 +123,7 @@ class BGTDecodeSession:
                 aligned_chunks.append(block_logits[:, : block_size - 1, :])
                 next_logits = block_logits[:, -1, :]
 
-            if event_follows:
+            if event_follows and self.processor_enabled:
                 event_cache_lengths.append(cache.seq_len)
                 cache = self._process(cache)
                 last_token = torch.tensor([[block_ids[-1]]], dtype=torch.long, device=device)
@@ -153,9 +156,14 @@ class BGTDecodeSession:
         top_p: float,
         top_k: int,
         generator: torch.Generator | None = None,
+        stop_sequences: Sequence[Sequence[int]] = (),
+        greedy: bool = False,
     ) -> RolloutResult:
         if max_response_tokens <= 0:
             raise ValueError("max_response_tokens must be positive")
+        normalized_stop_sequences = tuple(tuple(sequence) for sequence in stop_sequences)
+        if any(not sequence for sequence in normalized_stop_sequences):
+            raise ValueError("stop sequences must be non-empty")
         self._validate_total_length(prompt, max_response_tokens)
         next_logits, cache, event_cache_lengths = self._start_static(
             prompt,
@@ -164,20 +172,30 @@ class BGTDecodeSession:
         response_ids: list[int] = []
 
         for response_index in range(max_response_tokens):
-            sampled = sample_next_token(
-                next_logits,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-                valid_vocab_size=self.valid_vocab_size,
-                generator=generator,
-            )
+            if greedy:
+                greedy_logits = next_logits
+                if self.valid_vocab_size is not None:
+                    greedy_logits = greedy_logits[:, : self.valid_vocab_size]
+                sampled = torch.argmax(greedy_logits, dim=-1)
+            else:
+                sampled = sample_next_token(
+                    next_logits,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    valid_vocab_size=self.valid_vocab_size,
+                    generator=generator,
+                )
             if sampled.numel() != 1:
                 raise ValueError("distillation rollout supports batch size one")
             token_id = int(sampled.item())
             response_ids.append(token_id)
             consumed = response_index + 1
-            finished = eos_token_id is not None and token_id == eos_token_id
+            finished = (eos_token_id is not None and token_id == eos_token_id) or any(
+                len(response_ids) >= len(sequence)
+                and tuple(response_ids[-len(sequence) :]) == sequence
+                for sequence in normalized_stop_sequences
+            )
             will_continue = not finished and consumed < max_response_tokens
             if not will_continue:
                 break
@@ -216,8 +234,10 @@ class BGTDecodeSession:
         base_ids = torch.tensor([prompt.base_ids], dtype=torch.long, device=device)
         trigger_ids = torch.tensor([prompt.trigger_ids], dtype=torch.long, device=device)
         _, cache = self.model.backbone.forward_chunk_static(base_ids, 0, cache, logits=False)
-        event_cache_lengths = [cache.seq_len]
-        cache = self._process_static(cache)
+        event_cache_lengths: list[int] = []
+        if self.processor_enabled:
+            event_cache_lengths.append(cache.seq_len)
+            cache = self._process_static(cache)
         trigger_logits, cache = self.model.backbone.forward_chunk_static(
             trigger_ids,
             len(prompt.base_ids),
@@ -239,7 +259,7 @@ class BGTDecodeSession:
         token_position = len(prompt.full_ids) + response_index
         token_logits, cache = self.model.backbone.forward_chunk_static(token, token_position, cache)
         next_logits = token_logits[:, -1, :]
-        if recurrent_event_due(
+        if self.processor_enabled and recurrent_event_due(
             consumed_response_tokens=consumed,
             process_every=self.process_every,
             will_continue=will_continue,
@@ -257,8 +277,10 @@ class BGTDecodeSession:
 
         _, raw_cache = self.model.backbone.forward_chunk(base_ids, 0, logits=False)
         cache = self._require_cache_state(raw_cache)
-        event_cache_lengths = [cache.seq_len]
-        cache = self._process(cache)
+        event_cache_lengths: list[int] = []
+        if self.processor_enabled:
+            event_cache_lengths.append(cache.seq_len)
+            cache = self._process(cache)
 
         trigger_logits, raw_cache = self.model.backbone.forward_chunk(
             trigger_ids,
@@ -286,7 +308,7 @@ class BGTDecodeSession:
         cache = self._require_cache_state(raw_cache)
         next_logits = token_logits[:, -1, :]
 
-        if recurrent_event_due(
+        if self.processor_enabled and recurrent_event_due(
             consumed_response_tokens=consumed,
             process_every=self.process_every,
             will_continue=will_continue,

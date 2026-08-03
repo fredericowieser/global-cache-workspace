@@ -63,3 +63,72 @@ def test_context_continuation_truncation_keeps_at_least_one_context_token():
     ctx, cont = truncate_context_continuation([1], [2, 3, 4, 5, 6], max_length=3)
     assert ctx == [3]
     assert cont == [4, 5, 6]
+
+
+
+def test_opsd_eval_chat_prompt_controls_thinking_without_changing_base():
+    from gcw.opsd_eval import build_opsd_eval_prompt
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, enable_thinking):
+            assert tokenize is True
+            base = [10, 11, 12]
+            if not add_generation_prompt:
+                return base
+            return [*base, 20, 21] if messages else [20, 21]
+
+        def encode(self, text, add_special_tokens=False):
+            assert add_special_tokens is False
+            if text == "<think>\n":
+                return [30, 31]
+            raise AssertionError(text)
+
+    tokenizer = Tokenizer()
+    thinking_off = build_opsd_eval_prompt(tokenizer, "question", enable_thinking=False)
+    thinking_on = build_opsd_eval_prompt(tokenizer, "question", enable_thinking=True)
+
+    assert thinking_off.base_ids == thinking_on.base_ids == (10, 11, 12)
+    assert thinking_off.trigger_ids == (20, 21)
+    assert thinking_on.trigger_ids == (20, 21, 30, 31)
+
+
+
+def test_opsd_generate_until_trims_online_stop_with_eot_argument(monkeypatch):
+    from types import SimpleNamespace
+
+    from gcw.distill.prompt import ChatPrompt
+    from gcw.distill.session import RolloutResult
+    from gcw.eval import GCWEvalLM
+    from gcw.opsd_eval import OpsdEvalCondition
+
+    class Tokenizer:
+        eot_id = 99
+
+        def encode(self, text, add_special_tokens=False):
+            assert text == "STOP"
+            return [9]
+
+        def decode(self, token_ids):
+            return ",".join(str(token_id) for token_id in token_ids)
+
+    fake = SimpleNamespace(
+        model=object(),
+        tokenizer=Tokenizer(),
+        opsd_condition=OpsdEvalCondition(False, False),
+        opsd_generation_records=[],
+        tok_decode=lambda token_ids: ",".join(str(token_id) for token_id in token_ids),
+        eot_token_id=99,
+    )
+    monkeypatch.setattr(
+        "gcw.eval.build_opsd_eval_prompt",
+        lambda *args, **kwargs: ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+    )
+    monkeypatch.setattr(
+        "gcw.eval.greedy_opsd_response",
+        lambda *args, **kwargs: RolloutResult(response_ids=(5, 9), event_cache_lengths=()),
+    )
+    request = SimpleNamespace(args=("question", {"until": ["STOP"], "max_gen_toks": 12}))
+
+    output = GCWEvalLM._generate_until_opsd(fake, [request])
+
+    assert output == ["5"]

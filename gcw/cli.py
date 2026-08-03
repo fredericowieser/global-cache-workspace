@@ -2,15 +2,46 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
+import tempfile
 
 from gcw.convert import convert_bottleneck, convert_hf, convert_ppt
 from gcw.data.fineweb import prepare_fineweb
 from gcw.data.sft import prepare_openmath
-from pathlib import Path
 
-from gcw.eval import is_main_process, run_core, run_fineweb, run_math, run_paper7, run_ppt
+from gcw.eval import is_main_process, run_core, run_fineweb, run_math, run_opsd_screen, run_paper7, run_ppt
+from gcw.opsd_eval import aggregate_opsd_screen
 from gcw.params import write_family_configs
 from gcw.train import train_from_config
+
+
+def _atomic_write_new(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise FileExistsError(
+                f"refusing to overwrite OPSD evaluation output: {path}"
+            ) from error
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -59,6 +90,19 @@ def main(argv: list[str] | None = None) -> None:
     fineweb.add_argument("--eval-tokens", type=int, default=10 * 524288)
     fineweb.add_argument("--batch-size", type=int, default=16)
     fineweb.add_argument("--out", default=None)
+    opsd = eval_sub.add_parser("opsd-screen")
+    opsd.add_argument("--checkpoint", required=True)
+    opsd.add_argument("--source-revision", required=True)
+    opsd.add_argument("--tokenizer-source", required=True)
+    opsd.add_argument("--datasets-cache", required=True)
+    opsd.add_argument("--thinking", choices=["on", "off"], required=True)
+    opsd.add_argument("--processor", choices=["on", "off"], required=True)
+    opsd.add_argument("--tasks", default="gsm8k_openmath,svamp,gsm8k_hard")
+    opsd.add_argument("--limit", type=int, default=64)
+    opsd.add_argument("--out", required=True)
+    opsd_aggregate = eval_sub.add_parser("opsd-aggregate")
+    opsd_aggregate.add_argument("--inputs", nargs=4, required=True)
+    opsd_aggregate.add_argument("--out", required=True)
 
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
@@ -103,8 +147,24 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "train":
         train_from_config(args.config)
     elif args.cmd == "eval":
-        if args.suite == "fineweb":
+        if args.suite == "opsd-aggregate":
+            results = aggregate_opsd_screen(
+                [json.loads(Path(path).read_text()) for path in args.inputs]
+            )
+        elif args.suite == "fineweb":
             results = run_fineweb(args.checkpoint, data_dir=args.data_dir, eval_tokens=args.eval_tokens, batch_size=args.batch_size)
+        elif args.suite == "opsd-screen":
+            tasks = tuple(task.strip() for task in args.tasks.split(",") if task.strip())
+            results = run_opsd_screen(
+                args.checkpoint,
+                source_revision=args.source_revision,
+                tokenizer_source=args.tokenizer_source,
+                datasets_cache=args.datasets_cache,
+                enable_thinking=args.thinking == "on",
+                processor_enabled=args.processor == "on",
+                tasks=tasks,
+                limit=args.limit,
+            )
         else:
             runners = {"core": run_core, "math": run_math, "paper7": run_paper7, "ppt": run_ppt}
             results = runners[args.suite](args.checkpoint, limit=args.limit, batch_size=args.batch_size)
@@ -112,8 +172,11 @@ def main(argv: list[str] | None = None) -> None:
             return
         text = json.dumps(results, indent=2, default=str)
         if args.out:
-            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-            Path(args.out).write_text(text)
+            if args.suite.startswith("opsd-"):
+                _atomic_write_new(Path(args.out), text)
+            else:
+                Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.out).write_text(text)
         else:
             print(text)
     elif args.cmd == "convert":

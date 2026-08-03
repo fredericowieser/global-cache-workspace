@@ -858,3 +858,95 @@ def test_native_teacher_sampling_uses_static_cache(monkeypatch):
         generator=torch.Generator().manual_seed(6),
     )
     assert len(generated) == 3
+
+
+
+def test_decode_session_can_disable_processor_for_matched_eval_control():
+    model = _tiny_bgt()
+    recorder = RecordingZeroProcessor()
+    model.cache_processor = recorder
+    session = BGTDecodeSession(
+        model,
+        process_every=2,
+        select_all=False,
+        valid_vocab_size=model.config.vocab_size,
+        processor_enabled=False,
+    )
+
+    rollout = session.rollout(
+        ChatPrompt(base_ids=(1, 2), trigger_ids=(3,)),
+        max_response_tokens=4,
+        eos_token_id=None,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+    )
+
+    assert len(rollout.response_ids) == 4
+    assert rollout.event_cache_lengths == ()
+    assert recorder.calls == []
+
+
+
+def test_processor_disabled_session_matches_raw_backbone_greedy_generation():
+    model = _tiny_bgt()
+    prompt = ChatPrompt(base_ids=(1, 2), trigger_ids=(3,))
+    session = BGTDecodeSession(
+        model,
+        process_every=2,
+        select_all=False,
+        valid_vocab_size=model.config.vocab_size,
+        processor_enabled=False,
+    )
+
+    rollout = session.rollout(
+        prompt,
+        max_response_tokens=4,
+        eos_token_id=None,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        greedy=True,
+    )
+    raw = model.backbone.generate_fast(
+        torch.tensor([prompt.full_ids], dtype=torch.long),
+        max_new_tokens=4,
+        eos_token_id=None,
+    )
+
+    assert rollout.response_ids == tuple(raw[0, len(prompt.full_ids) :].tolist())
+
+
+
+def test_greedy_decode_session_stops_online_on_token_sequence():
+    model = _tiny_bgt()
+    prompt = ChatPrompt(base_ids=(1, 2), trigger_ids=(3,))
+    session = BGTDecodeSession(
+        model,
+        process_every=2,
+        select_all=False,
+        valid_vocab_size=model.config.vocab_size,
+        processor_enabled=False,
+    )
+    baseline = session.rollout(
+        prompt,
+        max_response_tokens=4,
+        eos_token_id=None,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        greedy=True,
+    )
+    stopped = session.rollout(
+        prompt,
+        max_response_tokens=4,
+        eos_token_id=None,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        stop_sequences=[[baseline.response_ids[0]]],
+        greedy=True,
+    )
+
+    assert stopped.response_ids == baseline.response_ids[:1]
+    assert stopped.event_cache_lengths == ()

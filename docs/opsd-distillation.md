@@ -68,6 +68,19 @@ The output directory contains:
 
 The trainer refuses to overwrite existing metrics or a final checkpoint.
 
+## Quick causal screen
+
+Before 10k training, evaluate the 128-prompt checkpoint on the same paired zero-shot samples under four conditions: CoT off/on × trained cache processor off/on. The quick screen uses the first 64 examples from each of `gsm8k_openmath`, `svamp`, and `gsm8k_hard`, greedy decoding, one common 512-token cap, and the exact training-time cache schedule (prompt boundary and every 64 response tokens). It is an exploratory gate, not a final accuracy estimate.
+
+Use `gcw eval opsd-screen` once per condition with the full Git SHA and explicit tokenizer source, then combine the four JSON files with `gcw eval opsd-aggregate`. The evaluator hashes the tokenizer vocabulary/template identity rather than mutating an older checkpoint that lacks tokenizer metadata. Aggregation fails if checkpoint hashes, tokenizer identity, source revisions, task definitions, ordered prompt hashes, or processor-event evidence differ across conditions.
+
+The primary contrasts are:
+
+- cache effect with CoT off: `(CoT off, CP on) - (CoT off, CP off)`;
+- cache effect with CoT on: `(CoT on, CP on) - (CoT on, CP off)`;
+- CoT gap with the processor disabled;
+- interaction between CoT and the trained cache processor.
+
 ## V0 limitations
 
 - one process and one finite epoch;
