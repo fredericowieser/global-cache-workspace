@@ -47,7 +47,7 @@ mode: cot_distillation
 distributed: none
 freeze_backbone: true
 backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/qwen3_06b/tf
-output_dir: /mnt/jfs-01/shared/gcw/experiments/qwen3_06b_opsd_v0/overfit-16x20-fp32-v1
+output_dir: /mnt/jfs-01/shared/gcw/experiments/qwen3_06b_opsd_v0/overfit-16x20-exact-kl-v2
 batch_size: 1
 sequence_len: 8192
 max_steps: 1
@@ -72,7 +72,7 @@ distillation:
   temperature: 1.1
   top_p: 1.0
   top_k: 0
-  token_clip: 0.05
+  token_clip: null
   kl_sequence_chunk_size: 32
   response_process_every: 64
   boundary_selection: configured

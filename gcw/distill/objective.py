@@ -15,16 +15,16 @@ class ForwardKLMetrics:
     teacher_entropy: torch.Tensor
 
 
-def clipped_forward_kl(
+def exact_forward_kl(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     answer_mask: torch.Tensor,
     *,
     temperature: float = 1.1,
-    token_clip: float | None = 0.05,
+    token_clip: float | None = None,
     sequence_chunk_size: int = 64,
 ) -> torch.Tensor:
-    return clipped_forward_kl_with_metrics(
+    return exact_forward_kl_with_metrics(
         student_logits,
         teacher_logits,
         answer_mask,
@@ -34,16 +34,16 @@ def clipped_forward_kl(
     ).loss
 
 
-def clipped_forward_kl_with_metrics(
+def exact_forward_kl_with_metrics(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
     answer_mask: torch.Tensor,
     *,
     temperature: float = 1.1,
-    token_clip: float | None = 0.05,
+    token_clip: float | None = None,
     sequence_chunk_size: int = 64,
 ) -> ForwardKLMetrics:
-    """Released OPSD forward KL with chunked exact diagnostics."""
+    """Exact full-vocabulary forward KL with chunked diagnostics."""
     if student_logits.shape != teacher_logits.shape:
         raise ValueError("student and teacher logits must have identical shapes")
     if student_logits.ndim != 3:
@@ -57,8 +57,10 @@ def clipped_forward_kl_with_metrics(
         raise ValueError("answer_mask must include at least one answer token")
     if temperature <= 0:
         raise ValueError("temperature must be positive")
-    if token_clip is not None and token_clip <= 0:
-        raise ValueError("token_clip must be positive or null")
+    if token_clip is not None:
+        raise ValueError(
+            "signed per-vocabulary KL clipping is invalid; token_clip must be null"
+        )
     if sequence_chunk_size <= 0:
         raise ValueError("sequence_chunk_size must be positive")
 
@@ -86,10 +88,7 @@ def clipped_forward_kl_with_metrics(
             teacher_entropy = -(teacher_log_probs.exp() * teacher_log_probs).sum(dim=-1)
             student_entropy_sum += (student_entropy * mask_float).sum()
             teacher_entropy_sum += (teacher_entropy * mask_float).sum()
-            if token_clip is not None:
-                clipped_count += ((per_vocab > token_clip) & mask.unsqueeze(-1)).sum()
-        clipped = per_vocab.clamp(max=token_clip) if token_clip is not None else per_vocab
-        loss_sum = loss_sum + (clipped.sum(dim=-1) * mask_float).sum()
+        loss_sum = loss_sum + (per_vocab.sum(dim=-1) * mask_float).sum()
 
     denominator = valid_tokens.to(torch.float32)
     clipping_denominator = denominator * vocabulary_size

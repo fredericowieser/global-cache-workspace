@@ -9,7 +9,7 @@ from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, Mod
 from gcw.distill import trainer as distill_trainer
 from gcw.distill.cache import truncate_last_cache_token
 from gcw.distill.data import iter_openmath_prompts
-from gcw.distill.objective import clipped_forward_kl
+from gcw.distill.objective import exact_forward_kl
 from gcw.distill.pipeline import DistillationExample, distillation_example_loss
 from gcw.distill.prompt import ChatPrompt, format_chat_prompt, format_teacher_prompt
 from gcw.distill.session import BGTDecodeSession, sample_next_token
@@ -89,6 +89,13 @@ def test_distillation_config_accepts_explicit_v0_contract():
     assert config.distillation.response_process_every == 64
     assert config.distillation.teacher_thinking
     assert not config.distillation.student_thinking
+
+
+def test_distillation_uses_exact_forward_kl_and_rejects_legacy_clipping():
+    assert DistillationConfig().token_clip is None
+
+    with pytest.raises(ValueError, match="signed per-vocabulary KL clipping"):
+        DistillationConfig(token_clip=0.05)
 
 
 def test_distillation_repeated_epochs_require_explicit_overfit_diagnostic():
@@ -174,30 +181,52 @@ def test_teacher_prompt_appends_thinking_open_when_template_ignores_flag():
     assert prompt.trigger_ids == (30, 31, 20, 21)
 
 
-def test_clipped_forward_kl_matches_released_opsd_order_and_masks_tokens():
-    student = torch.tensor([[[4.0, -2.0], [0.5, -0.5], [-3.0, 3.0]]], requires_grad=True)
-    teacher = torch.tensor([[[-2.0, 4.0], [1.0, -1.0], [3.0, -3.0]]], requires_grad=True)
-    mask = torch.tensor([[True, False, True]])
+def test_forward_kl_matches_exact_pytorch_definition_and_is_non_negative():
+    student = torch.tensor(
+        [[[12.19104, 1.0137914, 12.252707, 10.12801, 8.895775, -4.5896535, -2.2890944, -3.6223664]]],
+        requires_grad=True,
+    )
+    teacher = torch.tensor(
+        [[[6.3993907, -4.970331, 9.074863, -3.0142415, 8.074074, 9.650991, -2.1125073, -0.4159319]]],
+        requires_grad=True,
+    )
+    mask = torch.tensor([[True]])
     temperature = 1.1
-    clip = 0.05
 
-    loss = clipped_forward_kl(student, teacher, mask, temperature=temperature, token_clip=clip)
+    loss = exact_forward_kl(
+        student,
+        teacher,
+        mask,
+        temperature=temperature,
+        token_clip=None,
+    )
 
     student_log_probs = F.log_softmax(student / temperature, dim=-1)
     teacher_log_probs = F.log_softmax(teacher.detach() / temperature, dim=-1)
     per_vocab = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
-    expected = per_vocab.clamp(max=clip)[mask].sum() / mask.sum()
+    expected = per_vocab.sum(dim=-1)[mask].mean()
+    legacy_surrogate = per_vocab.clamp(max=0.05).sum(dim=-1)[mask].mean()
     torch.testing.assert_close(loss, expected)
+    assert float(loss.detach()) >= 0.0
+    assert float(legacy_surrogate.detach()) < 0.0
 
     loss.backward()
     assert student.grad is not None
     assert teacher.grad is None
 
 
-def test_clipped_forward_kl_rejects_empty_answer_mask():
+def test_forward_kl_rejects_signed_contribution_clipping():
+    logits = torch.zeros(1, 1, 3)
+    mask = torch.ones(1, 1, dtype=torch.bool)
+
+    with pytest.raises(ValueError, match="signed per-vocabulary KL clipping"):
+        exact_forward_kl(logits, logits, mask, token_clip=0.05)
+
+
+def test_exact_forward_kl_rejects_empty_answer_mask():
     logits = torch.zeros(1, 2, 3)
     with pytest.raises(ValueError, match="at least one answer token"):
-        clipped_forward_kl(logits, logits, torch.zeros(1, 2, dtype=torch.bool))
+        exact_forward_kl(logits, logits, torch.zeros(1, 2, dtype=torch.bool))
 
 
 def test_truncate_last_cache_token_preserves_earlier_values_and_gradients():
@@ -467,7 +496,7 @@ def test_distillation_example_loss_uses_teacher_cot_and_trains_only_bgt():
         example,
         BGTDecodeSession(model, process_every=2),
         temperature=1.1,
-        token_clip=0.05,
+        token_clip=None,
     )
     result.loss.backward()
 
@@ -650,10 +679,10 @@ def test_distillation_trainer_reuses_fixed_trace_across_overfit_epochs(tmp_path,
 
 
 
-def test_clipped_forward_kl_computes_bfloat16_logits_in_float32():
+def test_exact_forward_kl_computes_bfloat16_logits_in_float32():
     student = torch.tensor([[[0.0, 1.0, -1.0]]], dtype=torch.bfloat16, requires_grad=True)
     teacher = torch.tensor([[[1.0, 0.0, -1.0]]], dtype=torch.bfloat16)
-    loss = clipped_forward_kl(student, teacher, torch.ones((1, 1), dtype=torch.bool))
+    loss = exact_forward_kl(student, teacher, torch.ones((1, 1), dtype=torch.bool))
 
     assert loss.dtype == torch.float32
     assert torch.isfinite(loss)
@@ -740,20 +769,20 @@ def test_chunked_kl_matches_unchunked_value_and_student_gradient():
     student_full = base_student.clone().requires_grad_(True)
     student_chunked = base_student.clone().requires_grad_(True)
 
-    full = clipped_forward_kl(
+    full = exact_forward_kl(
         student_full,
         teacher,
         mask,
         temperature=1.1,
-        token_clip=0.05,
+        token_clip=None,
         sequence_chunk_size=5,
     )
-    chunked = clipped_forward_kl(
+    chunked = exact_forward_kl(
         student_chunked,
         teacher,
         mask,
         temperature=1.1,
-        token_clip=0.05,
+        token_clip=None,
         sequence_chunk_size=2,
     )
     full.backward()

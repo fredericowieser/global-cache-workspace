@@ -417,7 +417,7 @@ class DistillationConfig:
     temperature: float = 1.1
     top_p: float = 1.0
     top_k: int = 0
-    token_clip: float | None = 0.05
+    token_clip: float | None = None
     kl_sequence_chunk_size: int = 32
     response_process_every: int = 64
     boundary_selection: Literal["configured", "all"] = "configured"
@@ -448,8 +448,10 @@ class DistillationConfig:
             raise ValueError("distillation top_p must be in (0, 1]")
         if self.top_k < 0:
             raise ValueError("distillation top_k must be non-negative")
-        if self.token_clip is not None and self.token_clip <= 0:
-            raise ValueError("distillation token_clip must be positive or null")
+        if self.token_clip is not None:
+            raise ValueError(
+                "signed per-vocabulary KL clipping is invalid; distillation token_clip must be null"
+            )
         if self.kl_sequence_chunk_size <= 0:
             raise ValueError("distillation kl_sequence_chunk_size must be positive")
         if self.response_process_every <= 0:

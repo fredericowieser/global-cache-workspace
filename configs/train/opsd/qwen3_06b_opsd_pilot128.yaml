@@ -70,7 +70,7 @@ distillation:
   temperature: 1.1
   top_p: 1.0
   top_k: 0
-  token_clip: 0.05
+  token_clip: null
   kl_sequence_chunk_size: 32
   response_process_every: 64
   boundary_selection: configured

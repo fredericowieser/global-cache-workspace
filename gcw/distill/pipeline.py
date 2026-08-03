@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import torch
 
-from gcw.distill.objective import clipped_forward_kl_with_metrics
+from gcw.distill.objective import exact_forward_kl_with_metrics
 from gcw.distill.prompt import ChatPrompt
 from gcw.distill.session import BGTDecodeSession
 from gcw.distill.teacher import teacher_answer_logits
@@ -53,7 +53,7 @@ def distillation_example_loss(
     if teacher.device != student.logits.device:
         teacher = teacher.to(student.logits.device)
     answer_mask = torch.ones(student.logits.shape[:2], dtype=torch.bool, device=student.logits.device)
-    objective = clipped_forward_kl_with_metrics(
+    objective = exact_forward_kl_with_metrics(
         student.logits,
         teacher,
         answer_mask,

@@ -16,10 +16,10 @@ For answer position `t` and vocabulary item `v`:
 
 ```text
 k[t,v] = p_T[t,v] * (log p_T[t,v] - log p_S[t,v])
-loss = sum(mask[t] * sum_v min(k[t,v], token_clip)) / sum(mask)
+loss = sum(mask[t] * sum_v k[t,v]) / sum(mask)
 ```
 
-Both log-softmax operations run in FP32 and sequence chunks while retaining full-vocabulary normalization. Logits are divided by `temperature`; there is no additional temperature-squared multiplier. Teacher reasoning is context, never a loss position. Source dataset answers are ignored.
+Both log-softmax operations run in FP32 and sequence chunks while retaining full-vocabulary normalization. Logits are divided by `temperature`; there is no additional temperature-squared multiplier. Teacher reasoning is context, never a loss position. Source dataset answers are ignored. `token_clip` must be null: individual vocabulary contributions can be negative even though their sum is non-negative, so independently capping positive contributions creates an invalid surrogate that can decrease while true KL increases. Ordinary gradient clipping handles optimisation spikes without changing the estimand.
 
 ## Cache schedule
 
