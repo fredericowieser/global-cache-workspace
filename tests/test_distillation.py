@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from gcw.checkpoint import load_checkpoint
-from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, ModelConfig, TrainConfig
+from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, ModelConfig, TrainConfig, load_train_config
 from gcw.distill import trainer as distill_trainer
 from gcw.distill.cache import truncate_last_cache_token
 from gcw.distill.data import iter_openmath_prompts
@@ -89,6 +89,41 @@ def test_distillation_config_accepts_explicit_v0_contract():
     assert config.distillation.response_process_every == 64
     assert config.distillation.teacher_thinking
     assert not config.distillation.student_thinking
+
+
+def test_distillation_repeated_epochs_require_explicit_overfit_diagnostic():
+    with pytest.raises(ValueError, match="overfit diagnostic"):
+        DistillationConfig(epochs=2)
+
+    with pytest.raises(ValueError, match="expected_locked_examples"):
+        DistillationConfig(epochs=2, overfit_diagnostic=True)
+
+    diagnostic = DistillationConfig(
+        epochs=2,
+        overfit_diagnostic=True,
+        expected_locked_examples=1,
+    )
+
+    assert diagnostic.epochs == 2
+    assert diagnostic.overfit_diagnostic
+    assert diagnostic.expected_locked_examples == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "take_rows", "epochs", "expected_locked"),
+    [
+        ("configs/train/opsd/qwen3_06b_opsd_overfit16_smoke.yaml", 1, 2, 1),
+        ("configs/train/opsd/qwen3_06b_opsd_overfit16x20.yaml", 21, 20, 16),
+    ],
+)
+def test_opsd_overfit_configs_are_explicit_diagnostics(path, take_rows, epochs, expected_locked):
+    config = load_train_config(path)
+
+    assert config.data.sft_take_rows == take_rows
+    assert config.distillation is not None
+    assert config.distillation.epochs == epochs
+    assert config.distillation.overfit_diagnostic
+    assert config.distillation.expected_locked_examples == expected_locked
 
 
 @pytest.mark.parametrize(
@@ -509,7 +544,7 @@ class TrainingHFBackend:
         return [8, 9]
 
 
-def test_distillation_trainer_runs_one_finite_cpu_epoch(tmp_path, monkeypatch):
+def test_distillation_trainer_reuses_fixed_trace_across_overfit_epochs(tmp_path, monkeypatch):
     source_model = _tiny_bgt()
     checkpoint = tmp_path / "backbone"
     checkpoint.mkdir()
@@ -526,11 +561,22 @@ def test_distillation_trainer_runs_one_finite_cpu_epoch(tmp_path, monkeypatch):
     tokenizer.eot_id = 62
     tokenizer.vocab_size = 63
     monkeypatch.setattr(distill_trainer, "get_tokenizer", lambda _: tokenizer)
-    monkeypatch.setattr(
-        distill_trainer,
-        "sample_backbone_completion",
-        lambda *args, **kwargs: (8, 9),
-    )
+    teacher_calls = []
+
+    def fake_teacher(*args, **kwargs):
+        teacher_calls.append((args, kwargs))
+        return (8, 9)
+
+    monkeypatch.setattr(distill_trainer, "sample_backbone_completion", fake_teacher)
+    verification_saw_staging = []
+    real_verify = distill_trainer._verify_overfit_checkpoint
+
+    def verify_staging(checkpoint_path, *args, **kwargs):
+        verification_saw_staging.append(checkpoint_path.name.startswith(".final-overfit-staging"))
+        assert not (output_dir / "final").exists()
+        return real_verify(checkpoint_path, *args, **kwargs)
+
+    monkeypatch.setattr(distill_trainer, "_verify_overfit_checkpoint", verify_staging)
     config = TrainConfig(
         model=source_model.config,
         data=DataConfig(
@@ -548,6 +594,9 @@ def test_distillation_trainer_runs_one_finite_cpu_epoch(tmp_path, monkeypatch):
         learning_rate=1e-3,
         weight_decay=0.0,
         distillation=DistillationConfig(
+            epochs=2,
+            overfit_diagnostic=True,
+            expected_locked_examples=1,
             max_teacher_reasoning_tokens=2,
             max_response_tokens=3,
             top_k=1,
@@ -559,16 +608,45 @@ def test_distillation_trainer_runs_one_finite_cpu_epoch(tmp_path, monkeypatch):
     distill_trainer.train_distillation(config)
 
     summary = __import__("json").loads((output_dir / "summary.json").read_text())
-    assert summary["seen_prompts"] == 1
-    assert summary["valid_prompts"] == 1
+    assert summary["epoch"] == 2
+    assert summary["seen_prompts"] == 2
+    assert summary["valid_prompts"] == 2
     assert summary["skipped_prompts"] == 0
-    assert summary["optimizer_steps"] == 1
+    assert summary["optimizer_steps"] == 2
     assert (output_dir / "final" / "model.safetensors").is_file()
-    assert len((output_dir / "metrics.jsonl").read_text().splitlines()) == 1
+    assert verification_saw_staging == [True]
+    metric_rows = [
+        __import__("json").loads(line)
+        for line in (output_dir / "metrics.jsonl").read_text().splitlines()
+    ]
+    assert [row["epoch"] for row in metric_rows] == [1, 2]
+    assert [row["teacher_trace_cached"] for row in metric_rows] == [True, True]
+    assert all(isinstance(row["processor_gate_before_example"], float) for row in metric_rows)
+    assert all(isinstance(row["processor_gate_after_example"], float) for row in metric_rows)
+    assert all(
+        len(row["cache_relative_l2_displacements"]) == len(row["cache_events"])
+        for row in metric_rows
+    )
+    assert len(teacher_calls) == 1
+    diagnostic = summary["overfit_diagnostic"]
+    assert diagnostic["locked_examples"] == 1
+    assert diagnostic["lock_attempts"] == 1
+    assert diagnostic["lock_skips"] == []
+    assert diagnostic["locked_source_indices"] == [0]
+    assert diagnostic["initial"]["examples"] == 1
+    assert diagnostic["pre_save"]["examples"] == 1
+    assert diagnostic["post_load"]["examples"] == 1
+    assert diagnostic["pre_save"] == diagnostic["post_load"]
+    assert diagnostic["processor_changed_from_initialization"] is True
+    assert diagnostic["initial_processor_sha256"] != diagnostic["pre_save_processor_sha256"]
+    assert diagnostic["logit_probe_response_tokens"] == 3
+    assert len(diagnostic["logit_probe_event_cache_lengths"]) == 2
+    assert diagnostic["pre_save_logit_probe_sha256"] == diagnostic["post_load_logit_probe_sha256"]
+    assert diagnostic["post_load_logits_verified"] is True
     loaded, loaded_config, loaded_state = load_checkpoint(output_dir / "final")
     assert isinstance(loaded, BGT)
     assert loaded_config == source_model.config
-    assert loaded_state["valid_prompts"] == 1
+    assert loaded_state["valid_prompts"] == 2
 
 
 
@@ -588,7 +666,8 @@ def test_blockwise_replay_matches_tokenwise_reference_between_events():
     prompt = ChatPrompt(base_ids=(1, 2, 3), trigger_ids=(4,))
     response = (5, 6, 7, 8, 9)
 
-    next_logits, cache, events = session._start(prompt)
+    next_logits, cache, events, displacements = session._start(prompt)
+    assert displacements == []
     tokenwise = []
     for response_index, token_id in enumerate(response):
         tokenwise.append(next_logits)
@@ -789,28 +868,52 @@ def test_bf16_backbone_fp32_processor_rollout_and_replay_under_autocast():
 
 
 
-def test_bf16_final_checkpoint_round_trips_without_processor_requantisation(tmp_path):
-    model = _tiny_bgt().to(dtype=torch.bfloat16)
+def test_mixed_final_checkpoint_verifies_exact_processor_round_trip(tmp_path):
+    model = _tiny_bgt()
+    model.backbone.to(dtype=torch.bfloat16)
+    model.cache_processor.to(dtype=torch.float32)
+    model.cache_processor.block.gate.data.fill_(-4.9896)
     destination = tmp_path / "final"
     expected_processor = {
         name: tensor.detach().clone()
         for name, tensor in model.cache_processor.state_dict().items()
-        if tensor.is_floating_point()
     }
-    distill_trainer._publish_checkpoint(
+
+    published_state = distill_trainer._publish_checkpoint(
         destination,
         model,
         model.config,
-        {"dtype": "bfloat16", "valid_prompts": 1},
+        {
+            "dtype": "mixed_bfloat16_backbone_float32_processor",
+            "valid_prompts": 1,
+        },
     )
-
     loaded, _, state = load_checkpoint(destination)
 
-    assert state["dtype"] == "bfloat16"
-    assert all(parameter.dtype == torch.bfloat16 for parameter in loaded.cache_processor.parameters())
+    assert published_state["checkpoint_fidelity_verified"] is True
+    assert state == published_state
+    assert state["pre_save_processor_sha256"] == state["post_load_processor_sha256"]
+    assert state["pre_save_processor_gate"] == pytest.approx(-4.9896)
+    assert state["post_load_processor_gate"] == pytest.approx(-4.9896)
+    assert all(parameter.dtype == torch.bfloat16 for parameter in loaded.backbone.parameters())
+    assert all(parameter.dtype == torch.float32 for parameter in loaded.cache_processor.parameters())
     for name, expected in expected_processor.items():
         torch.testing.assert_close(loaded.cache_processor.state_dict()[name], expected, rtol=0, atol=0)
 
+
+def test_replay_records_relative_cache_displacement_when_enabled():
+    model = _tiny_bgt()
+    session = BGTDecodeSession(
+        model,
+        process_every=2,
+        valid_vocab_size=model.config.vocab_size,
+        record_displacements=True,
+    )
+
+    replay = session.replay(ChatPrompt(base_ids=(1, 2), trigger_ids=(3,)), (4, 5, 6))
+
+    assert len(replay.event_relative_l2_displacements) == len(replay.event_cache_lengths)
+    assert all(torch.isfinite(torch.tensor(value)) and value >= 0 for value in replay.event_relative_l2_displacements)
 
 
 def test_student_rollout_uses_static_cache(monkeypatch):

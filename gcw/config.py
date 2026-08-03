@@ -408,6 +408,8 @@ class WandbConfig:
 @dataclass(frozen=True)
 class DistillationConfig:
     epochs: int = 1
+    overfit_diagnostic: bool = False
+    expected_locked_examples: int | None = None
     teacher_thinking: bool = True
     student_thinking: bool = False
     max_teacher_reasoning_tokens: int = 1024
@@ -426,8 +428,16 @@ class DistillationConfig:
     skip_invalid_traces: bool = True
 
     def __post_init__(self) -> None:
-        if self.epochs != 1:
-            raise ValueError("cot_distillation V0 requires exactly one epoch")
+        if self.epochs <= 0:
+            raise ValueError("distillation epochs must be positive")
+        if self.epochs != 1 and not self.overfit_diagnostic:
+            raise ValueError("repeated distillation epochs require an explicit overfit diagnostic")
+        if self.overfit_diagnostic and (
+            self.expected_locked_examples is None or self.expected_locked_examples <= 0
+        ):
+            raise ValueError("overfit diagnostic requires positive expected_locked_examples")
+        if not self.overfit_diagnostic and self.expected_locked_examples is not None:
+            raise ValueError("expected_locked_examples is only valid for an overfit diagnostic")
         if not self.teacher_thinking or self.student_thinking:
             raise ValueError("cot_distillation requires a thinking teacher and thinking-off student")
         if self.max_teacher_reasoning_tokens <= 0 or self.max_response_tokens <= 0:

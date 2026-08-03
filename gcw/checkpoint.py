@@ -41,12 +41,20 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
     weights = load_file(path / "model.safetensors", device=str(device))
     model = build_model(cfg)
     dtype_name = train_state.get("dtype")
-    recorded_dtype = {"bfloat16": torch.bfloat16, "float32": torch.float32}.get(
-        dtype_name if isinstance(dtype_name, str) else ""
-    )
-    dtype = recorded_dtype or _infer_floating_dtype(weights)
-    if dtype is not None:
-        model.to(dtype=dtype)
+    if dtype_name == "mixed_bfloat16_backbone_float32_processor":
+        backbone = getattr(model, "backbone", None)
+        cache_processor = getattr(model, "cache_processor", None)
+        if not isinstance(backbone, torch.nn.Module) or not isinstance(cache_processor, torch.nn.Module):
+            raise ValueError("mixed BGT checkpoint requires backbone and cache_processor modules")
+        cast(torch.nn.Module, backbone).to(dtype=torch.bfloat16)
+        cast(torch.nn.Module, cache_processor).to(dtype=torch.float32)
+    else:
+        recorded_dtype = {"bfloat16": torch.bfloat16, "float32": torch.float32}.get(
+            dtype_name if isinstance(dtype_name, str) else ""
+        )
+        dtype = recorded_dtype or _infer_floating_dtype(weights)
+        if dtype is not None:
+            model.to(dtype=dtype)
     model.load_state_dict(weights, strict=True)
     model.to(device)
     return model, cfg, train_state

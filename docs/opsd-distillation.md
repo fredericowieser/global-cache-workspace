@@ -81,9 +81,24 @@ The primary contrasts are:
 - CoT gap with the processor disabled;
 - interaction between CoT and the trained cache processor.
 
+## Overfit and checkpoint-fidelity diagnostic
+
+Before scaling a failed 128-prompt pilot, run the explicit `overfit_diagnostic` path on the first 21 OpenMath rows. The prior pilot established that these contain exactly 16 valid source-indexed prompts. Preparation locks each valid teacher trace and initial student response before any optimiser update; repeated epochs optimise the same 16 examples rather than changing the target sample.
+
+The main diagnostic uses `qwen3_06b_opsd_overfit16x20.yaml`: 20 epochs × 16 valid prompts = 320 optimiser steps. A one-prompt, two-epoch config is provided for a real-device smoke. Diagnostic JSONL rows record epoch, unclipped KL, gate before/after the example, event cache lengths, and event-level relative-L2 cache displacement.
+
+Checkpoint publication keeps the frozen backbone in BF16 and the Cache Processor master/checkpoint weights in FP32. CUDA processor matrix operations still run under BF16 autocast and write deployed updates into the BF16 cache; this diagnostic tests weight-publication fidelity, not full-FP32 processor execution. Before publication, the processor state and gate are hashed; the temporary checkpoint is reloaded through the standard loader and must match exactly. The diagnostic additionally compares a recurrent-event-covering student-logit hash and the same locked-corpus metrics immediately before save and after reload.
+
+Proceed to a repeated 128-prompt pilot only if all gates pass:
+
+1. processor state hash, scalar gate, and logit-probe hash match exactly across reload;
+2. every diagnostic metric is finite and cache displacement is non-zero;
+3. token-weighted unclipped KL after 320 steps is at most 25% of its initial value;
+4. all 16 locked examples complete every epoch without skips.
+
 ## V0 limitations
 
-- one process and one finite epoch;
+- one process and one finite epoch, except for explicit fixed-example overfit diagnostics;
 - batch size one, with optional gradient accumulation;
 - no exact optimiser resume yet;
 - malformed/missing thinking-close traces may be skipped by policy;

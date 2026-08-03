@@ -17,6 +17,7 @@ from gcw.models.cache_state import CacheState, StaticCacheState
 class ReplayResult:
     logits: torch.Tensor
     event_cache_lengths: tuple[int, ...]
+    event_relative_l2_displacements: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class BGTDecodeSession:
         select_all: bool = False,
         valid_vocab_size: int | None = None,
         processor_enabled: bool = True,
+        record_displacements: bool = False,
     ) -> None:
         if not isinstance(model, BGT):
             raise TypeError("BGTDecodeSession requires a BGT model")
@@ -92,6 +94,7 @@ class BGTDecodeSession:
         self.process_every = process_every
         self.select_all = select_all
         self.processor_enabled = processor_enabled
+        self.record_displacements = record_displacements
         if valid_vocab_size is not None and not 0 < valid_vocab_size <= model.config.vocab_size:
             raise ValueError("valid_vocab_size must be within the model vocabulary")
         self.valid_vocab_size = valid_vocab_size
@@ -100,7 +103,7 @@ class BGTDecodeSession:
         if not response_ids:
             raise ValueError("replay requires at least one response token")
         self._validate_total_length(prompt, len(response_ids))
-        next_logits, cache, event_cache_lengths = self._start(prompt)
+        next_logits, cache, event_cache_lengths, event_displacements = self._start(prompt)
         aligned_chunks: list[torch.Tensor] = []
         device = self.model.get_device()
         response_offset = 0
@@ -125,7 +128,7 @@ class BGTDecodeSession:
 
             if event_follows and self.processor_enabled:
                 event_cache_lengths.append(cache.seq_len)
-                cache = self._process(cache)
+                cache = self._process_recording(cache, event_displacements)
                 last_token = torch.tensor([[block_ids[-1]]], dtype=torch.long, device=device)
                 last_position = len(prompt.full_ids) + response_offset + block_size - 1
                 refreshed_logits, raw_cache = self.model.backbone.forward_chunk(
@@ -143,6 +146,7 @@ class BGTDecodeSession:
         return ReplayResult(
             logits=logits,
             event_cache_lengths=tuple(event_cache_lengths),
+            event_relative_l2_displacements=tuple(event_displacements),
         )
 
     @torch.no_grad()
@@ -270,7 +274,9 @@ class BGTDecodeSession:
             next_logits = refreshed_logits[:, -1, :]
         return next_logits, cache
 
-    def _start(self, prompt: ChatPrompt) -> tuple[torch.Tensor, CacheState, list[int]]:
+    def _start(
+        self, prompt: ChatPrompt
+    ) -> tuple[torch.Tensor, CacheState, list[int], list[float]]:
         device = self.model.get_device()
         base_ids = torch.tensor([prompt.base_ids], dtype=torch.long, device=device)
         trigger_ids = torch.tensor([prompt.trigger_ids], dtype=torch.long, device=device)
@@ -278,9 +284,10 @@ class BGTDecodeSession:
         _, raw_cache = self.model.backbone.forward_chunk(base_ids, 0, logits=False)
         cache = self._require_cache_state(raw_cache)
         event_cache_lengths: list[int] = []
+        event_displacements: list[float] = []
         if self.processor_enabled:
             event_cache_lengths.append(cache.seq_len)
-            cache = self._process(cache)
+            cache = self._process_recording(cache, event_displacements)
 
         trigger_logits, raw_cache = self.model.backbone.forward_chunk(
             trigger_ids,
@@ -288,7 +295,7 @@ class BGTDecodeSession:
             cache,
         )
         cache = self._require_cache_state(raw_cache)
-        return trigger_logits[:, -1, :], cache, event_cache_lengths
+        return trigger_logits[:, -1, :], cache, event_cache_lengths, event_displacements
 
     def _consume(
         self,
@@ -328,6 +335,27 @@ class BGTDecodeSession:
     def _process(self, cache: CacheState) -> CacheState:
         processed = self.model.cache_processor(cache, select_all=self.select_all)
         return self._require_cache_state(processed)
+
+    def _process_recording(self, cache: CacheState, displacements: list[float]) -> CacheState:
+        if not self.record_displacements:
+            return self._process(cache)
+        before = tuple(cache.keys) + tuple(cache.values)
+        processed = self._process(cache)
+        after = tuple(processed.keys) + tuple(processed.values)
+        if len(before) != len(after):
+            raise RuntimeError("cache processor changed the number of cache tensors")
+        with torch.no_grad():
+            squared_change = torch.zeros((), dtype=torch.float64, device=cache.device)
+            squared_input = torch.zeros((), dtype=torch.float64, device=cache.device)
+            for source, target in zip(before, after, strict=True):
+                source_float = source.detach().float()
+                target_float = target.detach().float()
+                squared_change += torch.sum((target_float - source_float).square(), dtype=torch.float64)
+                squared_input += torch.sum(source_float.square(), dtype=torch.float64)
+            denominator = torch.sqrt(squared_input).clamp_min(torch.finfo(torch.float64).eps)
+            relative = torch.sqrt(squared_change) / denominator
+            displacements.append(float(relative.cpu().item()))
+        return processed
 
     def _process_static(self, cache: StaticCacheState) -> StaticCacheState:
         processed = self.model.cache_processor(cache, select_all=self.select_all)

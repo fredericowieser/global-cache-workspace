@@ -34,6 +34,7 @@ class DistillationLossResult:
     teacher_entropy: torch.Tensor
     answer_tokens: int
     event_cache_lengths: tuple[int, ...]
+    event_relative_l2_displacements: tuple[float, ...]
 
 
 def distillation_example_loss(
@@ -68,4 +69,5 @@ def distillation_example_loss(
         teacher_entropy=objective.teacher_entropy,
         answer_tokens=len(example.response_ids),
         event_cache_lengths=student.event_cache_lengths,
+        event_relative_l2_displacements=student.event_relative_l2_displacements,
     )

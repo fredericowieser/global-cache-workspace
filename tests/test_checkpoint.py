@@ -52,3 +52,47 @@ def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
 
     assert lm.tokenizer_name == "qwen-tokenizer"
     assert lm.apply_chat_template([{"role": "user", "content": "hi"}]) == "user:hi:True"
+
+
+
+def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(tmp_path):
+    from gcw.checkpoint import load_checkpoint, save_checkpoint
+    from gcw.config import CacheProcessorConfig, ModelConfig
+    from gcw.models import build_model
+    from gcw.models.bgt import BGT
+
+    config = ModelConfig(
+        variant="bgt",
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        cache_processor=CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            hidden_size=16,
+            intermediate_size=32,
+            num_heads=2,
+        ),
+    )
+    model = build_model(config)
+    assert isinstance(model, BGT)
+    model.backbone.to(dtype=torch.bfloat16)
+    model.cache_processor.to(dtype=torch.float32)
+    model.cache_processor.block.gate.data.fill_(-4.9896)
+    save_checkpoint(
+        tmp_path / "mixed",
+        model,
+        config,
+        {"dtype": "mixed_bfloat16_backbone_float32_processor"},
+    )
+
+    loaded, _, _ = load_checkpoint(tmp_path / "mixed")
+
+    assert isinstance(loaded, BGT)
+    assert {p.dtype for p in loaded.backbone.parameters()} == {torch.bfloat16}
+    assert {p.dtype for p in loaded.cache_processor.parameters()} == {torch.float32}
+    assert loaded.cache_processor.block.gate.item() == pytest.approx(-4.9896)

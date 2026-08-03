@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 import time
+from collections.abc import Iterable
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 
-from gcw.checkpoint import load_backbone_checkpoint, save_checkpoint
+from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_checkpoint
 from gcw.config import DistillationConfig, ModelConfig, TrainConfig, to_dict
 from gcw.data.tokenizers import TransformersTokenizer, get_tokenizer
 from gcw.distill.data import PromptRecord, iter_openmath_prompts
@@ -40,7 +43,14 @@ def train_distillation(config: TrainConfig) -> None:
     output_dir = Path(config.output_dir)
     metrics_path = output_dir / "metrics.jsonl"
     final_checkpoint = output_dir / "final"
-    if metrics_path.exists() or final_checkpoint.exists():
+    staging_checkpoint = output_dir / ".final-overfit-staging"
+    locked_examples_path = output_dir / "locked-examples.json"
+    if (
+        metrics_path.exists()
+        or final_checkpoint.exists()
+        or staging_checkpoint.exists()
+        or (distill.overfit_diagnostic and locked_examples_path.exists())
+    ):
         raise FileExistsError(
             f"refusing to overwrite an existing distillation run in {output_dir}; "
             "teacher traces may be prepared there, but metrics/final must be absent"
@@ -91,7 +101,49 @@ def train_distillation(config: TrainConfig) -> None:
         process_every=distill.response_process_every,
         select_all=select_all,
         valid_vocab_size=tokenizer.get_vocab_size(),
+        record_displacements=distill.overfit_diagnostic,
     )
+
+    diagnostic_examples: list[tuple[PromptRecord, DistillationExample]] | None = None
+    overfit_diagnostic: dict[str, Any] | None = None
+    if distill.overfit_diagnostic:
+        diagnostic_examples, lock_report = _prepare_locked_examples(
+            model,
+            tokenizer,
+            config,
+            distill,
+            trace_store,
+            close_ids,
+            decode_session,
+            device,
+        )
+        initial_metrics = _evaluate_locked_examples(
+            model,
+            [example for _, example in diagnostic_examples],
+            decode_session,
+            config,
+            device,
+        )
+        initial_probe, probe_tokens, probe_events = _student_logit_probe_sha256(
+            model,
+            [example for _, example in diagnostic_examples],
+            decode_session,
+            config,
+            device,
+        )
+        overfit_diagnostic = {
+            **lock_report,
+            "locked_examples": len(diagnostic_examples),
+            "initial": initial_metrics,
+            "initial_processor_sha256": _processor_state_sha256(model),
+            "initial_logit_probe_sha256": initial_probe,
+            "logit_probe_response_tokens": probe_tokens,
+            "logit_probe_event_cache_lengths": probe_events,
+        }
+        _atomic_write_json(
+            locked_examples_path,
+            _locked_examples_payload(diagnostic_examples),
+        )
 
     seen = 0
     valid = 0
@@ -102,93 +154,132 @@ def train_distillation(config: TrainConfig) -> None:
     started = time.monotonic()
     optimizer.zero_grad(set_to_none=True)
 
-    records = iter_openmath_prompts(
-        config.data.data_dir,
-        skip_rows=config.data.sft_skip_rows,
-        take_rows=config.data.sft_take_rows,
-    )
     with metrics_path.open("x", encoding="utf-8") as metrics:
-        for record in records:
-            seen += 1
-            try:
-                with _autocast_context(config, device):
-                    example, trace_cached = _build_example(
-                        model,
-                        tokenizer,
-                        record,
-                        distill,
-                        trace_store,
-                        close_ids,
-                        decode_session,
-                        seed=config.seed,
-                        device=device,
-                    )
-                with _autocast_context(config, device):
-                    result = distillation_example_loss(
-                        model,
-                        example,
-                        decode_session,
-                        temperature=distill.temperature,
-                        token_clip=distill.token_clip,
-                        sequence_chunk_size=distill.kl_sequence_chunk_size,
-                    )
-                if not bool(torch.isfinite(result.loss)):
-                    raise FloatingPointError("distillation loss is non-finite")
-                result.loss.backward()
-                if valid == 0 and any(parameter.grad is not None for parameter in model.backbone.parameters()):
-                    raise RuntimeError("frozen teacher/student backbone accumulated gradients")
-                accumulated += 1
-                valid += 1
-                answer_tokens += result.answer_tokens
-                grad_norm: float | None = None
-                if accumulated == distill.gradient_accumulation_steps:
-                    grad_norm = _optimizer_step(model, optimizer, accumulated, config.grad_clip)
-                    optimizer_steps += 1
-                    accumulated = 0
+        for epoch in range(1, distill.epochs + 1):
+            for record, locked_example in _epoch_training_items(config, diagnostic_examples):
+                seen += 1
+                processor_gate_before_example = _processor_gate(model)
+                try:
+                    if locked_example is None:
+                        with _autocast_context(config, device):
+                            example, trace_cached = _build_example(
+                                model,
+                                tokenizer,
+                                record,
+                                distill,
+                                trace_store,
+                                close_ids,
+                                decode_session,
+                                seed=config.seed,
+                                device=device,
+                            )
+                    else:
+                        example = locked_example
+                        trace_cached = True
+                    with _autocast_context(config, device):
+                        result = distillation_example_loss(
+                            model,
+                            example,
+                            decode_session,
+                            temperature=distill.temperature,
+                            token_clip=distill.token_clip,
+                            sequence_chunk_size=distill.kl_sequence_chunk_size,
+                        )
+                    if not bool(torch.isfinite(result.loss)):
+                        raise FloatingPointError("distillation loss is non-finite")
+                    result.loss.backward()
+                    if valid == 0 and any(parameter.grad is not None for parameter in model.backbone.parameters()):
+                        raise RuntimeError("frozen teacher/student backbone accumulated gradients")
+                    accumulated += 1
+                    valid += 1
+                    answer_tokens += result.answer_tokens
+                    grad_norm: float | None = None
+                    if accumulated == distill.gradient_accumulation_steps:
+                        grad_norm = _optimizer_step(model, optimizer, accumulated, config.grad_clip)
+                        optimizer_steps += 1
+                        accumulated = 0
 
-                _write_metric(
-                    metrics,
-                    {
-                        "source_index": record.source_index,
-                        "status": "trained",
-                        "loss": float(result.loss.detach().float().item()),
-                        "unclipped_kl": float(result.unclipped_kl.item()),
-                        "clipping_fraction": float(result.clipping_fraction.item()),
-                        "student_entropy": float(result.student_entropy.item()),
-                        "teacher_entropy": float(result.teacher_entropy.item()),
-                        "teacher_reasoning_tokens": len(example.teacher_reasoning_ids),
-                        "answer_tokens": result.answer_tokens,
-                        "cache_events": list(result.event_cache_lengths),
-                        "teacher_trace_cached": trace_cached,
-                        "grad_norm": grad_norm,
-                        "optimizer_steps": optimizer_steps,
-                    },
-                )
-            except InvalidDistillationExample as exc:
-                if not distill.skip_invalid_traces:
-                    raise
-                skipped += 1
-                _write_metric(
-                    metrics,
-                    {
-                        "source_index": record.source_index,
-                        "status": "skipped",
-                        "reason": str(exc),
-                        "optimizer_steps": optimizer_steps,
-                    },
-                )
+                    _write_metric(
+                        metrics,
+                        {
+                            "epoch": epoch,
+                            "source_index": record.source_index,
+                            "status": "trained",
+                            "loss": float(result.loss.detach().float().item()),
+                            "unclipped_kl": float(result.unclipped_kl.item()),
+                            "clipping_fraction": float(result.clipping_fraction.item()),
+                            "student_entropy": float(result.student_entropy.item()),
+                            "teacher_entropy": float(result.teacher_entropy.item()),
+                            "teacher_reasoning_tokens": len(example.teacher_reasoning_ids),
+                            "answer_tokens": result.answer_tokens,
+                            "cache_events": list(result.event_cache_lengths),
+                            "cache_relative_l2_displacements": list(
+                                result.event_relative_l2_displacements
+                            ),
+                            "teacher_trace_cached": trace_cached,
+                            "grad_norm": grad_norm,
+                            "processor_gate_before_example": processor_gate_before_example,
+                            "processor_gate_after_example": _processor_gate(model),
+                            "optimizer_steps": optimizer_steps,
+                        },
+                    )
+                    del result
+                except InvalidDistillationExample as exc:
+                    if not distill.skip_invalid_traces:
+                        raise
+                    skipped += 1
+                    _write_metric(
+                        metrics,
+                        {
+                            "epoch": epoch,
+                            "source_index": record.source_index,
+                            "status": "skipped",
+                            "reason": str(exc),
+                            "optimizer_steps": optimizer_steps,
+                        },
+                    )
 
-        if accumulated:
-            _optimizer_step(model, optimizer, accumulated, config.grad_clip)
-            optimizer_steps += 1
+            if accumulated:
+                _optimizer_step(model, optimizer, accumulated, config.grad_clip)
+                optimizer_steps += 1
+                accumulated = 0
 
     trace_store.sync()
     if valid == 0:
         raise RuntimeError("distillation epoch produced no valid training examples")
+    if overfit_diagnostic is not None and diagnostic_examples is not None:
+        locked = [example for _, example in diagnostic_examples]
+        overfit_diagnostic["pre_save"] = _evaluate_locked_examples(
+            model,
+            locked,
+            decode_session,
+            config,
+            device,
+        )
+        pre_save_processor_hash = _processor_state_sha256(model)
+        overfit_diagnostic["pre_save_processor_sha256"] = pre_save_processor_hash
+        overfit_diagnostic["processor_changed_from_initialization"] = (
+            pre_save_processor_hash != overfit_diagnostic["initial_processor_sha256"]
+        )
+        if not overfit_diagnostic["processor_changed_from_initialization"]:
+            raise RuntimeError("overfit diagnostic did not change the cache processor state")
+        pre_save_probe, pre_probe_tokens, pre_probe_events = _student_logit_probe_sha256(
+            model,
+            locked,
+            decode_session,
+            config,
+            device,
+        )
+        if (
+            pre_probe_tokens != overfit_diagnostic["logit_probe_response_tokens"]
+            or pre_probe_events != overfit_diagnostic["logit_probe_event_cache_lengths"]
+        ):
+            raise RuntimeError("logit probe coverage changed before checkpoint publication")
+        overfit_diagnostic["pre_save_logit_probe_sha256"] = pre_save_probe
     elapsed = time.monotonic() - started
     train_state: dict[str, Any] = {
         "mode": "cot_distillation",
-        "epoch": 1,
+        "epoch": distill.epochs,
         "seen_prompts": seen,
         "valid_prompts": valid,
         "skipped_prompts": skipped,
@@ -199,13 +290,278 @@ def train_distillation(config: TrainConfig) -> None:
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0,
         "teacher_trace_fingerprint": trace_fingerprint,
         "tokenizer_source": config.data.tokenizer.removeprefix("hf:"),
-        "dtype": "bfloat16" if config.bf16 and device.type == "cuda" else "float32",
+        "dtype": (
+            "mixed_bfloat16_backbone_float32_processor"
+            if config.bf16 and device.type == "cuda"
+            else "float32"
+        ),
     }
-    if config.bf16 and device.type == "cuda":
-        model.cache_processor.to(dtype=torch.bfloat16)
-    _publish_checkpoint(final_checkpoint, model, config.model, train_state)
+    if overfit_diagnostic is not None:
+        train_state["overfit_diagnostic"] = overfit_diagnostic
+    publication_checkpoint = (
+        output_dir / ".final-overfit-staging"
+        if overfit_diagnostic is not None
+        else final_checkpoint
+    )
+    train_state = _publish_checkpoint(publication_checkpoint, model, config.model, train_state)
+    if overfit_diagnostic is not None and diagnostic_examples is not None:
+        del optimizer
+        del decode_session
+        del model
+        gc.collect()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        try:
+            train_state = _verify_overfit_checkpoint(
+                publication_checkpoint,
+                config,
+                device,
+                distill,
+                select_all,
+                tokenizer.get_vocab_size(),
+                [example for _, example in diagnostic_examples],
+                overfit_diagnostic,
+                train_state,
+            )
+            os.rename(publication_checkpoint, final_checkpoint)
+            _fsync_directory(output_dir)
+        except Exception:
+            shutil.rmtree(publication_checkpoint, ignore_errors=True)
+            raise
     _atomic_write_json(output_dir / "summary.json", train_state)
     print(json.dumps(train_state, sort_keys=True))
+
+
+def _verify_overfit_checkpoint(
+    checkpoint: Path,
+    config: TrainConfig,
+    device: torch.device,
+    distill: DistillationConfig,
+    select_all: bool,
+    valid_vocab_size: int,
+    locked: list[DistillationExample],
+    overfit_diagnostic: dict[str, Any],
+    train_state: dict[str, Any],
+) -> dict[str, Any]:
+    reloaded, reloaded_config, _ = load_checkpoint(checkpoint, device=device)
+    if not isinstance(reloaded, BGT) or reloaded_config != config.model:
+        raise RuntimeError("overfit diagnostic checkpoint reload changed the model contract")
+    reloaded.backbone.eval()
+    reloaded.cache_processor.train()
+    reloaded_session = BGTDecodeSession(
+        reloaded,
+        process_every=distill.response_process_every,
+        select_all=select_all,
+        valid_vocab_size=valid_vocab_size,
+        record_displacements=True,
+    )
+    post_load_metrics = _evaluate_locked_examples(
+        reloaded,
+        locked,
+        reloaded_session,
+        config,
+        device,
+    )
+    pre_save_metrics = overfit_diagnostic["pre_save"]
+    if post_load_metrics != pre_save_metrics:
+        raise RuntimeError(
+            "locked-corpus diagnostics changed across checkpoint reload: "
+            f"{pre_save_metrics!r} -> {post_load_metrics!r}"
+        )
+    overfit_diagnostic["post_load"] = post_load_metrics
+    post_load_probe, post_probe_tokens, post_probe_events = _student_logit_probe_sha256(
+        reloaded,
+        locked,
+        reloaded_session,
+        config,
+        device,
+    )
+    if (
+        post_probe_tokens != overfit_diagnostic["logit_probe_response_tokens"]
+        or post_probe_events != overfit_diagnostic["logit_probe_event_cache_lengths"]
+    ):
+        raise RuntimeError("logit probe coverage changed after checkpoint reload")
+    pre_save_probe = str(overfit_diagnostic["pre_save_logit_probe_sha256"])
+    if post_load_probe != pre_save_probe:
+        raise RuntimeError(
+            "student logits changed across checkpoint reload: "
+            f"{pre_save_probe} -> {post_load_probe}"
+        )
+    overfit_diagnostic["post_load_logit_probe_sha256"] = post_load_probe
+    overfit_diagnostic["post_load_logits_verified"] = True
+    verified_state = {**train_state, "overfit_diagnostic": overfit_diagnostic}
+    _atomic_write_json(checkpoint / "train_state.json", verified_state)
+    _fsync_directory(checkpoint)
+    return verified_state
+
+
+def _epoch_training_items(
+    config: TrainConfig,
+    locked_examples: list[tuple[PromptRecord, DistillationExample]] | None,
+) -> Iterable[tuple[PromptRecord, DistillationExample | None]]:
+    if locked_examples is not None:
+        return locked_examples
+    records = iter_openmath_prompts(
+        config.data.data_dir or "",
+        skip_rows=config.data.sft_skip_rows,
+        take_rows=config.data.sft_take_rows,
+    )
+    return ((record, None) for record in records)
+
+
+def _prepare_locked_examples(
+    model: BGT,
+    tokenizer: TransformersTokenizer,
+    config: TrainConfig,
+    distill: DistillationConfig,
+    trace_store: TeacherTraceStore,
+    close_ids: tuple[int, ...],
+    decode_session: BGTDecodeSession,
+    device: torch.device,
+) -> tuple[list[tuple[PromptRecord, DistillationExample]], dict[str, Any]]:
+    locked: list[tuple[PromptRecord, DistillationExample]] = []
+    attempts = 0
+    skips: list[dict[str, Any]] = []
+    records = iter_openmath_prompts(
+        config.data.data_dir or "",
+        skip_rows=config.data.sft_skip_rows,
+        take_rows=config.data.sft_take_rows,
+    )
+    for record in records:
+        attempts += 1
+        try:
+            with _autocast_context(config, device):
+                example, _ = _build_example(
+                    model,
+                    tokenizer,
+                    record,
+                    distill,
+                    trace_store,
+                    close_ids,
+                    decode_session,
+                    seed=config.seed,
+                    device=device,
+                )
+        except InvalidDistillationExample as exc:
+            if not distill.skip_invalid_traces:
+                raise
+            skips.append({"source_index": record.source_index, "reason": str(exc)})
+            continue
+        locked.append((record, example))
+    if not locked:
+        raise RuntimeError("overfit diagnostic produced no valid locked examples")
+    expected = distill.expected_locked_examples
+    if expected is None or len(locked) != expected:
+        raise RuntimeError(
+            f"overfit diagnostic expected exactly {expected} locked examples but got {len(locked)} "
+            f"from {attempts} attempts with {len(skips)} skips"
+        )
+    trace_store.sync()
+    return locked, {
+        "lock_attempts": attempts,
+        "lock_skips": skips,
+        "locked_source_indices": [record.source_index for record, _ in locked],
+    }
+
+
+@torch.no_grad()
+def _evaluate_locked_examples(
+    model: BGT,
+    examples: list[DistillationExample],
+    decode_session: BGTDecodeSession,
+    config: TrainConfig,
+    device: torch.device,
+) -> dict[str, Any]:
+    distill = config.distillation
+    if distill is None:
+        raise ValueError("locked-example evaluation requires distillation configuration")
+    weighted_loss = 0.0
+    weighted_kl = 0.0
+    answer_tokens = 0
+    displacements: list[float] = []
+    for example in examples:
+        with _autocast_context(config, device):
+            result = distillation_example_loss(
+                model,
+                example,
+                decode_session,
+                temperature=distill.temperature,
+                token_clip=distill.token_clip,
+                sequence_chunk_size=distill.kl_sequence_chunk_size,
+            )
+        weighted_loss += float(result.loss.detach().float().item()) * result.answer_tokens
+        weighted_kl += float(result.unclipped_kl.detach().float().item()) * result.answer_tokens
+        answer_tokens += result.answer_tokens
+        displacements.extend(result.event_relative_l2_displacements)
+    if answer_tokens == 0:
+        raise RuntimeError("locked-example evaluation produced no answer tokens")
+    return {
+        "examples": len(examples),
+        "answer_tokens": answer_tokens,
+        "token_weighted_loss": weighted_loss / answer_tokens,
+        "token_weighted_unclipped_kl": weighted_kl / answer_tokens,
+        "processor_gate": _processor_gate(model),
+        "cache_events": len(displacements),
+        "mean_cache_relative_l2_displacement": (
+            sum(displacements) / len(displacements) if displacements else 0.0
+        ),
+    }
+
+
+@torch.no_grad()
+def _student_logit_probe_sha256(
+    model: BGT,
+    examples: list[DistillationExample],
+    decode_session: BGTDecodeSession,
+    config: TrainConfig,
+    device: torch.device,
+) -> tuple[str, int, list[int]]:
+    if not examples:
+        raise ValueError("student logit probe requires at least one locked example")
+    example = max(examples, key=lambda item: len(item.response_ids))
+    minimum = decode_session.process_every + 1
+    if len(example.response_ids) < minimum:
+        raise RuntimeError(
+            "student logit probe requires a response long enough to cross one recurrent event: "
+            f"need {minimum}, got {len(example.response_ids)}"
+        )
+    probe_count = min(len(example.response_ids), 2 * decode_session.process_every + 1)
+    probe_ids = example.response_ids[:probe_count]
+    with _autocast_context(config, device):
+        replay = decode_session.replay(example.student_prompt, probe_ids)
+    if len(replay.event_cache_lengths) < 2:
+        raise RuntimeError("student logit probe did not exercise a recurrent processor event")
+    logits = replay.logits.detach().cpu().contiguous()
+    digest = hashlib.sha256()
+    metadata = json.dumps(
+        {"dtype": str(logits.dtype), "shape": list(logits.shape)},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest.update(metadata)
+    digest.update(logits.view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest(), probe_count, list(replay.event_cache_lengths)
+
+
+def _locked_examples_payload(
+    examples: list[tuple[PromptRecord, DistillationExample]],
+) -> dict[str, Any]:
+    return {
+        "schema": "gcw.opsd-overfit-locked-examples.v1",
+        "examples": [
+            {
+                "source_index": record.source_index,
+                "prompt": record.prompt,
+                "student_base_ids": list(example.student_prompt.base_ids),
+                "student_trigger_ids": list(example.student_prompt.trigger_ids),
+                "teacher_base_ids": list(example.teacher_prompt.base_ids),
+                "teacher_trigger_ids": list(example.teacher_prompt.trigger_ids),
+                "teacher_reasoning_ids": list(example.teacher_reasoning_ids),
+                "response_ids": list(example.response_ids),
+            }
+            for record, example in examples
+        ],
+    }
 
 
 def _build_example(
@@ -396,20 +752,78 @@ def _write_metric(handle, payload: dict[str, Any]) -> None:
     handle.flush()
 
 
+def _processor_state_sha256(model: BGT) -> str:
+    digest = hashlib.sha256()
+    for name, tensor in sorted(model.cache_processor.state_dict().items()):
+        value = tensor.detach().cpu().contiguous()
+        metadata = json.dumps(
+            {"name": name, "dtype": str(value.dtype), "shape": list(value.shape)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest.update(len(metadata).to_bytes(8, "big"))
+        digest.update(metadata)
+        digest.update(value.view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _processor_gate(model: BGT) -> float:
+    gate = getattr(getattr(model.cache_processor, "block", None), "gate", None)
+    if not isinstance(gate, torch.Tensor) or gate.numel() != 1:
+        raise ValueError("BGT cache processor must expose one scalar block.gate")
+    gate_tensor = cast(torch.Tensor, gate)
+    return float(gate_tensor.detach().float().cpu().item())
+
+
 def _publish_checkpoint(
     destination: Path,
     model: BGT,
     model_config: ModelConfig,
     train_state: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
+    if destination.exists():
+        raise FileExistsError(f"refusing to overwrite checkpoint: {destination}")
+    expected_hash = _processor_state_sha256(model)
+    expected_gate = _processor_gate(model)
+    published_state = {
+        **train_state,
+        "checkpoint_fidelity_verified": False,
+        "pre_save_processor_sha256": expected_hash,
+        "pre_save_processor_gate": expected_gate,
+    }
     temporary = Path(tempfile.mkdtemp(prefix=".final-", dir=destination.parent))
-    save_checkpoint(temporary, model, model_config, train_state)
-    for child in temporary.iterdir():
-        if child.is_file():
-            with child.open("rb") as handle:
-                os.fsync(handle.fileno())
-    os.replace(temporary, destination)
-    _fsync_directory(destination.parent)
+    try:
+        save_checkpoint(temporary, model, model_config, published_state)
+        reloaded, reloaded_config, _ = load_checkpoint(temporary, device="cpu")
+        if not isinstance(reloaded, BGT) or reloaded_config != model_config:
+            raise RuntimeError("published checkpoint did not reload as the expected BGT model")
+        observed_hash = _processor_state_sha256(reloaded)
+        observed_gate = _processor_gate(reloaded)
+        if observed_hash != expected_hash or observed_gate != expected_gate:
+            raise RuntimeError(
+                "cache processor changed across checkpoint publication: "
+                f"hash {expected_hash} -> {observed_hash}, gate {expected_gate} -> {observed_gate}"
+            )
+        published_state.update(
+            {
+                "checkpoint_fidelity_verified": True,
+                "post_load_processor_sha256": observed_hash,
+                "post_load_processor_gate": observed_gate,
+            }
+        )
+        del reloaded
+        gc.collect()
+        _atomic_write_json(temporary / "train_state.json", published_state)
+        for child in temporary.iterdir():
+            if child.is_file():
+                with child.open("rb") as handle:
+                    os.fsync(handle.fileno())
+        os.rename(temporary, destination)
+        _fsync_directory(destination.parent)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return published_state
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
