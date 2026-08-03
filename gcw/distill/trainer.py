@@ -16,7 +16,7 @@ from gcw.config import DistillationConfig, ModelConfig, TrainConfig, to_dict
 from gcw.data.tokenizers import TransformersTokenizer, get_tokenizer
 from gcw.distill.data import PromptRecord, iter_openmath_prompts
 from gcw.distill.pipeline import DistillationExample, distillation_example_loss
-from gcw.distill.prompt import format_chat_prompt
+from gcw.distill.prompt import format_chat_prompt, format_teacher_prompt
 from gcw.distill.session import BGTDecodeSession
 from gcw.distill.teacher import sample_backbone_completion, split_teacher_reasoning
 from gcw.distill.traces import TeacherTraceStore
@@ -57,10 +57,13 @@ def train_distillation(config: TrainConfig) -> None:
             f"tokenizer vocabulary {tokenizer.get_vocab_size()} exceeds model vocabulary "
             f"{config.model.vocab_size}"
         )
+    open_ids = tuple(tokenizer.encode(distill.reasoning_open_text))
+    if not open_ids:
+        raise ValueError("reasoning_open_text tokenised to an empty sequence")
     close_ids = tuple(tokenizer.encode(distill.reasoning_close_text))
     if not close_ids:
         raise ValueError("reasoning_close_text tokenised to an empty sequence")
-    trace_fingerprint = _teacher_fingerprint(config, close_ids, tokenizer)
+    trace_fingerprint = _teacher_fingerprint(config, open_ids, close_ids, tokenizer)
 
     model = build_model(config.model)
     if not isinstance(model, BGT):
@@ -218,7 +221,11 @@ def _build_example(
 ) -> tuple[DistillationExample, bool]:
     try:
         student_prompt = format_chat_prompt(tokenizer, record.prompt, enable_thinking=False)
-        teacher_prompt = format_chat_prompt(tokenizer, record.prompt, enable_thinking=True)
+        teacher_prompt = format_teacher_prompt(
+            tokenizer,
+            record.prompt,
+            reasoning_open_text=distill.reasoning_open_text,
+        )
     except ValueError as exc:
         raise InvalidDistillationExample(str(exc)) from exc
     reasoning_ids = trace_store.get(source_index=record.source_index, prompt=record.prompt)
@@ -325,6 +332,7 @@ def _optimizer_step(
 
 def _teacher_fingerprint(
     config: TrainConfig,
+    open_ids: tuple[int, ...],
     close_ids: tuple[int, ...],
     tokenizer: TransformersTokenizer,
 ) -> str:
@@ -339,7 +347,7 @@ def _teacher_fingerprint(
         while chunk := handle.read(8 * 1024 * 1024):
             digest.update(chunk)
     payload = {
-        "schema": "gcw-teacher-trace-v2",
+        "schema": "gcw.teacher-trace.v3",
         "checkpoint_sha256": digest.hexdigest(),
         "model": to_dict(config.model),
         "tokenizer": config.data.tokenizer,
@@ -352,6 +360,8 @@ def _teacher_fingerprint(
             "top_k": distill.top_k,
             "max_teacher_reasoning_tokens": distill.max_teacher_reasoning_tokens,
             "eos_token_id": tokenizer.eot_id,
+            "reasoning_open_text": distill.reasoning_open_text,
+            "open_ids": list(open_ids),
             "reasoning_close_text": distill.reasoning_close_text,
             "close_ids": list(close_ids),
         },

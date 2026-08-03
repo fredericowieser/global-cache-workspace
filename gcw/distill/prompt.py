@@ -43,3 +43,14 @@ def format_chat_prompt(tokenizer: Any, prompt: str, *, enable_thinking: bool) ->
     if not trigger_ids:
         raise ValueError("chat template produced an empty assistant trigger")
     return ChatPrompt(base_ids=base_ids, trigger_ids=trigger_ids)
+
+
+def format_teacher_prompt(tokenizer: Any, prompt: str, *, reasoning_open_text: str) -> ChatPrompt:
+    """Return a thinking-on prompt even when a tokenizer ignores ``enable_thinking``."""
+    chat = format_chat_prompt(tokenizer, prompt, enable_thinking=True)
+    open_ids = tuple(int(token_id) for token_id in tokenizer.encode(reasoning_open_text))
+    if not open_ids:
+        raise ValueError("reasoning_open_text tokenised to an empty sequence")
+    if chat.full_ids[-len(open_ids) :] == open_ids:
+        return chat
+    return ChatPrompt(base_ids=chat.base_ids, trigger_ids=chat.trigger_ids + open_ids)

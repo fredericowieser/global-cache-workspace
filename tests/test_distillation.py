@@ -11,7 +11,7 @@ from gcw.distill.cache import truncate_last_cache_token
 from gcw.distill.data import iter_openmath_prompts
 from gcw.distill.objective import clipped_forward_kl
 from gcw.distill.pipeline import DistillationExample, distillation_example_loss
-from gcw.distill.prompt import ChatPrompt, format_chat_prompt
+from gcw.distill.prompt import ChatPrompt, format_chat_prompt, format_teacher_prompt
 from gcw.distill.session import BGTDecodeSession, sample_next_token
 from gcw.distill.teacher import sample_backbone_completion, split_teacher_reasoning, teacher_answer_logits
 from gcw.distill.traces import TeacherTraceStore
@@ -40,6 +40,20 @@ class FakeChatTokenizer:
         if not add_generation_prompt:
             return base
         return base + ([20, 21] if enable_thinking else [30, 31])
+
+    def encode(self, text: str):
+        assert text == "<think>\n"
+        return [20, 21]
+
+
+class ThinkingAgnosticTokenizer(FakeChatTokenizer):
+    def apply_chat_template(self, messages, *, tokenize, add_generation_prompt, enable_thinking):
+        return super().apply_chat_template(
+            messages,
+            tokenize=tokenize,
+            add_generation_prompt=add_generation_prompt,
+            enable_thinking=False,
+        )
 
 
 def _distillation_train_config(**overrides) -> TrainConfig:
@@ -111,6 +125,18 @@ def test_format_chat_prompt_keeps_thinking_mode_in_trigger():
     prompt = format_chat_prompt(FakeChatTokenizer(), "2+2?", enable_thinking=True)
 
     assert prompt.trigger_ids == (20, 21)
+
+
+def test_teacher_prompt_does_not_duplicate_template_thinking_open():
+    prompt = format_teacher_prompt(FakeChatTokenizer(), "2+2?", reasoning_open_text="<think>\n")
+
+    assert prompt.trigger_ids == (20, 21)
+
+
+def test_teacher_prompt_appends_thinking_open_when_template_ignores_flag():
+    prompt = format_teacher_prompt(ThinkingAgnosticTokenizer(), "2+2?", reasoning_open_text="<think>\n")
+
+    assert prompt.trigger_ids == (30, 31, 20, 21)
 
 
 def test_clipped_forward_kl_matches_released_opsd_order_and_masks_tokens():
@@ -708,7 +734,7 @@ def test_teacher_fingerprint_invalidates_seed_limit_and_chat_template(tmp_path):
         seed=7,
         distillation=DistillationConfig(max_teacher_reasoning_tokens=8),
     )
-    baseline = distill_trainer._teacher_fingerprint(base, (8, 9), tokenizer)
+    baseline = distill_trainer._teacher_fingerprint(base, (6, 7), (8, 9), tokenizer)
     changed_seed = _distillation_train_config(
         backbone_checkpoint=str(checkpoint),
         seed=8,
@@ -719,10 +745,10 @@ def test_teacher_fingerprint_invalidates_seed_limit_and_chat_template(tmp_path):
         seed=7,
         distillation=DistillationConfig(max_teacher_reasoning_tokens=9),
     )
-    assert distill_trainer._teacher_fingerprint(changed_seed, (8, 9), tokenizer) != baseline
-    assert distill_trainer._teacher_fingerprint(changed_limit, (8, 9), tokenizer) != baseline
+    assert distill_trainer._teacher_fingerprint(changed_seed, (6, 7), (8, 9), tokenizer) != baseline
+    assert distill_trainer._teacher_fingerprint(changed_limit, (6, 7), (8, 9), tokenizer) != baseline
     tokenizer.enc.chat_template = "template-v2"
-    assert distill_trainer._teacher_fingerprint(base, (8, 9), tokenizer) != baseline
+    assert distill_trainer._teacher_fingerprint(base, (6, 7), (8, 9), tokenizer) != baseline
 
 
 

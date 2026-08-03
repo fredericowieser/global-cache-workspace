@@ -75,6 +75,7 @@ distillation:
   response_process_every: 64
   boundary_selection: configured
   gradient_accumulation_steps: 1
+  reasoning_open_text: "<think>\n"
   reasoning_close_text: "</think>\n\n"
   skip_invalid_traces: true
 

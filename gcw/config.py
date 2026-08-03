@@ -420,6 +420,7 @@ class DistillationConfig:
     response_process_every: int = 64
     boundary_selection: Literal["configured", "all"] = "configured"
     gradient_accumulation_steps: int = 1
+    reasoning_open_text: str = "<think>\n"
     reasoning_close_text: str = "</think>\n\n"
     skip_invalid_traces: bool = True
 
