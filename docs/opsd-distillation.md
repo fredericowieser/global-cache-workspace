@@ -86,6 +86,20 @@ Run `gcw eval opsd-screen` once per condition with the full Git SHA, explicit to
 
 The primary contrasts are trained minus untrained and trained minus processor-off. Untrained minus processor-off isolates damage or benefit from the cache architecture before learning.
 
+## Matched held-out KL and teacher-consistency audit
+
+When trained-active does not beat the seed-identical untrained control, run `gcw eval opsd-kl-audit --config configs/eval/opsd/matched-heldout-kl-audit-v1.yaml` before changing training dose. The production config admits no CLI protocol overrides. It scans source rows from index 128, excludes exact and whitespace-normalized collisions with all 128 training rows and 192 evaluation prompts, and locks the first 32 valid examples within 64 attempts.
+
+For each locked prompt, the untrained processor generates one student response and one self-generated teacher completion. The audit preserves the raw completion IDs and distinguishes a native thinking-close delimiter from a direct-answer EOT rewritten into a close. Both checkpoints are then scored on the exact same student token IDs; the teacher-logit hash and cache-event schedule must match across sequential passes. The primary estimand is token-weighted exact forward KL under the trained processor minus the seed-identical untrained processor, with prompt-level paired bootstrap intervals. Teacher-context consistency is measured separately by scoring the same normalized dataset-solution tokens under (a) the no-privilege direct-answer context and (b) the self-generated reasoning context. Lower dataset-solution NLL is better, but the normalized `answer` field has no independent verification provenance. This is neither teacher correctness nor answer accuracy.
+
+The output binds the clean audit revision, pilot revision, source dataset, training/evaluation manifests, tokenizer, checkpoint bundles, locked prompts, raw and transformed teacher completions, student responses, unverified dataset-solution IDs, cache events and processor states. It is published once with atomic no-clobber semantics.
+
+Decision rule:
+
+1. trained KL does not decrease credibly: run a 128-row four-epoch optimisation-dose ablation;
+2. trained KL decreases but held-out accuracy remains flat/down: redesign the objective rather than adding data;
+3. self-generated reasoning does not reduce dataset-solution NLL, or most traces are EOT rewrites: inspect/replace the teacher-trace policy before further distillation.
+
 ## Overfit and checkpoint-fidelity diagnostic
 
 Before scaling a failed 128-prompt pilot, run the explicit `overfit_diagnostic` path on the first 21 OpenMath rows. The prior pilot established that these contain exactly 16 valid source-indexed prompts. Preparation locks each valid teacher trace and initial student response before any optimiser update; repeated epochs optimise the same 16 examples rather than changing the target sample.

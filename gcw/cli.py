@@ -9,6 +9,7 @@ import tempfile
 from gcw.convert import convert_bottleneck, convert_hf, convert_ppt
 from gcw.data.fineweb import prepare_fineweb
 from gcw.data.sft import prepare_openmath
+from gcw.distill.audit import load_opsd_matched_audit_config, run_matched_opsd_audit
 
 from gcw.eval import is_main_process, run_core, run_fineweb, run_math, run_opsd_screen, run_paper7, run_ppt
 from gcw.opsd_eval import (
@@ -120,6 +121,8 @@ def main(argv: list[str] | None = None) -> None:
     opsd_overlap.add_argument("--untrained", required=True)
     opsd_overlap.add_argument("--trained", required=True)
     opsd_overlap.add_argument("--out", required=True)
+    opsd_kl_audit = eval_sub.add_parser("opsd-kl-audit")
+    opsd_kl_audit.add_argument("--config", required=True)
 
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
@@ -164,6 +167,13 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "train":
         train_from_config(args.config)
     elif args.cmd == "eval":
+        if args.suite == "opsd-kl-audit":
+            results = run_matched_opsd_audit(
+                load_opsd_matched_audit_config(args.config)
+            )
+            if is_main_process():
+                print(json.dumps(results, indent=2, default=str))
+            return
         if args.suite == "opsd-aggregate":
             results = aggregate_opsd_screen(
                 [json.loads(Path(path).read_text()) for path in args.inputs]

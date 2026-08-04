@@ -1,6 +1,23 @@
 from gcw import cli
 
 
+def test_eval_opsd_kl_audit_loads_config_and_runs(monkeypatch, capsys):
+    marker = object()
+    calls = []
+    monkeypatch.setattr(cli, "load_opsd_matched_audit_config", lambda path: (marker, path))
+
+    def fake_run(config):
+        calls.append(config)
+        return {"kind": "matched-audit", "examples": 32}
+
+    monkeypatch.setattr(cli, "run_matched_opsd_audit", fake_run)
+
+    cli.main(["eval", "opsd-kl-audit", "--config", "audit.yaml"])
+
+    assert calls == [(marker, "audit.yaml")]
+    assert '"examples": 32' in capsys.readouterr().out
+
+
 def test_convert_hf_forwards_processor_variants(monkeypatch):
     calls = []
 
