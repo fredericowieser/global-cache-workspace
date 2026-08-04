@@ -1,3 +1,5 @@
+# Historical occupied output identity; do not launch. Use
+# qwen3_06b_opsd_pilot128_exact_kl_v2.yaml for the corrected fresh pilot.
 model:
   variant: bgt
   family: qwen3

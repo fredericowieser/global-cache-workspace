@@ -134,6 +134,23 @@ def test_opsd_overfit_configs_are_explicit_diagnostics(path, take_rows, epochs, 
     assert config.distillation.expected_locked_examples == expected_locked
 
 
+def test_opsd_exact_kl_pilot_config_is_seed_locked_and_fresh():
+    config = load_train_config(
+        "configs/train/opsd/qwen3_06b_opsd_pilot128_exact_kl_v2.yaml"
+    )
+
+    assert config.data.sft_skip_rows == 0
+    assert config.data.sft_take_rows == 128
+    assert config.seed == 24
+    assert config.learning_rate == 1.0e-4
+    assert config.distillation is not None
+    assert config.distillation.epochs == 1
+    assert not config.distillation.overfit_diagnostic
+    assert config.distillation.record_cache_displacements
+    assert config.distillation.token_clip is None
+    assert config.output_dir.endswith("/pilot-128-exact-kl-v2")
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

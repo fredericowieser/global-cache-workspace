@@ -409,6 +409,7 @@ class WandbConfig:
 class DistillationConfig:
     epochs: int = 1
     overfit_diagnostic: bool = False
+    record_cache_displacements: bool = False
     expected_locked_examples: int | None = None
     teacher_thinking: bool = True
     student_thinking: bool = False

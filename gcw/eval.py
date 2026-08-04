@@ -24,6 +24,7 @@ from gcw.eval_support import (
 )
 from gcw.loss_eval import evaluate_nll_bpb
 from gcw.opsd_eval import OpsdEvalCondition, build_opsd_eval_prompt, greedy_opsd_response
+from gcw.prompt_identity import normalized_prompt_text_sha256, prompt_text_sha256
 
 
 _encode_generate_prompt = encode_generate_prompt
@@ -271,7 +272,11 @@ class GCWEvalLM(TemplateLM):
             self.opsd_generation_records.append(
                 {
                     "request_index": len(self.opsd_generation_records),
-                    "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                    "prompt_sha256": prompt_text_sha256(prompt),
+                    "prompt_text_sha256": prompt_text_sha256(prompt),
+                    "normalized_prompt_text_sha256": normalized_prompt_text_sha256(
+                        prompt
+                    ),
                     "base_token_ids_sha256": _token_ids_sha256(chat_prompt.base_ids),
                     "full_prompt_token_ids_sha256": _token_ids_sha256(chat_prompt.full_ids),
                     "base_tokens": len(chat_prompt.base_ids),

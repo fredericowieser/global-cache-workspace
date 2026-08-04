@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from collections.abc import Iterable
@@ -25,6 +26,8 @@ from gcw.distill.teacher import sample_backbone_completion, split_teacher_reason
 from gcw.distill.traces import TeacherTraceStore
 from gcw.models import build_model
 from gcw.models.bgt import BGT
+from gcw.prompt_identity import normalized_prompt_text_sha256, prompt_text_sha256
+from gcw.state_hash import tensor_state_sha256
 
 
 class InvalidDistillationExample(ValueError):
@@ -39,7 +42,6 @@ def train_distillation(config: TrainConfig) -> None:
     if config.data.data_dir is None:
         raise ValueError("cot_distillation requires data.data_dir")
 
-    torch.manual_seed(config.seed)
     output_dir = Path(config.output_dir)
     metrics_path = output_dir / "metrics.jsonl"
     final_checkpoint = output_dir / "final"
@@ -75,6 +77,7 @@ def train_distillation(config: TrainConfig) -> None:
         raise ValueError("reasoning_close_text tokenised to an empty sequence")
     trace_fingerprint = _teacher_fingerprint(config, open_ids, close_ids, tokenizer)
 
+    torch.manual_seed(config.seed)
     model = build_model(config.model)
     if not isinstance(model, BGT):
         raise TypeError("cot_distillation requires a BGT model")
@@ -86,12 +89,17 @@ def train_distillation(config: TrainConfig) -> None:
     model.to(device)
     if config.bf16 and device.type == "cuda":
         model.backbone.to(dtype=torch.bfloat16)
+    initial_processor_sha256 = _processor_state_sha256(model)
+    initial_processor_gate = _processor_gate(model)
+    source_revision, source_clean = _repository_state()
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "run_config.json").write_text(
+    run_config_path = output_dir / "run_config.json"
+    run_config_path.write_text(
         json.dumps(to_dict(config), indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    run_config_sha256 = _sha256_file(run_config_path)
 
     trace_store = TeacherTraceStore(output_dir / "teacher-traces.jsonl", fingerprint=trace_fingerprint)
     optimizer = _optimizer(model, config)
@@ -101,7 +109,9 @@ def train_distillation(config: TrainConfig) -> None:
         process_every=distill.response_process_every,
         select_all=select_all,
         valid_vocab_size=tokenizer.get_vocab_size(),
-        record_displacements=distill.overfit_diagnostic,
+        record_displacements=(
+            distill.overfit_diagnostic or distill.record_cache_displacements
+        ),
     )
 
     diagnostic_examples: list[tuple[PromptRecord, DistillationExample]] | None = None
@@ -204,6 +214,10 @@ def train_distillation(config: TrainConfig) -> None:
                         {
                             "epoch": epoch,
                             "source_index": record.source_index,
+                            "prompt_text_sha256": prompt_text_sha256(record.prompt),
+                            "normalized_prompt_text_sha256": normalized_prompt_text_sha256(
+                                record.prompt
+                            ),
                             "status": "trained",
                             "loss": float(result.loss.detach().float().item()),
                             "unclipped_kl": float(result.unclipped_kl.item()),
@@ -233,6 +247,10 @@ def train_distillation(config: TrainConfig) -> None:
                         {
                             "epoch": epoch,
                             "source_index": record.source_index,
+                            "prompt_text_sha256": prompt_text_sha256(record.prompt),
+                            "normalized_prompt_text_sha256": normalized_prompt_text_sha256(
+                                record.prompt
+                            ),
                             "status": "skipped",
                             "reason": str(exc),
                             "optimizer_steps": optimizer_steps,
@@ -290,6 +308,18 @@ def train_distillation(config: TrainConfig) -> None:
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0,
         "teacher_trace_fingerprint": trace_fingerprint,
         "tokenizer_source": config.data.tokenizer.removeprefix("hf:"),
+        "tokenizer_identity_sha256": tokenizer.identity_sha256(),
+        "source_revision": source_revision,
+        "source_clean": source_clean,
+        "run_config_sha256": run_config_sha256,
+        "training_seed": config.seed,
+        "processor_initialization_recipe": (
+            "torch.manual_seed(training_seed); build_model(model_config); v1"
+        ),
+        "torch_version": torch.__version__,
+        "initial_processor_sha256": initial_processor_sha256,
+        "initial_processor_gate": initial_processor_gate,
+        "record_cache_displacements": distill.record_cache_displacements,
         "dtype": (
             "mixed_bfloat16_backbone_float32_processor"
             if config.bf16 and device.type == "cuda"
@@ -752,19 +782,30 @@ def _write_metric(handle, payload: dict[str, Any]) -> None:
     handle.flush()
 
 
-def _processor_state_sha256(model: BGT) -> str:
+def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    for name, tensor in sorted(model.cache_processor.state_dict().items()):
-        value = tensor.detach().cpu().contiguous()
-        metadata = json.dumps(
-            {"name": name, "dtype": str(value.dtype), "shape": list(value.shape)},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        digest.update(len(metadata).to_bytes(8, "big"))
-        digest.update(metadata)
-        digest.update(value.view(torch.uint8).numpy().tobytes())
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
     return digest.hexdigest()
+
+
+def _repository_state() -> tuple[str | None, bool]:
+    repository = Path(__file__).resolve().parents[2]
+    try:
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+        ).strip()
+        dirty = subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=repository, text=True
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None, False
+    return revision, not bool(dirty)
+
+
+def _processor_state_sha256(model: BGT) -> str:
+    return tensor_state_sha256(dict(model.cache_processor.state_dict()))
 
 
 def _processor_gate(model: BGT) -> float:

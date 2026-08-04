@@ -11,7 +11,11 @@ from gcw.data.fineweb import prepare_fineweb
 from gcw.data.sft import prepare_openmath
 
 from gcw.eval import is_main_process, run_core, run_fineweb, run_math, run_opsd_screen, run_paper7, run_ppt
-from gcw.opsd_eval import aggregate_opsd_screen
+from gcw.opsd_eval import (
+    aggregate_opsd_screen,
+    aggregate_opsd_three_way,
+    audit_opsd_prompt_overlap,
+)
 from gcw.params import write_family_configs
 from gcw.train import train_from_config
 
@@ -103,6 +107,19 @@ def main(argv: list[str] | None = None) -> None:
     opsd_aggregate = eval_sub.add_parser("opsd-aggregate")
     opsd_aggregate.add_argument("--inputs", nargs=4, required=True)
     opsd_aggregate.add_argument("--out", required=True)
+    opsd_three_way = eval_sub.add_parser("opsd-three-way")
+    opsd_three_way.add_argument("--off", required=True)
+    opsd_three_way.add_argument("--untrained", required=True)
+    opsd_three_way.add_argument("--trained", required=True)
+    opsd_three_way.add_argument("--bootstrap-seed", type=int, default=240805)
+    opsd_three_way.add_argument("--bootstrap-samples", type=int, default=10_000)
+    opsd_three_way.add_argument("--out", required=True)
+    opsd_overlap = eval_sub.add_parser("opsd-overlap")
+    opsd_overlap.add_argument("--training-metrics", required=True)
+    opsd_overlap.add_argument("--off", required=True)
+    opsd_overlap.add_argument("--untrained", required=True)
+    opsd_overlap.add_argument("--trained", required=True)
+    opsd_overlap.add_argument("--out", required=True)
 
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
@@ -150,6 +167,30 @@ def main(argv: list[str] | None = None) -> None:
         if args.suite == "opsd-aggregate":
             results = aggregate_opsd_screen(
                 [json.loads(Path(path).read_text()) for path in args.inputs]
+            )
+        elif args.suite == "opsd-three-way":
+            results = aggregate_opsd_three_way(
+                {
+                    "off": json.loads(Path(args.off).read_text()),
+                    "untrained": json.loads(Path(args.untrained).read_text()),
+                    "trained": json.loads(Path(args.trained).read_text()),
+                },
+                bootstrap_seed=args.bootstrap_seed,
+                bootstrap_samples=args.bootstrap_samples,
+            )
+        elif args.suite == "opsd-overlap":
+            training_rows = [
+                json.loads(line)
+                for line in Path(args.training_metrics).read_text().splitlines()
+                if line.strip()
+            ]
+            results = audit_opsd_prompt_overlap(
+                training_rows,
+                {
+                    "off": json.loads(Path(args.off).read_text()),
+                    "untrained": json.loads(Path(args.untrained).read_text()),
+                    "trained": json.loads(Path(args.trained).read_text()),
+                },
             )
         elif args.suite == "fineweb":
             results = run_fineweb(args.checkpoint, data_dir=args.data_dir, eval_tokens=args.eval_tokens, batch_size=args.batch_size)
