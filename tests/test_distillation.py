@@ -121,6 +121,7 @@ def test_distillation_repeated_epochs_require_explicit_overfit_diagnostic():
     [
         ("configs/train/opsd/qwen3_06b_opsd_overfit16_smoke.yaml", 1, 2, 1),
         ("configs/train/opsd/qwen3_06b_opsd_overfit16x20.yaml", 21, 20, 16),
+        ("configs/train/opsd/qwen3_06b_opsd_overfit16x40.yaml", 21, 40, 16),
     ],
 )
 def test_opsd_overfit_configs_are_explicit_diagnostics(path, take_rows, epochs, expected_locked):
