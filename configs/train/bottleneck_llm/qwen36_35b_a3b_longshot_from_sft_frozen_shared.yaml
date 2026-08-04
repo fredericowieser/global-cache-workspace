@@ -18,6 +18,10 @@ model:
     process_every: 64
     topk: 32
     topk_heads: 20
+    topk_linear_heads: 240
+    linear_state_cache: true
+    linear_state_query_mode: global
+    gate_linear_state_delta: true
     score: kv_norm
     hidden_size: 1536
     intermediate_size: 6144

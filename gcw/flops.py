@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, ModelConfig, linear_attention_following_cache_indices
 
 
 PAD_VOCAB_TO = 128
@@ -164,11 +164,13 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
                 selected_heads += 1
             total += _icarus_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
         elif config.variant == "longshot":
-            selected_heads = min(cp.topk_heads, cache_heads)
-            if cp.include_self_head_kv and selected_heads < cache_heads:
+            linear_heads = _longshot_linear_state_heads(config)
+            total_heads = cache_heads + linear_heads
+            selected_heads = min(cp.topk_heads, cache_heads) + min(_longshot_topk_linear_heads(cp), linear_heads)
+            if cp.include_self_head_kv and selected_heads < total_heads:
                 selected_heads += 1
             total += cp.iterations * _longshot_processor_block_flops_per_call(
-                2 * int(config.head_dim), cp, selected, cache_heads, selected_heads
+                2 * int(config.head_dim), cp, selected, cache_heads, selected_heads, model_config=config
             )
     return total
 
@@ -194,20 +196,59 @@ def _longshot_processor_block_flops_per_call(
     selected: int,
     cache_heads: int,
     selected_heads: int,
+    *,
+    model_config: ModelConfig | None = None,
 ) -> float:
+    linear_heads = 0 if model_config is None else _longshot_linear_state_heads(model_config)
+    total_heads = cache_heads + linear_heads
     encoder_len = config.encoder_seq_len or config.process_every + max(config.topk, 0)
     encoder_in = input_dim if config.encoder_method == "query_attention" else input_dim * encoder_len
     output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
-    in_out = encoder_in * config.hidden_size + config.hidden_size * output_dim
+    kv_in_out = encoder_in * config.hidden_size + config.hidden_size * output_dim
     encode_extra = 0
     if config.encoder_method == "query_attention":
         encode_extra = 4 * cache_heads * selected * input_dim
         if config.encoder_query_source == "final_token":
             encode_extra += 2 * cache_heads * input_dim * input_dim
-    matmul = 2 * cache_heads * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+    linear_in_out = 0
+    if model_config is not None and linear_heads > 0:
+        layer_pairs = linear_attention_following_cache_indices(model_config)
+        linear_key_dim = int(model_config.linear_key_head_dim or model_config.head_dim)
+        linear_value_dim = int(model_config.linear_value_head_dim or linear_key_dim)
+        linear_value_heads = int(model_config.linear_num_value_heads or model_config.num_heads)
+        linear_layer_count = linear_heads // linear_value_heads
+        context_dim = config.hidden_size
+        if config.linear_state_query_mode == "per_linear_state":
+            query_count = linear_layer_count
+            query_out = linear_value_heads * linear_key_dim
+        elif config.linear_state_query_mode == "shared":
+            query_count = len({following_cache_idx for _, following_cache_idx in layer_pairs})
+            query_out = linear_key_dim
+        elif config.linear_state_query_mode == "global":
+            query_count = len({following_cache_idx for _, following_cache_idx in layer_pairs})
+            query_out = linear_key_dim
+        else:
+            raise ValueError(f"unsupported cache_processor.linear_state_query_mode: {config.linear_state_query_mode}")
+        feature_dim = linear_key_dim + linear_value_dim
+        linear_in_out = linear_heads * (feature_dim * config.hidden_size + config.hidden_size * feature_dim)
+        encode_extra += 2 * query_count * context_dim * query_out
+        encode_extra += 2 * linear_heads * linear_key_dim * linear_value_dim
+        encode_extra += 2 * linear_heads * linear_key_dim * linear_value_dim
+    matmul = 2 * (cache_heads * kv_in_out + linear_in_out + total_heads * config.num_layers * _processor_layer_matmul_params(config))
     head_dim = config.hidden_size // config.num_heads
-    attn = config.num_layers * 4 * config.num_heads * head_dim * cache_heads * selected_heads
+    attn = config.num_layers * 4 * config.num_heads * head_dim * total_heads * selected_heads
     return float(matmul + encode_extra + attn)
+
+
+def _longshot_linear_state_heads(config: ModelConfig) -> int:
+    cp = config.cache_processor
+    if cp is None or not cp.linear_state_cache:
+        return 0
+    return len(linear_attention_following_cache_indices(config)) * int(config.linear_num_value_heads or config.num_heads)
+
+
+def _longshot_topk_linear_heads(config: CacheProcessorConfig) -> int:
+    return config.topk_heads if config.topk_linear_heads is None else config.topk_linear_heads
 
 
 def flops_per_token(config: ModelConfig, seq_len: int) -> float:

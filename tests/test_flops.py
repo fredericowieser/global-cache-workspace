@@ -86,6 +86,53 @@ def test_longshot_processor_flops_scale_with_iterations():
     )
 
 
+def test_qwen35_longshot_linear_state_flops_are_counted():
+    cp = CacheProcessorConfig(
+        process_every=4,
+        topk=2,
+        topk_heads=2,
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+    )
+    cfg = ModelConfig(
+        variant="longshot",
+        family="qwen3_5",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        cache_processor=cp,
+    )
+    enabled = replace(cfg, cache_processor=replace(cp, linear_state_cache=True))
+    per_linear_state = replace(
+        enabled,
+        cache_processor=replace(enabled.cache_processor, linear_state_query_mode="per_linear_state"),
+    )
+    global_query = replace(enabled, cache_processor=replace(enabled.cache_processor, linear_state_query_mode="global"))
+    shared = replace(enabled, cache_processor=replace(enabled.cache_processor, linear_state_query_mode="shared"))
+    unselected = replace(enabled, cache_processor=replace(enabled.cache_processor, topk_linear_heads=0))
+
+    assert processor_forward_flops_per_sequence(enabled, 16) > processor_forward_flops_per_sequence(cfg, 16)
+    assert processor_forward_flops_per_sequence(unselected, 16) < processor_forward_flops_per_sequence(enabled, 16)
+    assert processor_forward_flops_per_sequence(global_query, 16) == processor_forward_flops_per_sequence(enabled, 16)
+    assert processor_forward_flops_per_sequence(shared, 16) == processor_forward_flops_per_sequence(enabled, 16)
+    assert processor_forward_flops_per_sequence(shared, 16) < processor_forward_flops_per_sequence(per_linear_state, 16)
+
+
 def test_icarus_value_only_writeback_flops_keep_kv_input_but_reduce_output():
     backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
     kv_cp = CacheProcessorConfig(process_every=32, topk=8, hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)

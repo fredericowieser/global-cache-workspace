@@ -248,6 +248,7 @@ class GlobalCacheProcessor(nn.Module):
         self.num_kv_heads, self.head_dim = model_config.stored_cache_shape
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
+        self.rotary_dim = int(self.head_dim * model_config.partial_rotary_factor)
         self.num_cache_heads = self.num_layers * self.num_kv_heads
         output_dim = self.head_dim if self.config.update_stream == "v" else 2 * self.head_dim
         self.block = CacheProcessor(2 * self.head_dim, self.num_cache_heads, self.config, output_dim=output_dim)
@@ -261,6 +262,7 @@ class GlobalCacheProcessor(nn.Module):
                 unrope_keys=self.config.unrope_keys,
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
+                rotary_dim=self.rotary_dim,
             )
             indices, selected_heads = self._select_indices_and_heads(cache, merged, select_all)
             if indices.shape[-1] == 0:
@@ -277,6 +279,7 @@ class GlobalCacheProcessor(nn.Module):
                 unrope_keys=self.config.unrope_keys,
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
+                rotary_dim=self.rotary_dim,
             )
         if indices.shape[-1] == 0:
             return cache
@@ -290,7 +293,13 @@ class GlobalCacheProcessor(nn.Module):
             return _scatter_latest_values(cache, latest, values)
         keys, values = _split_merged(latest_update, self.num_layers, self.num_kv_heads, self.head_dim)
         if self.config.unrope_keys:
-            keys = rotate_cache_keys(keys, latest, theta=self.rope_theta, rotary_style=self.rotary_style)
+            keys = rotate_cache_keys(
+                keys,
+                latest,
+                theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+                rotary_dim=self.rotary_dim,
+            )
         return _scatter_latest(cache, latest, keys, values)
 
     def _select_indices_and_heads(
