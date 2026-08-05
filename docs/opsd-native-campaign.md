@@ -46,7 +46,7 @@ The reviewed SFT-backed smoke at source `d9615c837d96e626106e7f95e787a267e2c9fbd
 
 This is a fail-closed scientific negative for the staged SFT checkpoint. The 1k, evaluation and 10k stages were not launched.
 
-A distinct fallback may use the official native-thinking `Qwen/Qwen3-0.6B` base checkpoint. It is **not** a continuation of the failed SFT-backed protocol and uses `qwen3_06b_opsd_native_base_smoke_v1.yaml`, followed only on smoke promotion by `qwen3_06b_opsd_native_base_steps1000_bs16_v1.yaml`. Before either run, the HF→GCW conversion must pass the fixed BF16 policy in `scripts/verify_hf_conversion.py` with complete model, tokenizer and checkpoint manifests. Every base training allocation re-executes parity immediately before optimisation and revalidates that fresh evidence after training; a stored JSON claim alone cannot authorize success.
+A distinct fallback may use the official native-thinking `Qwen/Qwen3-0.6B` base checkpoint. It is **not** a continuation of the failed SFT-backed protocol and uses `qwen3_06b_opsd_native_base_smoke_v1.yaml`, followed only on smoke promotion by `qwen3_06b_opsd_native_base_steps1000_bs16_v1.yaml`. Before either run, the HF→GCW conversion must pass the fixed policy in `scripts/verify_hf_conversion.py`: BF16 model parameters/internal compute, the native model's intentional FP32 output logits, explicit FP32 comparison, `max_abs <= 0.25`, `mean_abs <= 0.01`, final-token top-1 exact, and complete model/tokenizer/checkpoint manifests. Every base training allocation re-executes parity immediately before optimisation and revalidates that fresh evidence after training; a stored JSON claim alone cannot authorize success.
 
 ## Promotion gates
 

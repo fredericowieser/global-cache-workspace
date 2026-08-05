@@ -16,9 +16,9 @@ from gcw.checkpoint import load_checkpoint
 from gcw.models import TF
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 EVIDENCE_KIND = "hf_to_gcw_conversion_parity"
-POLICY_ID = "qwen3-06b-bf16-logits-v1"
+POLICY_ID = "qwen3-06b-bf16-parameters-fp32-comparison-v2"
 CANONICAL_PROMPT = "Verify the converted model logits for this deterministic prompt."
 MAX_ABS_THRESHOLD = 0.25
 MEAN_ABS_THRESHOLD = 0.01
@@ -139,10 +139,11 @@ def verify_hf_conversion(
         native_logits_raw = native(tokens)
         native_logits_dtype = str(native_logits_raw.dtype).removeprefix("torch.")
         native_logits = native_logits_raw.float().cpu()
-    if hf_logits_dtype != REQUIRED_DTYPE or native_logits_dtype != REQUIRED_DTYPE:
+    if hf_logits_dtype != REQUIRED_DTYPE or native_logits_dtype != "float32":
         raise TypeError(
-            "parity logits must both be BF16: "
-            f"hf={hf_logits_dtype!r}, native={native_logits_dtype!r}"
+            "parity logit dtypes violate the fixed operational contract: "
+            f"hf={hf_logits_dtype!r} (expected 'bfloat16'), "
+            f"native={native_logits_dtype!r} (expected 'float32')"
         )
 
     if native_logits.shape != hf_logits.shape:
@@ -195,6 +196,7 @@ def verify_hf_conversion(
             "native_parameter_dtypes": native_parameter_dtypes,
             "hf_logits_dtype": hf_logits_dtype,
             "native_logits_dtype": native_logits_dtype,
+            "comparison_dtype": "float32",
             "source_state": state,
             "model_config": asdict(config),
             "torch_version": torch.__version__,
@@ -249,6 +251,7 @@ def validate_parity_evidence(
         "native_parameter_dtypes",
         "hf_logits_dtype",
         "native_logits_dtype",
+        "comparison_dtype",
         "source_state",
         "model_config",
         "torch_version",
@@ -372,8 +375,10 @@ def validate_parity_evidence(
         raise ValueError("parity native parameter dtype mismatch")
     if payload.get("hf_logits_dtype") != REQUIRED_DTYPE:
         raise ValueError("parity HF logits dtype mismatch")
-    if payload.get("native_logits_dtype") != REQUIRED_DTYPE:
+    if payload.get("native_logits_dtype") != "float32":
         raise ValueError("parity native logits dtype mismatch")
+    if payload.get("comparison_dtype") != "float32":
+        raise ValueError("parity comparison dtype mismatch")
     source_state = payload.get("source_state")
     checkpoint_state = json.loads((checkpoint / "train_state.json").read_text())
     if source_state != checkpoint_state:
