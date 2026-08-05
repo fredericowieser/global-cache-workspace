@@ -421,6 +421,7 @@ def test_pragmatic_submitter_hard_wires_afterok_chain_and_identities():
     assert "agent-xlong-15" in submitter
     assert "scancel" in submitter
     assert "submission-receipt" in submitter
+    assert "os.chmod(path, 0o444)" in submitter
 
 
 def test_native_train_wrapper_rejects_external_config(tmp_path):

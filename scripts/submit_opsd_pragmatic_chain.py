@@ -70,6 +70,7 @@ def _write_new(path: Path, document: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.link(temporary, path)
+        os.chmod(path, 0o444)
         directory_fd = os.open(path.parent, os.O_RDONLY)
         try:
             os.fsync(directory_fd)
