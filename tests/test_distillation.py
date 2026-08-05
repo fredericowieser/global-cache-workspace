@@ -238,6 +238,29 @@ def test_native_full_campaign_configs_lock_budget_and_online_tracking(
 
 
 
+def test_conversion_diagnostic_wrapper_is_fail_closed():
+    wrapper = (
+        Path(__file__).parents[1] / "scripts/slurm/diagnose_qwen3_base_conversion.sbatch"
+    ).read_text()
+
+    assert "#SBATCH --gres=gpu:1" in wrapper
+    assert "#SBATCH --partition=agent-dev-15,agent-dev" in wrapper
+    assert "#SBATCH --nodes=1" in wrapper
+    assert "#SBATCH --ntasks=1" in wrapper
+    assert "#SBATCH --cpus-per-task=4" in wrapper
+    assert "#SBATCH --mem=32G" in wrapper
+    assert "git status --porcelain" in wrapper
+    assert "git ls-files --error-unmatch" in wrapper
+    assert "PARENT_PARITY_SHA256" in wrapper
+    assert "1aca29e6db3099d652d8635d57f8f79a9acccfbec915a378c0477e7104b86216" in wrapper
+    assert "[[ ! -e \"$OUT\" ]]" in wrapper
+    assert "scripts/diagnose_hf_conversion.py" in wrapper
+    assert "--validate-only" in wrapper
+    assert "torch.cuda.device_count()" in wrapper
+    assert "nvidia-smi --query-gpu" not in wrapper
+    assert "sbatch --wrap" not in wrapper
+
+
 def test_native_train_wrapper_rejects_external_config(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

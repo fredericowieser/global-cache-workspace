@@ -18,6 +18,7 @@ from gcw.convert import (
     load_ppt_state,
 )
 from gcw.models import build_model
+from scripts import diagnose_hf_conversion as diagnosis
 from scripts import verify_hf_conversion as parity
 from scripts.verify_hf_conversion import _atomic_write_new
 
@@ -211,6 +212,58 @@ def test_conversion_parity_policy_rejects_tampering(tmp_path, monkeypatch):
         artifact.write_bytes(original)
 
 
+def test_conversion_diagnostic_removes_harmless_per_position_logit_offsets():
+    assert diagnosis.FIXED_PROMPTS[0][1] == parity.CANONICAL_PROMPT
+    hf = torch.tensor([[[1.0, 2.0, 4.0], [-2.0, 0.0, 1.0]]])
+    native = hf + torch.tensor([[[7.0], [-3.0]]])
+
+    metrics = diagnosis.distribution_metrics(hf, native)
+
+    assert metrics["raw_mean_abs_error"] == pytest.approx(5.0)
+    assert metrics["centred_max_abs_error"] == pytest.approx(0.0, abs=1e-6)
+    assert metrics["centred_mean_abs_error"] == pytest.approx(0.0, abs=1e-6)
+    assert metrics["kl_hf_to_native_mean"] == pytest.approx(0.0, abs=1e-7)
+    assert metrics["total_variation_mean"] == pytest.approx(0.0, abs=1e-7)
+    assert metrics["top1_match_fraction"] == pytest.approx(1.0)
+
+
+def test_conversion_diagnostic_kl_is_nonnegative_at_full_qwen_vocab():
+    torch.manual_seed(7)
+    hf = torch.randn(1, 2, 151_936)
+    native = hf + torch.tensor([[[3.0], [-5.0]]])
+
+    metrics = diagnosis.distribution_metrics(hf, native)
+
+    assert metrics["kl_hf_to_native_min"] >= 0.0
+    assert metrics["kl_hf_to_native_mean"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_conversion_diagnostic_reads_nested_checkpoint_model_config(tmp_path):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text('{"model": {"num_layers": 28}}')
+
+    assert diagnosis._checkpoint_model_config(checkpoint) == {"num_layers": 28}
+
+
+def test_conversion_diagnostic_detects_distribution_and_hidden_state_drift():
+    hf_logits = torch.tensor([[[2.0, 0.0, -1.0]]])
+    native_logits = torch.tensor([[[0.0, 2.0, -1.0]]])
+    distribution = diagnosis.distribution_metrics(hf_logits, native_logits)
+    hidden = diagnosis.hidden_metrics(
+        torch.tensor([[[1.0, 2.0]]]),
+        torch.tensor([[[1.0, 3.0]]]),
+    )
+
+    assert distribution["kl_hf_to_native_mean"] > 0.0
+    assert distribution["total_variation_mean"] > 0.0
+    assert distribution["top1_match_fraction"] == pytest.approx(0.0)
+    assert hidden["max_abs_error"] == pytest.approx(1.0)
+    assert hidden["mean_abs_error"] == pytest.approx(0.5)
+    assert hidden["relative_l2_error"] > 0.0
+    assert hidden["cosine_similarity"] < 1.0
+
+
 def test_conversion_parity_execution_failure_is_persisted(tmp_path, monkeypatch):
     output = tmp_path / "failed-parity.json"
     hf_path = tmp_path / "hf"
@@ -367,10 +420,20 @@ def test_tiny_qwen3_logits_match_transformers():
     native = build_model(config_from_hf(hf_cfg, family="qwen3")).eval()
     load_hf_state(native, hf.state_dict(), family="qwen3")
     x = torch.tensor([[1, 2, 3, 4]])
-    with torch.no_grad():
-        hf_logits = hf(x).logits
-        native_logits = native(x)
+    hf_logits, hf_hidden, hf_dtypes, hf_logits_dtype = diagnosis._capture_forward(
+        hf, x, hf_model=True
+    )
+    native_logits, native_hidden, native_dtypes, native_logits_dtype = diagnosis._capture_forward(
+        native, x, hf_model=False
+    )
     assert torch.allclose(native_logits, hf_logits, atol=1e-5, rtol=1e-5)
+    assert list(hf_hidden) == ["embedding", "layer_00", "final_norm"]
+    assert list(native_hidden) == list(hf_hidden)
+    assert hf_dtypes == native_dtypes
+    assert hf_logits_dtype == "float32"
+    assert native_logits_dtype == "float32"
+    for stage in hf_hidden:
+        assert torch.allclose(native_hidden[stage], hf_hidden[stage], atol=1e-5, rtol=1e-5)
 
 
 def test_tiny_qwen35_logits_match_transformers():
