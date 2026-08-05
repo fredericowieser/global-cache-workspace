@@ -14,6 +14,12 @@ export GCW_STRICT_FLASH="${GCW_STRICT_FLASH:-1}"
 export WANDB_DIR="${WANDB_DIR:-$HOME/wandb}"
 
 REPO="${REPO:-$HOME/code/global-cache-workspace}"
+REPO="$(python3 - "$REPO" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).resolve(strict=True))
+PY
+)"
 CONFIG="${CONFIG:?CONFIG is required}"
 SOURCE_REVISION="${SOURCE_REVISION:?SOURCE_REVISION is required}"
 export SOURCE_REVISION
@@ -26,6 +32,25 @@ ACTUAL_REVISION="$(git rev-parse HEAD)"
 }
 [[ -z "$(git status --porcelain)" ]] || {
   printf 'training requires a clean checkout\n' >&2
+  exit 2
+}
+CONFIG="$(python3 - "$CONFIG" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).resolve(strict=True))
+PY
+)"
+export CONFIG
+case "$CONFIG" in
+  "$REPO"/*) ;;
+  *)
+    printf 'config must resolve inside pinned source checkout: %s\n' "$CONFIG" >&2
+    exit 2
+    ;;
+esac
+CONFIG_REL="${CONFIG#"$REPO"/}"
+git ls-files --error-unmatch -- "$CONFIG_REL" >/dev/null || {
+  printf 'config must be tracked by the pinned source revision: %s\n' "$CONFIG_REL" >&2
   exit 2
 }
 [[ -f "$CONFIG" ]] || {
@@ -54,11 +79,16 @@ if distill.max_optimizer_steps > 1000:
     )
 if not config.wandb.enabled or config.wandb.mode != "online":
     raise SystemExit("campaign training requires online W&B")
+backbone_checkpoint = str(Path(config.backbone_checkpoint).resolve(strict=True))
+tokenizer_source = str(
+    Path(config.data.tokenizer.removeprefix("hf:")).resolve(strict=True)
+)
+data_dir = str(Path(config.data.data_dir).resolve(strict=True))
 paths = {
     "OUTPUT_DIR": config.output_dir,
-    "BACKBONE_CHECKPOINT": config.backbone_checkpoint,
-    "DATA_DIR": config.data.data_dir,
-    "TOKENIZER_SOURCE": config.data.tokenizer.removeprefix("hf:"),
+    "BACKBONE_CHECKPOINT": backbone_checkpoint,
+    "DATA_DIR": data_dir,
+    "TOKENIZER_SOURCE": tokenizer_source,
     "MAX_OPTIMIZER_STEPS": str(distill.max_optimizer_steps),
     "EFFECTIVE_BATCH_EXAMPLES": str(distill.gradient_accumulation_steps),
     "RECORD_CACHE_DISPLACEMENTS": str(distill.record_cache_displacements).lower(),
@@ -68,16 +98,60 @@ for key, value in paths.items():
     if not value:
         raise SystemExit(f"missing config-derived {key}")
     print(f"{key}={value}")
+parity_raw = config.metadata.get("required_conversion_parity", "")
+parity = str(Path(parity_raw).resolve(strict=True)) if parity_raw else ""
+base_checkpoint = str(
+    Path("/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1").resolve(
+        strict=True
+    )
+)
+base_tokenizer = str(
+    Path("/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1").resolve(strict=True)
+)
+base_scope = "distinct_base_backbone_fallback_after_sft_zero_yield"
+base_parity = str((Path(base_checkpoint) / "parity.json").resolve(strict=True))
+base_signals = (
+    backbone_checkpoint == base_checkpoint,
+    tokenizer_source == base_tokenizer,
+    config.metadata.get("scientific_scope") == base_scope,
+    parity == base_parity,
+)
+if any(base_signals) and not all(base_signals):
+    raise SystemExit("base fallback checkpoint/tokenizer/scope/parity contract mismatch")
+print(f"REQUIRES_CONVERSION_PARITY={str(all(base_signals)).lower()}")
+print(f"REQUIRED_CONVERSION_PARITY={parity}")
 PY
 )"
 mapfile -t PREFLIGHT <<<"$PREFLIGHT_RAW"
 for assignment in "${PREFLIGHT[@]}"; do
   case "$assignment" in
-    OUTPUT_DIR=*|BACKBONE_CHECKPOINT=*|DATA_DIR=*|TOKENIZER_SOURCE=*|MAX_OPTIMIZER_STEPS=*|EFFECTIVE_BATCH_EXAMPLES=*|RECORD_CACHE_DISPLACEMENTS=*|WANDB_MODE_CONFIG=*)
+    OUTPUT_DIR=*|BACKBONE_CHECKPOINT=*|DATA_DIR=*|TOKENIZER_SOURCE=*|MAX_OPTIMIZER_STEPS=*|EFFECTIVE_BATCH_EXAMPLES=*|RECORD_CACHE_DISPLACEMENTS=*|WANDB_MODE_CONFIG=*|REQUIRES_CONVERSION_PARITY=*|REQUIRED_CONVERSION_PARITY=*)
       export "$assignment" ;;
     *) printf 'unexpected config preflight output: %s\n' "$assignment" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$REQUIRES_CONVERSION_PARITY" == true && -z "$REQUIRED_CONVERSION_PARITY" ]]; then
+  printf 'base fallback requires conversion parity evidence\n' >&2
+  exit 2
+fi
+if [[ -n "$REQUIRED_CONVERSION_PARITY" ]]; then
+  uv run --locked --extra gpu --extra convert python - <<'PY'
+import json
+import os
+from pathlib import Path
+from scripts.verify_hf_conversion import validate_parity_evidence
+
+parity_path = Path(os.environ["REQUIRED_CONVERSION_PARITY"]).resolve(strict=True)
+payload = json.loads(parity_path.read_text())
+validate_parity_evidence(
+    payload,
+    hf_path=Path(os.environ["TOKENIZER_SOURCE"]),
+    checkpoint=Path(os.environ["BACKBONE_CHECKPOINT"]),
+    source_revision=os.environ["SOURCE_REVISION"],
+)
+PY
+fi
 
 if [[ "$MAX_OPTIMIZER_STEPS" -eq 1000 ]]; then
   PROMOTION_EVIDENCE="${PROMOTION_EVIDENCE:?1k requires smoke PROMOTION_EVIDENCE}"
@@ -134,12 +208,28 @@ mkdir "$OUTPUT_DIR" || {
 }
 
 uv run --locked --extra gpu python scripts/check_cuda_env.py
-GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | sed -n '1p')"
+GPU_NAME="$(uv run --locked --extra gpu python - <<'PY'
+import torch
+if torch.cuda.device_count() != 1:
+    raise SystemExit(f"training requires exactly one Slurm-visible GPU; got {torch.cuda.device_count()}")
+print(torch.cuda.get_device_name(0))
+PY
+)"
 export GPU_NAME
 [[ "$GPU_NAME" == *H100* ]] || {
   printf 'campaign requires H100; allocated GPU is %s\n' "$GPU_NAME" >&2
   exit 2
 }
+REQUIRED_FRESH_PARITY=""
+if [[ "$REQUIRES_CONVERSION_PARITY" == true ]]; then
+  REQUIRED_FRESH_PARITY="$OUTPUT_DIR/preflight-parity.json"
+  export REQUIRED_FRESH_PARITY
+  uv run --locked --extra gpu --extra convert python scripts/verify_hf_conversion.py \
+    --hf-path "$TOKENIZER_SOURCE" \
+    --checkpoint "$BACKBONE_CHECKPOINT" \
+    --out "$REQUIRED_FRESH_PARITY"
+fi
+export REQUIRED_FRESH_PARITY
 uv run --locked --extra gpu python - <<'PY'
 import wandb
 if not wandb.api.api_key:
@@ -158,16 +248,27 @@ uv run --locked --extra gpu gcw train --config "$CONFIG"
   exit 2
 }
 
-uv run --locked --extra gpu python - <<'PY'
+uv run --locked --extra gpu --extra convert python - <<'PY'
 import hashlib
 import json
 import os
 from pathlib import Path
+from scripts.verify_hf_conversion import validate_parity_evidence
+
 root = Path(os.environ["OUTPUT_DIR"])
 summary_path = root / "summary.json"
 metrics_path = root / "metrics.jsonl"
 run_config_path = root / "run_config.json"
 checkpoint = root / "final"
+fresh_parity = os.environ.get("REQUIRED_FRESH_PARITY")
+if fresh_parity:
+    payload = json.loads(Path(fresh_parity).read_text())
+    validate_parity_evidence(
+        payload,
+        hf_path=Path(os.environ["TOKENIZER_SOURCE"]),
+        checkpoint=Path(os.environ["BACKBONE_CHECKPOINT"]),
+        source_revision=os.environ["SOURCE_REVISION"],
+    )
 summary = json.loads(summary_path.read_text())
 metrics = [json.loads(line) for line in metrics_path.read_text().splitlines() if line]
 expected_steps = int(os.environ["MAX_OPTIMIZER_STEPS"])
@@ -240,13 +341,27 @@ required = [
     checkpoint / "config.json",
     checkpoint / "train_state.json",
 ]
+if os.environ.get("REQUIRED_CONVERSION_PARITY"):
+    required.append(Path(os.environ["REQUIRED_CONVERSION_PARITY"]))
+if os.environ.get("REQUIRED_FRESH_PARITY"):
+    required.append(Path(os.environ["REQUIRED_FRESH_PARITY"]))
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(8 * 1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 files = {}
 for path in required:
     if not path.is_file():
         raise SystemExit(f"missing required output: {path}")
-    files[str(path.relative_to(root))] = {
+    try:
+        manifest_name = str(path.relative_to(root))
+    except ValueError:
+        manifest_name = f"external:{path}"
+    files[manifest_name] = {
         "bytes": path.stat().st_size,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "sha256": sha256_file(path),
     }
 payload = json.dumps(
     {

@@ -11,7 +11,16 @@ from gcw.data.fineweb import prepare_fineweb
 from gcw.data.sft import prepare_openmath
 from gcw.distill.audit import load_opsd_matched_audit_config, run_matched_opsd_audit
 
-from gcw.eval import is_main_process, run_core, run_fineweb, run_math, run_opsd_screen, run_paper7, run_ppt
+from gcw.eval import (
+    OPSD_SCREEN_TASKS,
+    is_main_process,
+    run_core,
+    run_fineweb,
+    run_math,
+    run_opsd_screen,
+    run_paper7,
+    run_ppt,
+)
 from gcw.opsd_eval import (
     aggregate_opsd_screen,
     aggregate_opsd_three_way,
@@ -102,8 +111,8 @@ def main(argv: list[str] | None = None) -> None:
     opsd.add_argument("--datasets-cache", required=True)
     opsd.add_argument("--thinking", choices=["on", "off"], required=True)
     opsd.add_argument("--processor", choices=["on", "off"], required=True)
-    opsd.add_argument("--tasks", default="gsm8k_openmath,svamp,gsm8k_hard")
-    opsd.add_argument("--limit", type=int, default=64)
+    opsd.add_argument("--tasks", default=",".join(OPSD_SCREEN_TASKS))
+    opsd.add_argument("--limit", type=int, default=None)
     opsd.add_argument("--out", required=True)
     opsd_aggregate = eval_sub.add_parser("opsd-aggregate")
     opsd_aggregate.add_argument("--inputs", nargs=4, required=True)

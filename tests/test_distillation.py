@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
+from pathlib import Path
+import subprocess
 import weakref
 
 import pytest
@@ -232,6 +235,86 @@ def test_native_full_campaign_configs_lock_budget_and_online_tracking(
     assert config.wandb.mode == "online"
     assert f"steps{optimizer_steps}" in config.wandb.name
     assert not __import__("pathlib").Path(config.output_dir).exists()
+
+
+
+def test_native_train_wrapper_rejects_external_config(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=repo, check=True
+    )
+    tracked = repo / "tracked.txt"
+    tracked.write_text("tracked\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=repo, check=True)
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    external_config = tmp_path / "external.yaml"
+    external_config.write_text("untrusted: true\n")
+    wrapper = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/slurm/opsd_native_train.sbatch"
+    )
+    result = subprocess.run(
+        ["bash", str(wrapper)],
+        cwd=repo,
+        env={
+            **os.environ,
+            "REPO": str(repo),
+            "CONFIG": str(external_config),
+            "SOURCE_REVISION": revision,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "config must resolve inside pinned source checkout" in result.stderr
+
+
+def test_native_base_smoke_is_distinct_and_parity_gated():
+    config = load_train_config(
+        "configs/train/opsd/qwen3_06b_opsd_native_base_smoke_v1.yaml"
+    )
+
+    assert config.backbone_checkpoint == (
+        "/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1"
+    )
+    assert config.data.tokenizer == "hf:/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1"
+    assert config.output_dir.endswith("qwen3_06b_opsd_native_base_v1/smoke-steps1-bs1")
+    assert config.distillation is not None
+    assert config.distillation.max_optimizer_steps == 1
+    assert config.distillation.teacher_trajectory_mode == "native_full"
+    assert config.distillation.visible_trajectory_mode == "both"
+    assert config.metadata["scientific_scope"] == (
+        "distinct_base_backbone_fallback_after_sft_zero_yield"
+    )
+    assert config.metadata["required_conversion_parity"].endswith("/tf-v1/parity.json")
+
+    one_k = load_train_config(
+        "configs/train/opsd/qwen3_06b_opsd_native_base_steps1000_bs16_v1.yaml"
+    )
+    assert one_k.backbone_checkpoint == config.backbone_checkpoint
+    assert one_k.data.tokenizer == config.data.tokenizer
+    assert one_k.distillation is not None
+    assert one_k.distillation.max_optimizer_steps == 1000
+    assert one_k.distillation.gradient_accumulation_steps == 16
+    assert one_k.output_dir.endswith("qwen3_06b_opsd_native_base_v1/steps1000-bs16")
+    assert one_k.metadata["required_conversion_parity"] == (
+        config.metadata["required_conversion_parity"]
+    )
 
 
 

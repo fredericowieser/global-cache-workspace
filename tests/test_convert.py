@@ -1,6 +1,9 @@
+import copy
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 import torch
-from types import SimpleNamespace
 from transformers import LlamaConfig, LlamaForCausalLM, Qwen3Config, Qwen3ForCausalLM
 
 from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_checkpoint
@@ -15,6 +18,232 @@ from gcw.convert import (
     load_ppt_state,
 )
 from gcw.models import build_model
+from scripts import verify_hf_conversion as parity
+from scripts.verify_hf_conversion import _atomic_write_new
+
+
+def test_conversion_parity_evidence_is_atomic_and_no_clobber(tmp_path):
+    output = tmp_path / "parity.json"
+    payload = {"passed": True, "max_abs_error": 0.01}
+
+    _atomic_write_new(output, payload)
+
+    assert __import__("json").loads(output.read_text()) == payload
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        _atomic_write_new(output, payload)
+
+
+
+def test_conversion_parity_policy_rejects_tampering(tmp_path, monkeypatch):
+    hf_path = tmp_path / "hf"
+    checkpoint = tmp_path / "checkpoint"
+    hf_path.mkdir()
+    checkpoint.mkdir()
+    source_revision = "a" * 40
+    token_ids = [1, 2, 3]
+    hf_config = {
+        "model_type": "qwen3",
+        "architectures": ["Qwen3ForCausalLM"],
+        "hidden_size": 1024,
+        "intermediate_size": 3072,
+        "num_hidden_layers": 28,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 8,
+        "head_dim": 128,
+        "vocab_size": 151936,
+        "tie_word_embeddings": True,
+    }
+    model_config = {
+        "variant": "tf",
+        "vocab_size": 151936,
+        "hidden_size": 1024,
+        "intermediate_size": 3072,
+        "num_layers": 28,
+        "num_heads": 16,
+        "num_kv_heads": 8,
+        "head_dim": 128,
+        "tie_embeddings": True,
+    }
+    source_state = {"dtype": "bfloat16", "source": str(hf_path.resolve())}
+    for name in parity.HF_PARITY_FILES:
+        (hf_path / name).write_bytes(f"hf-{name}".encode())
+    (hf_path / "config.json").write_text(__import__("json").dumps(hf_config))
+    (checkpoint / "CONVERSION.json").write_text("{}")
+    (checkpoint / "config.json").write_text(
+        __import__("json").dumps(model_config)
+    )
+    (checkpoint / "model.safetensors").write_bytes(b"native-model")
+    (checkpoint / "train_state.json").write_text(
+        __import__("json").dumps(source_state)
+    )
+    monkeypatch.setattr(parity.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(parity.torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(
+        parity.torch.cuda,
+        "get_device_name",
+        lambda device: "NVIDIA H100 80GB HBM3",
+    )
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, *args, **kwargs):
+            return cls()
+
+        def encode(self, prompt, add_special_tokens):
+            assert prompt == parity.CANONICAL_PROMPT
+            assert add_special_tokens is True
+            return token_ids
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "transformers",
+        SimpleNamespace(AutoTokenizer=FakeTokenizer),
+    )
+    payload = {
+        "schema_version": parity.SCHEMA_VERSION,
+        "kind": parity.EVIDENCE_KIND,
+        "policy_id": parity.POLICY_ID,
+        "source_revision": source_revision,
+        "script_sha256": parity._sha256(Path(parity.__file__).resolve()),
+        "hf_path": str(hf_path.resolve()),
+        "checkpoint": str(checkpoint.resolve()),
+        "canonical_prompt_sha256": __import__("hashlib").sha256(
+            parity.CANONICAL_PROMPT.encode()
+        ).hexdigest(),
+        "max_abs_threshold": parity.MAX_ABS_THRESHOLD,
+        "mean_abs_threshold": parity.MEAN_ABS_THRESHOLD,
+        "required_dtype": parity.REQUIRED_DTYPE,
+        "passed": True,
+        "hf_model_sha256": parity._sha256(hf_path / "model.safetensors"),
+        "checkpoint_model_sha256": parity._sha256(
+            checkpoint / "model.safetensors"
+        ),
+        "hf_files": parity._file_manifest(hf_path, parity.HF_PARITY_FILES),
+        "checkpoint_files": parity._file_manifest(
+            checkpoint, parity.CHECKPOINT_PARITY_FILES
+        ),
+        "token_ids": token_ids,
+        "token_ids_sha256": parity._token_ids_sha256(token_ids),
+        "tokens": len(token_ids),
+        "logit_shape": [1, len(token_ids), 151936],
+        "max_abs_error": 0.1,
+        "mean_abs_error": 0.005,
+        "top1_match_fraction": 1.0,
+        "final_top1_match": True,
+        "hf_parameter_dtypes": ["bfloat16"],
+        "native_parameter_dtypes": ["bfloat16"],
+        "hf_logits_dtype": "bfloat16",
+        "native_logits_dtype": "bfloat16",
+        "source_state": source_state,
+        "model_config": model_config,
+        "torch_version": parity.torch.__version__,
+        "torch_cuda_version": parity.torch.version.cuda,
+        "device": "cuda",
+        "gpu_name": "NVIDIA H100 80GB HBM3",
+    }
+
+    parity.validate_parity_evidence(
+        payload,
+        hf_path=hf_path,
+        checkpoint=checkpoint,
+        source_revision=source_revision,
+    )
+
+    tampering = (
+        ("max_abs_threshold", float("inf")),
+        ("max_abs_error", float("nan")),
+        ("mean_abs_error", -0.001),
+        ("final_top1_match", False),
+        ("native_logits_dtype", "float32"),
+        ("token_ids_sha256", "0" * 64),
+        ("script_sha256", "0" * 64),
+        ("source_revision", "b" * 40),
+    )
+    for key, value in tampering:
+        altered = copy.deepcopy(payload)
+        altered[key] = value
+        with pytest.raises(ValueError):
+            parity.validate_parity_evidence(
+                altered,
+                hf_path=hf_path,
+                checkpoint=checkpoint,
+                source_revision=source_revision,
+            )
+
+    forged_tokens = copy.deepcopy(payload)
+    forged_tokens["token_ids"] = [9, 8, 7]
+    forged_tokens["token_ids_sha256"] = parity._token_ids_sha256([9, 8, 7])
+    with pytest.raises(ValueError, match="current canonical tokenizer"):
+        parity.validate_parity_evidence(
+            forged_tokens,
+            hf_path=hf_path,
+            checkpoint=checkpoint,
+            source_revision=source_revision,
+        )
+
+    incomplete = copy.deepcopy(payload)
+    incomplete.pop("logit_shape")
+    with pytest.raises(ValueError, match="missing fields"):
+        parity.validate_parity_evidence(
+            incomplete,
+            hf_path=hf_path,
+            checkpoint=checkpoint,
+            source_revision=source_revision,
+        )
+
+    for artifact in (
+        hf_path / "config.json",
+        hf_path / "tokenizer.json",
+        checkpoint / "config.json",
+        checkpoint / "train_state.json",
+    ):
+        original = artifact.read_bytes()
+        artifact.write_bytes(original + b"tamper")
+        with pytest.raises(ValueError, match="manifest mismatch"):
+            parity.validate_parity_evidence(
+                payload,
+                hf_path=hf_path,
+                checkpoint=checkpoint,
+                source_revision=source_revision,
+            )
+        artifact.write_bytes(original)
+
+
+def test_conversion_parity_execution_failure_is_persisted(tmp_path, monkeypatch):
+    output = tmp_path / "failed-parity.json"
+    hf_path = tmp_path / "hf"
+    checkpoint = tmp_path / "checkpoint"
+    hf_path.mkdir()
+    checkpoint.mkdir()
+    monkeypatch.setenv("SOURCE_REVISION", "a" * 40)
+    monkeypatch.setattr(parity.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        parity,
+        "verify_hf_conversion",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("load failed")),
+    )
+    monkeypatch.setattr(
+        __import__("sys"),
+        "argv",
+        [
+            "verify_hf_conversion.py",
+            "--hf-path",
+            str(hf_path),
+            "--checkpoint",
+            str(checkpoint),
+            "--out",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        parity.main()
+
+    payload = __import__("json").loads(output.read_text())
+    assert payload["passed"] is False
+    assert payload["failure_stage"] == "parity_execution"
+    assert payload["error_type"] == "RuntimeError"
+    assert payload["error"] == "load failed"
 
 
 def test_hf_llama_key_mapping_loads_native_backbone():

@@ -4,14 +4,230 @@ import copy
 
 import pytest
 
+from configs.tasks.utils_opsd_mc import process_gaokao, process_logiqa
 from gcw.cli import _atomic_write_new
-from gcw.eval import _opsd_sample_manifest
+from gcw.eval import (
+    OPSD_FULL_TASK_SAMPLE_COUNTS,
+    OPSD_SCREEN_TASKS,
+    _opsd_dataset_file_identity,
+    _opsd_sample_manifest,
+    _validate_opsd_full_sample_counts,
+)
 from gcw.opsd_eval import (
     OPSD_SCREEN_CONDITIONS,
+    _condition_metrics,
     aggregate_opsd_screen,
     aggregate_opsd_three_way,
     audit_opsd_prompt_overlap,
 )
+
+
+from scripts import log_opsd_matrix_wandb as wandb_publisher
+from scripts.log_opsd_matrix_wandb import flatten_finite_metrics
+
+
+def test_wandb_eval_flattening_keeps_only_finite_numeric_metrics():
+    metrics = flatten_finite_metrics(
+        {
+            "score": 0.5,
+            "nested": {"count": 3, "ok": True, "bad": float("nan")},
+            "text": "ignore",
+        }
+    )
+
+    assert metrics == {
+        "eval/score": 0.5,
+        "eval/nested/count": 3.0,
+        "eval/nested/ok": 1.0,
+    }
+
+
+
+def test_wandb_eval_publisher_is_online_and_checkpoint_step_bound(
+    tmp_path, monkeypatch
+):
+    tasks = list(OPSD_SCREEN_TASKS)
+    out = tmp_path / "matrix"
+    checkpoint = tmp_path / "checkpoint"
+    out.mkdir()
+    checkpoint.mkdir()
+    (checkpoint / "train_state.json").write_text(
+        __import__("json").dumps({"optimizer_steps": 1000})
+    )
+    aggregate = {"tasks": tasks, "metrics": {"score": 0.5}}
+    (out / "aggregate.json").write_text(__import__("json").dumps(aggregate))
+    for name in (
+        "cot-off__cp-off.json",
+        "cot-off__cp-on.json",
+        "cot-on__cp-off.json",
+        "cot-on__cp-on.json",
+    ):
+        (out / name).write_text("{}")
+
+    init_calls = []
+    logged = []
+
+    class FakeArtifact:
+        def __init__(self, name, **kwargs):
+            self.name = name
+            self.files = []
+
+        def add_file(self, path, name):
+            assert __import__("pathlib").Path(path).is_file()
+            self.files.append(name)
+
+    class FakeRun:
+        id = "eval-run-id"
+        url = "https://wandb.example/eval-run-id"
+
+        def log(self, metrics, step):
+            logged.append((metrics, step))
+
+        def log_artifact(self, artifact):
+            assert len(artifact.files) == 5
+
+        def finish(self):
+            return None
+
+    fake_wandb = type(
+        "FakeWandb",
+        (),
+        {
+            "init": staticmethod(
+                lambda **kwargs: (init_calls.append(kwargs) or FakeRun())
+            ),
+            "Artifact": FakeArtifact,
+        },
+    )()
+    monkeypatch.setitem(__import__("sys").modules, "wandb", fake_wandb)
+    monkeypatch.setenv("OUT_DIR", str(out))
+    monkeypatch.setenv("CHECKPOINT", str(checkpoint))
+    monkeypatch.setenv("SOURCE_REVISION", "a" * 40)
+
+    wandb_publisher.main()
+
+    assert init_calls[0]["mode"] == "online"
+    assert init_calls[0]["config"]["training_step"] == 1000
+    assert logged[0][1] == 1000
+    evidence = __import__("json").loads((out / "wandb-publication.json").read_text())
+    assert evidence["wandb_run_id"] == "eval-run-id"
+    assert evidence["tasks"] == tasks
+
+
+
+def test_generative_multiple_choice_scoring_requires_explicit_terminal_answer():
+    logiqa = {"options": ["one", "two", "three", "four"], "label": "b"}
+    gaokao = {"choices": ["one", "two", "three", "four"], "gold": [2]}
+
+    assert process_logiqa(logiqa, ["A is tempting.\nFinal answer: B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Reasoning ends here. Answer: B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Therefore, Final answer is B."]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Conclusion: Answer: B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["推理。答案：B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["推理，答案：B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Reasoning — Answer: B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Reasoning… Answer: B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Reasoning. **Answer:** **B**"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Reasoning. **Answer**: B"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Reasoning.\n**Final answer is B.**"]) == {"acc": 1.0}
+    assert process_logiqa(logiqa, ["Reasoning.\nAnswer: D"]) == {"acc": 0.0}
+    assert process_gaokao(gaokao, ["Choice A fails; therefore \\boxed{C}"]) == {"acc": 1.0}
+    assert process_gaokao(gaokao, ["推理。\n答案：C"]) == {"acc": 1.0}
+
+    ambiguous_or_nonfinal = (
+        ({**logiqa, "label": "a"}, "A reasonable derivation gives the result."),
+        ({**logiqa, "label": "d"}, "A is tempting. I conclude C because D is wrong."),
+        ({**logiqa, "label": "a"}, "Final answer: A and D"),
+        ({**logiqa, "label": "d"}, "the final answer is definitely C"),
+        ({**logiqa, "label": "c"}, "answeris C"),
+        ({**logiqa, "label": "b"}, "Answer: (B"),
+        ({**logiqa, "label": "b"}, "Answer: B)"),
+        ({**logiqa, "label": "b"}, "Answer: A. Answer: B"),
+        ({**logiqa, "label": "b"}, "The incorrect answer: B"),
+        (logiqa, "no final option"),
+    )
+    for document, response in ambiguous_or_nonfinal:
+        assert process_logiqa(document, [response]) == {"acc": 0.0}
+
+
+def test_condition_metrics_retains_task_specific_accuracy_metrics():
+    tasks = list(OPSD_SCREEN_TASKS)
+    results = {
+        task: (
+            {"acc,none": 0.75, "alias": task}
+            if task in {"logiqa_opsd_generate", "agieval_gaokao_mathqa_opsd_generate"}
+            else {"exact_match,strict-match": 0.5, "alias": task}
+        )
+        for task in tasks
+    }
+    document = {
+        "tasks": tasks,
+        "lm_eval": {"results": results},
+        "generation_records": [
+            {"response_tokens": 10, "max_response_tokens": 20}
+        ],
+    }
+
+    metrics = _condition_metrics(document)
+
+    assert metrics["logiqa_opsd_generate"] == {"acc,none": 0.75}
+    assert metrics["agieval_gaokao_mathqa_opsd_generate"] == {"acc,none": 0.75}
+    assert metrics["gsm8k_openmath"] == {"exact_match,strict-match": 0.5}
+
+    broken = copy.deepcopy(document)
+    broken["lm_eval"]["results"]["logiqa_opsd_generate"] = {"alias": "logiqa"}
+    with pytest.raises(ValueError, match="no supported finite accuracy metric"):
+        _condition_metrics(broken)
+
+
+
+def test_opsd_screen_supports_full_five_task_matrix_and_authenticates_files(
+    tmp_path, monkeypatch
+):
+    expected = (
+        "gsm8k_openmath",
+        "svamp",
+        "gsm8k_hard",
+        "logiqa_opsd_generate",
+        "agieval_gaokao_mathqa_opsd_generate",
+    )
+    assert OPSD_SCREEN_TASKS == expected
+    filenames = (
+        "gsm8k-test.arrow",
+        "svamp-test.arrow",
+        "gsm-hard-train.arrow",
+        "logiqa-test.arrow",
+        "agieval-gaokao-mathqa-test.arrow",
+    )
+    for filename in filenames:
+        (tmp_path / filename).write_bytes(filename.encode())
+    monkeypatch.setenv("HF_DATASETS_CACHE", str(tmp_path))
+
+    identity = _opsd_dataset_file_identity(expected)
+
+    assert tuple(identity) == expected
+    assert {value["path"].rsplit("/", 1)[-1] for value in identity.values()} == set(
+        filenames
+    )
+
+
+
+def test_opsd_full_sample_counts_fail_closed_on_incomplete_split():
+    manifest = [
+        {"task": task}
+        for task in OPSD_SCREEN_TASKS
+        for _ in range(OPSD_FULL_TASK_SAMPLE_COUNTS[task])
+    ]
+    _validate_opsd_full_sample_counts(manifest, tasks=OPSD_SCREEN_TASKS, limit=None)
+
+    with pytest.raises(ValueError, match="sample counts"):
+        _validate_opsd_full_sample_counts(
+            manifest[:-1], tasks=OPSD_SCREEN_TASKS, limit=None
+        )
+    _validate_opsd_full_sample_counts(
+        manifest[:-1], tasks=OPSD_SCREEN_TASKS, limit=64
+    )
+
 
 
 def _document(name: str, score: float) -> dict:

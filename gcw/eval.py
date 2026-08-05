@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
 import os
@@ -45,6 +47,27 @@ PPT_FEWSHOT = {"lambada_openai": 0, "hellaswag": 0, "piqa": 0, "winogrande": 5, 
 ACC_NORM_TASKS = {"hellaswag", "piqa", "arc_easy", "arc_challenge"}
 MATH_TASKS = ["gsm8k_openmath", "hendrycks_math", "svamp", "theoremqa", "logiqa", "agieval_gaokao_mathqa", "gsm8k_hard"]
 PAPER7_TASKS = ["gsm8k_openmath", "svamp", "theoremqa", "logiqa", "agieval_gaokao_mathqa", "gsm8k_hard"]
+OPSD_SCREEN_TASKS = (
+    "gsm8k_openmath",
+    "svamp",
+    "gsm8k_hard",
+    "logiqa_opsd_generate",
+    "agieval_gaokao_mathqa_opsd_generate",
+)
+OPSD_FULL_TASK_SAMPLE_COUNTS = {
+    "gsm8k_openmath": 1_319,
+    "svamp": 300,
+    "gsm8k_hard": 1_319,
+    "logiqa_opsd_generate": 651,
+    "agieval_gaokao_mathqa_opsd_generate": 351,
+}
+OPSD_DATASET_FILE_PATTERNS = {
+    "gsm8k_openmath": "gsm8k-test.arrow",
+    "svamp": "svamp-test.arrow",
+    "gsm8k_hard": "gsm-hard-train.arrow",
+    "logiqa_opsd_generate": "logiqa-test.arrow",
+    "agieval_gaokao_mathqa_opsd_generate": "agieval-gaokao-mathqa-test.arrow",
+}
 MATH_RUNS = [([task], 0) for task in MATH_TASKS]
 HENDRYCKS_MATH_LEAF_TASKS = {
     "hendrycks_math_algebra",
@@ -428,13 +451,13 @@ def run_opsd_screen(
     datasets_cache: str,
     enable_thinking: bool,
     processor_enabled: bool,
-    tasks: tuple[str, ...] = ("gsm8k_openmath", "svamp", "gsm8k_hard"),
-    limit: int = 64,
+    tasks: tuple[str, ...] = OPSD_SCREEN_TASKS,
+    limit: int | None = 64,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
-    if limit <= 0:
-        raise ValueError("OPSD screen limit must be positive")
+    if limit is not None and limit <= 0:
+        raise ValueError("OPSD screen limit must be positive when set")
     if len(source_revision) != 40 or any(
         character not in "0123456789abcdef" for character in source_revision
     ):
@@ -444,9 +467,11 @@ def run_opsd_screen(
     if not datasets_cache_path.is_dir():
         raise ValueError("OPSD screen datasets cache must be an existing directory")
     os.environ["HF_DATASETS_CACHE"] = str(datasets_cache_path)
-    allowed_tasks = {"gsm8k_openmath", "svamp", "gsm8k_hard"}
+    allowed_tasks = set(OPSD_SCREEN_TASKS)
     if not tasks or not set(tasks) <= allowed_tasks:
-        raise ValueError("OPSD screen tasks must be GSM8K, SVAMP, or GSM-Hard")
+        raise ValueError(
+            "OPSD screen tasks must be GSM8K, SVAMP, GSM-Hard, LogiQA, or Gaokao"
+        )
 
     import lm_eval
     from lm_eval.tasks import TaskManager
@@ -478,6 +503,7 @@ def run_opsd_screen(
     sample_manifest = _opsd_sample_manifest(evaluated, tasks)
     if len(sample_manifest) != len(lm.opsd_generation_records):
         raise ValueError("OPSD screen lm-eval samples differ from generation records")
+    _validate_opsd_full_sample_counts(sample_manifest, tasks=tasks, limit=limit)
     return {
         "schema_version": 1,
         "kind": "opsd_quick_screen_condition",
@@ -537,6 +563,23 @@ def _checkpoint_manifest(checkpoint: Path) -> dict[str, object]:
     return {"files": files, "manifest_sha256": manifest_sha256}
 
 
+def _validate_opsd_full_sample_counts(
+    sample_manifest: Sequence[Mapping[str, object]],
+    *,
+    tasks: tuple[str, ...],
+    limit: int | None,
+) -> None:
+    if limit is not None:
+        return
+    observed = Counter(str(row["task"]) for row in sample_manifest)
+    expected = {task: OPSD_FULL_TASK_SAMPLE_COUNTS[task] for task in tasks}
+    if dict(observed) != expected:
+        raise ValueError(
+            "OPSD full evaluation sample counts do not match authenticated splits: "
+            f"observed={dict(observed)!r}, expected={expected!r}"
+        )
+
+
 def _opsd_sample_manifest(evaluated: dict, tasks: tuple[str, ...]) -> list[dict[str, object]]:
     samples = evaluated.get("samples")
     if not isinstance(samples, dict):
@@ -569,11 +612,7 @@ def _sha256_file(path: Path) -> str:
 
 def _opsd_dataset_file_identity(tasks: tuple[str, ...]) -> dict[str, dict[str, str | int]]:
     cache_root = Path(os.environ.get("HF_DATASETS_CACHE", base_dir() / "hf_datasets_eval_v3"))
-    patterns = {
-        "gsm8k_openmath": "gsm8k-test.arrow",
-        "svamp": "svamp-test.arrow",
-        "gsm8k_hard": "gsm-hard-train.arrow",
-    }
+    patterns = OPSD_DATASET_FILE_PATTERNS
     identity: dict[str, dict[str, str | int]] = {}
     for task in tasks:
         matches = sorted(cache_root.rglob(patterns[task]))

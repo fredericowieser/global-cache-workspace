@@ -642,14 +642,17 @@ def _condition_metrics(document: dict[str, Any]) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     for task in document["tasks"]:
         row = task_results[task]
-        metrics[task] = {
+        task_metrics = {
             key: float(value)
             for key, value in row.items()
             if isinstance(value, (int, float))
             and not isinstance(value, bool)
             and math.isfinite(float(value))
-            and key.startswith("exact_match,")
+            and key.startswith(("exact_match,", "acc,"))
         }
+        if not task_metrics:
+            raise ValueError(f"task {task!r} has no supported finite accuracy metric")
+        metrics[task] = task_metrics
     records = document["generation_records"]
     metrics["generation"] = {
         "mean_response_tokens": sum(record["response_tokens"] for record in records) / len(records),
