@@ -147,11 +147,15 @@ def hidden_metrics(hf_hidden: torch.Tensor, native_hidden: torch.Tensor) -> dict
     _finite(hf, "HF hidden state")
     _finite(native, "native hidden state")
     delta = native - hf
-    hf_flat = hf.reshape(-1)
-    native_flat = native.reshape(-1)
+    hf_flat = hf.reshape(-1).double()
+    native_flat = native.reshape(-1).double()
+    delta_flat = native_flat - hf_flat
     hf_norm = torch.linalg.vector_norm(hf_flat)
-    relative = torch.linalg.vector_norm(delta.reshape(-1)) / hf_norm.clamp_min(torch.finfo(torch.float32).tiny)
-    cosine = F.cosine_similarity(hf_flat, native_flat, dim=0)
+    relative = torch.linalg.vector_norm(delta_flat) / hf_norm.clamp_min(torch.finfo(torch.float64).tiny)
+    cosine_raw = F.cosine_similarity(hf_flat, native_flat, dim=0)
+    if float(cosine_raw.item()) < -1.0 - 1e-12 or float(cosine_raw.item()) > 1.0 + 1e-12:
+        raise FloatingPointError(f"FP64 cosine outside mathematical range: {float(cosine_raw.item())}")
+    cosine = cosine_raw.clamp(-1.0, 1.0)
     return {
         "max_abs_error": float(delta.abs().max().item()),
         "mean_abs_error": float(delta.abs().mean().item()),

@@ -246,6 +246,16 @@ def test_conversion_diagnostic_reads_nested_checkpoint_model_config(tmp_path):
     assert diagnosis._checkpoint_model_config(checkpoint) == {"num_layers": 28}
 
 
+def test_conversion_diagnostic_hidden_cosine_stays_in_mathematical_range():
+    torch.manual_seed(0)
+    hidden = torch.randn(1, 32, 1024, dtype=torch.bfloat16)
+
+    metrics = diagnosis.hidden_metrics(hidden, hidden)
+
+    assert metrics["cosine_similarity"] == pytest.approx(1.0, abs=1e-15)
+    assert -1.0 <= metrics["cosine_similarity"] <= 1.0
+
+
 def test_conversion_diagnostic_detects_distribution_and_hidden_state_drift():
     hf_logits = torch.tensor([[[2.0, 0.0, -1.0]]])
     native_logits = torch.tensor([[[0.0, 2.0, -1.0]]])
