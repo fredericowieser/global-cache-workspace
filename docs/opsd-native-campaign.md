@@ -48,6 +48,8 @@ This is a fail-closed scientific negative for the staged SFT checkpoint. The 1k,
 
 A distinct fallback may use the official native-thinking `Qwen/Qwen3-0.6B` base checkpoint. It is **not** a continuation of the failed SFT-backed protocol and uses `qwen3_06b_opsd_native_base_smoke_v1.yaml`, followed only on smoke promotion by `qwen3_06b_opsd_native_base_steps1000_bs16_v1.yaml`. Before either run, the HF→GCW conversion must pass the fixed policy in `scripts/verify_hf_conversion.py`: BF16 model parameters/internal compute, the native model's intentional FP32 output logits, explicit FP32 comparison, `max_abs <= 0.25`, `mean_abs <= 0.01`, final-token top-1 exact, and complete model/tokenizer/checkpoint manifests. Every base training allocation re-executes parity immediately before optimisation and revalidates that fresh evidence after training; a stored JSON claim alone cannot authorize success.
 
+The reviewed base conversion at source `71aa72fe2df7a82bc2b416dd8a677b3ae81c6a32` completed as job `22464` in 1m35s with authenticated stable source hashes. The corrected schema-3 parity run at source `b31ff9636b62859c0ab944cbc2678b44bf8d2355` completed as job `22466` and failed the fixed numerical gate: max absolute error `0.234375` (limit `0.25`), mean absolute error `0.035964` (limit `0.01`), final-token top-1 exact, full-token top-1 fraction `1.0`. Its evidence SHA-256 is `1aca29e6db3099d652d8635d57f8f79a9acccfbec915a378c0477e7104b86216`. No base smoke, 1k run or evaluation was launched; do not relax the parity threshold.
+
 ## Promotion gates
 
 ### Smoke → 1k
