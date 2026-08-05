@@ -50,6 +50,8 @@ A distinct fallback may use the official native-thinking `Qwen/Qwen3-0.6B` base 
 
 The reviewed base conversion at source `71aa72fe2df7a82bc2b416dd8a677b3ae81c6a32` completed as job `22464` in 1m35s with authenticated stable source hashes. The corrected schema-3 parity run at source `b31ff9636b62859c0ab944cbc2678b44bf8d2355` completed as job `22466` and failed the fixed numerical gate: max absolute error `0.234375` (limit `0.25`), mean absolute error `0.035964` (limit `0.01`), final-token top-1 exact, full-token top-1 fraction `1.0`. Its evidence SHA-256 is `1aca29e6db3099d652d8635d57f8f79a9acccfbec915a378c0477e7104b86216`. No base smoke, 1k run or evaluation was launched; do not relax the parity threshold.
 
+The authenticated five-prompt diagnostic at source `fbb55d8f886021e14db0e3a8be3f54b1892e376e` completed as job `22525` in 51s. Evidence SHA-256: `a02e037e2cb666f6ca38dc7e4c07e193be8e4e70b0c89b6beb95213a7ef94821`. Vocabulary centring retained `77.1–88.3%` of raw mean absolute logit error (`82.6%` aggregate), so a softmax-invariant offset explains only a minority of the mismatch. Mean KL was `0.000750–0.001523` nats/token; mean total variation was `1.39–1.95%`; top-1 agreement remained `100%`. Embeddings were exact. The first measured divergence was the **output** of decoder `layer_00` for every prompt (`0.5427–0.6565%` relative L2). This does not localise an operation inside layer 0 or distinguish BF16 kernel/order effects from a parameter, architecture or implementation mismatch. The failed parity gate remains authoritative; no smoke or training is authorised.
+
 ## Promotion gates
 
 ### Smoke → 1k
