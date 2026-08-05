@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import copy
+import hashlib
+import importlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -259,6 +263,164 @@ def test_conversion_diagnostic_wrapper_is_fail_closed():
     assert "torch.cuda.device_count()" in wrapper
     assert "nvidia-smi --query-gpu" not in wrapper
     assert "sbatch --wrap" not in wrapper
+
+
+@pytest.mark.parametrize(
+    ("filename", "steps", "effective_batch", "output_name"),
+    (
+        ("qwen3_06b_opsd_native_base_pragmatic_canary_v1.yaml", 1, 1, "canary-steps1-bs1"),
+        ("qwen3_06b_opsd_native_base_pragmatic_steps1000_bs16_v1.yaml", 1000, 16, "steps1000-bs16"),
+    ),
+)
+def test_pragmatic_base_configs_are_exact_waived_protocol(
+    filename, steps, effective_batch, output_name
+):
+    root = Path(__file__).parents[1]
+    config = load_train_config(root / "configs/train/opsd" / filename)
+
+    assert config.freeze_backbone is True
+    assert config.distillation is not None
+    assert config.distillation.teacher_trajectory_mode == "native_full"
+    assert config.distillation.visible_trajectory_mode == "both"
+    assert config.distillation.max_optimizer_steps == steps
+    assert config.distillation.gradient_accumulation_steps == effective_batch
+    assert config.metadata == {
+        "campaign": "opsd-native-base-pragmatic-v1",
+        "scientific_scope": "pragmatic_same_gcw_backbone_sensitivity_after_failed_hf_parity",
+        "required_conversion_parity": "/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1/parity.json",
+        "required_conversion_diagnostic": "/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1/diagnostics/layerwise-distribution-v1-fp64.json",
+        "conversion_parity_waiver": "configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json",
+        "comparison_reference": "configs/train/bottleneck_llm/qwen3_06b_bgt_from_sft_frozen.yaml",
+        "backbone_label": "converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF",
+        "distillation_effective_batch_examples": effective_batch,
+        "requested_optimizer_steps": steps,
+    }
+    assert config.output_dir.endswith(f"/qwen3_06b_opsd_native_base_pragmatic_v1/{output_name}")
+
+
+def test_pragmatic_parity_waiver_is_closed_and_tamper_rejected():
+    root = Path(__file__).parents[1]
+    path = root / "configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json"
+    document = json.loads(path.read_text())
+    validator = importlib.import_module("scripts.validate_opsd_pragmatic_waiver")
+
+    validator.validate_waiver_document(document)
+    tampered = copy.deepcopy(document)
+    tampered["constraints"]["max_optimizer_steps"] = 10_000
+    with pytest.raises(ValueError, match="waiver document"):
+        validator.validate_waiver_document(tampered)
+
+
+def test_native_train_wrapper_preserves_parity_gate_and_has_strict_pragmatic_branch():
+    wrapper = (
+        Path(__file__).parents[1] / "scripts/slurm/opsd_native_train.sbatch"
+    ).read_text()
+
+    assert "REQUIRES_CONVERSION_PARITY" in wrapper
+    assert "validate_parity_evidence" in wrapper
+    assert "REQUIRES_PARITY_WAIVER" in wrapper
+    assert "validate_opsd_pragmatic_waiver.py" in wrapper
+    assert "PRAGMATIC_WAIVER_EVIDENCE" in wrapper
+    assert "pragmatic_same_gcw_backbone_sensitivity_after_failed_hf_parity" in wrapper
+
+
+def test_pragmatic_full_matrix_preserves_waiver_label_and_exact_factorial():
+    root = Path(__file__).parents[1]
+    wrapper = (root / "scripts/slurm/opsd_full_matrix.sbatch").read_text()
+    publisher = (root / "scripts/log_opsd_matrix_wandb.py").read_text()
+
+    assert "EXPECTED_PRAGMATIC_WAIVER" in wrapper
+    assert "PRAGMATIC_WAIVER.json" in wrapper
+    assert "pragmatic_parity_waiver" in wrapper
+    assert "parity_gate_remains_failed" in wrapper
+    for condition in (
+        "cot-off__cp-off",
+        "cot-off__cp-on",
+        "cot-on__cp-off",
+        "cot-on__cp-on",
+    ):
+        assert condition in wrapper
+    assert "WANDB_PRAGMATIC_WAIVER" in publisher
+    assert "pragmatic-parity-waiver" in publisher
+    assert "parity_gate_remains_failed" in publisher
+
+
+def test_pragmatic_parity_validator_accepts_only_schema3_numeric_failure():
+    validator = importlib.import_module("scripts.validate_opsd_pragmatic_waiver")
+    document = {
+        "passed": False,
+        "policy_id": "qwen3-06b-bf16-parameters-fp32-comparison-v2",
+        "mean_abs_error": 0.03596403822302818,
+        "mean_abs_threshold": 0.01,
+    }
+
+    validator.validate_parity_failure_document(document)
+    for mutation in (
+        {**document, "passed": "false"},
+        {**document, "mean_abs_error": "0.03596403822302818"},
+        {**document, "mean_abs_error": 0.01},
+        {
+            "passed": False,
+            "policy_id": document["policy_id"],
+            "mean_abs_error": document["mean_abs_error"],
+            "thresholds": {"mean_abs_error": 0.01},
+        },
+    ):
+        with pytest.raises(ValueError, match="approved numerical failure"):
+            validator.validate_parity_failure_document(mutation)
+
+
+def test_pragmatic_protocol_binds_exact_configs_and_promotion_evidence():
+    root = Path(__file__).parents[1]
+    validator = importlib.import_module("scripts.validate_opsd_pragmatic_waiver")
+    wrapper = (root / "scripts/slurm/opsd_native_train.sbatch").read_text()
+
+    for filename, expected in validator.CONFIGS.items():
+        path = root / "configs/train/opsd" / filename
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected["sha256"]
+    assert "CANARY_CONFIG_SHA256" in wrapper
+    assert 'success.get("pragmatic_parity_waiver") is not True' in wrapper
+    assert 'success.get("parity_gate_remains_failed") is not True' in wrapper
+    assert 'waiver_entry = files.get("PRAGMATIC_WAIVER.json")' in wrapper
+    assert "canary config digest mismatch" in wrapper
+
+
+def test_pragmatic_labels_tokenizer_prepublication_and_safe_claim_order():
+    root = Path(__file__).parents[1]
+    train = (root / "scripts/slurm/opsd_native_train.sbatch").read_text()
+    matrix = (root / "scripts/slurm/opsd_full_matrix.sbatch").read_text()
+    publisher = (root / "scripts/log_opsd_matrix_wandb.py").read_text()
+    label = "converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF"
+
+    assert label in train
+    assert label in matrix
+    assert label in publisher
+    assert "/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1" in matrix
+    assert 'state.get("tokenizer_source") != tokenizer' in matrix
+    assert 'success.get("pragmatic_parity_waiver") is not expected_waiver' in matrix
+    assert 'success.get("parity_gate_remains_failed") is not expected_waiver' in matrix
+    assert "canonical_matrix_validated_before_publication=true" in matrix
+    assert matrix.index("canonical_matrix_validated_before_publication=true") < matrix.index(
+        "scripts/log_opsd_matrix_wandb.py"
+    )
+    assert train.index('[[ ! -e "$OUTPUT_DIR"') > train.index("wandb_authenticated=true")
+    assert "#SBATCH --partition=agent-xlong-15" in train
+    assert "#SBATCH --partition=agent-xlong-15" in matrix
+
+
+def test_pragmatic_submitter_hard_wires_afterok_chain_and_identities():
+    submitter = (
+        Path(__file__).parents[1] / "scripts/submit_opsd_pragmatic_chain.py"
+    ).read_text()
+
+    assert "afterok:{canary_job_id}" in submitter
+    assert "afterok:{train_job_id}" in submitter
+    assert "PROMOTION_EVIDENCE" in submitter
+    assert '"EXPECTED_PRAGMATIC_WAIVER": "true"' in submitter
+    assert "agent-dev-15" in submitter
+    assert "agent-xlong-15" in submitter
+    assert "scancel" in submitter
+    assert "submission-receipt" in submitter
 
 
 def test_native_train_wrapper_rejects_external_config(tmp_path):

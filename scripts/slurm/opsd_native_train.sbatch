@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gcw-opsd-native-train
+#SBATCH --partition=agent-xlong-15
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
@@ -22,7 +23,8 @@ PY
 )"
 CONFIG="${CONFIG:?CONFIG is required}"
 SOURCE_REVISION="${SOURCE_REVISION:?SOURCE_REVISION is required}"
-export SOURCE_REVISION
+BACKBONE_LABEL="converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF"
+export SOURCE_REVISION BACKBONE_LABEL
 
 cd "$REPO"
 ACTUAL_REVISION="$(git rev-parse HEAD)"
@@ -99,7 +101,11 @@ for key, value in paths.items():
         raise SystemExit(f"missing config-derived {key}")
     print(f"{key}={value}")
 parity_raw = config.metadata.get("required_conversion_parity", "")
+diagnostic_raw = config.metadata.get("required_conversion_diagnostic", "")
+waiver_raw = config.metadata.get("conversion_parity_waiver", "")
 parity = str(Path(parity_raw).resolve(strict=True)) if parity_raw else ""
+diagnostic = str(Path(diagnostic_raw).resolve(strict=True)) if diagnostic_raw else ""
+waiver = str(Path(waiver_raw).resolve(strict=True)) if waiver_raw else ""
 base_checkpoint = str(
     Path("/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1").resolve(
         strict=True
@@ -109,33 +115,59 @@ base_tokenizer = str(
     Path("/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1").resolve(strict=True)
 )
 base_scope = "distinct_base_backbone_fallback_after_sft_zero_yield"
+pragmatic_scope = "pragmatic_same_gcw_backbone_sensitivity_after_failed_hf_parity"
 base_parity = str((Path(base_checkpoint) / "parity.json").resolve(strict=True))
-base_signals = (
-    backbone_checkpoint == base_checkpoint,
-    tokenizer_source == base_tokenizer,
-    config.metadata.get("scientific_scope") == base_scope,
-    parity == base_parity,
+base_diagnostic = str(
+    (Path(base_checkpoint) / "diagnostics/layerwise-distribution-v1-fp64.json").resolve(
+        strict=True
+    )
 )
-if any(base_signals) and not all(base_signals):
-    raise SystemExit("base fallback checkpoint/tokenizer/scope/parity contract mismatch")
-print(f"REQUIRES_CONVERSION_PARITY={str(all(base_signals)).lower()}")
+expected_waiver = str(
+    Path("configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json").resolve(
+        strict=True
+    )
+)
+uses_base_checkpoint = backbone_checkpoint == base_checkpoint
+uses_base_tokenizer = tokenizer_source == base_tokenizer
+if uses_base_checkpoint != uses_base_tokenizer:
+    raise SystemExit("base fallback checkpoint/tokenizer contract mismatch")
+requires_parity = False
+requires_waiver = False
+if uses_base_checkpoint:
+    scope = config.metadata.get("scientific_scope")
+    if scope == base_scope:
+        if parity != base_parity or diagnostic or waiver:
+            raise SystemExit("base parity-gated scope/evidence contract mismatch")
+        requires_parity = True
+    elif scope == pragmatic_scope:
+        if parity != base_parity or diagnostic != base_diagnostic or waiver != expected_waiver:
+            raise SystemExit("pragmatic base scope/evidence contract mismatch")
+        requires_waiver = True
+    else:
+        raise SystemExit("base fallback uses an unapproved scientific scope")
+elif parity or diagnostic or waiver:
+    raise SystemExit("non-base config cannot declare base conversion evidence")
+print(f"REQUIRES_CONVERSION_PARITY={str(requires_parity).lower()}")
+print(f"REQUIRES_PARITY_WAIVER={str(requires_waiver).lower()}")
 print(f"REQUIRED_CONVERSION_PARITY={parity}")
+print(f"REQUIRED_CONVERSION_DIAGNOSTIC={diagnostic}")
+print(f"PARITY_WAIVER={waiver}")
 PY
 )"
 mapfile -t PREFLIGHT <<<"$PREFLIGHT_RAW"
 for assignment in "${PREFLIGHT[@]}"; do
   case "$assignment" in
-    OUTPUT_DIR=*|BACKBONE_CHECKPOINT=*|DATA_DIR=*|TOKENIZER_SOURCE=*|MAX_OPTIMIZER_STEPS=*|EFFECTIVE_BATCH_EXAMPLES=*|RECORD_CACHE_DISPLACEMENTS=*|WANDB_MODE_CONFIG=*|REQUIRES_CONVERSION_PARITY=*|REQUIRED_CONVERSION_PARITY=*)
+    OUTPUT_DIR=*|BACKBONE_CHECKPOINT=*|DATA_DIR=*|TOKENIZER_SOURCE=*|MAX_OPTIMIZER_STEPS=*|EFFECTIVE_BATCH_EXAMPLES=*|RECORD_CACHE_DISPLACEMENTS=*|WANDB_MODE_CONFIG=*|REQUIRES_CONVERSION_PARITY=*|REQUIRES_PARITY_WAIVER=*|REQUIRED_CONVERSION_PARITY=*|REQUIRED_CONVERSION_DIAGNOSTIC=*|PARITY_WAIVER=*)
       export "$assignment" ;;
     *) printf 'unexpected config preflight output: %s\n' "$assignment" >&2; exit 2 ;;
   esac
 done
 
-if [[ "$REQUIRES_CONVERSION_PARITY" == true && -z "$REQUIRED_CONVERSION_PARITY" ]]; then
-  printf 'base fallback requires conversion parity evidence\n' >&2
-  exit 2
-fi
-if [[ -n "$REQUIRED_CONVERSION_PARITY" ]]; then
+if [[ "$REQUIRES_CONVERSION_PARITY" == true ]]; then
+  [[ -n "$REQUIRED_CONVERSION_PARITY" && "$REQUIRES_PARITY_WAIVER" == false ]] || {
+    printf 'base parity-gated scope has an invalid evidence mode\n' >&2
+    exit 2
+  }
   uv run --locked --extra gpu --extra convert python - <<'PY'
 import json
 import os
@@ -151,6 +183,20 @@ validate_parity_evidence(
     source_revision=os.environ["SOURCE_REVISION"],
 )
 PY
+elif [[ "$REQUIRES_PARITY_WAIVER" == true ]]; then
+  [[ -n "$PARITY_WAIVER" && -n "$REQUIRED_CONVERSION_PARITY" && -n "$REQUIRED_CONVERSION_DIAGNOSTIC" ]] || {
+    printf 'pragmatic scope lacks complete waiver evidence paths\n' >&2
+    exit 2
+  }
+  uv run --locked --extra gpu python scripts/validate_opsd_pragmatic_waiver.py \
+    --repo "$REPO" \
+    --config "$CONFIG" \
+    --waiver "$PARITY_WAIVER" \
+    --source-revision "$SOURCE_REVISION" \
+    --check-only
+elif [[ -n "$REQUIRED_CONVERSION_PARITY" || -n "$REQUIRED_CONVERSION_DIAGNOSTIC" || -n "$PARITY_WAIVER" ]]; then
+  printf 'undeclared conversion evidence mode\n' >&2
+  exit 2
 fi
 
 if [[ "$MAX_OPTIMIZER_STEPS" -eq 1000 ]]; then
@@ -163,19 +209,43 @@ import os
 from pathlib import Path
 success_path = Path(os.environ["PROMOTION_EVIDENCE"]).resolve(strict=True)
 success = json.loads(success_path.read_text())
+CANARY_CONFIG_SHA256 = "65a2133efaea7614a3a0eea72943bf64593db94b49293d9c49e287831be01b30"
 if success.get("source_revision") != os.environ["SOURCE_REVISION"]:
-    raise SystemExit("smoke evidence source revision mismatch")
+    raise SystemExit("canary evidence source revision mismatch")
+if success.get("source_config_sha256") != CANARY_CONFIG_SHA256:
+    raise SystemExit("canary config digest mismatch")
+if success.get("pragmatic_parity_waiver") is not True:
+    raise SystemExit("canary lacks strict pragmatic waiver label")
+if success.get("parity_gate_remains_failed") is not True:
+    raise SystemExit("canary does not retain failed parity label")
+if success.get("backbone_label") != os.environ["BACKBONE_LABEL"]:
+    raise SystemExit("canary backbone label mismatch")
 if success.get("optimizer_steps") != 1 or success.get("effective_batch_examples") != 1:
-    raise SystemExit("promotion evidence is not a one-step batch-one smoke")
-summary_entry = success.get("files", {}).get("summary.json")
-if not isinstance(summary_entry, dict):
-    raise SystemExit("smoke evidence does not authenticate summary.json")
+    raise SystemExit("promotion evidence is not the exact one-step batch-one canary")
+files = success.get("files", {})
+summary_entry = files.get("summary.json")
+waiver_entry = files.get("PRAGMATIC_WAIVER.json")
+if not isinstance(summary_entry, dict) or not isinstance(waiver_entry, dict):
+    raise SystemExit("canary evidence does not authenticate summary and waiver")
 summary_path = success_path.parent / "summary.json"
+waiver_path = success_path.parent / "PRAGMATIC_WAIVER.json"
 if hashlib.sha256(summary_path.read_bytes()).hexdigest() != summary_entry.get("sha256"):
-    raise SystemExit("smoke summary digest mismatch")
+    raise SystemExit("canary summary digest mismatch")
+if hashlib.sha256(waiver_path.read_bytes()).hexdigest() != waiver_entry.get("sha256"):
+    raise SystemExit("canary waiver digest mismatch")
+waiver = json.loads(waiver_path.read_text())
+if (
+    waiver.get("source_revision") != os.environ["SOURCE_REVISION"]
+    or waiver.get("config_sha256") != CANARY_CONFIG_SHA256
+    or waiver.get("optimizer_steps") != 1
+    or waiver.get("effective_batch_examples") != 1
+    or waiver.get("parity_gate_remains_failed") is not True
+    or waiver.get("backbone_label") != os.environ["BACKBONE_LABEL"]
+):
+    raise SystemExit("canary run-specific waiver identity mismatch")
 summary = json.loads(summary_path.read_text())
 if summary.get("seen_prompts", 65) > 64 or summary.get("valid_prompts") != 1:
-    raise SystemExit("smoke strict-yield gate failed")
+    raise SystemExit("canary strict-yield gate failed")
 projected_seconds = float(summary["elapsed_seconds"]) * 16_000
 if projected_seconds > 4.5 * 24 * 60 * 60:
     raise SystemExit(
@@ -185,15 +255,6 @@ print(f"smoke_promotion_projected_seconds={projected_seconds:.3f}")
 PY
 fi
 
-[[ ! -e "$OUTPUT_DIR" && ! -L "$OUTPUT_DIR" ]] || {
-  printf 'refusing to overwrite output: %s\n' "$OUTPUT_DIR" >&2
-  exit 2
-}
-mkdir -p "$(dirname "$OUTPUT_DIR")"
-mkdir "$OUTPUT_DIR" || {
-  printf 'failed to claim fresh output directory: %s\n' "$OUTPUT_DIR" >&2
-  exit 2
-}
 [[ -d "$BACKBONE_CHECKPOINT" ]] || {
   printf 'missing backbone checkpoint: %s\n' "$BACKBONE_CHECKPOINT" >&2
   exit 2
@@ -206,7 +267,6 @@ mkdir "$OUTPUT_DIR" || {
   printf 'missing tokenizer source: %s\n' "$TOKENIZER_SOURCE" >&2
   exit 2
 }
-
 uv run --locked --extra gpu python scripts/check_cuda_env.py
 GPU_NAME="$(uv run --locked --extra gpu python - <<'PY'
 import torch
@@ -220,6 +280,33 @@ export GPU_NAME
   printf 'campaign requires H100; allocated GPU is %s\n' "$GPU_NAME" >&2
   exit 2
 }
+uv run --locked --extra gpu python - <<'PY'
+import wandb
+if not wandb.api.api_key:
+    raise SystemExit("W&B is not authenticated")
+print("wandb_authenticated=true")
+PY
+
+[[ ! -e "$OUTPUT_DIR" && ! -L "$OUTPUT_DIR" ]] || {
+  printf 'refusing to overwrite output: %s\n' "$OUTPUT_DIR" >&2
+  exit 2
+}
+mkdir -p "$(dirname "$OUTPUT_DIR")"
+mkdir "$OUTPUT_DIR" || {
+  printf 'failed to claim fresh output directory: %s\n' "$OUTPUT_DIR" >&2
+  exit 2
+}
+PRAGMATIC_WAIVER_EVIDENCE=""
+if [[ "$REQUIRES_PARITY_WAIVER" == true ]]; then
+  PRAGMATIC_WAIVER_EVIDENCE="$OUTPUT_DIR/PRAGMATIC_WAIVER.json"
+  uv run --locked --extra gpu python scripts/validate_opsd_pragmatic_waiver.py \
+    --repo "$REPO" \
+    --config "$CONFIG" \
+    --waiver "$PARITY_WAIVER" \
+    --source-revision "$SOURCE_REVISION" \
+    --out "$PRAGMATIC_WAIVER_EVIDENCE"
+fi
+export PRAGMATIC_WAIVER_EVIDENCE
 REQUIRED_FRESH_PARITY=""
 if [[ "$REQUIRES_CONVERSION_PARITY" == true ]]; then
   REQUIRED_FRESH_PARITY="$OUTPUT_DIR/preflight-parity.json"
@@ -230,12 +317,6 @@ if [[ "$REQUIRES_CONVERSION_PARITY" == true ]]; then
     --out "$REQUIRED_FRESH_PARITY"
 fi
 export REQUIRED_FRESH_PARITY
-uv run --locked --extra gpu python - <<'PY'
-import wandb
-if not wandb.api.api_key:
-    raise SystemExit("W&B is not authenticated")
-print("wandb_authenticated=true")
-PY
 
 uv run --locked --extra gpu gcw train --config "$CONFIG"
 
@@ -340,9 +421,16 @@ required = [
     checkpoint / "model.safetensors",
     checkpoint / "config.json",
     checkpoint / "train_state.json",
+    Path(os.environ["CONFIG"]),
 ]
 if os.environ.get("REQUIRED_CONVERSION_PARITY"):
     required.append(Path(os.environ["REQUIRED_CONVERSION_PARITY"]))
+if os.environ.get("REQUIRED_CONVERSION_DIAGNOSTIC"):
+    required.append(Path(os.environ["REQUIRED_CONVERSION_DIAGNOSTIC"]))
+if os.environ.get("PARITY_WAIVER"):
+    required.append(Path(os.environ["PARITY_WAIVER"]))
+if os.environ.get("PRAGMATIC_WAIVER_EVIDENCE"):
+    required.append(Path(os.environ["PRAGMATIC_WAIVER_EVIDENCE"]))
 if os.environ.get("REQUIRED_FRESH_PARITY"):
     required.append(Path(os.environ["REQUIRED_FRESH_PARITY"]))
 def sha256_file(path: Path) -> str:
@@ -366,12 +454,16 @@ for path in required:
 payload = json.dumps(
     {
         "source_revision": os.environ["SOURCE_REVISION"],
+        "source_config_sha256": sha256_file(Path(os.environ["CONFIG"])),
+        "backbone_label": os.environ["BACKBONE_LABEL"],
         "optimizer_steps": expected_steps,
         "effective_batch_examples": expected_batch,
         "valid_examples": expected_examples,
         "gpu_name": os.environ["GPU_NAME"],
         "wandb_run_id": summary["wandb_run_id"],
         "wandb_run_url": summary["wandb_run_url"],
+        "pragmatic_parity_waiver": bool(os.environ.get("PRAGMATIC_WAIVER_EVIDENCE")),
+        "parity_gate_remains_failed": bool(os.environ.get("PRAGMATIC_WAIVER_EVIDENCE")),
         "files": files,
     },
     indent=2,

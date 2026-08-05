@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=gcw-opsd-full-matrix
+#SBATCH --partition=agent-xlong-15
 #SBATCH --nodes=1
 #SBATCH --ntasks=4
 #SBATCH --gres=gpu:4
@@ -16,10 +17,22 @@ REPO="${REPO:-$HOME/code/global-cache-workspace}"
 CHECKPOINT="${CHECKPOINT:?CHECKPOINT is required}"
 SOURCE_REVISION="${SOURCE_REVISION:?SOURCE_REVISION is required}"
 TOKENIZER_SOURCE="${TOKENIZER_SOURCE:?TOKENIZER_SOURCE is required}"
+TOKENIZER_SOURCE="$(python3 - "$TOKENIZER_SOURCE" <<'PY'
+import sys
+from pathlib import Path
+print(Path(sys.argv[1]).resolve(strict=True))
+PY
+)"
+[[ "$TOKENIZER_SOURCE" == "/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1" ]] || {
+  printf 'pragmatic matrix tokenizer mismatch: %s\n' "$TOKENIZER_SOURCE" >&2
+  exit 2
+}
 DATASETS_CACHE="${DATASETS_CACHE:?DATASETS_CACHE is required}"
 OUT_DIR="${OUT_DIR:?OUT_DIR is required}"
+EXPECTED_PRAGMATIC_WAIVER="${EXPECTED_PRAGMATIC_WAIVER:-false}"
+BACKBONE_LABEL="converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF"
 TASKS="gsm8k_openmath,svamp,gsm8k_hard,logiqa_opsd_generate,agieval_gaokao_mathqa_opsd_generate"
-export CHECKPOINT SOURCE_REVISION OUT_DIR TASKS
+export CHECKPOINT SOURCE_REVISION TOKENIZER_SOURCE OUT_DIR TASKS EXPECTED_PRAGMATIC_WAIVER BACKBONE_LABEL
 
 cd "$REPO"
 ACTUAL_REVISION="$(git rev-parse HEAD)"
@@ -63,12 +76,32 @@ if state.get("checkpoint_fidelity_verified") is not True:
     raise SystemExit("checkpoint fidelity is not verified")
 if state.get("initial_processor_sha256") == state.get("pre_save_processor_sha256"):
     raise SystemExit("checkpoint processor did not change")
+expected_waiver_raw = os.environ["EXPECTED_PRAGMATIC_WAIVER"]
+if expected_waiver_raw not in {"true", "false"}:
+    raise SystemExit("EXPECTED_PRAGMATIC_WAIVER must be true or false")
+expected_waiver = expected_waiver_raw == "true"
+if success.get("pragmatic_parity_waiver") is not expected_waiver:
+    raise SystemExit("checkpoint pragmatic waiver status mismatch")
+if success.get("parity_gate_remains_failed") is not expected_waiver:
+    raise SystemExit("checkpoint parity status label mismatch")
+if expected_waiver and success.get("backbone_label") != os.environ["BACKBONE_LABEL"]:
+    raise SystemExit("checkpoint backbone label mismatch")
+tokenizer = os.environ["TOKENIZER_SOURCE"]
+if state.get("tokenizer_source") != tokenizer or summary.get("tokenizer_source") != tokenizer:
+    raise SystemExit("checkpoint tokenizer provenance mismatch")
+if expected_waiver:
+    waiver_entry = success.get("files", {}).get("PRAGMATIC_WAIVER.json")
+    waiver_path = root / "PRAGMATIC_WAIVER.json"
+    if not isinstance(waiver_entry, dict) or not waiver_path.is_file():
+        raise SystemExit("checkpoint lacks authenticated pragmatic waiver evidence")
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while chunk := handle.read(8 * 1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+if expected_waiver and sha256_file(waiver_path) != waiver_entry.get("sha256"):
+    raise SystemExit("checkpoint pragmatic waiver digest mismatch")
 for relative in ("final/model.safetensors", "final/config.json", "final/train_state.json"):
     entry = success.get("files", {}).get(relative)
     path = root / relative
@@ -84,6 +117,12 @@ names = [torch.cuda.get_device_name(index) for index in range(count)]
 if any("H100" not in name for name in names):
     raise SystemExit(f"full matrix requires H100s; got {names!r}")
 print(f"matrix_gpus={names!r}")
+PY
+uv run --locked --extra gpu python - <<'PY'
+import wandb
+if not wandb.api.api_key:
+    raise SystemExit("W&B is not authenticated")
+print("wandb_authenticated=true")
 PY
 [[ ! -e "$OUT_DIR" && ! -L "$OUT_DIR" ]] || {
   printf 'refusing to overwrite evaluation directory: %s\n' "$OUT_DIR" >&2
@@ -150,13 +189,58 @@ uv run --locked --extra gpu --extra eval gcw eval opsd-aggregate \
     "$OUT_DIR/cot-on__cp-on.json" \
   --out "$OUT_DIR/aggregate.json"
 
-export WANDB_MODE=online
-uv run --locked --extra gpu python - <<'PY'
-import wandb
-if not wandb.api.api_key:
-    raise SystemExit("W&B is not authenticated")
+python - <<'PY'
+import json
+import os
+from collections import Counter
+from pathlib import Path
+root = Path(os.environ["OUT_DIR"])
+condition_names = (
+    "cot-off__cp-off",
+    "cot-off__cp-on",
+    "cot-on__cp-off",
+    "cot-on__cp-on",
+)
+expected_tasks = (
+    "gsm8k_openmath",
+    "svamp",
+    "gsm8k_hard",
+    "logiqa_opsd_generate",
+    "agieval_gaokao_mathqa_opsd_generate",
+)
+expected_counts = {
+    "gsm8k_openmath": 1319,
+    "svamp": 300,
+    "gsm8k_hard": 1319,
+    "logiqa_opsd_generate": 651,
+    "agieval_gaokao_mathqa_opsd_generate": 351,
+}
+for condition in condition_names:
+    document = json.loads((root / f"{condition}.json").read_text())
+    if tuple(document.get("tasks", ())) != expected_tasks or document.get("limit_per_task") is not None:
+        raise SystemExit(f"{condition} is not the canonical unlimited five-task evaluation")
+    if document.get("source_revision") != os.environ["SOURCE_REVISION"]:
+        raise SystemExit(f"{condition} source revision mismatch")
+    if document.get("tokenizer_source") != os.environ["TOKENIZER_SOURCE"]:
+        raise SystemExit(f"{condition} tokenizer provenance mismatch")
+    counts = Counter(str(row["task"]) for row in document.get("sample_manifest", ()))
+    if dict(counts) != expected_counts:
+        raise SystemExit(f"{condition} sample counts mismatch: {dict(counts)!r}")
+    if len(document.get("generation_records", ())) != sum(expected_counts.values()):
+        raise SystemExit(f"{condition} generation count mismatch")
+aggregate = json.loads((root / "aggregate.json").read_text())
+if (
+    tuple(aggregate.get("tasks", ())) != expected_tasks
+    or aggregate.get("limit_per_task") is not None
+    or aggregate.get("prompt_count") != sum(expected_counts.values())
+):
+    raise SystemExit("aggregate is not the canonical full matrix")
+print("canonical_matrix_validated_before_publication=true")
 PY
+
+export WANDB_MODE=online
 SOURCE_REVISION="$SOURCE_REVISION" CHECKPOINT="$CHECKPOINT" OUT_DIR="$OUT_DIR" \
+  WANDB_PRAGMATIC_WAIVER="$EXPECTED_PRAGMATIC_WAIVER" \
   uv run --locked --extra gpu python scripts/log_opsd_matrix_wandb.py
 [[ "$(git rev-parse HEAD)" == "$SOURCE_REVISION" && -z "$(git status --porcelain)" ]] || {
   printf 'source checkout changed during aggregation/publication\n' >&2
@@ -170,6 +254,7 @@ import os
 from collections import Counter
 from pathlib import Path
 root = Path(os.environ["OUT_DIR"])
+expected_pragmatic_waiver = os.environ["EXPECTED_PRAGMATIC_WAIVER"] == "true"
 condition_names = (
     "cot-off__cp-off",
     "cot-off__cp-on",
@@ -214,6 +299,9 @@ if (
     or not publication.get("wandb_run_url")
     or publication.get("training_step") != 1000
     or tuple(publication.get("tasks", ())) != expected_tasks
+    or publication.get("pragmatic_parity_waiver") is not expected_pragmatic_waiver
+    or publication.get("backbone_label")
+    != (os.environ["BACKBONE_LABEL"] if expected_pragmatic_waiver else None)
 ):
     raise SystemExit("online W&B publication evidence is incomplete")
 def sha256_file(path: Path) -> str:
@@ -239,6 +327,11 @@ payload = json.dumps(
         "sample_counts": expected_counts,
         "wandb_run_id": publication["wandb_run_id"],
         "wandb_run_url": publication["wandb_run_url"],
+        "pragmatic_parity_waiver": expected_pragmatic_waiver,
+        "parity_gate_remains_failed": expected_pragmatic_waiver,
+        "backbone_label": (
+            os.environ["BACKBONE_LABEL"] if expected_pragmatic_waiver else None
+        ),
         "files": files,
     },
     indent=2,

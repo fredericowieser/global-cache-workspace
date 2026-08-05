@@ -52,6 +52,16 @@ The reviewed base conversion at source `71aa72fe2df7a82bc2b416dd8a677b3ae81c6a32
 
 The authenticated five-prompt diagnostic at source `fbb55d8f886021e14db0e3a8be3f54b1892e376e` completed as job `22525` in 51s. Evidence SHA-256: `a02e037e2cb666f6ca38dc7e4c07e193be8e4e70b0c89b6beb95213a7ef94821`. Vocabulary centring retained `77.1–88.3%` of raw mean absolute logit error (`82.6%` aggregate), so a softmax-invariant offset explains only a minority of the mismatch. Mean KL was `0.000750–0.001523` nats/token; mean total variation was `1.39–1.95%`; top-1 agreement remained `100%`. Embeddings were exact. The first measured divergence was the **output** of decoder `layer_00` for every prompt (`0.5427–0.6565%` relative L2). This does not localise an operation inside layer 0 or distinguish BF16 kernel/order effects from a parameter, architecture or implementation mismatch. The failed parity gate remains authoritative; no smoke or training is authorised.
 
+### Pragmatic same-backbone fork
+
+On 2026-08-05 the user explicitly authorised a separate practical-sensitivity experiment despite failed HF→GCW numerical parity. This is **not** a parity-qualified continuation and must label the backbone `converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF`. The source-controlled waiver is `configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json`; it binds the exact failed parity and successful diagnostic hashes. It authorises only:
+
+1. `qwen3_06b_opsd_native_base_pragmatic_canary_v1.yaml`;
+2. after validated canary success, `qwen3_06b_opsd_native_base_pragmatic_steps1000_bs16_v1.yaml` at exactly 1,000 optimiser steps and effective batch 16;
+3. after validated 1k success, the complete five-task 2×2 CoT on/off × CP on/off matrix.
+
+The canary, 1k and matrix use fresh outputs and Slurm `afterok` dependencies. The paired CP contrasts remain interpretable because CP-on and CP-off share the same converted GCW backbone; they do not establish exact HF-Qwen behaviour. Every training and evaluation success artefact must retain `pragmatic_parity_waiver: true` and `parity_gate_remains_failed: true`. The waiver does not authorise 10k.
+
 ## Promotion gates
 
 ### Smoke → 1k

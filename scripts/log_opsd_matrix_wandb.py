@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 
+BACKBONE_LABEL = "converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF"
+
+
 def flatten_finite_metrics(value: Any, *, prefix: str = "eval") -> dict[str, float]:
     metrics: dict[str, float] = {}
 
@@ -46,6 +49,10 @@ def main() -> None:
     )
     if tasks != expected_tasks:
         raise SystemExit(f"aggregate task contract mismatch: {tasks!r}")
+    pragmatic_raw = os.environ.get("WANDB_PRAGMATIC_WAIVER", "false")
+    if pragmatic_raw not in {"true", "false"}:
+        raise SystemExit("WANDB_PRAGMATIC_WAIVER must be true or false")
+    pragmatic_waiver = pragmatic_raw == "true"
     name = os.environ.get("WANDB_EVAL_NAME", f"opsd-native-v2-steps{step}-full-matrix")
     run = wandb.init(
         project=os.environ.get("WANDB_PROJECT", "global-cache-workspace"),
@@ -53,11 +60,20 @@ def main() -> None:
         group=os.environ.get("WANDB_GROUP", "opsd-native-full-v2"),
         job_type="evaluation",
         mode="online",
-        tags=["opsd", "full-matrix", "five-benchmark", f"steps-{step}"],
+        tags=[
+            "opsd",
+            "full-matrix",
+            "five-benchmark",
+            f"steps-{step}",
+            *(["pragmatic-parity-waiver", BACKBONE_LABEL] if pragmatic_waiver else []),
+        ],
         config={
             "source_revision": source_revision,
             "checkpoint": str(checkpoint),
             "training_step": step,
+            "pragmatic_parity_waiver": pragmatic_waiver,
+            "parity_gate_remains_failed": pragmatic_waiver,
+            "backbone_label": BACKBONE_LABEL if pragmatic_waiver else None,
             "conditions": [
                 "cot-off__cp-off",
                 "cot-off__cp-on",
@@ -96,6 +112,9 @@ def main() -> None:
         "source_revision": source_revision,
         "training_step": step,
         "tasks": list(tasks),
+        "pragmatic_parity_waiver": pragmatic_waiver,
+        "parity_gate_remains_failed": pragmatic_waiver,
+        "backbone_label": BACKBONE_LABEL if pragmatic_waiver else None,
     }
     target = out_dir / "wandb-publication.json"
     temporary = out_dir / f".wandb-publication.{os.getpid()}.tmp"
