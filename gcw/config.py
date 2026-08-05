@@ -414,7 +414,10 @@ class DistillationConfig:
     teacher_thinking: bool = True
     student_thinking: bool = False
     max_teacher_reasoning_tokens: int = 1024
+    max_teacher_completion_tokens: int = 2048
     max_response_tokens: int = 1024
+    teacher_trajectory_mode: Literal["reasoning_only", "native_full"] = "reasoning_only"
+    visible_trajectory_mode: Literal["student", "both"] = "student"
     temperature: float = 1.1
     top_p: float = 1.0
     top_k: int = 0
@@ -443,6 +446,16 @@ class DistillationConfig:
             raise ValueError("cot_distillation requires a thinking teacher and thinking-off student")
         if self.max_teacher_reasoning_tokens <= 0 or self.max_response_tokens <= 0:
             raise ValueError("distillation token limits must be positive")
+        if self.max_teacher_completion_tokens <= 0:
+            raise ValueError("distillation teacher completion token limit must be positive")
+        if self.teacher_trajectory_mode not in {"reasoning_only", "native_full"}:
+            raise ValueError("teacher_trajectory_mode must be 'reasoning_only' or 'native_full'")
+        if self.visible_trajectory_mode not in {"student", "both"}:
+            raise ValueError("visible_trajectory_mode must be student or both")
+        if self.teacher_trajectory_mode == "native_full" and self.close_reasoning_at_eos:
+            raise ValueError("native_full requires close_reasoning_at_eos=false")
+        if self.teacher_trajectory_mode != "native_full" and self.visible_trajectory_mode != "student":
+            raise ValueError("teacher or both visible trajectories require native_full teacher mode")
         if self.temperature <= 0:
             raise ValueError("distillation temperature must be positive")
         if not 0 < self.top_p <= 1:

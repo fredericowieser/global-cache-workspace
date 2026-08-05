@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from gcw.distill.teacher import NativeTeacherTrajectory
+
 
 @dataclass(frozen=True)
 class TeacherTraceIndexEntry:
@@ -39,6 +41,71 @@ class TeacherTraceStore:
             payload = _parse_payload(handle.readline(), source=f"source_index={source_index}")
         return _reasoning_ids(payload, source=f"source_index={source_index}")
 
+    def get_native_trajectory(
+        self, *, source_index: int, prompt: str
+    ) -> NativeTeacherTrajectory | None:
+        entry = self._index.get(source_index)
+        if entry is None:
+            return None
+        prompt_hash = _prompt_hash(prompt)
+        if entry.prompt_sha256 != prompt_hash:
+            raise ValueError(f"teacher trace prompt hash mismatch for source_index={source_index}")
+        with self.path.open("rb") as handle:
+            handle.seek(entry.byte_offset)
+            payload = _parse_payload(handle.readline(), source=f"source_index={source_index}")
+        reasoning_ids = _reasoning_ids(payload, source=f"source_index={source_index}")
+        visible_ids = _token_tuple(
+            payload, "visible_response_ids", source=f"source_index={source_index}"
+        )
+        full_ids = _token_tuple(
+            payload, "full_completion_ids", source=f"source_index={source_index}"
+        )
+        if reasoning_ids + visible_ids != full_ids:
+            raise ValueError(f"invalid native teacher trajectory for source_index={source_index}")
+        return NativeTeacherTrajectory(reasoning_ids, visible_ids, full_ids)
+
+    def put_native_trajectory(
+        self,
+        *,
+        source_index: int,
+        prompt: str,
+        reasoning_ids: tuple[int, ...],
+        visible_response_ids: tuple[int, ...],
+        full_completion_ids: tuple[int, ...],
+    ) -> None:
+        if source_index < 0:
+            raise ValueError("source_index must be non-negative")
+        _validate_reasoning_ids(reasoning_ids, source=f"source_index={source_index}")
+        _validate_token_ids(
+            visible_response_ids,
+            field="visible_response_ids",
+            source=f"source_index={source_index}",
+        )
+        if reasoning_ids + visible_response_ids != full_completion_ids:
+            raise ValueError(f"invalid native teacher trajectory for source_index={source_index}")
+        prompt_hash = _prompt_hash(prompt)
+        existing = self._index.get(source_index)
+        if existing is not None:
+            cached = self.get_native_trajectory(source_index=source_index, prompt=prompt)
+            expected = NativeTeacherTrajectory(
+                reasoning_ids, visible_response_ids, full_completion_ids
+            )
+            if existing.prompt_sha256 != prompt_hash or cached != expected:
+                raise ValueError(f"conflicting teacher trace for source_index={source_index}")
+            return
+        self._append(
+            source_index=source_index,
+            prompt_hash=prompt_hash,
+            payload={
+                "fingerprint": self.fingerprint,
+                "source_index": source_index,
+                "prompt_sha256": prompt_hash,
+                "reasoning_ids": list(reasoning_ids),
+                "visible_response_ids": list(visible_response_ids),
+                "full_completion_ids": list(full_completion_ids),
+            },
+        )
+
     def put(self, *, source_index: int, prompt: str, reasoning_ids: tuple[int, ...]) -> None:
         if source_index < 0:
             raise ValueError("source_index must be non-negative")
@@ -50,13 +117,21 @@ class TeacherTraceStore:
                 raise ValueError(f"conflicting teacher trace for source_index={source_index}")
             return
 
+        self._append(
+            source_index=source_index,
+            prompt_hash=prompt_hash,
+            payload={
+                "fingerprint": self.fingerprint,
+                "source_index": source_index,
+                "prompt_sha256": prompt_hash,
+                "reasoning_ids": list(reasoning_ids),
+            },
+        )
+
+    def _append(
+        self, *, source_index: int, prompt_hash: str, payload: dict[str, Any]
+    ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "fingerprint": self.fingerprint,
-            "source_index": source_index,
-            "prompt_sha256": prompt_hash,
-            "reasoning_ids": list(reasoning_ids),
-        }
         encoded = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
         with self.path.open("ab") as handle:
             byte_offset = handle.tell()
@@ -129,9 +204,22 @@ def _reasoning_ids(payload: dict[str, Any], *, source: str) -> tuple[int, ...]:
     return reasoning_ids
 
 
+def _token_tuple(payload: dict[str, Any], field: str, *, source: str) -> tuple[int, ...]:
+    try:
+        token_ids = tuple(int(token_id) for token_id in payload[field])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"invalid teacher trace {source}") from exc
+    _validate_token_ids(token_ids, field=field, source=source)
+    return token_ids
+
+
+def _validate_token_ids(token_ids: tuple[int, ...], *, field: str, source: str) -> None:
+    if not token_ids or any(token_id < 0 for token_id in token_ids):
+        raise ValueError(f"invalid teacher trace {field} for {source}")
+
+
 def _validate_reasoning_ids(reasoning_ids: tuple[int, ...], *, source: str) -> None:
-    if not reasoning_ids or any(token_id < 0 for token_id in reasoning_ids):
-        raise ValueError(f"invalid teacher trace reasoning_ids for {source}")
+    _validate_token_ids(reasoning_ids, field="reasoning_ids", source=source)
 
 
 def _prompt_hash(prompt: str) -> str:

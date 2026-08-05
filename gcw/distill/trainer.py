@@ -19,10 +19,19 @@ from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_check
 from gcw.config import DistillationConfig, ModelConfig, TrainConfig, to_dict
 from gcw.data.tokenizers import TransformersTokenizer, get_tokenizer
 from gcw.distill.data import PromptRecord, iter_openmath_prompts
-from gcw.distill.pipeline import DistillationExample, distillation_example_loss
+from gcw.distill.pipeline import (
+    DistillationExample,
+    DistillationLossResult,
+    distillation_example_loss,
+)
 from gcw.distill.prompt import format_chat_prompt, format_teacher_prompt
 from gcw.distill.session import BGTDecodeSession
-from gcw.distill.teacher import sample_backbone_completion, split_teacher_reasoning
+from gcw.distill.teacher import (
+    NativeTeacherTrajectory,
+    parse_native_teacher_trajectory,
+    sample_backbone_completion,
+    split_teacher_reasoning,
+)
 from gcw.distill.traces import TeacherTraceStore
 from gcw.models import build_model
 from gcw.models.bgt import BGT
@@ -186,18 +195,13 @@ def train_distillation(config: TrainConfig) -> None:
                     else:
                         example = locked_example
                         trace_cached = True
-                    with _autocast_context(config, device):
-                        result = distillation_example_loss(
-                            model,
-                            example,
-                            decode_session,
-                            temperature=distill.temperature,
-                            token_clip=distill.token_clip,
-                            sequence_chunk_size=distill.kl_sequence_chunk_size,
-                        )
-                    if not bool(torch.isfinite(result.loss)):
-                        raise FloatingPointError("distillation loss is non-finite")
-                    result.loss.backward()
+                    result = _backward_distillation_example(
+                        model,
+                        example,
+                        decode_session,
+                        config,
+                        device,
+                    )
                     if valid == 0 and any(parameter.grad is not None for parameter in model.backbone.parameters()):
                         raise RuntimeError("frozen teacher/student backbone accumulated gradients")
                     accumulated += 1
@@ -225,10 +229,22 @@ def train_distillation(config: TrainConfig) -> None:
                             "student_entropy": float(result.student_entropy.item()),
                             "teacher_entropy": float(result.teacher_entropy.item()),
                             "teacher_reasoning_tokens": len(example.teacher_reasoning_ids),
+                            "teacher_visible_response_tokens": len(
+                                example.teacher_response_ids or ()
+                            ),
+                            "visible_trajectory_mode": distill.visible_trajectory_mode,
                             "answer_tokens": result.answer_tokens,
+                            "student_trajectory_tokens": result.student_trajectory_tokens,
+                            "teacher_trajectory_tokens": result.teacher_trajectory_tokens,
                             "cache_events": list(result.event_cache_lengths),
+                            "teacher_trajectory_cache_events": list(
+                                result.teacher_trajectory_event_cache_lengths
+                            ),
                             "cache_relative_l2_displacements": list(
                                 result.event_relative_l2_displacements
+                            ),
+                            "teacher_trajectory_cache_relative_l2_displacements": list(
+                                result.teacher_trajectory_event_relative_l2_displacements
                             ),
                             "teacher_trace_cached": trace_cached,
                             "grad_norm": grad_norm,
@@ -494,6 +510,90 @@ def _prepare_locked_examples(
     }
 
 
+def _backward_distillation_example(
+    model: BGT,
+    example: DistillationExample,
+    decode_session: BGTDecodeSession,
+    config: TrainConfig,
+    device: torch.device,
+) -> DistillationLossResult:
+    distill = config.distillation
+    if distill is None:
+        raise ValueError("distillation training requires distillation configuration")
+    modes = (
+        ("student", "teacher")
+        if distill.visible_trajectory_mode == "both"
+        else (distill.visible_trajectory_mode,)
+    )
+    detached_results: list[DistillationLossResult] = []
+    for mode in modes:
+        with _autocast_context(config, device):
+            result = distillation_example_loss(
+                model,
+                example,
+                decode_session,
+                temperature=distill.temperature,
+                token_clip=distill.token_clip,
+                sequence_chunk_size=distill.kl_sequence_chunk_size,
+                visible_trajectory_mode=mode,
+            )
+        if not bool(torch.isfinite(result.loss)):
+            raise FloatingPointError(f"{mode} trajectory distillation loss is non-finite")
+        (result.loss / len(modes)).backward()
+        detached_results.append(_detach_loss_result(result))
+        del result
+    if len(detached_results) == 1:
+        return detached_results[0]
+    return _combine_serial_trajectory_results(*detached_results)
+
+
+def _detach_loss_result(result: DistillationLossResult) -> DistillationLossResult:
+    return DistillationLossResult(
+        loss=result.loss.detach(),
+        unclipped_kl=result.unclipped_kl.detach(),
+        clipping_fraction=result.clipping_fraction.detach(),
+        student_entropy=result.student_entropy.detach(),
+        teacher_entropy=result.teacher_entropy.detach(),
+        answer_tokens=result.answer_tokens,
+        student_trajectory_tokens=result.student_trajectory_tokens,
+        teacher_trajectory_tokens=result.teacher_trajectory_tokens,
+        event_cache_lengths=result.event_cache_lengths,
+        event_relative_l2_displacements=result.event_relative_l2_displacements,
+        teacher_trajectory_event_cache_lengths=(
+            result.teacher_trajectory_event_cache_lengths
+        ),
+        teacher_trajectory_event_relative_l2_displacements=(
+            result.teacher_trajectory_event_relative_l2_displacements
+        ),
+    )
+
+
+def _combine_serial_trajectory_results(
+    student: DistillationLossResult, teacher: DistillationLossResult
+) -> DistillationLossResult:
+    def mean_scalars(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        return torch.stack((left, right)).mean()
+
+    return DistillationLossResult(
+        loss=mean_scalars(student.loss, teacher.loss),
+        unclipped_kl=mean_scalars(student.unclipped_kl, teacher.unclipped_kl),
+        clipping_fraction=mean_scalars(
+            student.clipping_fraction, teacher.clipping_fraction
+        ),
+        student_entropy=mean_scalars(student.student_entropy, teacher.student_entropy),
+        teacher_entropy=mean_scalars(student.teacher_entropy, teacher.teacher_entropy),
+        answer_tokens=student.answer_tokens + teacher.answer_tokens,
+        student_trajectory_tokens=student.student_trajectory_tokens,
+        teacher_trajectory_tokens=teacher.teacher_trajectory_tokens,
+        event_cache_lengths=student.event_cache_lengths,
+        event_relative_l2_displacements=student.event_relative_l2_displacements,
+        teacher_trajectory_event_cache_lengths=teacher.event_cache_lengths,
+        teacher_trajectory_event_relative_l2_displacements=(
+            teacher.event_relative_l2_displacements
+        ),
+    )
+
+
 @torch.no_grad()
 def _evaluate_locked_examples(
     model: BGT,
@@ -505,10 +605,11 @@ def _evaluate_locked_examples(
     distill = config.distillation
     if distill is None:
         raise ValueError("locked-example evaluation requires distillation configuration")
-    weighted_loss = 0.0
-    weighted_kl = 0.0
+    aggregate_loss = 0.0
+    aggregate_kl = 0.0
     answer_tokens = 0
-    displacements: list[float] = []
+    student_displacements: list[float] = []
+    teacher_displacements: list[float] = []
     for example in examples:
         with _autocast_context(config, device):
             result = distillation_example_loss(
@@ -518,24 +619,58 @@ def _evaluate_locked_examples(
                 temperature=distill.temperature,
                 token_clip=distill.token_clip,
                 sequence_chunk_size=distill.kl_sequence_chunk_size,
+                visible_trajectory_mode=distill.visible_trajectory_mode,
             )
-        weighted_loss += float(result.loss.detach().float().item()) * result.answer_tokens
-        weighted_kl += float(result.unclipped_kl.detach().float().item()) * result.answer_tokens
+        weight = 1 if distill.visible_trajectory_mode == "both" else result.answer_tokens
+        aggregate_loss += float(result.loss.detach().float().item()) * weight
+        aggregate_kl += float(result.unclipped_kl.detach().float().item()) * weight
         answer_tokens += result.answer_tokens
-        displacements.extend(result.event_relative_l2_displacements)
+        student_displacements.extend(result.event_relative_l2_displacements)
+        teacher_displacements.extend(
+            result.teacher_trajectory_event_relative_l2_displacements
+        )
     if answer_tokens == 0:
         raise RuntimeError("locked-example evaluation produced no answer tokens")
-    return {
+    metrics: dict[str, Any] = {
         "examples": len(examples),
         "answer_tokens": answer_tokens,
-        "token_weighted_loss": weighted_loss / answer_tokens,
-        "token_weighted_unclipped_kl": weighted_kl / answer_tokens,
         "processor_gate": _processor_gate(model),
-        "cache_events": len(displacements),
-        "mean_cache_relative_l2_displacement": (
-            sum(displacements) / len(displacements) if displacements else 0.0
-        ),
     }
+    if distill.visible_trajectory_mode == "both":
+        metrics.update(
+            {
+                "objective_aggregation": "equal_example_mean_of_equal_trajectory_means",
+                "objective_mean_loss": aggregate_loss / len(examples),
+                "objective_mean_unclipped_kl": aggregate_kl / len(examples),
+                "student_cache_events": len(student_displacements),
+                "teacher_cache_events": len(teacher_displacements),
+                "mean_student_cache_relative_l2_displacement": (
+                    sum(student_displacements) / len(student_displacements)
+                    if student_displacements
+                    else 0.0
+                ),
+                "mean_teacher_cache_relative_l2_displacement": (
+                    sum(teacher_displacements) / len(teacher_displacements)
+                    if teacher_displacements
+                    else 0.0
+                ),
+            }
+        )
+    else:
+        metrics.update(
+            {
+                "objective_aggregation": "token_weighted_visible_positions",
+                "token_weighted_loss": aggregate_loss / answer_tokens,
+                "token_weighted_unclipped_kl": aggregate_kl / answer_tokens,
+                "cache_events": len(student_displacements),
+                "mean_cache_relative_l2_displacement": (
+                    sum(student_displacements) / len(student_displacements)
+                    if student_displacements
+                    else 0.0
+                ),
+            }
+        )
+    return metrics
 
 
 @torch.no_grad()
@@ -577,7 +712,7 @@ def _locked_examples_payload(
     examples: list[tuple[PromptRecord, DistillationExample]],
 ) -> dict[str, Any]:
     return {
-        "schema": "gcw.opsd-overfit-locked-examples.v1",
+        "schema": "gcw.opsd-overfit-locked-examples.v2",
         "examples": [
             {
                 "source_index": record.source_index,
@@ -587,6 +722,11 @@ def _locked_examples_payload(
                 "teacher_base_ids": list(example.teacher_prompt.base_ids),
                 "teacher_trigger_ids": list(example.teacher_prompt.trigger_ids),
                 "teacher_reasoning_ids": list(example.teacher_reasoning_ids),
+                "teacher_response_ids": (
+                    list(example.teacher_response_ids)
+                    if example.teacher_response_ids is not None
+                    else None
+                ),
                 "response_ids": list(example.response_ids),
             }
             for record, example in examples
@@ -615,39 +755,102 @@ def _build_example(
         )
     except ValueError as exc:
         raise InvalidDistillationExample(str(exc)) from exc
-    reasoning_ids = trace_store.get(source_index=record.source_index, prompt=record.prompt)
-    trace_cached = reasoning_ids is not None
-    if reasoning_ids is not None and any(token_id >= tokenizer.get_vocab_size() for token_id in reasoning_ids):
-        raise ValueError(f"cached teacher trace contains out-of-vocabulary IDs for source_index={record.source_index}")
-    if reasoning_ids is None:
-        teacher_generator = _generator(device, seed + 2 * record.source_index)
-        try:
-            generated = sample_backbone_completion(
-                model.backbone,
-                teacher_prompt.full_ids,
-                max_new_tokens=distill.max_teacher_reasoning_tokens,
-                eos_token_id=tokenizer.eot_id,
-                stop_ids=close_ids,
-                temperature=distill.temperature,
-                top_p=distill.top_p,
-                top_k=distill.top_k,
-                valid_vocab_size=tokenizer.get_vocab_size(),
-                generator=teacher_generator,
+    teacher_response_ids: tuple[int, ...] | None = None
+    open_ids = tuple(tokenizer.encode(distill.reasoning_open_text))
+    if distill.teacher_trajectory_mode == "native_full":
+        native = trace_store.get_native_trajectory(
+            source_index=record.source_index, prompt=record.prompt
+        )
+        trace_cached = native is not None
+        if native is None:
+            teacher_generator = _generator(device, seed + 2 * record.source_index)
+            try:
+                generated = sample_backbone_completion(
+                    model.backbone,
+                    teacher_prompt.full_ids,
+                    max_new_tokens=distill.max_teacher_completion_tokens,
+                    eos_token_id=tokenizer.eot_id,
+                    stop_ids=None,
+                    temperature=distill.temperature,
+                    top_p=distill.top_p,
+                    top_k=distill.top_k,
+                    valid_vocab_size=tokenizer.get_vocab_size(),
+                    generator=teacher_generator,
+                )
+                native = parse_native_teacher_trajectory(
+                    generated,
+                    teacher_trigger_ids=teacher_prompt.trigger_ids,
+                    open_ids=open_ids,
+                    close_ids=close_ids,
+                    eos_token_id=tokenizer.eot_id,
+                )
+            except ValueError as exc:
+                raise InvalidDistillationExample(str(exc)) from exc
+            _validate_native_trajectory_caps(native, distill)
+            trace_store.put_native_trajectory(
+                source_index=record.source_index,
+                prompt=record.prompt,
+                reasoning_ids=native.reasoning_ids,
+                visible_response_ids=native.visible_response_ids,
+                full_completion_ids=native.full_completion_ids,
             )
-            reasoning_ids = split_teacher_reasoning(
-                generated,
+        else:
+            native = parse_native_teacher_trajectory(
+                native.full_completion_ids,
+                teacher_trigger_ids=teacher_prompt.trigger_ids,
+                open_ids=open_ids,
                 close_ids=close_ids,
                 eos_token_id=tokenizer.eot_id,
-                close_at_eos=distill.close_reasoning_at_eos,
             )
-            if len(reasoning_ids) > distill.max_teacher_reasoning_tokens:
-                raise ValueError("closed teacher reasoning exceeds max_teacher_reasoning_tokens")
-        except ValueError as exc:
-            raise InvalidDistillationExample(str(exc)) from exc
-        trace_store.put(
-            source_index=record.source_index,
-            prompt=record.prompt,
-            reasoning_ids=reasoning_ids,
+            _validate_native_trajectory_caps(native, distill)
+        reasoning_ids = native.reasoning_ids
+        teacher_response_ids = native.visible_response_ids
+    else:
+        cached_reasoning = trace_store.get(
+            source_index=record.source_index, prompt=record.prompt
+        )
+        trace_cached = cached_reasoning is not None
+        if cached_reasoning is None:
+            teacher_generator = _generator(device, seed + 2 * record.source_index)
+            try:
+                generated = sample_backbone_completion(
+                    model.backbone,
+                    teacher_prompt.full_ids,
+                    max_new_tokens=distill.max_teacher_reasoning_tokens,
+                    eos_token_id=tokenizer.eot_id,
+                    stop_ids=close_ids,
+                    temperature=distill.temperature,
+                    top_p=distill.top_p,
+                    top_k=distill.top_k,
+                    valid_vocab_size=tokenizer.get_vocab_size(),
+                    generator=teacher_generator,
+                )
+                reasoning_ids = split_teacher_reasoning(
+                    generated,
+                    close_ids=close_ids,
+                    eos_token_id=tokenizer.eot_id,
+                    close_at_eos=distill.close_reasoning_at_eos,
+                )
+                if len(reasoning_ids) > distill.max_teacher_reasoning_tokens:
+                    raise ValueError("closed teacher reasoning exceeds max_teacher_reasoning_tokens")
+            except ValueError as exc:
+                raise InvalidDistillationExample(str(exc)) from exc
+            trace_store.put(
+                source_index=record.source_index,
+                prompt=record.prompt,
+                reasoning_ids=reasoning_ids,
+            )
+        else:
+            reasoning_ids = cached_reasoning
+    if any(token_id >= tokenizer.get_vocab_size() for token_id in reasoning_ids):
+        raise ValueError(
+            f"cached teacher trace contains out-of-vocabulary IDs for source_index={record.source_index}"
+        )
+    if teacher_response_ids is not None and any(
+        token_id >= tokenizer.get_vocab_size() for token_id in teacher_response_ids
+    ):
+        raise ValueError(
+            f"cached teacher visible response contains out-of-vocabulary IDs for source_index={record.source_index}"
         )
 
     student_generator = _generator(device, seed + 2 * record.source_index + 1)
@@ -663,18 +866,37 @@ def _build_example(
         )
     except ValueError as exc:
         raise InvalidDistillationExample(str(exc)) from exc
-    teacher_scoring_tokens = len(teacher_prompt.full_ids) + len(reasoning_ids) + len(rollout.response_ids)
-    if teacher_scoring_tokens > model.config.sequence_len:
+    if (
+        distill.teacher_trajectory_mode == "native_full"
+        and rollout.response_ids[-1] != tokenizer.eot_id
+    ):
+        raise InvalidDistillationExample("native full student response must end with EOT")
+    if distill.teacher_trajectory_mode == "native_full" and (
+        _contains_token_sequence(rollout.response_ids, open_ids)
+        or _contains_token_sequence(rollout.response_ids, close_ids)
+    ):
         raise InvalidDistillationExample(
-            f"teacher context and student response require {teacher_scoring_tokens} tokens but model sequence_len is "
-            f"{model.config.sequence_len}"
+            "native full student response contains thinking delimiters"
         )
+    for trajectory_name, response_ids in (
+        ("student", rollout.response_ids),
+        ("teacher", teacher_response_ids),
+    ):
+        if response_ids is None:
+            continue
+        teacher_scoring_tokens = len(teacher_prompt.full_ids) + len(reasoning_ids) + len(response_ids)
+        if teacher_scoring_tokens > model.config.sequence_len:
+            raise InvalidDistillationExample(
+                f"teacher context and {trajectory_name} response require {teacher_scoring_tokens} tokens but "
+                f"model sequence_len is {model.config.sequence_len}"
+            )
     return (
         DistillationExample(
             student_prompt=student_prompt,
             teacher_prompt=teacher_prompt,
             teacher_reasoning_ids=reasoning_ids,
             response_ids=rollout.response_ids,
+            teacher_response_ids=teacher_response_ids,
         ),
         trace_cached,
     )
@@ -741,7 +963,7 @@ def _teacher_fingerprint(
         while chunk := handle.read(8 * 1024 * 1024):
             digest.update(chunk)
     payload = {
-        "schema": "gcw.teacher-trace.v4",
+        "schema": "gcw.teacher-trace.v5",
         "checkpoint_sha256": digest.hexdigest(),
         "model": to_dict(config.model),
         "tokenizer": config.data.tokenizer,
@@ -753,6 +975,8 @@ def _teacher_fingerprint(
             "top_p": distill.top_p,
             "top_k": distill.top_k,
             "max_teacher_reasoning_tokens": distill.max_teacher_reasoning_tokens,
+            "max_teacher_completion_tokens": distill.max_teacher_completion_tokens,
+            "teacher_trajectory_mode": distill.teacher_trajectory_mode,
             "eos_token_id": tokenizer.eot_id,
             "reasoning_open_text": distill.reasoning_open_text,
             "open_ids": list(open_ids),
@@ -763,6 +987,28 @@ def _teacher_fingerprint(
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_native_trajectory_caps(
+    trajectory: NativeTeacherTrajectory, distill: DistillationConfig
+) -> None:
+    if len(trajectory.reasoning_ids) > distill.max_teacher_reasoning_tokens:
+        raise InvalidDistillationExample(
+            "native teacher reasoning exceeds max_teacher_reasoning_tokens"
+        )
+    if len(trajectory.full_completion_ids) > distill.max_teacher_completion_tokens:
+        raise InvalidDistillationExample(
+            "native teacher completion exceeds max_teacher_completion_tokens"
+        )
+
+
+def _contains_token_sequence(
+    sequence: tuple[int, ...], pattern: tuple[int, ...]
+) -> bool:
+    return any(
+        sequence[start : start + len(pattern)] == pattern
+        for start in range(len(sequence) - len(pattern) + 1)
+    )
 
 
 def _generator(device: torch.device, seed: int) -> torch.Generator:

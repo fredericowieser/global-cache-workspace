@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import weakref
+
 import pytest
 import torch
 import torch.nn.functional as F
 
 from gcw.checkpoint import load_checkpoint
 from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, ModelConfig, TrainConfig, load_train_config
+from gcw.distill import pipeline as distill_pipeline
 from gcw.distill import trainer as distill_trainer
 from gcw.distill.cache import truncate_last_cache_token
 from gcw.distill.data import iter_openmath_prompts
@@ -13,7 +16,12 @@ from gcw.distill.objective import exact_forward_kl
 from gcw.distill.pipeline import DistillationExample, distillation_example_loss
 from gcw.distill.prompt import ChatPrompt, format_chat_prompt, format_teacher_prompt
 from gcw.distill.session import BGTDecodeSession, sample_next_token
-from gcw.distill.teacher import sample_backbone_completion, split_teacher_reasoning, teacher_answer_logits
+from gcw.distill.teacher import (
+    parse_native_teacher_trajectory,
+    sample_backbone_completion,
+    split_teacher_reasoning,
+    teacher_answer_logits,
+)
 from gcw.distill.traces import TeacherTraceStore
 from safetensors.torch import save_file
 from gcw.distill.schedule import processor_event_positions
@@ -96,6 +104,50 @@ def test_distillation_uses_exact_forward_kl_and_rejects_legacy_clipping():
 
     with pytest.raises(ValueError, match="signed per-vocabulary KL clipping"):
         DistillationConfig(token_clip=0.05)
+
+
+def test_native_full_teacher_protocol_is_explicit_and_uses_both_visible_trajectories():
+    config = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        max_teacher_completion_tokens=2048,
+        close_reasoning_at_eos=False,
+    )
+
+    assert config.teacher_trajectory_mode == "native_full"
+    assert config.visible_trajectory_mode == "both"
+    assert config.max_teacher_completion_tokens == 2048
+
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"teacher_trajectory_mode": "native_full"}, "close_reasoning_at_eos"),
+        ({"visible_trajectory_mode": "both"}, "native_full"),
+        (
+            {
+                "teacher_trajectory_mode": "native_full",
+                "visible_trajectory_mode": "teacher",
+                "close_reasoning_at_eos": False,
+            },
+            "student or both",
+        ),
+        (
+            {
+                "teacher_trajectory_mode": "native_full",
+                "visible_trajectory_mode": "both",
+                "max_teacher_completion_tokens": 0,
+                "close_reasoning_at_eos": False,
+            },
+            "completion token",
+        ),
+    ],
+)
+def test_native_full_teacher_protocol_rejects_ambiguous_configs(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        DistillationConfig(**kwargs)
+
 
 
 def test_distillation_repeated_epochs_require_explicit_overfit_diagnostic():
@@ -185,6 +237,59 @@ def test_format_chat_prompt_keeps_thinking_mode_in_trigger():
     prompt = format_chat_prompt(FakeChatTokenizer(), "2+2?", enable_thinking=True)
 
     assert prompt.trigger_ids == (20, 21)
+
+
+def test_native_teacher_trajectory_compacts_only_visible_tokens():
+    trajectory = parse_native_teacher_trajectory(
+        generated_ids=(40, 41, 22, 23, 50, 51, 0),
+        teacher_trigger_ids=(20, 21),
+        open_ids=(20, 21),
+        close_ids=(22, 23),
+        eos_token_id=0,
+    )
+
+    assert trajectory.reasoning_ids == (40, 41, 22, 23)
+    assert trajectory.visible_response_ids == (50, 51, 0)
+    assert trajectory.full_completion_ids == (40, 41, 22, 23, 50, 51, 0)
+
+
+
+def test_native_teacher_trajectory_rejects_budget_exhaustion_without_eot():
+    with pytest.raises(ValueError, match="end with EOT"):
+        parse_native_teacher_trajectory(
+            generated_ids=(40, 41, 22, 23, 50, 51),
+            teacher_trigger_ids=(20, 21),
+            open_ids=(20, 21),
+            close_ids=(22, 23),
+            eos_token_id=0,
+        )
+
+
+
+@pytest.mark.parametrize(
+    ("generated_ids", "teacher_trigger_ids", "message"),
+    [
+        ((40, 22, 23, 50, 0), (30, 31), "trigger"),
+        ((40, 22, 23, 50, 0), (20, 21, 20, 21), "exactly one thinking-open"),
+        ((20, 21, 40, 22, 23, 50, 0), (20, 21), "repeats"),
+        ((40, 22, 23, 50, 22, 23, 0), (20, 21), "exactly one"),
+        ((22, 23, 50, 0), (20, 21), "non-empty reasoning"),
+        ((40, 22, 23, 0), (20, 21), "visible answer"),
+        ((40, 0, 22, 23, 50, 0), (20, 21), "embedded EOT"),
+    ],
+)
+def test_native_teacher_trajectory_rejects_malformed_thinking_regions(
+    generated_ids, teacher_trigger_ids, message
+):
+    with pytest.raises(ValueError, match=message):
+        parse_native_teacher_trajectory(
+            generated_ids=generated_ids,
+            teacher_trigger_ids=teacher_trigger_ids,
+            open_ids=(20, 21),
+            close_ids=(22, 23),
+            eos_token_id=0,
+        )
+
 
 
 def test_teacher_prompt_does_not_duplicate_template_thinking_open():
@@ -499,6 +604,119 @@ def test_transformers_tokenizer_exposes_thinking_chat_template():
 
 
 
+def test_distillation_both_visible_trajectories_average_shared_prefix_losses():
+    model = _tiny_bgt()
+    model.backbone.requires_grad_(False)
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1, 2, 3), trigger_ids=(4,)),
+        teacher_prompt=ChatPrompt(base_ids=(1, 2, 3), trigger_ids=(8, 9)),
+        teacher_reasoning_ids=(10, 11, 12),
+        response_ids=(5, 6, 7),
+        teacher_response_ids=(13, 14),
+    )
+    session = BGTDecodeSession(model, process_every=2)
+
+    student = distillation_example_loss(
+        model,
+        example,
+        session,
+        temperature=1.1,
+        token_clip=None,
+        visible_trajectory_mode="student",
+    )
+    teacher = distillation_example_loss(
+        model,
+        example,
+        session,
+        temperature=1.1,
+        token_clip=None,
+        visible_trajectory_mode="teacher",
+    )
+    with pytest.raises(RuntimeError, match="serial"):
+        distillation_example_loss(
+            model,
+            example,
+            session,
+            temperature=1.1,
+            token_clip=None,
+            visible_trajectory_mode="both",
+        )
+    with torch.no_grad():
+        both = distillation_example_loss(
+            model,
+            example,
+            session,
+            temperature=1.1,
+            token_clip=None,
+            visible_trajectory_mode="both",
+        )
+
+    torch.testing.assert_close(both.loss, (student.loss + teacher.loss) / 2)
+    assert both.student_trajectory_tokens == 3
+    assert both.teacher_trajectory_tokens == 2
+    assert both.answer_tokens == 5
+
+
+
+def test_distillation_both_no_grad_releases_first_trajectory_logits(monkeypatch):
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+        teacher_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(8, 9)),
+        teacher_reasoning_ids=(40, 10, 11),
+        response_ids=(52, 53, 62),
+        teacher_response_ids=(50, 62),
+    )
+    state = {
+        "student_calls": 0,
+        "teacher_calls": 0,
+        "first_student": None,
+        "first_teacher": None,
+    }
+
+    class Replay:
+        def __init__(self, logits):
+            self.logits = logits
+            self.event_cache_lengths = ()
+            self.event_relative_l2_displacements = ()
+
+    class Session:
+        def replay(self, prompt, response_ids):
+            del prompt
+            if state["student_calls"] == 1:
+                assert state["first_student"]() is None
+            logits = torch.randn(1, len(response_ids), 8)
+            if state["student_calls"] == 0:
+                state["first_student"] = weakref.ref(logits)
+            state["student_calls"] += 1
+            return Replay(logits)
+
+    def fake_teacher(backbone, context_ids, response_ids):
+        del backbone, context_ids
+        if state["teacher_calls"] == 1:
+            assert state["first_teacher"]() is None
+        logits = torch.randn(1, len(response_ids), 8)
+        if state["teacher_calls"] == 0:
+            state["first_teacher"] = weakref.ref(logits)
+        state["teacher_calls"] += 1
+        return logits
+
+    monkeypatch.setattr(distill_pipeline, "teacher_answer_logits", fake_teacher)
+    with torch.no_grad():
+        result = distillation_example_loss(
+            _tiny_bgt(),
+            example,
+            Session(),
+            temperature=1.1,
+            token_clip=None,
+            visible_trajectory_mode="both",
+        )
+
+    assert result.answer_tokens == 5
+    assert state["student_calls"] == 2
+    assert state["teacher_calls"] == 2
+
+
+
 def test_distillation_example_loss_uses_teacher_cot_and_trains_only_bgt():
     model = _tiny_bgt()
     model.backbone.requires_grad_(False)
@@ -555,6 +773,27 @@ def test_teacher_sampling_honours_reasoning_stop_sequence():
 
 
 
+def test_teacher_trace_store_round_trips_native_full_trajectory(tmp_path):
+    path = tmp_path / "teacher-trajectories.jsonl"
+    store = TeacherTraceStore(path, fingerprint="teacher-native-v1")
+    store.put_native_trajectory(
+        source_index=7,
+        prompt="original",
+        reasoning_ids=(40, 22, 23),
+        visible_response_ids=(50, 51, 0),
+        full_completion_ids=(40, 22, 23, 50, 51, 0),
+    )
+
+    trajectory = TeacherTraceStore(path, fingerprint="teacher-native-v1").get_native_trajectory(
+        source_index=7, prompt="original"
+    )
+    assert trajectory is not None
+    assert trajectory.reasoning_ids == (40, 22, 23)
+    assert trajectory.visible_response_ids == (50, 51, 0)
+    assert trajectory.full_completion_ids == (40, 22, 23, 50, 51, 0)
+
+
+
 def test_teacher_trace_store_round_trips_and_rejects_prompt_drift(tmp_path):
     path = tmp_path / "teacher-traces.jsonl"
     store = TeacherTraceStore(path, fingerprint="teacher-v1")
@@ -589,6 +828,413 @@ class TrainingHFBackend:
     def encode(self, text, add_special_tokens=False):
         del text, add_special_tokens
         return [8, 9]
+
+
+class FixedRolloutSession:
+    def __init__(self, response_ids):
+        self.response_ids = response_ids
+
+    def rollout(self, *args, **kwargs):
+        del args, kwargs
+        return type("Rollout", (), {"response_ids": self.response_ids})()
+
+
+class NativeTrainingHFBackend(TrainingHFBackend):
+    def encode(self, text, add_special_tokens=False):
+        del add_special_tokens
+        if text == "<think>\n":
+            return [8, 9]
+        if text == "</think>\n\n":
+            return [10, 11]
+        raise AssertionError(text)
+
+
+def test_build_example_native_full_generates_through_eot_and_caches_visible_answer(
+    tmp_path, monkeypatch
+):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    calls = []
+
+    def fake_teacher(*args, **kwargs):
+        calls.append(kwargs)
+        return (40, 41, 10, 11, 50, 51, 62)
+
+    monkeypatch.setattr(distill_trainer, "sample_backbone_completion", fake_teacher)
+    distill = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        max_teacher_completion_tokens=7,
+        max_response_tokens=3,
+        top_k=1,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+    )
+    store = TeacherTraceStore(tmp_path / "native-trajectories.jsonl", fingerprint="native-v1")
+    record = distill_trainer.PromptRecord(source_index=0, prompt="solve this")
+    session = FixedRolloutSession((52, 53, 62))
+
+    example, cached = distill_trainer._build_example(
+        model,
+        tokenizer,
+        record,
+        distill,
+        store,
+        close_ids=(10, 11),
+        decode_session=session,
+        seed=24,
+        device=torch.device("cpu"),
+    )
+
+    assert cached is False
+    assert calls[0]["stop_ids"] is None
+    assert calls[0]["max_new_tokens"] == 7
+    assert example.teacher_reasoning_ids == (40, 41, 10, 11)
+    assert example.teacher_response_ids == (50, 51, 62)
+    persisted = store.get_native_trajectory(source_index=0, prompt="solve this")
+    assert persisted is not None
+    assert persisted.full_completion_ids == (40, 41, 10, 11, 50, 51, 62)
+
+
+
+def test_build_example_native_full_rejects_student_budget_exhaustion(tmp_path, monkeypatch):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    monkeypatch.setattr(
+        distill_trainer,
+        "sample_backbone_completion",
+        lambda *args, **kwargs: (40, 10, 11, 50, 62),
+    )
+    distill = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        max_teacher_completion_tokens=5,
+        max_response_tokens=3,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+    )
+
+    with pytest.raises(distill_trainer.InvalidDistillationExample, match="student.*EOT"):
+        distill_trainer._build_example(
+            model,
+            tokenizer,
+            distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+            distill,
+            TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1"),
+            close_ids=(10, 11),
+            decode_session=FixedRolloutSession((52, 53, 54)),
+            seed=24,
+            device=torch.device("cpu"),
+        )
+
+
+
+@pytest.mark.parametrize("response_ids", [(52, 8, 9, 53, 62), (52, 10, 11, 62)])
+def test_build_example_native_full_rejects_student_thinking_tokens(
+    tmp_path, monkeypatch, response_ids
+):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    monkeypatch.setattr(
+        distill_trainer,
+        "sample_backbone_completion",
+        lambda *args, **kwargs: (40, 10, 11, 50, 62),
+    )
+    distill = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        max_teacher_completion_tokens=5,
+        max_response_tokens=5,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+    )
+
+    with pytest.raises(distill_trainer.InvalidDistillationExample, match="student.*thinking"):
+        distill_trainer._build_example(
+            model,
+            tokenizer,
+            distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+            distill,
+            TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1"),
+            close_ids=(10, 11),
+            decode_session=FixedRolloutSession(response_ids),
+            seed=24,
+            device=torch.device("cpu"),
+        )
+
+
+
+def test_build_example_native_full_rejects_malformed_cached_trajectory(tmp_path):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    store = TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1")
+    store.put_native_trajectory(
+        source_index=0,
+        prompt="solve this",
+        reasoning_ids=(40,),
+        visible_response_ids=(50, 62),
+        full_completion_ids=(40, 50, 62),
+    )
+    distill = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        max_teacher_completion_tokens=5,
+        max_response_tokens=2,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+    )
+
+    with pytest.raises(ValueError, match="exactly one thinking-close"):
+        distill_trainer._build_example(
+            model,
+            tokenizer,
+            distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+            distill,
+            store,
+            close_ids=(10, 11),
+            decode_session=FixedRolloutSession((52, 62)),
+            seed=24,
+            device=torch.device("cpu"),
+        )
+
+
+
+@pytest.mark.parametrize(
+    ("max_reasoning", "max_completion", "message"),
+    [(4, 10, "reasoning"), (10, 6, "completion")],
+)
+def test_build_example_native_full_rechecks_cached_token_caps(
+    tmp_path, max_reasoning, max_completion, message
+):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    store = TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1")
+    store.put_native_trajectory(
+        source_index=0,
+        prompt="solve this",
+        reasoning_ids=(40, 41, 42, 10, 11),
+        visible_response_ids=(50, 62),
+        full_completion_ids=(40, 41, 42, 10, 11, 50, 62),
+    )
+    distill = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        max_teacher_reasoning_tokens=max_reasoning,
+        max_teacher_completion_tokens=max_completion,
+        max_response_tokens=2,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+    )
+
+    with pytest.raises(distill_trainer.InvalidDistillationExample, match=message):
+        distill_trainer._build_example(
+            model,
+            tokenizer,
+            distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+            distill,
+            store,
+            close_ids=(10, 11),
+            decode_session=FixedRolloutSession((52, 62)),
+            seed=24,
+            device=torch.device("cpu"),
+        )
+
+
+
+def test_locked_example_payload_retains_native_teacher_visible_response():
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+        teacher_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(8, 9)),
+        teacher_reasoning_ids=(40, 10, 11),
+        response_ids=(52, 62),
+        teacher_response_ids=(50, 62),
+    )
+
+    payload = distill_trainer._locked_examples_payload(
+        [(distill_trainer.PromptRecord(source_index=7, prompt="p"), example)]
+    )
+
+    assert payload["schema"] == "gcw.opsd-overfit-locked-examples.v2"
+    assert payload["examples"][0]["teacher_response_ids"] == [50, 62]
+
+
+
+def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatch):
+    source_model = _tiny_bgt()
+    checkpoint = tmp_path / "backbone"
+    checkpoint.mkdir()
+    save_file(
+        {
+            name: tensor.detach().clone()
+            for name, tensor in source_model.backbone.state_dict().items()
+        },
+        checkpoint / "model.safetensors",
+    )
+    data_path = tmp_path / "prompts.jsonl"
+    data_path.write_text('{"prompt":"solve this"}\n', encoding="utf-8")
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    monkeypatch.setattr(distill_trainer, "get_tokenizer", lambda _: tokenizer)
+    monkeypatch.setattr(
+        distill_trainer,
+        "sample_backbone_completion",
+        lambda *args, **kwargs: (40, 10, 11, 50, 62),
+    )
+    monkeypatch.setattr(
+        BGTDecodeSession,
+        "rollout",
+        lambda *args, **kwargs: type("Rollout", (), {"response_ids": (52, 62)})(),
+    )
+    modes = []
+
+    def fake_loss(model, example, session, **kwargs):
+        del example, session
+        mode = kwargs["visible_trajectory_mode"]
+        modes.append(mode)
+        loss = torch.stack(
+            [parameter.float().sum() for parameter in model.cache_processor.parameters()]
+        ).sum() * 1e-6
+        zero = torch.zeros((), dtype=torch.float32)
+        return type(
+            "Result",
+            (),
+            {
+                "loss": loss,
+                "unclipped_kl": loss.detach(),
+                "clipping_fraction": zero,
+                "student_entropy": zero,
+                "teacher_entropy": zero,
+                "answer_tokens": 2,
+                "student_trajectory_tokens": 2 if mode == "student" else 0,
+                "teacher_trajectory_tokens": 2 if mode == "teacher" else 0,
+                "event_cache_lengths": (2,),
+                "event_relative_l2_displacements": (
+                    (0.1,) if mode == "student" else (0.2,)
+                ),
+                "teacher_trajectory_event_cache_lengths": (
+                    (2,) if mode == "teacher" else ()
+                ),
+                "teacher_trajectory_event_relative_l2_displacements": (),
+            },
+        )()
+
+    monkeypatch.setattr(distill_trainer, "distillation_example_loss", fake_loss)
+    config = TrainConfig(
+        model=source_model.config,
+        data=DataConfig(
+            kind="openmath_prompts",
+            data_dir=str(data_path),
+            tokenizer="hf:fake",
+            sft_take_rows=1,
+        ),
+        mode="cot_distillation",
+        freeze_backbone=True,
+        backbone_checkpoint=str(checkpoint),
+        output_dir=str(tmp_path / "run"),
+        batch_size=1,
+        max_steps=1,
+        distillation=DistillationConfig(
+            teacher_trajectory_mode="native_full",
+            visible_trajectory_mode="both",
+            max_teacher_completion_tokens=5,
+            max_teacher_reasoning_tokens=3,
+            max_response_tokens=2,
+            reasoning_close_text="</think>\n\n",
+            close_reasoning_at_eos=False,
+        ),
+    )
+
+    distill_trainer.train_distillation(config)
+
+    assert modes == ["student", "teacher"]
+    metric = __import__("json").loads(
+        (tmp_path / "run" / "metrics.jsonl").read_text().splitlines()[0]
+    )
+    assert metric["visible_trajectory_mode"] == "both"
+    assert metric["student_trajectory_tokens"] == 2
+    assert metric["teacher_trajectory_tokens"] == 2
+    assert metric["teacher_visible_response_tokens"] == 2
+    assert metric["teacher_trajectory_cache_events"] == [2]
+    assert metric["cache_relative_l2_displacements"] == [0.1]
+    assert metric["teacher_trajectory_cache_relative_l2_displacements"] == [0.2]
+
+
+
+def test_native_both_locked_diagnostics_use_equal_example_objective_and_both_displacements(
+    monkeypatch,
+):
+    model = _tiny_bgt()
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+        teacher_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(8, 9)),
+        teacher_reasoning_ids=(40, 10, 11),
+        response_ids=(52, 62),
+        teacher_response_ids=(50, 62),
+    )
+    values = iter(((1.0, 2, 0.1, 0.2), (3.0, 10, 0.3, 0.4)))
+
+    def fake_loss(*args, **kwargs):
+        del args
+        assert kwargs["visible_trajectory_mode"] == "both"
+        loss_value, tokens, student_displacement, teacher_displacement = next(values)
+        scalar = torch.tensor(loss_value)
+        return type(
+            "Result",
+            (),
+            {
+                "loss": scalar,
+                "unclipped_kl": scalar,
+                "answer_tokens": tokens,
+                "event_relative_l2_displacements": (student_displacement,),
+                "teacher_trajectory_event_relative_l2_displacements": (
+                    teacher_displacement,
+                ),
+            },
+        )()
+
+    monkeypatch.setattr(distill_trainer, "distillation_example_loss", fake_loss)
+    config = _distillation_train_config(
+        distillation=DistillationConfig(
+            teacher_trajectory_mode="native_full",
+            visible_trajectory_mode="both",
+            close_reasoning_at_eos=False,
+        )
+    )
+
+    metrics = distill_trainer._evaluate_locked_examples(
+        model,
+        [example, example],
+        BGTDecodeSession(model, process_every=2),
+        config,
+        torch.device("cpu"),
+    )
+
+    assert metrics["objective_aggregation"] == "equal_example_mean_of_equal_trajectory_means"
+    assert metrics["objective_mean_loss"] == pytest.approx(2.0)
+    assert metrics["objective_mean_unclipped_kl"] == pytest.approx(2.0)
+    assert metrics["student_cache_events"] == 2
+    assert metrics["teacher_cache_events"] == 2
+    assert metrics["mean_student_cache_relative_l2_displacement"] == pytest.approx(0.2)
+    assert metrics["mean_teacher_cache_relative_l2_displacement"] == pytest.approx(0.3)
+    assert "token_weighted_loss" not in metrics
+
 
 
 def test_distillation_trainer_reuses_fixed_trace_across_overfit_epochs(tmp_path, monkeypatch):
@@ -884,6 +1530,35 @@ def test_teacher_fingerprint_invalidates_seed_limit_and_chat_template(tmp_path):
     )
     assert distill_trainer._teacher_fingerprint(changed_seed, (6, 7), (8, 9), tokenizer) != baseline
     assert distill_trainer._teacher_fingerprint(changed_limit, (6, 7), (8, 9), tokenizer) != baseline
+    changed_native_mode = _distillation_train_config(
+        backbone_checkpoint=str(checkpoint),
+        seed=7,
+        distillation=DistillationConfig(
+            teacher_trajectory_mode="native_full",
+            visible_trajectory_mode="both",
+            max_teacher_completion_tokens=64,
+            close_reasoning_at_eos=False,
+        ),
+    )
+    changed_native_budget = _distillation_train_config(
+        backbone_checkpoint=str(checkpoint),
+        seed=7,
+        distillation=DistillationConfig(
+            teacher_trajectory_mode="native_full",
+            visible_trajectory_mode="both",
+            max_teacher_completion_tokens=65,
+            close_reasoning_at_eos=False,
+        ),
+    )
+    native = distill_trainer._teacher_fingerprint(
+        changed_native_mode, (6, 7), (8, 9), tokenizer
+    )
+    assert (
+        distill_trainer._teacher_fingerprint(
+            changed_native_budget, (6, 7), (8, 9), tokenizer
+        )
+        != native
+    )
     tokenizer.enc.chat_template = "template-v2"
     assert distill_trainer._teacher_fingerprint(base, (6, 7), (8, 9), tokenizer) != baseline
 

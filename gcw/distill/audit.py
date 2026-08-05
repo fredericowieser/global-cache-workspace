@@ -16,7 +16,7 @@ import torch
 import torch.nn.functional as F
 
 from gcw.checkpoint import load_checkpoint
-from gcw.config import TrainConfig, load_train_config, load_yaml, to_dict
+from gcw.config import DistillationConfig, TrainConfig, load_train_config, load_yaml, to_dict
 from gcw.data.sft import _iter_openmath_rows, _prompt_answer
 from gcw.data.tokenizers import TransformersTokenizer, get_tokenizer
 from gcw.distill.objective import exact_forward_kl_with_metrics
@@ -743,6 +743,19 @@ def _locked_payload(item: _LockedAuditExample) -> dict[str, Any]:
     }
 
 
+def _validate_matched_audit_distillation_protocol(
+    distill: DistillationConfig,
+) -> None:
+    if (
+        distill.teacher_trajectory_mode != "reasoning_only"
+        or distill.visible_trajectory_mode != "student"
+    ):
+        raise ValueError(
+            "matched OPSD audit supports only the legacy reasoning_only/student objective; "
+            "native_full/both requires a protocol-matched audit"
+        )
+
+
 def _validate_static_provenance(
     config: OpsdMatchedAuditConfig,
 ) -> tuple[TrainConfig, dict[str, Any], dict[str, set[str]]]:
@@ -751,6 +764,8 @@ def _validate_static_provenance(
         raise ValueError("matched OPSD audit requires a clean Git source revision")
     train_config = load_train_config(config.train_config)
     distill = train_config.distillation
+    if distill is not None:
+        _validate_matched_audit_distillation_protocol(distill)
     if (
         train_config.mode != "cot_distillation"
         or distill is None

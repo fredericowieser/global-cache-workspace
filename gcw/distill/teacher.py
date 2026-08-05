@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterator, Protocol
 
 import torch
@@ -13,6 +14,50 @@ class TeacherBackbone(Protocol):
     def parameters(self, recurse: bool = True) -> Iterator[torch.nn.Parameter]: ...
 
     def forward_full(self, input_ids: torch.Tensor) -> torch.Tensor: ...
+
+
+@dataclass(frozen=True)
+class NativeTeacherTrajectory:
+    reasoning_ids: tuple[int, ...]
+    visible_response_ids: tuple[int, ...]
+    full_completion_ids: tuple[int, ...]
+
+
+def parse_native_teacher_trajectory(
+    generated_ids: tuple[int, ...],
+    *,
+    teacher_trigger_ids: tuple[int, ...],
+    open_ids: tuple[int, ...],
+    close_ids: tuple[int, ...],
+    eos_token_id: int,
+) -> NativeTeacherTrajectory:
+    if not open_ids or not close_ids:
+        raise ValueError("thinking delimiters must not be empty")
+    if not generated_ids or generated_ids[-1] != eos_token_id:
+        raise ValueError("native teacher completion must end with EOT")
+    if eos_token_id in generated_ids[:-1]:
+        raise ValueError("native teacher completion contains an embedded EOT")
+    if not _ends_with(list(teacher_trigger_ids), open_ids):
+        raise ValueError("teacher trigger must end with the thinking-open delimiter")
+    if len(_subsequence_starts(teacher_trigger_ids, open_ids)) != 1:
+        raise ValueError("teacher trigger requires exactly one thinking-open delimiter")
+    if _find_subsequence(generated_ids, open_ids) is not None:
+        raise ValueError("native teacher completion repeats the thinking-open delimiter")
+    close_starts = _subsequence_starts(generated_ids, close_ids)
+    if len(close_starts) != 1:
+        raise ValueError("native teacher completion requires exactly one thinking-close delimiter")
+    close_start = close_starts[0]
+    if close_start == 0:
+        raise ValueError("native teacher completion requires non-empty reasoning")
+    visible_start = close_start + len(close_ids)
+    visible_ids = generated_ids[visible_start:]
+    if len(visible_ids) <= 1:
+        raise ValueError("native teacher completion requires a visible answer before EOT")
+    return NativeTeacherTrajectory(
+        reasoning_ids=generated_ids[:visible_start],
+        visible_response_ids=visible_ids,
+        full_completion_ids=generated_ids,
+    )
 
 
 @torch.no_grad()
@@ -144,6 +189,14 @@ def _native_teacher_answer_logits(
     if logits.shape[1] != len(response_ids):
         raise RuntimeError("teacher logits did not align with every response token")
     return logits.detach()
+
+
+def _subsequence_starts(sequence: tuple[int, ...], pattern: tuple[int, ...]) -> list[int]:
+    return [
+        start
+        for start in range(len(sequence) - len(pattern) + 1)
+        if sequence[start : start + len(pattern)] == pattern
+    ]
 
 
 def _find_subsequence(sequence: tuple[int, ...], pattern: tuple[int, ...]) -> int | None:

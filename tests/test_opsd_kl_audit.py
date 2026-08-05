@@ -7,6 +7,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from gcw.config import DistillationConfig
+
 import gcw.distill.audit as audit_module
 from gcw.distill.audit import (
     OpsdMatchedAuditConfig,
@@ -74,6 +76,17 @@ def test_matched_opsd_audit_config_locks_production_protocol():
     assert config.max_attempts == 64
     assert config.student_seed == 24
     assert config.bootstrap_samples == 10_000
+
+
+def test_matched_opsd_audit_rejects_native_full_objective():
+    distill = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        close_reasoning_at_eos=False,
+    )
+
+    with pytest.raises(ValueError, match="legacy reasoning_only/student"):
+        audit_module._validate_matched_audit_distillation_protocol(distill)
 
 
 @pytest.mark.parametrize(

@@ -4,13 +4,25 @@
 
 ## Objective
 
-For prompt `x`:
+For prompt `x`, the legacy `reasoning_only` protocol:
 
-1. Render a thinking-on teacher prompt and sample teacher reasoning `z_T`.
-2. Render a thinking-off student prompt and sample an on-policy answer `y` with BGT active.
-3. Replay `y` through the student with gradients.
-4. Score the same `y` with the frozen teacher after context `(x, z_T)`.
-5. Apply full-vocabulary forward KL only at answer positions.
+1. renders a thinking-on teacher prompt and samples teacher reasoning `z_T`;
+2. renders a thinking-off student prompt and samples an on-policy visible answer `y_S` with BGT active;
+3. replays `y_S` through the student with gradients;
+4. scores the same `y_S` with the frozen teacher after context `(x, z_T)`;
+5. applies full-vocabulary forward KL only at visible-answer positions.
+
+The opt-in `native_full` protocol instead samples the teacher and student through terminal EOT. A valid teacher completion must contain exactly one native thinking-open delimiter in the assistant trigger, non-empty reasoning, exactly one native thinking-close delimiter, a non-empty visible suffix, and one terminal EOT. It rejects EOT rewriting, truncation, repeated/nested thinking delimiters, empty regions, and student-visible responses containing thinking delimiters. The raw teacher completion is split token-wise into hidden reasoning `z_T` (through the close delimiter) and visible response `y_T` (through EOT).
+
+With `visible_trajectory_mode: both`, the trainer computes two shared-prefix losses:
+
+```text
+L_S = mean_t KL(p_T(. | x, z_T, y_S,<t) || p_S(. | x, CP, y_S,<t))
+L_T = mean_t KL(p_T(. | x, z_T, y_T,<t) || p_S(. | x, CP, y_T,<t))
+L   = (L_S + L_T) / 2
+```
+
+Teacher and student outputs are never zipped by compacted index. Each KL compares full-vocabulary distributions replayed on the same visible prefix. Thinking tokens remain in the frozen teacher's causal context but are not student inputs or loss positions. `visible_trajectory_mode: student` preserves the original on-policy objective; `both` is available only with `native_full`. During training the two `both` losses are computed and backpropagated serially at weight 0.5 each, so their full differentiable replay graphs are never resident simultaneously.
 
 For answer position `t` and vocabulary item `v`:
 
@@ -37,16 +49,17 @@ V0 supports standard-attention `qwen3` BGT models only. It rejects Qwen3.5/Gemma
 
 `data.kind` must be `openmath_prompts`. The reader accepts JSONL or a Hugging Face dataset directory, extracts prompt-like fields, and never reads solution fields into the model input.
 
-Teacher reasoning is cached in append-only `teacher-traces.jsonl`. Every row binds:
+Teacher trajectories are cached in append-only `teacher-traces.jsonl`. Every row binds:
 
 - teacher/config fingerprint;
 - source row index;
 - SHA-256 of the prompt;
-- reasoning token IDs.
+- hidden reasoning token IDs;
+- in `native_full` mode, the visible teacher-response IDs and complete raw completion IDs.
 
-A fingerprint or prompt mismatch fails closed. Teacher and student use independent per-row RNG streams, so reusing a cached trace does not change student sampling.
+A fingerprint or prompt mismatch fails closed. Native cached trajectories are reparsed against the current token-level delimiter and EOT contract before use. Teacher and student use independent per-row RNG streams, so reusing a cached trajectory does not change student sampling.
 
-Native teacher `</think>` output is preferred. If a direct-answer SFT checkpoint instead terminates its worked solution with EOT, V0 removes that terminal EOT and appends the configured thinking-close delimiter. Budget-exhausted generations with neither terminator remain invalid.
+Legacy `reasoning_only` mode retains the original optional EOT-to-close adapter for reproducibility. `native_full` never applies that adapter: the model must emit a native close and a subsequent visible answer before terminal EOT, otherwise the row is invalid.
 
 ## Pilot
 
@@ -57,6 +70,14 @@ uv run --extra gpu --extra convert gcw train --config configs/train/opsd/qwen3_0
 ```
 
 Run it inside a Slurm GPU allocation. Do not run GPU work on a login node.
+
+The native full-trajectory implementation has a separate fresh-output config and is not an instruction to launch it without the usual review gate:
+
+```bash
+uv run --extra gpu --extra convert gcw train --config configs/train/opsd/qwen3_06b_opsd_pilot128_native_full_both_v1.yaml
+```
+
+It permits at most 4,096 teacher completion tokens, 3,072 hidden reasoning tokens, and 2,048 student response tokens. Any trajectory that reaches its cap before EOT is rejected. Both visible trajectory sources are equally weighted at the per-trajectory mean-KL level.
 
 The output directory contains:
 
@@ -88,7 +109,7 @@ The primary contrasts are trained minus untrained and trained minus processor-of
 
 ## Matched held-out KL and teacher-consistency audit
 
-When trained-active does not beat the seed-identical untrained control, run `gcw eval opsd-kl-audit --config configs/eval/opsd/matched-heldout-kl-audit-v1.yaml` before changing training dose. The production config admits no CLI protocol overrides. It scans source rows from index 128, excludes exact and whitespace-normalized collisions with all 128 training rows and 192 evaluation prompts, and locks the first 32 valid examples within 64 attempts.
+When trained-active does not beat the seed-identical untrained control, run `gcw eval opsd-kl-audit --config configs/eval/opsd/matched-heldout-kl-audit-v1.yaml` before changing training dose. The production config admits no CLI protocol overrides. This audit is explicitly locked to the legacy `reasoning_only` / `student` objective and fails closed for `native_full` / `both`; the native objective requires a separate protocol-matched publication audit. It scans source rows from index 128, excludes exact and whitespace-normalized collisions with all 128 training rows and 192 evaluation prompts, and locks the first 32 valid examples within 64 attempts.
 
 For each locked prompt, the untrained processor generates one student response and one self-generated teacher completion. The audit preserves the raw completion IDs and distinguishes a native thinking-close delimiter from a direct-answer EOT rewritten into a close. Both checkpoints are then scored on the exact same student token IDs; the teacher-logit hash and cache-event schedule must match across sequential passes. The primary estimand is token-weighted exact forward KL under the trained processor minus the seed-identical untrained processor, with prompt-level paired bootstrap intervals. Teacher-context consistency is measured separately by scoring the same normalized dataset-solution tokens under (a) the no-privilege direct-answer context and (b) the self-generated reasoning context. Lower dataset-solution NLL is better, but the normalized `answer` field has no independent verification provenance. This is neither teacher correctness nor answer accuracy.
 
