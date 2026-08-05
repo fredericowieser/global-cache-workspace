@@ -426,6 +426,7 @@ class DistillationConfig:
     response_process_every: int = 64
     boundary_selection: Literal["configured", "all"] = "configured"
     gradient_accumulation_steps: int = 1
+    max_optimizer_steps: int | None = None
     reasoning_open_text: str = "<think>\n"
     reasoning_close_text: str = "</think>\n\n"
     close_reasoning_at_eos: bool = True
@@ -474,6 +475,8 @@ class DistillationConfig:
             raise ValueError("distillation boundary_selection must be 'configured' or 'all'")
         if self.gradient_accumulation_steps <= 0:
             raise ValueError("distillation gradient_accumulation_steps must be positive")
+        if self.max_optimizer_steps is not None and self.max_optimizer_steps <= 0:
+            raise ValueError("distillation max_optimizer_steps must be positive when set")
         if not self.reasoning_close_text:
             raise ValueError("distillation reasoning_close_text must not be empty")
 

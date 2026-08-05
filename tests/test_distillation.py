@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import weakref
 
 import pytest
@@ -7,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from gcw.checkpoint import load_checkpoint
-from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, ModelConfig, TrainConfig, load_train_config
+from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, ModelConfig, TrainConfig, WandbConfig, load_train_config
 from gcw.distill import pipeline as distill_pipeline
 from gcw.distill import trainer as distill_trainer
 from gcw.distill.cache import truncate_last_cache_token
@@ -150,6 +151,12 @@ def test_native_full_teacher_protocol_rejects_ambiguous_configs(kwargs, message)
 
 
 
+def test_distillation_optimizer_step_budget_must_be_positive():
+    with pytest.raises(ValueError, match="max_optimizer_steps"):
+        DistillationConfig(max_optimizer_steps=0)
+
+
+
 def test_distillation_repeated_epochs_require_explicit_overfit_diagnostic():
     with pytest.raises(ValueError, match="overfit diagnostic"):
         DistillationConfig(epochs=2)
@@ -184,6 +191,48 @@ def test_opsd_overfit_configs_are_explicit_diagnostics(path, take_rows, epochs, 
     assert config.distillation.epochs == epochs
     assert config.distillation.overfit_diagnostic
     assert config.distillation.expected_locked_examples == expected_locked
+
+
+@pytest.mark.parametrize(
+    ("path", "take_rows", "accumulation", "optimizer_steps"),
+    [
+        (
+            "configs/train/opsd/qwen3_06b_opsd_native_full_smoke_v2.yaml",
+            64,
+            1,
+            1,
+        ),
+        (
+            "configs/train/opsd/qwen3_06b_opsd_native_full_steps1000_bs16_v2.yaml",
+            128_000,
+            16,
+            1_000,
+        ),
+        (
+            "configs/train/opsd/qwen3_06b_opsd_native_full_steps10000_bs16_v2.yaml",
+            1_280_000,
+            16,
+            10_000,
+        ),
+    ],
+)
+def test_native_full_campaign_configs_lock_budget_and_online_tracking(
+    path, take_rows, accumulation, optimizer_steps
+):
+    config = load_train_config(path)
+
+    assert config.data.sft_take_rows == take_rows
+    assert config.learning_rate == 1.0e-4
+    assert config.distillation is not None
+    assert config.distillation.teacher_trajectory_mode == "native_full"
+    assert config.distillation.visible_trajectory_mode == "both"
+    assert config.distillation.gradient_accumulation_steps == accumulation
+    assert config.distillation.max_optimizer_steps == optimizer_steps
+    assert config.wandb.enabled
+    assert config.wandb.mode == "online"
+    assert f"steps{optimizer_steps}" in config.wandb.name
+    assert not __import__("pathlib").Path(config.output_dir).exists()
+
 
 
 def test_opsd_exact_kl_pilot_config_is_seed_locked_and_fresh():
@@ -1086,7 +1135,9 @@ def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatc
         checkpoint / "model.safetensors",
     )
     data_path = tmp_path / "prompts.jsonl"
-    data_path.write_text('{"prompt":"solve this"}\n', encoding="utf-8")
+    data_path.write_text(
+        '{"prompt":"solve this"}\n{"prompt":"solve this too"}\n', encoding="utf-8"
+    )
     tokenizer = object.__new__(TransformersTokenizer)
     tokenizer.enc = NativeTrainingHFBackend()
     tokenizer.eot_id = 62
@@ -1103,6 +1154,35 @@ def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatc
         lambda *args, **kwargs: type("Rollout", (), {"response_ids": (52, 62)})(),
     )
     modes = []
+    wandb_inits = []
+    wandb_logs = []
+    wandb_finished = []
+
+    class FakeWandbRun:
+        def __init__(self):
+            self.summary = {}
+            self.id = "fake-run-id"
+            self.url = "https://wandb.example/fake-run-id"
+
+        def define_metric(self, *args, **kwargs):
+            return None
+
+        def log(self, metrics, step):
+            wandb_logs.append((metrics, step))
+
+        def finish(self):
+            wandb_finished.append(True)
+
+    fake_wandb = type(
+        "FakeWandb",
+        (),
+        {
+            "init": staticmethod(
+                lambda **kwargs: (wandb_inits.append(kwargs) or FakeWandbRun())
+            )
+        },
+    )()
+    monkeypatch.setitem(__import__("sys").modules, "wandb", fake_wandb)
 
     def fake_loss(model, example, session, **kwargs):
         del example, session
@@ -1142,7 +1222,7 @@ def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatc
             kind="openmath_prompts",
             data_dir=str(data_path),
             tokenizer="hf:fake",
-            sft_take_rows=1,
+            sft_take_rows=2,
         ),
         mode="cot_distillation",
         freeze_backbone=True,
@@ -1150,6 +1230,7 @@ def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatc
         output_dir=str(tmp_path / "run"),
         batch_size=1,
         max_steps=1,
+        wandb=WandbConfig(enabled=True, project="test-project", name="native-test"),
         distillation=DistillationConfig(
             teacher_trajectory_mode="native_full",
             visible_trajectory_mode="both",
@@ -1158,6 +1239,7 @@ def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatc
             max_response_tokens=2,
             reasoning_close_text="</think>\n\n",
             close_reasoning_at_eos=False,
+            max_optimizer_steps=1,
         ),
     )
 
@@ -1174,6 +1256,37 @@ def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatc
     assert metric["teacher_trajectory_cache_events"] == [2]
     assert metric["cache_relative_l2_displacements"] == [0.1]
     assert metric["teacher_trajectory_cache_relative_l2_displacements"] == [0.2]
+    assert len(wandb_inits) == 1
+    assert wandb_inits[0]["project"] == "test-project"
+    assert wandb_inits[0]["name"] == "native-test"
+    assert len(wandb_logs) == 1
+    logged, step = wandb_logs[0]
+    assert step == 1
+    assert logged["train/step"] == 1
+    assert logged["train/loss"] == pytest.approx(metric["loss"])
+    assert logged["train/effective_batch_examples"] == 1
+    assert wandb_finished == [True]
+    summary = __import__("json").loads((tmp_path / "run" / "summary.json").read_text())
+    assert summary["wandb_run_id"] == "fake-run-id"
+    assert summary["wandb_run_url"] == "https://wandb.example/fake-run-id"
+
+    assert config.distillation is not None
+    partial_config = replace(
+        config,
+        output_dir=str(tmp_path / "partial-run"),
+        wandb=WandbConfig(enabled=False),
+        distillation=replace(
+            config.distillation,
+            gradient_accumulation_steps=3,
+            max_optimizer_steps=1,
+        ),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=r"partial_examples=2, required_batch_examples=3",
+    ):
+        distill_trainer.train_distillation(partial_config)
+    assert not (tmp_path / "partial-run" / "final").exists()
 
 
 

@@ -104,11 +104,10 @@ def train_distillation(config: TrainConfig) -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     run_config_path = output_dir / "run_config.json"
-    run_config_path.write_text(
-        json.dumps(to_dict(config), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    _atomic_write_json(run_config_path, to_dict(config))
     run_config_sha256 = _sha256_file(run_config_path)
+    wandb_run = _init_distillation_wandb(config, source_revision)
+    wandb_batch = _empty_wandb_batch()
 
     trace_store = TeacherTraceStore(output_dir / "teacher-traces.jsonl", fingerprint=trace_fingerprint)
     optimizer = _optimizer(model, config)
@@ -170,6 +169,7 @@ def train_distillation(config: TrainConfig) -> None:
     answer_tokens = 0
     optimizer_steps = 0
     accumulated = 0
+    budget_reached = False
     started = time.monotonic()
     optimizer.zero_grad(set_to_none=True)
 
@@ -207,11 +207,16 @@ def train_distillation(config: TrainConfig) -> None:
                     accumulated += 1
                     valid += 1
                     answer_tokens += result.answer_tokens
+                    _accumulate_wandb_batch(wandb_batch, result, example)
                     grad_norm: float | None = None
                     if accumulated == distill.gradient_accumulation_steps:
                         grad_norm = _optimizer_step(model, optimizer, accumulated, config.grad_clip)
                         optimizer_steps += 1
                         accumulated = 0
+                        budget_reached = (
+                            distill.max_optimizer_steps is not None
+                            and optimizer_steps >= distill.max_optimizer_steps
+                        )
 
                     _write_metric(
                         metrics,
@@ -253,11 +258,24 @@ def train_distillation(config: TrainConfig) -> None:
                             "optimizer_steps": optimizer_steps,
                         },
                     )
+                    if grad_norm is not None:
+                        _log_distillation_wandb_step(
+                            wandb_run,
+                            wandb_batch,
+                            optimizer_steps=optimizer_steps,
+                            grad_norm=grad_norm,
+                            processor_gate=_processor_gate(model),
+                            seen=seen,
+                            valid=valid,
+                            skipped=skipped,
+                            started=started,
+                        )
                     del result
                 except InvalidDistillationExample as exc:
                     if not distill.skip_invalid_traces:
                         raise
                     skipped += 1
+                    wandb_batch["invalid_examples"] += 1.0
                     _write_metric(
                         metrics,
                         {
@@ -272,15 +290,43 @@ def train_distillation(config: TrainConfig) -> None:
                             "optimizer_steps": optimizer_steps,
                         },
                     )
+                if budget_reached:
+                    break
 
-            if accumulated:
-                _optimizer_step(model, optimizer, accumulated, config.grad_clip)
+            if budget_reached:
+                break
+            if accumulated and distill.max_optimizer_steps is None:
+                grad_norm = _optimizer_step(model, optimizer, accumulated, config.grad_clip)
                 optimizer_steps += 1
                 accumulated = 0
+                _log_distillation_wandb_step(
+                    wandb_run,
+                    wandb_batch,
+                    optimizer_steps=optimizer_steps,
+                    grad_norm=grad_norm,
+                    processor_gate=_processor_gate(model),
+                    seen=seen,
+                    valid=valid,
+                    skipped=skipped,
+                    started=started,
+                )
+            if budget_reached:
+                break
 
     trace_store.sync()
     if valid == 0:
         raise RuntimeError("distillation epoch produced no valid training examples")
+    if (
+        distill.max_optimizer_steps is not None
+        and optimizer_steps != distill.max_optimizer_steps
+    ):
+        raise RuntimeError(
+            "distillation exhausted data before completing the exact full-batch dose: "
+            f"completed_steps={optimizer_steps}, "
+            f"required_steps={distill.max_optimizer_steps}, "
+            f"partial_examples={accumulated}, "
+            f"required_batch_examples={distill.gradient_accumulation_steps}"
+        )
     if overfit_diagnostic is not None and diagnostic_examples is not None:
         locked = [example for _, example in diagnostic_examples]
         overfit_diagnostic["pre_save"] = _evaluate_locked_examples(
@@ -319,6 +365,8 @@ def train_distillation(config: TrainConfig) -> None:
         "skipped_prompts": skipped,
         "answer_tokens": answer_tokens,
         "optimizer_steps": optimizer_steps,
+        "max_optimizer_steps": distill.max_optimizer_steps,
+        "effective_batch_examples": distill.gradient_accumulation_steps,
         "elapsed_seconds": elapsed,
         "answer_tokens_per_second": answer_tokens / elapsed,
         "peak_cuda_memory_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0,
@@ -336,6 +384,8 @@ def train_distillation(config: TrainConfig) -> None:
         "initial_processor_sha256": initial_processor_sha256,
         "initial_processor_gate": initial_processor_gate,
         "record_cache_displacements": distill.record_cache_displacements,
+        "wandb_run_id": getattr(wandb_run, "id", None),
+        "wandb_run_url": getattr(wandb_run, "url", None),
         "dtype": (
             "mixed_bfloat16_backbone_float32_processor"
             if config.bf16 and device.type == "cuda"
@@ -375,7 +425,165 @@ def train_distillation(config: TrainConfig) -> None:
             shutil.rmtree(publication_checkpoint, ignore_errors=True)
             raise
     _atomic_write_json(output_dir / "summary.json", train_state)
+    _finish_distillation_wandb(wandb_run, train_state)
     print(json.dumps(train_state, sort_keys=True))
+
+
+def _init_distillation_wandb(config: TrainConfig, source_revision: str | None):
+    if not config.wandb.enabled:
+        return None
+    import wandb
+
+    distill = config.distillation
+    assert distill is not None
+    init_kwargs: dict[str, Any] = {
+        "project": config.wandb.project,
+        "name": config.wandb.name or Path(config.output_dir).name,
+        "group": config.wandb.group,
+        "tags": config.wandb.tags,
+        "config": {
+            **to_dict(config),
+            "distillation_budget": {
+                "max_optimizer_steps": distill.max_optimizer_steps,
+                "effective_batch_examples": distill.gradient_accumulation_steps,
+                "source_revision": source_revision,
+            },
+        },
+    }
+    if config.wandb.entity:
+        init_kwargs["entity"] = config.wandb.entity
+    if config.wandb.mode:
+        init_kwargs["mode"] = config.wandb.mode
+    if config.wandb.id:
+        init_kwargs["id"] = config.wandb.id
+    if config.wandb.resume:
+        init_kwargs["resume"] = config.wandb.resume
+    run = wandb.init(**init_kwargs)
+    run.define_metric("train/step")
+    run.define_metric("train/*", step_metric="train/step")
+    run.summary["protocol"] = "native_full_visible_trajectory_distillation"
+    run.summary["source_revision"] = source_revision
+    run.summary["effective_batch_examples"] = distill.gradient_accumulation_steps
+    run.summary["requested_optimizer_steps"] = distill.max_optimizer_steps
+    return run
+
+
+def _empty_wandb_batch() -> dict[str, float]:
+    return {
+        "examples": 0.0,
+        "invalid_examples": 0.0,
+        "loss": 0.0,
+        "unclipped_kl": 0.0,
+        "clipping_fraction": 0.0,
+        "student_entropy": 0.0,
+        "teacher_entropy": 0.0,
+        "teacher_reasoning_tokens": 0.0,
+        "teacher_visible_tokens": 0.0,
+        "student_visible_tokens": 0.0,
+        "student_displacement_sum": 0.0,
+        "student_displacement_count": 0.0,
+        "teacher_displacement_sum": 0.0,
+        "teacher_displacement_count": 0.0,
+    }
+
+
+def _accumulate_wandb_batch(
+    batch: dict[str, float],
+    result: DistillationLossResult,
+    example: DistillationExample,
+) -> None:
+    batch["examples"] += 1.0
+    batch["loss"] += float(result.loss.detach().float().item())
+    batch["unclipped_kl"] += float(result.unclipped_kl.detach().float().item())
+    batch["clipping_fraction"] += float(
+        result.clipping_fraction.detach().float().item()
+    )
+    batch["student_entropy"] += float(result.student_entropy.detach().float().item())
+    batch["teacher_entropy"] += float(result.teacher_entropy.detach().float().item())
+    batch["teacher_reasoning_tokens"] += len(example.teacher_reasoning_ids)
+    batch["teacher_visible_tokens"] += result.teacher_trajectory_tokens
+    batch["student_visible_tokens"] += result.student_trajectory_tokens
+    student_displacements = result.event_relative_l2_displacements
+    teacher_displacements = result.teacher_trajectory_event_relative_l2_displacements
+    batch["student_displacement_sum"] += sum(student_displacements)
+    batch["student_displacement_count"] += len(student_displacements)
+    batch["teacher_displacement_sum"] += sum(teacher_displacements)
+    batch["teacher_displacement_count"] += len(teacher_displacements)
+
+
+def _log_distillation_wandb_step(
+    run,
+    batch: dict[str, float],
+    *,
+    optimizer_steps: int,
+    grad_norm: float,
+    processor_gate: float,
+    seen: int,
+    valid: int,
+    skipped: int,
+    started: float,
+) -> None:
+    count = batch["examples"]
+    if count <= 0:
+        raise RuntimeError("cannot log an empty distillation optimizer batch")
+
+    def mean(name: str) -> float:
+        return batch[name] / count
+
+    student_displacement = (
+        batch["student_displacement_sum"] / batch["student_displacement_count"]
+        if batch["student_displacement_count"]
+        else 0.0
+    )
+    teacher_displacement = (
+        batch["teacher_displacement_sum"] / batch["teacher_displacement_count"]
+        if batch["teacher_displacement_count"]
+        else 0.0
+    )
+    payload = {
+        "train/step": optimizer_steps,
+        "train/loss": mean("loss"),
+        "train/unclipped_kl": mean("unclipped_kl"),
+        "train/clipping_fraction": mean("clipping_fraction"),
+        "train/student_entropy": mean("student_entropy"),
+        "train/teacher_entropy": mean("teacher_entropy"),
+        "train/teacher_reasoning_tokens": mean("teacher_reasoning_tokens"),
+        "train/teacher_visible_tokens": mean("teacher_visible_tokens"),
+        "train/student_visible_tokens": mean("student_visible_tokens"),
+        "train/student_cache_relative_l2_displacement": student_displacement,
+        "train/teacher_cache_relative_l2_displacement": teacher_displacement,
+        "train/grad_norm": grad_norm,
+        "train/processor_gate": processor_gate,
+        "train/effective_batch_examples": int(count),
+        "train/invalid_examples_since_step": int(batch["invalid_examples"]),
+        "train/seen_prompts": seen,
+        "train/valid_prompts": valid,
+        "train/skipped_prompts": skipped,
+        "train/valid_fraction": valid / seen,
+        "train/elapsed_seconds": time.monotonic() - started,
+    }
+    if run is not None:
+        run.log(payload, step=optimizer_steps)
+    batch.clear()
+    batch.update(_empty_wandb_batch())
+
+
+def _finish_distillation_wandb(run, train_state: dict[str, Any]) -> None:
+    if run is None:
+        return
+    for key in (
+        "optimizer_steps",
+        "seen_prompts",
+        "valid_prompts",
+        "skipped_prompts",
+        "answer_tokens_per_second",
+        "peak_cuda_memory_bytes",
+        "post_load_processor_gate",
+        "checkpoint_fidelity_verified",
+    ):
+        if key in train_state:
+            run.summary[key] = train_state[key]
+    run.finish()
 
 
 def _verify_overfit_checkpoint(
