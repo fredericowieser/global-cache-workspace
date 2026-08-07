@@ -140,12 +140,12 @@ def _validate_spend_approval(
     monetary_values = (hourly_quote, disk_allowance, maximum_spend)
     if not all(math.isfinite(value) for value in monetary_values):
         raise RuntimeError("spend approval monetary fields must be finite")
-    if (
-        approved_hours != requested_hours
-        or approved_hours != phrase_hours
-        or maximum_spend != phrase_maximum
-    ):
-        raise RuntimeError("requested runtime differs from exact approved hours")
+    if not math.isfinite(approved_hours) or not math.isfinite(requested_hours):
+        raise RuntimeError("spend approval runtime fields must be finite")
+    if approved_hours != phrase_hours or maximum_spend != phrase_maximum:
+        raise RuntimeError("approval phrase differs from exact approved envelope")
+    if requested_hours <= 0 or requested_hours > approved_hours:
+        raise RuntimeError("requested runtime exceeds exact approved hours")
     if hourly_quote != 4.5 or disk_allowance < 0 or maximum_spend <= 0:
         raise RuntimeError("spend approval has invalid quoted price fields")
     if hourly_quote * approved_hours + disk_allowance > maximum_spend:

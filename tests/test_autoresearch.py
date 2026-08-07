@@ -153,10 +153,23 @@ def test_spend_approval_phrase_binds_exact_envelope_and_finite_money(tmp_path):
         protocol_sha256=protocol_sha256,
         requested_hours=12.0,
     ) == approval
+    assert _validate_spend_approval(
+        path,
+        source_revision=source_revision,
+        protocol_sha256=protocol_sha256,
+        requested_hours=11.5,
+    ) == approval
+    with pytest.raises(RuntimeError, match="exceeds exact approved hours"):
+        _validate_spend_approval(
+            path,
+            source_revision=source_revision,
+            protocol_sha256=protocol_sha256,
+            requested_hours=12.01,
+        )
 
     approval["maximum_spend_usd"] = 110.0
     path.write_text(json.dumps(approval))
-    with pytest.raises(RuntimeError, match="exact approved hours"):
+    with pytest.raises(RuntimeError, match="exact approved envelope"):
         _validate_spend_approval(
             path,
             source_revision=source_revision,
