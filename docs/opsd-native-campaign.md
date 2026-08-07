@@ -54,7 +54,7 @@ The authenticated five-prompt diagnostic at source `fbb55d8f886021e14db0e3a8be3f
 
 ### Pragmatic same-backbone fork
 
-On 2026-08-05 the user explicitly authorised a separate practical-sensitivity experiment despite failed HF→GCW numerical parity. This is **not** a parity-qualified continuation and must label the backbone `converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF`. The source-controlled waiver is `configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json`; it binds the exact failed parity and successful diagnostic hashes. It authorises only:
+On 2026-08-05 the user explicitly authorised a separate practical-sensitivity experiment despite failed HF→GCW numerical parity. This is **not** a parity-qualified continuation and must label the backbone `converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF`. On 2026-08-07 the user authorised extending that fork to the verified H200 path. The active source-controlled waiver is `configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v2.json`; v1 remains historical. V2 binds the exact failed parity and successful diagnostic hashes, permits only H100/H200 training, and requires matching canary→1k GPU model topology (name, family, memory and compute capability). It authorises only:
 
 1. `qwen3_06b_opsd_native_base_pragmatic_canary_v1.yaml`;
 2. after validated canary success, `qwen3_06b_opsd_native_base_pragmatic_steps1000_bs16_v1.yaml` at exactly 1,000 optimiser steps and effective batch 16;
@@ -69,7 +69,7 @@ The canary, 1k and matrix use fresh outputs and Slurm `afterok` dependencies. Th
 All must hold:
 
 1. at least one strict native trajectory is valid within 64 attempted rows;
-2. one finite optimiser step completes on an H100;
+2. one finite optimiser step completes on an approved H100 or H200, and the 1k run uses the same approved GPU model topology (name, family, memory and compute capability) as the canary;
 3. backbone gradient count is zero;
 4. processor state changes and checkpoint fidelity verifies;
 5. teacher/student visible responses terminate with EOT;

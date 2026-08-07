@@ -107,7 +107,7 @@ metadata:
   scientific_scope: pragmatic_same_gcw_backbone_sensitivity_after_failed_hf_parity
   required_conversion_parity: /mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1/parity.json
   required_conversion_diagnostic: /mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1/diagnostics/layerwise-distribution-v1-fp64.json
-  conversion_parity_waiver: configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json
+  conversion_parity_waiver: configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v2.json
   comparison_reference: configs/train/bottleneck_llm/qwen3_06b_bgt_from_sft_frozen.yaml
   backbone_label: converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF
   distillation_effective_batch_examples: 1

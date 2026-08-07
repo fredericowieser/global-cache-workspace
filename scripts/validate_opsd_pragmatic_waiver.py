@@ -14,14 +14,14 @@ from typing import Any
 
 from gcw.config import TrainConfig, load_train_config
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KIND = "opsd_pragmatic_conversion_parity_waiver"
 VALIDATED_KIND = "validated_opsd_pragmatic_conversion_parity_waiver"
 SCOPE = "pragmatic_same_gcw_backbone_sensitivity_after_failed_hf_parity"
 BACKBONE_LABEL = "converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF"
-WAIVER_RELATIVE = Path("configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json")
-WAIVER_FILE_SHA256 = "0b515f38843ce84abb074ee266d8fc81709ceae188638e30d480aa0d08516b8c"
-WAIVER_CANONICAL_SHA256 = "0630d47f44c19757416fe39be37a4e5dc1a2fe04ce9e05b1ccfbbce4963b1efe"
+WAIVER_RELATIVE = Path("configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v2.json")
+WAIVER_FILE_SHA256 = "f3c481927cf394072770db05fa8bd2a09535044cdf2a9c48168903be456d290f"
+WAIVER_CANONICAL_SHA256 = "23bb60f3818d11614658c0773646f151d99ff277429410610dd9ac863c8dde4b"
 PARITY_PATH = Path("/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1/parity.json")
 PARITY_SHA256 = "1aca29e6db3099d652d8635d57f8f79a9acccfbec915a378c0477e7104b86216"
 PARITY_POLICY = "qwen3-06b-bf16-parameters-fp32-comparison-v2"
@@ -34,6 +34,7 @@ DIAGNOSTIC_SOURCE_REVISION = "fbb55d8f886021e14db0e3a8be3f54b1892e376e"
 BACKBONE = Path("/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1")
 TOKENIZER = Path("/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1")
 OUTPUT_ROOT = Path("/mnt/jfs-01/shared/gcw/experiments/qwen3_06b_opsd_native_base_pragmatic_v1")
+CANARY_SUCCESS = OUTPUT_ROOT / "canary-steps1-bs1/SUCCESS.json"
 TASKS = (
     "gsm8k_openmath",
     "svamp",
@@ -47,20 +48,20 @@ CONDITIONS = (
     "cot-on__cp-off",
     "cot-on__cp-on",
 )
-CONFIGS = {
+CONFIGS: dict[str, dict[str, Any]] = {
     "qwen3_06b_opsd_native_base_pragmatic_canary_v1.yaml": {
         "steps": 1,
         "effective_batch": 1,
         "take_rows": 64,
         "output": OUTPUT_ROOT / "canary-steps1-bs1",
-        "sha256": "65a2133efaea7614a3a0eea72943bf64593db94b49293d9c49e287831be01b30",
+        "sha256": "0478dc84cdbd9c11c5aadd3e705fe7f2392ddc9ab487e376cfe385b08262b059",
     },
     "qwen3_06b_opsd_native_base_pragmatic_steps1000_bs16_v1.yaml": {
         "steps": 1000,
         "effective_batch": 16,
         "take_rows": 128000,
         "output": OUTPUT_ROOT / "steps1000-bs16",
-        "sha256": "b9feef1a9dbd8944c1e3a7453b8c40580bc1fbe4e29756c66583900872db3da5",
+        "sha256": "72b08249a64cefe038080867cd21d6fdd1e163ce5645f82ff2046b8709f0935b",
     },
 }
 
@@ -95,14 +96,52 @@ def validate_waiver_document(document: dict[str, Any]) -> None:
         or constraints.get("max_optimizer_steps") != 1000
         or constraints.get("effective_batch_examples") != 16
         or constraints.get("ten_thousand_steps_authorized") is not False
+        or constraints.get("training_gpu_families") != ["H100", "H200"]
+        or constraints.get("training_gpu_model_topology_must_match_canary") is not True
         or tuple(constraints.get("evaluation_tasks", ())) != TASKS
         or tuple(constraints.get("conditions", ())) != CONDITIONS
     ):
         raise ValueError("waiver document constraint mismatch")
 
 
-def _expected_metadata(*, steps: int, effective_batch: int) -> dict[str, Any]:
+def validate_training_gpu(document: dict[str, Any], gpu_name: str) -> str:
+    validate_waiver_document(document)
+    if not isinstance(gpu_name, str) or not gpu_name:
+        raise ValueError("training GPU name is missing")
+    match = re.fullmatch(r"NVIDIA (H100|H200)(?:\b.*)?", gpu_name)
+    if match is None:
+        raise ValueError(f"training GPU is outside the approved families: {gpu_name!r}")
+    family = match.group(1)
+    if family not in document["constraints"]["training_gpu_families"]:
+        raise ValueError(f"training GPU family is not approved: {family!r}")
+    return family
+
+
+def detect_runtime_gpu(document: dict[str, Any]) -> dict[str, Any]:
+    import torch
+
+    count = torch.cuda.device_count()
+    if count != 1:
+        raise ValueError(f"training requires exactly one visible GPU; got {count}")
+    properties = torch.cuda.get_device_properties(0)
+    gpu_name = str(properties.name)
+    gpu_family = validate_training_gpu(document, gpu_name)
+    total_memory = int(properties.total_memory)
+    if total_memory <= 0:
+        raise ValueError("training GPU reports invalid total memory")
+    capability = torch.cuda.get_device_capability(0)
+    if len(capability) != 2 or any(not isinstance(value, int) for value in capability):
+        raise ValueError("training GPU reports invalid compute capability")
     return {
+        "gpu_name": gpu_name,
+        "gpu_family": gpu_family,
+        "gpu_total_memory_bytes": total_memory,
+        "gpu_compute_capability": f"{capability[0]}.{capability[1]}",
+    }
+
+
+def _expected_metadata(*, steps: int, effective_batch: int) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
         "campaign": "opsd-native-base-pragmatic-v1",
         "scientific_scope": SCOPE,
         "required_conversion_parity": str(PARITY_PATH),
@@ -113,6 +152,9 @@ def _expected_metadata(*, steps: int, effective_batch: int) -> dict[str, Any]:
         "distillation_effective_batch_examples": effective_batch,
         "requested_optimizer_steps": steps,
     }
+    if steps == 1000:
+        metadata["promotion_evidence"] = str(CANARY_SUCCESS)
+    return metadata
 
 
 def validate_train_config(path: Path) -> TrainConfig:
@@ -208,7 +250,9 @@ def validate_external_evidence() -> None:
         raise ValueError("waiver diagnostic prompt evidence mismatch")
 
 
-def validate_all(*, repo: Path, config_path: Path, waiver_path: Path, source_revision: str) -> dict[str, Any]:
+def validate_static(
+    *, repo: Path, config_path: Path, waiver_path: Path, source_revision: str
+) -> dict[str, Any]:
     repo = repo.resolve(strict=True)
     config_path = config_path.resolve(strict=True)
     waiver_path = waiver_path.resolve(strict=True)
@@ -229,7 +273,7 @@ def validate_all(*, repo: Path, config_path: Path, waiver_path: Path, source_rev
         raise ValueError("validated pragmatic config unexpectedly lacks distillation")
     return {
         "schema_version": SCHEMA_VERSION,
-        "kind": VALIDATED_KIND,
+        "kind": "validated_opsd_pragmatic_static_waiver",
         "source_revision": source_revision,
         "scientific_scope": SCOPE,
         "backbone_label": BACKBONE_LABEL,
@@ -247,6 +291,22 @@ def validate_all(*, repo: Path, config_path: Path, waiver_path: Path, source_rev
         "ten_thousand_steps_authorized": False,
         "paired_cp_contrasts_share_converted_backbone": True,
     }
+
+
+def validate_all(
+    *, repo: Path, config_path: Path, waiver_path: Path, source_revision: str
+) -> dict[str, Any]:
+    evidence = validate_static(
+        repo=repo,
+        config_path=config_path,
+        waiver_path=waiver_path,
+        source_revision=source_revision,
+    )
+    waiver = json.loads(waiver_path.resolve(strict=True).read_text())
+    evidence.update(detect_runtime_gpu(waiver))
+    evidence["kind"] = VALIDATED_KIND
+    evidence["training_gpu_model_topology_must_match_canary"] = True
+    return evidence
 
 
 def _write_new(path: Path, document: dict[str, Any]) -> None:

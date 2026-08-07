@@ -276,6 +276,10 @@ def test_pragmatic_base_configs_are_exact_waived_protocol(
     filename, steps, effective_batch, output_name
 ):
     root = Path(__file__).parents[1]
+    validator = importlib.import_module("scripts.validate_opsd_pragmatic_waiver")
+    assert validator.TOKENIZER == Path(
+        "/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1"
+    )
     config = load_train_config(root / "configs/train/opsd" / filename)
 
     assert config.freeze_backbone is True
@@ -289,22 +293,43 @@ def test_pragmatic_base_configs_are_exact_waived_protocol(
         "scientific_scope": "pragmatic_same_gcw_backbone_sensitivity_after_failed_hf_parity",
         "required_conversion_parity": "/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1/parity.json",
         "required_conversion_diagnostic": "/mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1/diagnostics/layerwise-distribution-v1-fp64.json",
-        "conversion_parity_waiver": "configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json",
+        "conversion_parity_waiver": "configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v2.json",
         "comparison_reference": "configs/train/bottleneck_llm/qwen3_06b_bgt_from_sft_frozen.yaml",
         "backbone_label": "converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF",
         "distillation_effective_batch_examples": effective_batch,
         "requested_optimizer_steps": steps,
+        **(
+            {
+                "promotion_evidence": (
+                    "/mnt/jfs-01/shared/gcw/experiments/"
+                    "qwen3_06b_opsd_native_base_pragmatic_v1/"
+                    "canary-steps1-bs1/SUCCESS.json"
+                )
+            }
+            if steps == 1000
+            else {}
+        ),
     }
     assert config.output_dir.endswith(f"/qwen3_06b_opsd_native_base_pragmatic_v1/{output_name}")
 
 
 def test_pragmatic_parity_waiver_is_closed_and_tamper_rejected():
     root = Path(__file__).parents[1]
-    path = root / "configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json"
+    path = root / "configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v2.json"
     document = json.loads(path.read_text())
     validator = importlib.import_module("scripts.validate_opsd_pragmatic_waiver")
 
     validator.validate_waiver_document(document)
+    assert document["constraints"]["training_gpu_families"] == ["H100", "H200"]
+    assert validator.validate_training_gpu(document, "NVIDIA H100 80GB HBM3") == "H100"
+    assert validator.validate_training_gpu(document, "NVIDIA H200") == "H200"
+    with pytest.raises(ValueError, match="GPU"):
+        validator.validate_training_gpu(document, "NVIDIA A100-SXM4-80GB")
+    with pytest.raises(ValueError, match="GPU"):
+        validator.validate_training_gpu(document, "counterfeit-H200-device")
+    with pytest.raises(ValueError, match="GPU"):
+        validator.validate_training_gpu(document, "NVIDIA GH200 480GB")
+    assert document["constraints"]["training_gpu_model_topology_must_match_canary"] is True
     tampered = copy.deepcopy(document)
     tampered["constraints"]["max_optimizer_steps"] = 10_000
     with pytest.raises(ValueError, match="waiver document"):
@@ -370,6 +395,35 @@ def test_pragmatic_parity_validator_accepts_only_schema3_numeric_failure():
             validator.validate_parity_failure_document(mutation)
 
 
+def test_pragmatic_runtime_gpu_evidence_is_detected_from_cuda(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    root = Path(__file__).parents[1]
+    document = json.loads(
+        (
+            root
+            / "configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v2.json"
+        ).read_text()
+    )
+    fake_cuda = SimpleNamespace(
+        device_count=lambda: 1,
+        get_device_properties=lambda _: SimpleNamespace(
+            name="NVIDIA H200", total_memory=143_771 * 1024 * 1024
+        ),
+        get_device_capability=lambda _: (9, 0),
+    )
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=fake_cuda))
+    validator = importlib.import_module("scripts.validate_opsd_pragmatic_waiver")
+
+    assert validator.detect_runtime_gpu(document) == {
+        "gpu_name": "NVIDIA H200",
+        "gpu_family": "H200",
+        "gpu_total_memory_bytes": 143_771 * 1024 * 1024,
+        "gpu_compute_capability": "9.0",
+    }
+
+
 def test_pragmatic_protocol_binds_exact_configs_and_promotion_evidence():
     root = Path(__file__).parents[1]
     validator = importlib.import_module("scripts.validate_opsd_pragmatic_waiver")
@@ -378,6 +432,18 @@ def test_pragmatic_protocol_binds_exact_configs_and_promotion_evidence():
     for filename, expected in validator.CONFIGS.items():
         path = root / "configs/train/opsd" / filename
         assert hashlib.sha256(path.read_bytes()).hexdigest() == expected["sha256"]
+    assert "qwen3_06b_opsd_pragmatic_parity_waiver_v2.json" in wrapper
+    validator_source = (
+        root / "scripts/validate_opsd_pragmatic_waiver.py"
+    ).read_text()
+    assert "--gpu-name" not in wrapper
+    assert "detect_runtime_gpu(waiver)" in validator_source
+    assert 'success.get("gpu_name") != os.environ["GPU_NAME"]' in wrapper
+    assert 'waiver.get("gpu_name") != os.environ["GPU_NAME"]' in wrapper
+    assert '"gpu_family": os.environ["GPU_FAMILY"]' in wrapper
+    assert '"gpu_total_memory_bytes": int(os.environ["GPU_TOTAL_MEMORY_BYTES"])' in wrapper
+    assert '"gpu_compute_capability": os.environ["GPU_COMPUTE_CAPABILITY"]' in wrapper
+    assert 'success_path != Path(os.environ["CONFIG_PROMOTION_EVIDENCE"])' in wrapper
     assert "CANARY_CONFIG_SHA256" in wrapper
     assert 'success.get("pragmatic_parity_waiver") is not True' in wrapper
     assert 'success.get("parity_gate_remains_failed") is not True' in wrapper
@@ -415,6 +481,8 @@ def test_pragmatic_submitter_hard_wires_afterok_chain_and_identities():
 
     assert "afterok:{canary_job_id}" in submitter
     assert "afterok:{train_job_id}" in submitter
+    assert "validate_static(" in submitter
+    assert "validate_all(" not in submitter
     assert "PROMOTION_EVIDENCE" in submitter
     assert '"EXPECTED_PRAGMATIC_WAIVER": "true"' in submitter
     assert "agent-dev-15" in submitter

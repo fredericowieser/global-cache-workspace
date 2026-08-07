@@ -8,7 +8,7 @@ import re
 import subprocess
 from typing import Any
 
-from scripts.validate_opsd_pragmatic_waiver import WAIVER_RELATIVE, validate_all
+from scripts.validate_opsd_pragmatic_waiver import WAIVER_RELATIVE, validate_static
 
 CANARY_CONFIG = Path(
     "configs/train/opsd/qwen3_06b_opsd_native_base_pragmatic_canary_v1.yaml"
@@ -99,13 +99,13 @@ def submit_chain(repo: Path) -> dict[str, Any]:
     waiver = repo / WAIVER_RELATIVE
     canary_config = repo / CANARY_CONFIG
     train_config = repo / TRAIN_CONFIG
-    canary_evidence = validate_all(
+    canary_evidence = validate_static(
         repo=repo,
         config_path=canary_config,
         waiver_path=waiver,
         source_revision=source_revision,
     )
-    train_evidence = validate_all(
+    train_evidence = validate_static(
         repo=repo,
         config_path=train_config,
         waiver_path=waiver,

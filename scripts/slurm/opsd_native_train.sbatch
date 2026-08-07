@@ -123,7 +123,7 @@ base_diagnostic = str(
     )
 )
 expected_waiver = str(
-    Path("configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v1.json").resolve(
+    Path("configs/protocols/qwen3_06b_opsd_pragmatic_parity_waiver_v2.json").resolve(
         strict=True
     )
 )
@@ -151,17 +151,60 @@ print(f"REQUIRES_CONVERSION_PARITY={str(requires_parity).lower()}")
 print(f"REQUIRES_PARITY_WAIVER={str(requires_waiver).lower()}")
 print(f"REQUIRED_CONVERSION_PARITY={parity}")
 print(f"REQUIRED_CONVERSION_DIAGNOSTIC={diagnostic}")
+promotion_raw = config.metadata.get("promotion_evidence", "")
+if distill.max_optimizer_steps == 1000:
+    if not promotion_raw:
+        raise SystemExit("1k config lacks canonical promotion_evidence")
+    promotion = str(Path(promotion_raw).resolve(strict=True))
+else:
+    if promotion_raw:
+        raise SystemExit("non-1k config cannot declare promotion_evidence")
+    promotion = ""
 print(f"PARITY_WAIVER={waiver}")
+print(f"CONFIG_PROMOTION_EVIDENCE={promotion}")
 PY
 )"
 mapfile -t PREFLIGHT <<<"$PREFLIGHT_RAW"
 for assignment in "${PREFLIGHT[@]}"; do
   case "$assignment" in
-    OUTPUT_DIR=*|BACKBONE_CHECKPOINT=*|DATA_DIR=*|TOKENIZER_SOURCE=*|MAX_OPTIMIZER_STEPS=*|EFFECTIVE_BATCH_EXAMPLES=*|RECORD_CACHE_DISPLACEMENTS=*|WANDB_MODE_CONFIG=*|REQUIRES_CONVERSION_PARITY=*|REQUIRES_PARITY_WAIVER=*|REQUIRED_CONVERSION_PARITY=*|REQUIRED_CONVERSION_DIAGNOSTIC=*|PARITY_WAIVER=*)
+    OUTPUT_DIR=*|BACKBONE_CHECKPOINT=*|DATA_DIR=*|TOKENIZER_SOURCE=*|MAX_OPTIMIZER_STEPS=*|EFFECTIVE_BATCH_EXAMPLES=*|RECORD_CACHE_DISPLACEMENTS=*|WANDB_MODE_CONFIG=*|REQUIRES_CONVERSION_PARITY=*|REQUIRES_PARITY_WAIVER=*|REQUIRED_CONVERSION_PARITY=*|REQUIRED_CONVERSION_DIAGNOSTIC=*|PARITY_WAIVER=*|CONFIG_PROMOTION_EVIDENCE=*)
       export "$assignment" ;;
     *) printf 'unexpected config preflight output: %s\n' "$assignment" >&2; exit 2 ;;
   esac
 done
+
+uv run --locked --extra gpu python scripts/check_cuda_env.py
+GPU_INFO_RAW="$(uv run --locked --extra gpu python - <<'PY'
+import torch
+if torch.cuda.device_count() != 1:
+    raise SystemExit(f"training requires exactly one visible GPU; got {torch.cuda.device_count()}")
+properties = torch.cuda.get_device_properties(0)
+capability = torch.cuda.get_device_capability(0)
+print(properties.name)
+print(int(properties.total_memory))
+print(f"{capability[0]}.{capability[1]}")
+PY
+)"
+mapfile -t GPU_INFO <<<"$GPU_INFO_RAW"
+[[ "${#GPU_INFO[@]}" -eq 3 ]] || { printf 'invalid runtime GPU topology output\n' >&2; exit 2; }
+GPU_NAME="${GPU_INFO[0]}"
+GPU_TOTAL_MEMORY_BYTES="${GPU_INFO[1]}"
+GPU_COMPUTE_CAPABILITY="${GPU_INFO[2]}"
+case "$GPU_NAME" in
+  NVIDIA\ H100*) GPU_FAMILY="H100" ;;
+  NVIDIA\ H200*) GPU_FAMILY="H200" ;;
+  *)
+    printf 'campaign GPU is outside the approved H100/H200 families: %s\n' "$GPU_NAME" >&2
+    exit 2
+    ;;
+esac
+[[ "$GPU_TOTAL_MEMORY_BYTES" =~ ^[1-9][0-9]*$ ]] || { printf 'invalid GPU memory size\n' >&2; exit 2; }
+[[ "$GPU_COMPUTE_CAPABILITY" =~ ^[0-9]+\.[0-9]+$ ]] || { printf 'invalid GPU compute capability\n' >&2; exit 2; }
+export GPU_NAME GPU_FAMILY GPU_TOTAL_MEMORY_BYTES GPU_COMPUTE_CAPABILITY
+if [[ "$GPU_FAMILY" != H100 && "$REQUIRES_PARITY_WAIVER" != true ]]; then
+  printf 'only the pragmatic waiver may run on H200; allocated GPU is %s\n' "$GPU_NAME" >&2
+  exit 2
+fi
 
 if [[ "$REQUIRES_CONVERSION_PARITY" == true ]]; then
   [[ -n "$REQUIRED_CONVERSION_PARITY" && "$REQUIRES_PARITY_WAIVER" == false ]] || {
@@ -208,8 +251,10 @@ import json
 import os
 from pathlib import Path
 success_path = Path(os.environ["PROMOTION_EVIDENCE"]).resolve(strict=True)
+if success_path != Path(os.environ["CONFIG_PROMOTION_EVIDENCE"]):
+    raise SystemExit("promotion evidence differs from the canonical config-owned path")
 success = json.loads(success_path.read_text())
-CANARY_CONFIG_SHA256 = "65a2133efaea7614a3a0eea72943bf64593db94b49293d9c49e287831be01b30"
+CANARY_CONFIG_SHA256 = "0478dc84cdbd9c11c5aadd3e705fe7f2392ddc9ab487e376cfe385b08262b059"
 if success.get("source_revision") != os.environ["SOURCE_REVISION"]:
     raise SystemExit("canary evidence source revision mismatch")
 if success.get("source_config_sha256") != CANARY_CONFIG_SHA256:
@@ -220,6 +265,14 @@ if success.get("parity_gate_remains_failed") is not True:
     raise SystemExit("canary does not retain failed parity label")
 if success.get("backbone_label") != os.environ["BACKBONE_LABEL"]:
     raise SystemExit("canary backbone label mismatch")
+if success.get("gpu_name") != os.environ["GPU_NAME"]:
+    raise SystemExit("canary GPU identity differs from the live 1k GPU")
+if success.get("gpu_family") != os.environ["GPU_FAMILY"]:
+    raise SystemExit("canary GPU family differs from the live 1k GPU")
+if success.get("gpu_total_memory_bytes") != int(os.environ["GPU_TOTAL_MEMORY_BYTES"]):
+    raise SystemExit("canary GPU memory topology differs from the live 1k GPU")
+if success.get("gpu_compute_capability") != os.environ["GPU_COMPUTE_CAPABILITY"]:
+    raise SystemExit("canary GPU compute capability differs from the live 1k GPU")
 if success.get("optimizer_steps") != 1 or success.get("effective_batch_examples") != 1:
     raise SystemExit("promotion evidence is not the exact one-step batch-one canary")
 files = success.get("files", {})
@@ -241,6 +294,11 @@ if (
     or waiver.get("effective_batch_examples") != 1
     or waiver.get("parity_gate_remains_failed") is not True
     or waiver.get("backbone_label") != os.environ["BACKBONE_LABEL"]
+    or waiver.get("gpu_name") != os.environ["GPU_NAME"]
+    or waiver.get("gpu_family") != os.environ["GPU_FAMILY"]
+    or waiver.get("gpu_total_memory_bytes") != int(os.environ["GPU_TOTAL_MEMORY_BYTES"])
+    or waiver.get("gpu_compute_capability") != os.environ["GPU_COMPUTE_CAPABILITY"]
+    or waiver.get("training_gpu_model_topology_must_match_canary") is not True
 ):
     raise SystemExit("canary run-specific waiver identity mismatch")
 summary = json.loads(summary_path.read_text())
@@ -265,19 +323,6 @@ fi
 }
 [[ -d "$TOKENIZER_SOURCE" ]] || {
   printf 'missing tokenizer source: %s\n' "$TOKENIZER_SOURCE" >&2
-  exit 2
-}
-uv run --locked --extra gpu python scripts/check_cuda_env.py
-GPU_NAME="$(uv run --locked --extra gpu python - <<'PY'
-import torch
-if torch.cuda.device_count() != 1:
-    raise SystemExit(f"training requires exactly one Slurm-visible GPU; got {torch.cuda.device_count()}")
-print(torch.cuda.get_device_name(0))
-PY
-)"
-export GPU_NAME
-[[ "$GPU_NAME" == *H100* ]] || {
-  printf 'campaign requires H100; allocated GPU is %s\n' "$GPU_NAME" >&2
   exit 2
 }
 uv run --locked --extra gpu python - <<'PY'
@@ -439,6 +484,17 @@ def sha256_file(path: Path) -> str:
         while chunk := handle.read(8 * 1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+if os.environ.get("PRAGMATIC_WAIVER_EVIDENCE"):
+    runtime_waiver = json.loads(Path(os.environ["PRAGMATIC_WAIVER_EVIDENCE"]).read_text())
+    expected_topology = {
+        "gpu_name": os.environ["GPU_NAME"],
+        "gpu_family": os.environ["GPU_FAMILY"],
+        "gpu_total_memory_bytes": int(os.environ["GPU_TOTAL_MEMORY_BYTES"]),
+        "gpu_compute_capability": os.environ["GPU_COMPUTE_CAPABILITY"],
+        "training_gpu_model_topology_must_match_canary": True,
+    }
+    if any(runtime_waiver.get(key) != value for key, value in expected_topology.items()):
+        raise SystemExit("run-specific waiver GPU topology differs from the live runtime")
 files = {}
 for path in required:
     if not path.is_file():
@@ -460,6 +516,9 @@ payload = json.dumps(
         "effective_batch_examples": expected_batch,
         "valid_examples": expected_examples,
         "gpu_name": os.environ["GPU_NAME"],
+        "gpu_family": os.environ["GPU_FAMILY"],
+        "gpu_total_memory_bytes": int(os.environ["GPU_TOTAL_MEMORY_BYTES"]),
+        "gpu_compute_capability": os.environ["GPU_COMPUTE_CAPABILITY"],
         "wandb_run_id": summary["wandb_run_id"],
         "wandb_run_url": summary["wandb_run_url"],
         "pragmatic_parity_waiver": bool(os.environ.get("PRAGMATIC_WAIVER_EVIDENCE")),
