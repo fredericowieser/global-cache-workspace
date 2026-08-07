@@ -32,7 +32,12 @@ OUT_DIR="${OUT_DIR:?OUT_DIR is required}"
 EXPECTED_PRAGMATIC_WAIVER="${EXPECTED_PRAGMATIC_WAIVER:-false}"
 BACKBONE_LABEL="converted_GCW_Qwen3_0.6B_base_not_numerically_identical_to_HF"
 TASKS="gsm8k_openmath,svamp,gsm8k_hard,logiqa_opsd_generate,agieval_gaokao_mathqa_opsd_generate"
-export CHECKPOINT SOURCE_REVISION TOKENIZER_SOURCE OUT_DIR TASKS EXPECTED_PRAGMATIC_WAIVER BACKBONE_LABEL
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-1}"
+[[ "$EVAL_BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'EVAL_BATCH_SIZE must be a positive integer: %s\n' "$EVAL_BATCH_SIZE" >&2
+  exit 2
+}
+export CHECKPOINT SOURCE_REVISION TOKENIZER_SOURCE OUT_DIR TASKS EXPECTED_PRAGMATIC_WAIVER BACKBONE_LABEL EVAL_BATCH_SIZE
 
 cd "$REPO"
 ACTUAL_REVISION="$(git rev-parse HEAD)"
@@ -155,6 +160,7 @@ run_condition() {
         --thinking "$6" \
         --processor "$7" \
         --tasks "$8" \
+        --batch-size "$EVAL_BATCH_SIZE" \
         --out "$9"
     ' _ "$REPO" "$CHECKPOINT" "$SOURCE_REVISION" "$TOKENIZER_SOURCE" \
       "$DATASETS_CACHE" "$thinking" "$processor" "$TASKS" "$output" \

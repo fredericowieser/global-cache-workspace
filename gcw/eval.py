@@ -4,7 +4,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import os
 import subprocess
@@ -14,6 +14,7 @@ import time
 import torch
 
 from gcw.checkpoint import load_checkpoint
+from gcw.distill.prompt import ChatPrompt
 from gcw.common import base_dir
 from gcw.data.shards import data_loader
 from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, TransformersTokenizer, get_token_bytes
@@ -25,7 +26,12 @@ from gcw.eval_support import (
     truncate_context_continuation,
 )
 from gcw.loss_eval import evaluate_nll_bpb
-from gcw.opsd_eval import OpsdEvalCondition, build_opsd_eval_prompt, greedy_opsd_response
+from gcw.opsd_eval import (
+    OpsdEvalCondition,
+    build_opsd_eval_prompt,
+    greedy_opsd_response,
+    greedy_opsd_responses,
+)
 from gcw.prompt_identity import normalized_prompt_text_sha256, prompt_text_sha256
 
 
@@ -68,6 +74,18 @@ OPSD_DATASET_FILE_PATTERNS = {
     "logiqa_opsd_generate": "logiqa-test.arrow",
     "agieval_gaokao_mathqa_opsd_generate": "agieval-gaokao-mathqa-test.arrow",
 }
+
+
+@dataclass(frozen=True)
+class _OpsdPreparedRequest:
+    request_index: int
+    prompt: str
+    requested_max_new: int
+    max_new: int
+    until: tuple[str, ...]
+    stop_sequence_lists: list[list[int]]
+    stop_sequences: tuple[tuple[int, ...], ...]
+    chat_prompt: ChatPrompt
 MATH_RUNS = [([task], 0) for task in MATH_TASKS]
 HENDRYCKS_MATH_LEAF_TASKS = {
     "hendrycks_math_algebra",
@@ -260,11 +278,11 @@ class GCWEvalLM(TemplateLM):
 
     @torch.no_grad()
     def _generate_until_opsd(self, requests):
-        outs = []
         condition = self.opsd_condition
         if condition is None:
             raise RuntimeError("OPSD generation requires an explicit condition")
-        for req in requests:
+        prepared = []
+        for request_index, req in enumerate(requests):
             prompt, kwargs = req.args
             requested_max_new = int(kwargs.get("max_gen_toks", 256))
             max_new = condition.max_response_tokens
@@ -277,45 +295,95 @@ class GCWEvalLM(TemplateLM):
                 enable_thinking=condition.enable_thinking,
                 reasoning_open_text=condition.reasoning_open_text,
             )
-            rollout = greedy_opsd_response(
-                self.model,
-                self.tokenizer,
-                prompt,
-                max_response_tokens=max_new,
-                condition=condition,
-                stop_sequences=stop_sequences,
+            prepared.append(
+                _OpsdPreparedRequest(
+                    request_index=request_index,
+                    prompt=prompt,
+                    requested_max_new=requested_max_new,
+                    max_new=max_new,
+                    until=until,
+                    stop_sequence_lists=stop_sequence_lists,
+                    stop_sequences=stop_sequences,
+                    chat_prompt=chat_prompt,
+                )
             )
-            tokens = _trim_generated_token_ids(
-                list(rollout.response_ids),
-                stop_sequence_lists,
-                self.eot_token_id,
+
+        grouped: dict[tuple[object, ...], list[_OpsdPreparedRequest]] = {}
+        for item in prepared:
+            key = (
+                len(item.chat_prompt.base_ids),
+                len(item.chat_prompt.trigger_ids),
+                item.max_new,
+                item.stop_sequences,
             )
-            text = _trim_until(self.tok_decode(tokens), until)
-            outs.append(text)
-            self.opsd_generation_records.append(
-                {
-                    "request_index": len(self.opsd_generation_records),
-                    "prompt_sha256": prompt_text_sha256(prompt),
-                    "prompt_text_sha256": prompt_text_sha256(prompt),
-                    "normalized_prompt_text_sha256": normalized_prompt_text_sha256(
-                        prompt
-                    ),
-                    "base_token_ids_sha256": _token_ids_sha256(chat_prompt.base_ids),
-                    "full_prompt_token_ids_sha256": _token_ids_sha256(chat_prompt.full_ids),
-                    "base_tokens": len(chat_prompt.base_ids),
-                    "trigger_tokens": len(chat_prompt.trigger_ids),
-                    "response_tokens": len(tokens),
-                    "max_response_tokens": max_new,
-                    "task_requested_max_response_tokens": requested_max_new,
-                    "raw_response_tokens": len(rollout.response_ids),
-                    "cache_event_positions": (
-                        [0, *range(64, len(rollout.response_ids), 64)]
-                        if condition.processor_enabled
-                        else []
-                    ),
-                    "cache_event_lengths": list(rollout.event_cache_lengths),
-                }
-            )
+            grouped.setdefault(key, []).append(item)
+
+        outs = [""] * len(prepared)
+        records: list[dict[str, object] | None] = [None] * len(prepared)
+        batch_size = max(1, int(getattr(self, "batch_size", 1)))
+        for group in grouped.values():
+            for offset in range(0, len(group), batch_size):
+                chunk = group[offset : offset + batch_size]
+                first = chunk[0]
+                if len(chunk) == 1:
+                    rollouts = (
+                        greedy_opsd_response(
+                            self.model,
+                            self.tokenizer,
+                            first.prompt,
+                            max_response_tokens=first.max_new,
+                            condition=condition,
+                            stop_sequences=first.stop_sequences,
+                        ),
+                    )
+                else:
+                    rollouts = greedy_opsd_responses(
+                        self.model,
+                        self.tokenizer,
+                        prompts=tuple(item.prompt for item in chunk),
+                        max_response_tokens=first.max_new,
+                        condition=condition,
+                        stop_sequences=first.stop_sequences,
+                    )
+                for item, rollout in zip(chunk, rollouts, strict=True):
+                    request_index = item.request_index
+                    stop_sequence_lists = item.stop_sequence_lists
+                    until = item.until
+                    chat_prompt = item.chat_prompt
+                    tokens = _trim_generated_token_ids(
+                        list(rollout.response_ids),
+                        stop_sequence_lists,
+                        self.eot_token_id,
+                    )
+                    outs[request_index] = _trim_until(self.tok_decode(tokens), until)
+                    prompt = item.prompt
+                    records[request_index] = {
+                        "request_index": request_index,
+                        "prompt_sha256": prompt_text_sha256(prompt),
+                        "prompt_text_sha256": prompt_text_sha256(prompt),
+                        "normalized_prompt_text_sha256": normalized_prompt_text_sha256(
+                            prompt
+                        ),
+                        "base_token_ids_sha256": _token_ids_sha256(chat_prompt.base_ids),
+                        "full_prompt_token_ids_sha256": _token_ids_sha256(
+                            chat_prompt.full_ids
+                        ),
+                        "base_tokens": len(chat_prompt.base_ids),
+                        "trigger_tokens": len(chat_prompt.trigger_ids),
+                        "response_tokens": len(tokens),
+                        "max_response_tokens": item.max_new,
+                        "task_requested_max_response_tokens": item.requested_max_new,
+                        "raw_response_tokens": len(rollout.response_ids),
+                        "cache_event_positions": (
+                            [0, *range(64, len(rollout.response_ids), 64)]
+                            if condition.processor_enabled
+                            else []
+                        ),
+                        "cache_event_lengths": list(rollout.event_cache_lengths),
+                    }
+        if any(record is None for record in records):
+            raise RuntimeError("OPSD batched generation did not produce every request")
+        self.opsd_generation_records.extend(records)
         return outs
 
     @torch.no_grad()
@@ -453,11 +521,14 @@ def run_opsd_screen(
     processor_enabled: bool,
     tasks: tuple[str, ...] = OPSD_SCREEN_TASKS,
     limit: int | None = 64,
+    batch_size: int = 1,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
     if limit is not None and limit <= 0:
         raise ValueError("OPSD screen limit must be positive when set")
+    if batch_size <= 0:
+        raise ValueError("OPSD screen batch_size must be positive")
     if len(source_revision) != 40 or any(
         character not in "0123456789abcdef" for character in source_revision
     ):
@@ -483,7 +554,7 @@ def run_opsd_screen(
         enable_thinking=enable_thinking,
         processor_enabled=processor_enabled,
     )
-    lm = GCWEvalLM(model, tokenizer, batch_size=1, opsd_condition=condition)
+    lm = GCWEvalLM(model, tokenizer, batch_size=batch_size, opsd_condition=condition)
     task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
     evaluated = lm_eval.simple_evaluate(
         model=lm,
@@ -531,6 +602,7 @@ def run_opsd_screen(
         },
         "dataset_files": _opsd_dataset_file_identity(tasks),
         "limit_per_task": limit,
+        "execution_batch_size": batch_size,
         "generation_policy": {
             "do_sample": False,
             "temperature": 0.0,

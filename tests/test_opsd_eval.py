@@ -234,6 +234,7 @@ def _document(name: str, score: float) -> dict:
     processor_enabled = name.endswith("cp-on")
     return {
         "source_revision": "a" * 40,
+        "checkpoint": "/checkpoint",
         "checkpoint_sha256": "b" * 64,
         "checkpoint_manifest": {
             "files": {
@@ -244,6 +245,7 @@ def _document(name: str, score: float) -> dict:
             "manifest_sha256": "4" * 64,
         },
         "model_config": {"variant": "bgt"},
+        "train_state": {"optimizer_steps": 1},
         "tokenizer_source": "/models/qwen3-sft",
         "tokenizer_identity_sha256": "f" * 64,
         "datasets_cache": "/cache",
@@ -257,6 +259,7 @@ def _document(name: str, score: float) -> dict:
             }
         },
         "limit_per_task": 1,
+        "execution_batch_size": 1,
         "generation_policy": {
             "do_sample": False,
             "temperature": 0.0,

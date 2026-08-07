@@ -29,6 +29,46 @@ class TeacherTraceStore:
         if self.path.exists():
             self._load_index()
 
+    def get_failure(self, *, source_index: int, prompt: str) -> str | None:
+        entry = self._index.get(source_index)
+        if entry is None:
+            return None
+        prompt_hash = _prompt_hash(prompt)
+        if entry.prompt_sha256 != prompt_hash:
+            raise ValueError(f"teacher trace prompt hash mismatch for source_index={source_index}")
+        with self.path.open("rb") as handle:
+            handle.seek(entry.byte_offset)
+            payload = _parse_payload(handle.readline(), source=f"source_index={source_index}")
+        reason = payload.get("failure_reason")
+        if reason is None:
+            return None
+        if not isinstance(reason, str) or not reason:
+            raise ValueError(f"invalid teacher trace failure for source_index={source_index}")
+        return reason
+
+    def put_failure(self, *, source_index: int, prompt: str, reason: str) -> None:
+        if source_index < 0:
+            raise ValueError("source_index must be non-negative")
+        if not reason:
+            raise ValueError("teacher trace failure reason must not be empty")
+        prompt_hash = _prompt_hash(prompt)
+        existing = self._index.get(source_index)
+        if existing is not None:
+            cached_reason = self.get_failure(source_index=source_index, prompt=prompt)
+            if existing.prompt_sha256 != prompt_hash or cached_reason != reason:
+                raise ValueError(f"conflicting teacher trace for source_index={source_index}")
+            return
+        self._append(
+            source_index=source_index,
+            prompt_hash=prompt_hash,
+            payload={
+                "fingerprint": self.fingerprint,
+                "source_index": source_index,
+                "prompt_sha256": prompt_hash,
+                "failure_reason": reason,
+            },
+        )
+
     def get(self, *, source_index: int, prompt: str) -> tuple[int, ...] | None:
         entry = self._index.get(source_index)
         if entry is None:
@@ -86,6 +126,8 @@ class TeacherTraceStore:
         prompt_hash = _prompt_hash(prompt)
         existing = self._index.get(source_index)
         if existing is not None:
+            if self.get_failure(source_index=source_index, prompt=prompt) is not None:
+                raise ValueError(f"conflicting teacher trace for source_index={source_index}")
             cached = self.get_native_trajectory(source_index=source_index, prompt=prompt)
             expected = NativeTeacherTrajectory(
                 reasoning_ids, visible_response_ids, full_completion_ids
@@ -113,6 +155,8 @@ class TeacherTraceStore:
         prompt_hash = _prompt_hash(prompt)
         existing = self._index.get(source_index)
         if existing is not None:
+            if self.get_failure(source_index=source_index, prompt=prompt) is not None:
+                raise ValueError(f"conflicting teacher trace for source_index={source_index}")
             if existing.prompt_sha256 != prompt_hash or self.get(source_index=source_index, prompt=prompt) != reasoning_ids:
                 raise ValueError(f"conflicting teacher trace for source_index={source_index}")
             return
@@ -175,7 +219,11 @@ class TeacherTraceStore:
                     prompt_sha256 = str(payload["prompt_sha256"])
                 except (KeyError, TypeError, ValueError) as exc:
                     raise ValueError(f"invalid teacher trace {source}") from exc
-                _reasoning_ids(payload, source=source)
+                failure_reason = payload.get("failure_reason")
+                if failure_reason is None:
+                    _reasoning_ids(payload, source=source)
+                elif not isinstance(failure_reason, str) or not failure_reason:
+                    raise ValueError(f"invalid teacher trace failure at {source}")
                 if source_index < 0 or len(prompt_sha256) != 64:
                     raise ValueError(f"invalid teacher trace {source}")
                 entry = TeacherTraceIndexEntry(prompt_sha256, byte_offset)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Iterator, Protocol
 
 import torch
@@ -58,6 +59,95 @@ def parse_native_teacher_trajectory(
         visible_response_ids=visible_ids,
         full_completion_ids=generated_ids,
     )
+
+
+@torch.no_grad()
+def sample_backbone_completions(
+    backbone: TF,
+    prompt_ids: Sequence[tuple[int, ...]],
+    *,
+    max_new_tokens: int,
+    eos_token_id: int | None,
+    stop_ids: tuple[int, ...] | None,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    valid_vocab_size: int | None = None,
+    generators: Sequence[torch.Generator | None],
+) -> tuple[tuple[int, ...], ...]:
+    """Sample an equal-prompt-length batch with independent RNG streams."""
+    prompts = tuple(prompt_ids)
+    generator_list = tuple(generators)
+    if not prompts or any(not prompt for prompt in prompts):
+        raise ValueError("teacher generation requires non-empty prompts")
+    if len(generator_list) != len(prompts):
+        raise ValueError("teacher generation requires one generator per prompt")
+    prompt_length = len(prompts[0])
+    if any(len(prompt) != prompt_length for prompt in prompts):
+        raise ValueError("batched teacher prompts must have equal token lengths")
+    if max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be positive")
+    if prompt_length + max_new_tokens > backbone.config.sequence_len:
+        raise ValueError("teacher prompt and completion exceed model sequence_len")
+
+    device = backbone.get_device()
+    num_kv_heads, head_dim = backbone.config.stored_cache_shape
+    cache = StaticCacheState.allocate(
+        batch_size=len(prompts),
+        num_layers=backbone.config.cache_num_layers,
+        num_kv_heads=num_kv_heads,
+        max_seq_len=prompt_length + max_new_tokens,
+        head_dim=head_dim,
+        device=device,
+        dtype=backbone.embed_tokens.weight.dtype,
+    )
+    prompt_prefix = torch.tensor(
+        [prompt[:-1] for prompt in prompts], dtype=torch.long, device=device
+    )
+    if prompt_prefix.shape[1]:
+        _, cache = backbone.forward_chunk_static(prompt_prefix, 0, cache, logits=False)
+    prompt_last = torch.tensor(
+        [[prompt[-1]] for prompt in prompts], dtype=torch.long, device=device
+    )
+    logits, cache = backbone.forward_chunk_static(prompt_last, prompt_length - 1, cache)
+    next_logits = logits[:, -1, :]
+    generated: list[list[int]] = [[] for _ in prompts]
+    finished = [False] * len(prompts)
+    fill_token_id = eos_token_id if eos_token_id is not None else 0
+
+    for generated_index in range(max_new_tokens):
+        sampled_rows: list[torch.Tensor] = []
+        for row, generator in enumerate(generator_list):
+            if finished[row]:
+                sampled_rows.append(torch.tensor(fill_token_id, dtype=torch.long, device=device))
+                continue
+            sampled_rows.append(
+                sample_next_token(
+                    next_logits[row : row + 1],
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    valid_vocab_size=valid_vocab_size,
+                    generator=generator,
+                )[0]
+            )
+        sampled = torch.stack(sampled_rows)
+        for row in range(len(prompts)):
+            if finished[row]:
+                continue
+            token_id = int(sampled[row].item())
+            generated[row].append(token_id)
+            finished[row] = (eos_token_id is not None and token_id == eos_token_id) or (
+                stop_ids is not None and _ends_with(generated[row], stop_ids)
+            )
+        if all(finished) or generated_index + 1 == max_new_tokens:
+            break
+        token_position = prompt_length + generated_index
+        logits, cache = backbone.forward_chunk_static(
+            sampled[:, None], token_position, cache
+        )
+        next_logits = logits[:, -1, :]
+    return tuple(tuple(row) for row in generated)
 
 
 @torch.no_grad()

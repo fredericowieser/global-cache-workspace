@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import itertools
 import json
+import math
 import os
 import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterable
-from contextlib import nullcontext
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, cast
 
@@ -43,6 +45,45 @@ class InvalidDistillationExample(ValueError):
     """A data-dependent prompt/trace failure that may be skipped by policy."""
 
 
+class _PhaseTimings:
+    def __init__(self) -> None:
+        self.values: dict[str, float] = {}
+
+    @contextmanager
+    def measure(self, name: str) -> Iterator[None]:
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            self.values[name] = self.values.get(name, 0.0) + time.monotonic() - started
+
+
+def _should_record_cache_displacements(
+    distill: DistillationConfig,
+    *,
+    valid_examples: int,
+    accumulated_examples: int,
+    optimizer_steps: int,
+) -> bool:
+    if distill.overfit_diagnostic:
+        return True
+    if not distill.record_cache_displacements:
+        return False
+    cadence = distill.cache_displacement_audit_every_optimizer_steps
+    if cadence == 1:
+        return True
+    if valid_examples == 0:
+        return True
+    next_optimizer_step = optimizer_steps + 1
+    if accumulated_examples == 0 and next_optimizer_step % cadence == 0:
+        return True
+    return (
+        distill.max_optimizer_steps is not None
+        and next_optimizer_step == distill.max_optimizer_steps
+        and accumulated_examples + 1 == distill.gradient_accumulation_steps
+    )
+
+
 def train_distillation(config: TrainConfig) -> None:
     """Run one finite prompt epoch of on-policy self-distillation."""
     distill = config.distillation
@@ -56,11 +97,13 @@ def train_distillation(config: TrainConfig) -> None:
     final_checkpoint = output_dir / "final"
     staging_checkpoint = output_dir / ".final-overfit-staging"
     locked_examples_path = output_dir / "locked-examples.json"
+    heldout_examples_path = output_dir / "heldout-examples.json"
     if (
         metrics_path.exists()
         or final_checkpoint.exists()
         or staging_checkpoint.exists()
         or (distill.overfit_diagnostic and locked_examples_path.exists())
+        or (distill.heldout_source_indices and heldout_examples_path.exists())
     ):
         raise FileExistsError(
             f"refusing to overwrite an existing distillation run in {output_dir}; "
@@ -163,8 +206,38 @@ def train_distillation(config: TrainConfig) -> None:
             _locked_examples_payload(diagnostic_examples),
         )
 
+    heldout_examples: list[tuple[PromptRecord, DistillationExample]] | None = None
+    heldout_validation: dict[str, Any] | None = None
+    if distill.heldout_source_indices:
+        heldout_examples, heldout_report = _prepare_heldout_examples(
+            model,
+            tokenizer,
+            config,
+            distill,
+            trace_store,
+            close_ids,
+            decode_session,
+            device,
+        )
+        heldout_validation = {
+            **heldout_report,
+            "trajectory_policy": "fixed_pre_optimization_student_and_teacher_visible_trajectories",
+            "initial": _evaluate_locked_examples(
+                model,
+                [example for _, example in heldout_examples],
+                decode_session,
+                config,
+                device,
+            ),
+        }
+        _atomic_write_json(
+            heldout_examples_path,
+            _locked_examples_payload(heldout_examples),
+        )
+
     seen = 0
     valid = 0
+    trained_source_indices: set[int] = set()
     skipped = 0
     answer_tokens = 0
     optimizer_steps = 0
@@ -175,48 +248,79 @@ def train_distillation(config: TrainConfig) -> None:
 
     with metrics_path.open("x", encoding="utf-8") as metrics:
         for epoch in range(1, distill.epochs + 1):
-            for record, locked_example in _epoch_training_items(config, diagnostic_examples):
+            for record, locked_example, prebuilt_example in _epoch_training_items_with_prebuild(
+                model,
+                tokenizer,
+                config,
+                diagnostic_examples,
+                trace_store,
+                close_ids,
+                decode_session,
+                device,
+                remaining_before_update=lambda: (
+                    distill.gradient_accumulation_steps - accumulated
+                ),
+            ):
                 seen += 1
                 processor_gate_before_example = _processor_gate(model)
+                cache_displacement_audited = _should_record_cache_displacements(
+                    distill,
+                    valid_examples=valid,
+                    accumulated_examples=accumulated,
+                    optimizer_steps=optimizer_steps,
+                )
+                decode_session.record_displacements = cache_displacement_audited
+                phase_timings = _PhaseTimings()
                 try:
-                    if locked_example is None:
-                        with _autocast_context(config, device):
-                            example, trace_cached = _build_example(
-                                model,
-                                tokenizer,
-                                record,
-                                distill,
-                                trace_store,
-                                close_ids,
-                                decode_session,
-                                seed=config.seed,
-                                device=device,
-                            )
-                    else:
-                        example = locked_example
-                        trace_cached = True
-                    result = _backward_distillation_example(
-                        model,
-                        example,
-                        decode_session,
-                        config,
-                        device,
-                    )
+                    with phase_timings.measure("example_construction"):
+                        if isinstance(prebuilt_example, InvalidDistillationExample):
+                            raise prebuilt_example
+                        if prebuilt_example is not None:
+                            example = prebuilt_example
+                            trace_cached = True
+                        elif locked_example is None:
+                            with _autocast_context(config, device):
+                                example, trace_cached = _build_example(
+                                    model,
+                                    tokenizer,
+                                    record,
+                                    distill,
+                                    trace_store,
+                                    close_ids,
+                                    decode_session,
+                                    seed=config.seed,
+                                    device=device,
+                                )
+                        else:
+                            example = locked_example
+                            trace_cached = True
+                    with phase_timings.measure("backward"):
+                        result = _backward_distillation_example(
+                            model,
+                            example,
+                            decode_session,
+                            config,
+                            device,
+                        )
                     if valid == 0 and any(parameter.grad is not None for parameter in model.backbone.parameters()):
                         raise RuntimeError("frozen teacher/student backbone accumulated gradients")
                     accumulated += 1
                     valid += 1
+                    trained_source_indices.add(record.source_index)
                     answer_tokens += result.answer_tokens
                     _accumulate_wandb_batch(wandb_batch, result, example)
                     grad_norm: float | None = None
-                    if accumulated == distill.gradient_accumulation_steps:
-                        grad_norm = _optimizer_step(model, optimizer, accumulated, config.grad_clip)
-                        optimizer_steps += 1
-                        accumulated = 0
-                        budget_reached = (
-                            distill.max_optimizer_steps is not None
-                            and optimizer_steps >= distill.max_optimizer_steps
-                        )
+                    with phase_timings.measure("optimizer"):
+                        if accumulated == distill.gradient_accumulation_steps:
+                            grad_norm = _optimizer_step(
+                                model, optimizer, accumulated, config.grad_clip
+                            )
+                            optimizer_steps += 1
+                            accumulated = 0
+                            budget_reached = (
+                                distill.max_optimizer_steps is not None
+                                and optimizer_steps >= distill.max_optimizer_steps
+                            )
 
                     _write_metric(
                         metrics,
@@ -245,6 +349,15 @@ def train_distillation(config: TrainConfig) -> None:
                             "teacher_trajectory_cache_events": list(
                                 result.teacher_trajectory_event_cache_lengths
                             ),
+                            "cache_displacement_audited": cache_displacement_audited,
+                            "phase_seconds": {
+                                name: phase_timings.values.get(name, 0.0)
+                                for name in (
+                                    "example_construction",
+                                    "backward",
+                                    "optimizer",
+                                )
+                            },
                             "cache_relative_l2_displacements": list(
                                 result.event_relative_l2_displacements
                             ),
@@ -356,12 +469,35 @@ def train_distillation(config: TrainConfig) -> None:
         ):
             raise RuntimeError("logit probe coverage changed before checkpoint publication")
         overfit_diagnostic["pre_save_logit_probe_sha256"] = pre_save_probe
+    if heldout_validation is not None and heldout_examples is not None:
+        final_heldout = _evaluate_locked_examples(
+            model,
+            [example for _, example in heldout_examples],
+            decode_session,
+            config,
+            device,
+        )
+        metric_key = "objective_mean_unclipped_kl"
+        initial_kl = float(heldout_validation["initial"][metric_key])
+        final_kl = float(final_heldout[metric_key])
+        if not math.isfinite(initial_kl) or not math.isfinite(final_kl) or initial_kl <= 0:
+            raise RuntimeError("held-out validation produced invalid KL metrics")
+        heldout_validation.update(
+            {
+                "final": final_heldout,
+                "metric": metric_key,
+                "initial_kl": initial_kl,
+                "final_kl": final_kl,
+                "reduction_fraction": (initial_kl - final_kl) / initial_kl,
+            }
+        )
     elapsed = time.monotonic() - started
     train_state: dict[str, Any] = {
         "mode": "cot_distillation",
         "epoch": distill.epochs,
         "seen_prompts": seen,
         "valid_prompts": valid,
+        "trained_source_indices": sorted(trained_source_indices),
         "skipped_prompts": skipped,
         "answer_tokens": answer_tokens,
         "optimizer_steps": optimizer_steps,
@@ -394,6 +530,8 @@ def train_distillation(config: TrainConfig) -> None:
     }
     if overfit_diagnostic is not None:
         train_state["overfit_diagnostic"] = overfit_diagnostic
+    if heldout_validation is not None:
+        train_state["heldout_validation"] = heldout_validation
     publication_checkpoint = (
         output_dir / ".final-overfit-staging"
         if overfit_diagnostic is not None
@@ -660,7 +798,66 @@ def _epoch_training_items(
         skip_rows=config.data.sft_skip_rows,
         take_rows=config.data.sft_take_rows,
     )
-    return ((record, None) for record in records)
+    heldout = set(config.distillation.heldout_source_indices) if config.distillation else set()
+    return ((record, None) for record in records if record.source_index not in heldout)
+
+
+def _epoch_training_items_with_prebuild(
+    model: BGT,
+    tokenizer: TransformersTokenizer,
+    config: TrainConfig,
+    locked_examples: list[tuple[PromptRecord, DistillationExample]] | None,
+    trace_store: TeacherTraceStore,
+    close_ids: tuple[int, ...],
+    decode_session: BGTDecodeSession,
+    device: torch.device,
+    *,
+    remaining_before_update: Callable[[], int],
+) -> Iterable[
+    tuple[
+        PromptRecord,
+        DistillationExample | None,
+        DistillationExample | InvalidDistillationExample | None,
+    ]
+]:
+    distill = config.distillation
+    if distill is None:
+        raise ValueError("distillation training requires distillation configuration")
+    items = iter(_epoch_training_items(config, locked_examples))
+    if distill.execution_microbatch_size == 1 or locked_examples is not None:
+        for record, locked_example in items:
+            yield record, locked_example, None
+        return
+    while True:
+        remaining = remaining_before_update()
+        if not 1 <= remaining <= distill.gradient_accumulation_steps:
+            raise RuntimeError(
+                "execution microbatch scheduler received invalid remaining capacity: "
+                f"{remaining}"
+            )
+        chunk = tuple(
+            itertools.islice(
+                items,
+                min(distill.execution_microbatch_size, remaining),
+            )
+        )
+        if not chunk:
+            return
+        records = tuple(record for record, _ in chunk)
+        with _autocast_context(config, device):
+            built = _build_cached_examples_batch(
+                model,
+                tokenizer,
+                records,
+                distill,
+                trace_store,
+                close_ids,
+                decode_session,
+                seed=config.seed,
+                device=device,
+            )
+        for (record, locked_example), result in zip(chunk, built, strict=True):
+            yield record, locked_example, result
 
 
 def _prepare_locked_examples(
@@ -715,6 +912,64 @@ def _prepare_locked_examples(
         "lock_attempts": attempts,
         "lock_skips": skips,
         "locked_source_indices": [record.source_index for record, _ in locked],
+    }
+
+
+def _prepare_heldout_examples(
+    model: BGT,
+    tokenizer: TransformersTokenizer,
+    config: TrainConfig,
+    distill: DistillationConfig,
+    trace_store: TeacherTraceStore,
+    close_ids: tuple[int, ...],
+    decode_session: BGTDecodeSession,
+    device: torch.device,
+) -> tuple[list[tuple[PromptRecord, DistillationExample]], dict[str, Any]]:
+    requested = set(distill.heldout_source_indices)
+    heldout: list[tuple[PromptRecord, DistillationExample]] = []
+    skips: list[dict[str, Any]] = []
+    seen_requested: set[int] = set()
+    records = iter_openmath_prompts(
+        config.data.data_dir or "",
+        skip_rows=config.data.sft_skip_rows,
+        take_rows=config.data.sft_take_rows,
+    )
+    for record in records:
+        if record.source_index not in requested:
+            continue
+        seen_requested.add(record.source_index)
+        try:
+            with _autocast_context(config, device):
+                example, _ = _build_example(
+                    model,
+                    tokenizer,
+                    record,
+                    distill,
+                    trace_store,
+                    close_ids,
+                    decode_session,
+                    seed=config.seed,
+                    device=device,
+                )
+        except InvalidDistillationExample as exc:
+            skips.append({"source_index": record.source_index, "reason": str(exc)})
+        else:
+            heldout.append((record, example))
+        if seen_requested == requested:
+            break
+    missing = sorted(requested - seen_requested)
+    if missing:
+        raise RuntimeError(f"held-out source indices are outside the configured data slice: {missing}")
+    if len(heldout) < distill.minimum_heldout_examples:
+        raise RuntimeError(
+            "held-out validation produced too few valid examples: "
+            f"valid={len(heldout)}, minimum={distill.minimum_heldout_examples}, skips={skips}"
+        )
+    trace_store.sync()
+    return heldout, {
+        "candidate_source_indices": list(distill.heldout_source_indices),
+        "heldout_source_indices": [record.source_index for record, _ in heldout],
+        "heldout_skips": skips,
     }
 
 
@@ -829,7 +1084,7 @@ def _evaluate_locked_examples(
                 sequence_chunk_size=distill.kl_sequence_chunk_size,
                 visible_trajectory_mode=distill.visible_trajectory_mode,
             )
-        weight = 1 if distill.visible_trajectory_mode == "both" else result.answer_tokens
+        weight = 1.0
         aggregate_loss += float(result.loss.detach().float().item()) * weight
         aggregate_kl += float(result.unclipped_kl.detach().float().item()) * weight
         answer_tokens += result.answer_tokens
@@ -843,13 +1098,14 @@ def _evaluate_locked_examples(
         "examples": len(examples),
         "answer_tokens": answer_tokens,
         "processor_gate": _processor_gate(model),
+        "objective_mean_loss": aggregate_loss / len(examples),
+        "objective_mean_unclipped_kl": aggregate_kl / len(examples),
     }
     if distill.visible_trajectory_mode == "both":
         metrics.update(
             {
                 "objective_aggregation": "equal_example_mean_of_equal_trajectory_means",
-                "objective_mean_loss": aggregate_loss / len(examples),
-                "objective_mean_unclipped_kl": aggregate_kl / len(examples),
+
                 "student_cache_events": len(student_displacements),
                 "teacher_cache_events": len(teacher_displacements),
                 "mean_student_cache_relative_l2_displacement": (
@@ -867,9 +1123,7 @@ def _evaluate_locked_examples(
     else:
         metrics.update(
             {
-                "objective_aggregation": "token_weighted_visible_positions",
-                "token_weighted_loss": aggregate_loss / answer_tokens,
-                "token_weighted_unclipped_kl": aggregate_kl / answer_tokens,
+                "objective_aggregation": "equal_example_mean",
                 "cache_events": len(student_displacements),
                 "mean_cache_relative_l2_displacement": (
                     sum(student_displacements) / len(student_displacements)
@@ -942,6 +1196,191 @@ def _locked_examples_payload(
     }
 
 
+def _build_cached_examples_batch(
+    model: BGT,
+    tokenizer: TransformersTokenizer,
+    records: tuple[PromptRecord, ...],
+    distill: DistillationConfig,
+    trace_store: TeacherTraceStore,
+    close_ids: tuple[int, ...],
+    decode_session: BGTDecodeSession,
+    *,
+    seed: int,
+    device: torch.device,
+) -> tuple[DistillationExample | InvalidDistillationExample, ...]:
+    if not records:
+        raise ValueError("cached example batch must not be empty")
+    open_ids = tuple(tokenizer.encode(distill.reasoning_open_text))
+    prepared: list[tuple[Any, ...]] = []
+    results: list[DistillationExample | InvalidDistillationExample | None] = [
+        None
+    ] * len(records)
+    for index, record in enumerate(records):
+        try:
+            try:
+                student_prompt = format_chat_prompt(
+                    tokenizer, record.prompt, enable_thinking=False
+                )
+                teacher_prompt = format_teacher_prompt(
+                    tokenizer,
+                    record.prompt,
+                    reasoning_open_text=distill.reasoning_open_text,
+                )
+            except ValueError as exc:
+                raise InvalidDistillationExample(str(exc)) from exc
+            cached_failure = trace_store.get_failure(
+                source_index=record.source_index, prompt=record.prompt
+            )
+            if cached_failure is not None:
+                raise InvalidDistillationExample(cached_failure)
+            teacher_response_ids: tuple[int, ...] | None = None
+            if distill.teacher_trajectory_mode == "native_full":
+                native = trace_store.get_native_trajectory(
+                    source_index=record.source_index, prompt=record.prompt
+                )
+                if native is None:
+                    raise InvalidDistillationExample(
+                        "precomputed native teacher trajectory is missing"
+                    )
+                native = parse_native_teacher_trajectory(
+                    native.full_completion_ids,
+                    teacher_trigger_ids=teacher_prompt.trigger_ids,
+                    open_ids=open_ids,
+                    close_ids=close_ids,
+                    eos_token_id=tokenizer.eot_id,
+                )
+                _validate_native_trajectory_caps(native, distill)
+                reasoning_ids = native.reasoning_ids
+                teacher_response_ids = native.visible_response_ids
+            else:
+                cached_reasoning = trace_store.get(
+                    source_index=record.source_index, prompt=record.prompt
+                )
+                if cached_reasoning is None:
+                    raise InvalidDistillationExample(
+                        "precomputed teacher reasoning trace is missing"
+                    )
+                reasoning_ids = cached_reasoning
+            if any(
+                token_id >= tokenizer.get_vocab_size() for token_id in reasoning_ids
+            ):
+                raise ValueError(
+                    "cached teacher trace contains out-of-vocabulary IDs for "
+                    f"source_index={record.source_index}"
+                )
+            if teacher_response_ids is not None and any(
+                token_id >= tokenizer.get_vocab_size()
+                for token_id in teacher_response_ids
+            ):
+                raise ValueError(
+                    "cached teacher visible response contains out-of-vocabulary IDs for "
+                    f"source_index={record.source_index}"
+                )
+            prepared.append(
+                (
+                    index,
+                    record,
+                    student_prompt,
+                    teacher_prompt,
+                    reasoning_ids,
+                    teacher_response_ids,
+                )
+            )
+        except InvalidDistillationExample as exc:
+            results[index] = exc
+
+    grouped: dict[tuple[int, int], list[tuple[Any, ...]]] = {}
+    for item in prepared:
+        student_prompt = item[2]
+        key = (len(student_prompt.base_ids), len(student_prompt.trigger_ids))
+        grouped.setdefault(key, []).append(item)
+    for group in grouped.values():
+        try:
+            rollouts = decode_session.rollout_many(
+                tuple(item[2] for item in group),
+                max_response_tokens=distill.max_response_tokens,
+                eos_token_id=tokenizer.eot_id,
+                temperature=distill.temperature,
+                top_p=distill.top_p,
+                top_k=distill.top_k,
+                generators=tuple(
+                    _generator(device, seed + 2 * item[1].source_index + 1)
+                    for item in group
+                ),
+            )
+            completed = list(zip(group, rollouts, strict=True))
+        except ValueError:
+            completed = []
+            for item in group:
+                index = int(item[0])
+                record = item[1]
+                try:
+                    rollout = decode_session.rollout(
+                        item[2],
+                        max_response_tokens=distill.max_response_tokens,
+                        eos_token_id=tokenizer.eot_id,
+                        temperature=distill.temperature,
+                        top_p=distill.top_p,
+                        top_k=distill.top_k,
+                        generator=_generator(
+                            device, seed + 2 * record.source_index + 1
+                        ),
+                    )
+                except ValueError as exc:
+                    results[index] = InvalidDistillationExample(str(exc))
+                    continue
+                completed.append((item, rollout))
+        for item, rollout in completed:
+            index, record, student_prompt, teacher_prompt, reasoning_ids, teacher_response_ids = item
+            try:
+                if (
+                    distill.teacher_trajectory_mode == "native_full"
+                    and rollout.response_ids[-1] != tokenizer.eot_id
+                ):
+                    raise InvalidDistillationExample(
+                        "native full student response must end with EOT"
+                    )
+                if distill.teacher_trajectory_mode == "native_full" and (
+                    _contains_token_sequence(rollout.response_ids, open_ids)
+                    or _contains_token_sequence(rollout.response_ids, close_ids)
+                ):
+                    raise InvalidDistillationExample(
+                        "native full student response contains thinking delimiters"
+                    )
+                for trajectory_name, response_ids in (
+                    ("student", rollout.response_ids),
+                    ("teacher", teacher_response_ids),
+                ):
+                    if response_ids is None:
+                        continue
+                    teacher_scoring_tokens = (
+                        len(teacher_prompt.full_ids)
+                        + len(reasoning_ids)
+                        + len(response_ids)
+                    )
+                    if teacher_scoring_tokens > model.config.sequence_len:
+                        raise InvalidDistillationExample(
+                            f"teacher context and {trajectory_name} response require "
+                            f"{teacher_scoring_tokens} tokens but model sequence_len is "
+                            f"{model.config.sequence_len}"
+                        )
+                results[index] = DistillationExample(
+                    student_prompt=student_prompt,
+                    teacher_prompt=teacher_prompt,
+                    teacher_reasoning_ids=reasoning_ids,
+                    response_ids=rollout.response_ids,
+                    teacher_response_ids=teacher_response_ids,
+                )
+            except InvalidDistillationExample as exc:
+                results[index] = exc
+    if any(result is None for result in results):
+        raise RuntimeError("cached example batch did not produce every result")
+    return tuple(
+        cast(DistillationExample | InvalidDistillationExample, result)
+        for result in results
+    )
+
+
 def _build_example(
     model: BGT,
     tokenizer: TransformersTokenizer,
@@ -964,6 +1403,11 @@ def _build_example(
     except ValueError as exc:
         raise InvalidDistillationExample(str(exc)) from exc
     teacher_response_ids: tuple[int, ...] | None = None
+    cached_failure = trace_store.get_failure(
+        source_index=record.source_index, prompt=record.prompt
+    )
+    if cached_failure is not None:
+        raise InvalidDistillationExample(cached_failure)
     open_ids = tuple(tokenizer.encode(distill.reasoning_open_text))
     if distill.teacher_trajectory_mode == "native_full":
         native = trace_store.get_native_trajectory(
@@ -971,6 +1415,10 @@ def _build_example(
         )
         trace_cached = native is not None
         if native is None:
+            if distill.require_precomputed_teacher_traces:
+                raise InvalidDistillationExample(
+                    "precomputed native teacher trace is missing"
+                )
             teacher_generator = _generator(device, seed + 2 * record.source_index)
             try:
                 generated = sample_backbone_completion(
@@ -992,9 +1440,14 @@ def _build_example(
                     close_ids=close_ids,
                     eos_token_id=tokenizer.eot_id,
                 )
+                _validate_native_trajectory_caps(native, distill)
             except ValueError as exc:
+                trace_store.put_failure(
+                    source_index=record.source_index,
+                    prompt=record.prompt,
+                    reason=str(exc),
+                )
                 raise InvalidDistillationExample(str(exc)) from exc
-            _validate_native_trajectory_caps(native, distill)
             trace_store.put_native_trajectory(
                 source_index=record.source_index,
                 prompt=record.prompt,
@@ -1019,6 +1472,10 @@ def _build_example(
         )
         trace_cached = cached_reasoning is not None
         if cached_reasoning is None:
+            if distill.require_precomputed_teacher_traces:
+                raise InvalidDistillationExample(
+                    "precomputed teacher reasoning trace is missing"
+                )
             teacher_generator = _generator(device, seed + 2 * record.source_index)
             try:
                 generated = sample_backbone_completion(
@@ -1042,6 +1499,11 @@ def _build_example(
                 if len(reasoning_ids) > distill.max_teacher_reasoning_tokens:
                     raise ValueError("closed teacher reasoning exceeds max_teacher_reasoning_tokens")
             except ValueError as exc:
+                trace_store.put_failure(
+                    source_index=record.source_index,
+                    prompt=record.prompt,
+                    reason=str(exc),
+                )
                 raise InvalidDistillationExample(str(exc)) from exc
             trace_store.put(
                 source_index=record.source_index,
@@ -1170,10 +1632,12 @@ def _teacher_fingerprint(
     with checkpoint.open("rb") as handle:
         while chunk := handle.read(8 * 1024 * 1024):
             digest.update(chunk)
+    model_payload = to_dict(config.model)
+    model_payload.pop("cache_processor", None)
     payload = {
-        "schema": "gcw.teacher-trace.v5",
+        "schema": "gcw.teacher-trace.v6",
         "checkpoint_sha256": digest.hexdigest(),
-        "model": to_dict(config.model),
+        "model": model_payload,
         "tokenizer": config.data.tokenizer,
         "tokenizer_identity_sha256": tokenizer.identity_sha256(),
         "teacher_generation": {

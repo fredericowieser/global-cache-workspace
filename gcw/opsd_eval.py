@@ -42,6 +42,53 @@ def build_opsd_eval_prompt(
     return format_chat_prompt(tokenizer, prompt, enable_thinking=False)
 
 
+def greedy_opsd_responses(
+    model: BGT,
+    tokenizer: Any,
+    *,
+    prompts: tuple[str, ...],
+    max_response_tokens: int,
+    condition: OpsdEvalCondition,
+    stop_sequences: tuple[tuple[int, ...], ...] = (),
+) -> tuple[RolloutResult, ...]:
+    if not prompts:
+        raise ValueError("OPSD batched generation requires at least one prompt")
+    chat_prompts = tuple(
+        build_opsd_eval_prompt(
+            tokenizer,
+            prompt,
+            enable_thinking=condition.enable_thinking,
+            reasoning_open_text=condition.reasoning_open_text,
+        )
+        for prompt in prompts
+    )
+    session = BGTDecodeSession(
+        model,
+        process_every=condition.process_every,
+        select_all=condition.select_all,
+        valid_vocab_size=_tokenizer_vocab_size(tokenizer),
+        processor_enabled=condition.processor_enabled,
+    )
+    device = model.get_device()
+    context = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if device.type == "cuda"
+        else nullcontext()
+    )
+    with context:
+        return session.rollout_many(
+            chat_prompts,
+            max_response_tokens=max_response_tokens,
+            eos_token_id=int(tokenizer.eot_id),
+            temperature=1.0,
+            top_p=1.0,
+            top_k=1,
+            generators=(None,) * len(chat_prompts),
+            stop_sequences=stop_sequences,
+            greedy=True,
+        )
+
+
 def greedy_opsd_response(
     model: BGT,
     tokenizer: Any,
@@ -119,8 +166,11 @@ def aggregate_opsd_screen(documents: list[dict[str, Any]]) -> dict[str, Any]:
             raise ValueError("OPSD screen condition name disagrees with processor flag")
     shared_keys = (
         "source_revision",
+        "checkpoint",
         "checkpoint_sha256",
         "checkpoint_manifest",
+        "model_config",
+        "train_state",
         "tokenizer_source",
         "tokenizer_identity_sha256",
         "datasets_cache",
@@ -128,10 +178,21 @@ def aggregate_opsd_screen(documents: list[dict[str, Any]]) -> dict[str, Any]:
         "task_config_sha256",
         "dataset_files",
         "limit_per_task",
+        "execution_batch_size",
+        "generation_policy",
     )
     for key in shared_keys:
         if any(document[key] != ordered[0][key] for document in ordered[1:]):
             raise ValueError(f"OPSD screen conditions differ in {key}")
+    expected_generation_policy = {
+        "do_sample": False,
+        "temperature": 0.0,
+        "top_k": 1,
+        "fewshot": 0,
+        "apply_chat_template_in_lm_eval": False,
+    }
+    if ordered[0]["generation_policy"] != expected_generation_policy:
+        raise ValueError("OPSD screen generation policy is not canonical greedy decoding")
 
     sample_manifest = ordered[0]["sample_manifest"]
     if not sample_manifest or any(

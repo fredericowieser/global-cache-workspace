@@ -17,16 +17,18 @@ import torch.nn.functional as F
 from gcw.checkpoint import load_checkpoint
 from gcw.config import CacheProcessorConfig, DataConfig, DistillationConfig, ModelConfig, TrainConfig, WandbConfig, load_train_config
 from gcw.distill import pipeline as distill_pipeline
+from gcw.distill import precompute as distill_precompute
 from gcw.distill import trainer as distill_trainer
 from gcw.distill.cache import truncate_last_cache_token
 from gcw.distill.data import iter_openmath_prompts
 from gcw.distill.objective import exact_forward_kl
 from gcw.distill.pipeline import DistillationExample, distillation_example_loss
 from gcw.distill.prompt import ChatPrompt, format_chat_prompt, format_teacher_prompt
-from gcw.distill.session import BGTDecodeSession, sample_next_token
+from gcw.distill.session import BGTDecodeSession, RolloutResult, sample_next_token
 from gcw.distill.teacher import (
     parse_native_teacher_trajectory,
     sample_backbone_completion,
+    sample_backbone_completions,
     split_teacher_reasoning,
     teacher_answer_logits,
 )
@@ -162,6 +164,227 @@ def test_distillation_optimizer_step_budget_must_be_positive():
     with pytest.raises(ValueError, match="max_optimizer_steps"):
         DistillationConfig(max_optimizer_steps=0)
 
+
+def test_distillation_heldout_contract_is_unique_nonempty_and_excluded_from_training(
+    monkeypatch,
+):
+    distill = DistillationConfig(
+        heldout_source_indices=[1, 3],
+        minimum_heldout_examples=1,
+    )
+    assert distill.heldout_source_indices == (1, 3)
+    with pytest.raises(ValueError, match="unique"):
+        DistillationConfig(
+            heldout_source_indices=[1, 1],
+            minimum_heldout_examples=1,
+        )
+    with pytest.raises(ValueError, match="minimum_heldout_examples"):
+        DistillationConfig(heldout_source_indices=[1])
+
+    config = _distillation_train_config(distillation=distill)
+    records = tuple(
+        distill_trainer.PromptRecord(source_index=index, prompt=f"p-{index}")
+        for index in range(5)
+    )
+    monkeypatch.setattr(distill_trainer, "iter_openmath_prompts", lambda *a, **k: iter(records))
+    training = list(distill_trainer._epoch_training_items(config, None))
+    assert [record.source_index for record, _ in training] == [0, 2, 4]
+
+
+def test_phase_timings_accumulate_repeated_intervals(monkeypatch):
+    ticks = iter((1.0, 1.25, 2.0, 2.75))
+    monkeypatch.setattr(distill_trainer.time, "monotonic", lambda: next(ticks))
+    timings = distill_trainer._PhaseTimings()
+
+    with timings.measure("teacher_and_student_generation"):
+        pass
+    with timings.measure("teacher_and_student_generation"):
+        pass
+
+    assert timings.values == {"teacher_and_student_generation": 1.0}
+
+
+def test_training_items_prebuild_one_ordered_execution_microbatch(monkeypatch):
+    records = (
+        distill_trainer.PromptRecord(source_index=0, prompt="first"),
+        distill_trainer.PromptRecord(source_index=1, prompt="second"),
+    )
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+        teacher_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(3,)),
+        teacher_reasoning_ids=(4,),
+        response_ids=(5,),
+    )
+    invalid = distill_trainer.InvalidDistillationExample("cached failure")
+    calls = []
+    monkeypatch.setattr(
+        distill_trainer,
+        "_epoch_training_items",
+        lambda *args, **kwargs: ((record, None) for record in records),
+    )
+
+    def fake_build(*args, **kwargs):
+        calls.append(args[2])
+        return (example, invalid)
+
+    monkeypatch.setattr(distill_trainer, "_build_cached_examples_batch", fake_build)
+    monkeypatch.setattr(
+        distill_trainer,
+        "_autocast_context",
+        lambda *args, **kwargs: __import__("contextlib").nullcontext(),
+    )
+    config = __import__("types").SimpleNamespace(
+        distillation=DistillationConfig(
+            gradient_accumulation_steps=2,
+            execution_microbatch_size=2,
+            require_precomputed_teacher_traces=True,
+        ),
+        seed=24,
+    )
+
+    items = list(
+        distill_trainer._epoch_training_items_with_prebuild(
+            object(),
+            object(),
+            config,
+            None,
+            object(),
+            (),
+            object(),
+            torch.device("cpu"),
+            remaining_before_update=lambda: 2,
+        )
+    )
+
+    assert calls == [records]
+    assert items == [
+        (records[0], None, example),
+        (records[1], None, invalid),
+    ]
+
+
+def test_training_items_never_prebuild_across_optimizer_boundary_after_invalid(
+    monkeypatch,
+):
+    records = tuple(
+        distill_trainer.PromptRecord(source_index=index, prompt=str(index))
+        for index in range(4)
+    )
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+        teacher_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(3,)),
+        teacher_reasoning_ids=(4,),
+        response_ids=(5,),
+    )
+    invalid = distill_trainer.InvalidDistillationExample("cached failure")
+    calls = []
+    outcomes = iter(((invalid, example), (example,), (example,)))
+    monkeypatch.setattr(
+        distill_trainer,
+        "_epoch_training_items",
+        lambda *args, **kwargs: ((record, None) for record in records),
+    )
+
+    def fake_build(*args, **kwargs):
+        calls.append(args[2])
+        return next(outcomes)
+
+    monkeypatch.setattr(distill_trainer, "_build_cached_examples_batch", fake_build)
+    monkeypatch.setattr(
+        distill_trainer,
+        "_autocast_context",
+        lambda *args, **kwargs: __import__("contextlib").nullcontext(),
+    )
+    config = __import__("types").SimpleNamespace(
+        distillation=DistillationConfig(
+            gradient_accumulation_steps=2,
+            execution_microbatch_size=2,
+            require_precomputed_teacher_traces=True,
+        ),
+        seed=24,
+    )
+    accumulated = 0
+    items = distill_trainer._epoch_training_items_with_prebuild(
+        object(),
+        object(),
+        config,
+        None,
+        object(),
+        (),
+        object(),
+        torch.device("cpu"),
+        remaining_before_update=lambda: 2 - accumulated,
+    )
+
+    first = next(items)
+    assert isinstance(first[2], distill_trainer.InvalidDistillationExample)
+    second = next(items)
+    accumulated += 1
+    assert second[2] == example
+    third = next(items)
+    accumulated = 0  # this row triggers the optimizer update before another next()
+    assert third[2] == example
+    fourth = next(items)
+    assert fourth[2] == example
+    with pytest.raises(StopIteration):
+        next(items)
+
+    assert calls == [(records[0], records[1]), (records[2],), (records[3],)]
+
+
+def test_distillation_execution_microbatch_must_divide_effective_batch():
+    with pytest.raises(ValueError, match="execution_microbatch_size"):
+        DistillationConfig(
+            gradient_accumulation_steps=16,
+            execution_microbatch_size=3,
+        )
+
+
+def test_distillation_execution_microbatch_requires_precomputed_teacher_traces():
+    with pytest.raises(ValueError, match="precomputed teacher traces"):
+        DistillationConfig(
+            gradient_accumulation_steps=2,
+            execution_microbatch_size=2,
+        )
+
+
+def test_distillation_cache_displacement_audit_cadence_must_be_positive():
+    with pytest.raises(ValueError, match="cache displacement audit cadence"):
+        DistillationConfig(cache_displacement_audit_every_optimizer_steps=0)
+
+
+def test_cache_displacement_audit_schedule_covers_first_periodic_and_final_examples():
+    distill = DistillationConfig(
+        record_cache_displacements=True,
+        cache_displacement_audit_every_optimizer_steps=16,
+        gradient_accumulation_steps=4,
+        max_optimizer_steps=20,
+    )
+
+    audited = {
+        (step, accumulated)
+        for step in range(20)
+        for accumulated in range(4)
+        if distill_trainer._should_record_cache_displacements(
+            distill,
+            valid_examples=step * 4 + accumulated,
+            accumulated_examples=accumulated,
+            optimizer_steps=step,
+        )
+    }
+
+    assert audited == {(0, 0), (15, 0), (19, 3)}
+
+
+def test_cache_displacement_audit_schedule_preserves_legacy_every_example_default():
+    distill = DistillationConfig(record_cache_displacements=True)
+
+    assert distill_trainer._should_record_cache_displacements(
+        distill,
+        valid_examples=7,
+        accumulated_examples=0,
+        optimizer_steps=7,
+    )
 
 
 def test_distillation_repeated_epochs_require_explicit_overfit_diagnostic():
@@ -1130,6 +1353,58 @@ def test_distillation_example_loss_uses_teacher_cot_and_trains_only_bgt():
 
 
 
+def test_batched_teacher_sampling_matches_independent_serial_generation():
+    backbone = _tiny_bgt().backbone
+    prompts = ((1, 2, 3), (4, 5, 6))
+    serial = tuple(
+        sample_backbone_completion(
+            backbone,
+            prompt,
+            max_new_tokens=4,
+            eos_token_id=None,
+            stop_ids=None,
+            temperature=1.0,
+            top_p=1.0,
+            top_k=1,
+            generator=torch.Generator().manual_seed(10 + index),
+        )
+        for index, prompt in enumerate(prompts)
+    )
+
+    batched = sample_backbone_completions(
+        backbone,
+        prompts,
+        max_new_tokens=4,
+        eos_token_id=None,
+        stop_ids=None,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        generators=tuple(
+            torch.Generator().manual_seed(10 + index) for index in range(len(prompts))
+        ),
+    )
+
+    assert batched == serial
+
+
+def test_batched_teacher_sampling_rejects_mixed_prompt_lengths():
+    backbone = _tiny_bgt().backbone
+
+    with pytest.raises(ValueError, match="equal token lengths"):
+        sample_backbone_completions(
+            backbone,
+            ((1, 2), (3, 4, 5)),
+            max_new_tokens=2,
+            eos_token_id=None,
+            stop_ids=None,
+            temperature=1.0,
+            top_p=1.0,
+            top_k=1,
+            generators=(torch.Generator(), torch.Generator()),
+        )
+
+
 def test_teacher_sampling_honours_reasoning_stop_sequence():
     backbone = _tiny_bgt().backbone
     prompt_ids = (1, 2, 3)
@@ -1157,6 +1432,70 @@ def test_teacher_sampling_honours_reasoning_stop_sequence():
     assert len(full) == 3
     assert stopped == (full[0],)
 
+
+
+def test_teacher_trace_store_round_trips_prompt_bound_failure(tmp_path):
+    path = tmp_path / "teacher-trajectories.jsonl"
+    store = TeacherTraceStore(path, fingerprint="teacher-native-v1")
+    store.put_failure(
+        source_index=7,
+        prompt="original",
+        reason="native teacher completion must end with EOT",
+    )
+
+    reopened = TeacherTraceStore(path, fingerprint="teacher-native-v1")
+    assert reopened.get_failure(source_index=7, prompt="original") == (
+        "native teacher completion must end with EOT"
+    )
+    with pytest.raises(ValueError, match="prompt hash"):
+        reopened.get_failure(source_index=7, prompt="changed")
+
+
+def test_build_example_reuses_cached_teacher_failure(tmp_path, monkeypatch):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    calls = []
+
+    def fail_teacher(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise ValueError("native teacher completion must end with EOT")
+
+    monkeypatch.setattr(distill_trainer, "sample_backbone_completion", fail_teacher)
+    store = TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1")
+    distill = DistillationConfig(
+        teacher_trajectory_mode="native_full",
+        visible_trajectory_mode="both",
+        max_teacher_completion_tokens=5,
+        max_response_tokens=3,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+    )
+    kwargs = {
+        "model": model,
+        "tokenizer": tokenizer,
+        "record": distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+        "distill": distill,
+        "trace_store": store,
+        "close_ids": (10, 11),
+        "decode_session": FixedRolloutSession((52, 62)),
+        "seed": 24,
+        "device": torch.device("cpu"),
+    }
+
+    for _ in range(2):
+        with pytest.raises(
+            distill_trainer.InvalidDistillationExample,
+            match="native teacher completion must end with EOT",
+        ):
+            distill_trainer._build_example(**kwargs)
+
+    assert len(calls) == 1
+    assert store.get_failure(source_index=0, prompt="solve this") == (
+        "native teacher completion must end with EOT"
+    )
 
 
 def test_teacher_trace_store_round_trips_native_full_trajectory(tmp_path):
@@ -1233,6 +1572,250 @@ class NativeTrainingHFBackend(TrainingHFBackend):
         if text == "</think>\n\n":
             return [10, 11]
         raise AssertionError(text)
+
+
+def test_precompute_native_teacher_records_batches_equal_prompt_lengths(
+    tmp_path, monkeypatch
+):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    records = (
+        distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+        distill_trainer.PromptRecord(source_index=1, prompt="solve this"),
+    )
+    store = TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1")
+    calls = []
+
+    def fake_batch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return (
+            (40, 10, 11, 50, 62),
+            (40, 10, 11, 51, 62),
+        )
+
+    monkeypatch.setattr(distill_precompute, "sample_backbone_completions", fake_batch)
+    report = distill_precompute.precompute_native_teacher_records(
+        model,
+        tokenizer,
+        records,
+        DistillationConfig(
+            teacher_trajectory_mode="native_full",
+            visible_trajectory_mode="both",
+            max_teacher_completion_tokens=5,
+            max_teacher_reasoning_tokens=3,
+            max_response_tokens=3,
+            reasoning_close_text="</think>\n\n",
+            close_reasoning_at_eos=False,
+        ),
+        store,
+        batch_size=2,
+        seed=24,
+        device=torch.device("cpu"),
+    )
+
+    assert len(calls) == 1
+    assert report == {
+        "records": 2,
+        "cached": 0,
+        "generated": 2,
+        "valid": 2,
+        "invalid": 0,
+        "completion_tokens": 10,
+        "generation_batches": 1,
+        "singleton_batches": 0,
+        "max_observed_batch_size": 2,
+    }
+    assert store.get_native_trajectory(source_index=0, prompt="solve this") is not None
+    assert store.get_native_trajectory(source_index=1, prompt="solve this") is not None
+
+
+def test_build_cached_examples_batch_matches_serial_student_rollout(tmp_path):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    distill = DistillationConfig(
+        teacher_trajectory_mode="reasoning_only",
+        visible_trajectory_mode="student",
+        max_teacher_completion_tokens=5,
+        max_teacher_reasoning_tokens=3,
+        max_response_tokens=3,
+        top_k=1,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+        gradient_accumulation_steps=2,
+        execution_microbatch_size=2,
+        require_precomputed_teacher_traces=True,
+    )
+    records = (
+        distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+        distill_trainer.PromptRecord(source_index=1, prompt="solve this"),
+    )
+    store = TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1")
+    for record in records:
+        store.put(
+            source_index=record.source_index,
+            prompt=record.prompt,
+            reasoning_ids=(40, 10, 11),
+        )
+    serial_session = BGTDecodeSession(
+        model,
+        process_every=distill.response_process_every,
+        valid_vocab_size=tokenizer.get_vocab_size(),
+    )
+    serial = tuple(
+        distill_trainer._build_example(
+            model,
+            tokenizer,
+            record,
+            distill,
+            store,
+            close_ids=(10, 11),
+            decode_session=serial_session,
+            seed=24,
+            device=torch.device("cpu"),
+        )[0]
+        for record in records
+    )
+
+    batched = distill_trainer._build_cached_examples_batch(
+        model,
+        tokenizer,
+        records,
+        distill,
+        store,
+        close_ids=(10, 11),
+        decode_session=BGTDecodeSession(
+            model,
+            process_every=distill.response_process_every,
+            valid_vocab_size=tokenizer.get_vocab_size(),
+        ),
+        seed=24,
+        device=torch.device("cpu"),
+    )
+
+    assert tuple(result for result in batched) == serial
+
+
+def test_build_cached_examples_batch_localizes_student_rollout_value_errors(tmp_path):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    distill = DistillationConfig(
+        teacher_trajectory_mode="reasoning_only",
+        visible_trajectory_mode="student",
+        max_teacher_reasoning_tokens=3,
+        max_response_tokens=3,
+        top_k=1,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+        gradient_accumulation_steps=2,
+        execution_microbatch_size=2,
+        require_precomputed_teacher_traces=True,
+    )
+    records = (
+        distill_trainer.PromptRecord(source_index=0, prompt="solve this"),
+        distill_trainer.PromptRecord(source_index=1, prompt="solve this"),
+    )
+    store = TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1")
+    for record in records:
+        store.put(
+            source_index=record.source_index,
+            prompt=record.prompt,
+            reasoning_ids=(40, 10, 11),
+        )
+
+    class FailingBatchSession:
+        def __init__(self):
+            self.serial_calls = 0
+
+        def rollout_many(self, *args, **kwargs):
+            raise ValueError("one row failed")
+
+        def rollout(self, *args, **kwargs):
+            self.serial_calls += 1
+            if self.serial_calls == 2:
+                raise ValueError("second row failed")
+            return RolloutResult(response_ids=(52, 62), event_cache_lengths=())
+
+    session = FailingBatchSession()
+    built = distill_trainer._build_cached_examples_batch(
+        model,
+        tokenizer,
+        records,
+        distill,
+        store,
+        close_ids=(10, 11),
+        decode_session=session,
+        seed=24,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(built[0], DistillationExample)
+    assert isinstance(built[1], distill_trainer.InvalidDistillationExample)
+    assert str(built[1]) == "second row failed"
+    assert session.serial_calls == 2
+
+
+def test_build_cached_examples_batch_converts_prompt_errors_per_row(
+    tmp_path, monkeypatch
+):
+    model = _tiny_bgt()
+    tokenizer = object.__new__(TransformersTokenizer)
+    tokenizer.enc = NativeTrainingHFBackend()
+    tokenizer.eot_id = 62
+    tokenizer.vocab_size = 63
+    distill = DistillationConfig(
+        max_teacher_reasoning_tokens=3,
+        max_response_tokens=3,
+        top_k=1,
+        reasoning_close_text="</think>\n\n",
+        close_reasoning_at_eos=False,
+        gradient_accumulation_steps=2,
+        execution_microbatch_size=2,
+        require_precomputed_teacher_traces=True,
+    )
+    records = (
+        distill_trainer.PromptRecord(source_index=0, prompt="bad"),
+        distill_trainer.PromptRecord(source_index=1, prompt="good"),
+    )
+    store = TeacherTraceStore(tmp_path / "native.jsonl", fingerprint="native-v1")
+    store.put(source_index=1, prompt="good", reasoning_ids=(40, 10, 11))
+    real_format = distill_trainer.format_chat_prompt
+
+    def sometimes_bad(tokenizer, prompt, *, enable_thinking):
+        if prompt == "bad":
+            raise ValueError("bad prompt")
+        return real_format(tokenizer, prompt, enable_thinking=enable_thinking)
+
+    monkeypatch.setattr(distill_trainer, "format_chat_prompt", sometimes_bad)
+
+    class Session:
+        def rollout_many(self, prompts, **kwargs):
+            assert len(prompts) == 1
+            return (RolloutResult(response_ids=(52, 62), event_cache_lengths=()),)
+
+    built = distill_trainer._build_cached_examples_batch(
+        model,
+        tokenizer,
+        records,
+        distill,
+        store,
+        close_ids=(10, 11),
+        decode_session=Session(),
+        seed=24,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(built[0], distill_trainer.InvalidDistillationExample)
+    assert str(built[0]) == "bad prompt"
+    assert isinstance(built[1], DistillationExample)
 
 
 def test_build_example_native_full_generates_through_eot_and_caches_visible_answer(
@@ -1591,6 +2174,13 @@ def test_trainer_passes_native_both_trajectory_mode_to_loss(tmp_path, monkeypatc
     assert metric["teacher_trajectory_tokens"] == 2
     assert metric["teacher_visible_response_tokens"] == 2
     assert metric["teacher_trajectory_cache_events"] == [2]
+    assert metric["cache_displacement_audited"] is False
+    assert set(metric["phase_seconds"]) == {
+        "example_construction",
+        "backward",
+        "optimizer",
+    }
+    assert all(value >= 0.0 for value in metric["phase_seconds"].values())
     assert metric["cache_relative_l2_displacements"] == [0.1]
     assert metric["teacher_trajectory_cache_relative_l2_displacements"] == [0.2]
     assert len(wandb_inits) == 1
@@ -1685,6 +2275,57 @@ def test_native_both_locked_diagnostics_use_equal_example_objective_and_both_dis
     assert metrics["mean_teacher_cache_relative_l2_displacement"] == pytest.approx(0.3)
     assert "token_weighted_loss" not in metrics
 
+
+def test_student_locked_diagnostics_use_equal_example_mean_with_unequal_lengths(
+    monkeypatch,
+):
+    model = _tiny_bgt()
+    example = DistillationExample(
+        student_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+        teacher_prompt=ChatPrompt(base_ids=(1,), trigger_ids=(8, 9)),
+        teacher_reasoning_ids=(40, 10, 11),
+        response_ids=(52, 62),
+    )
+    values = iter(((1.0, 2), (3.0, 10)))
+
+    def fake_loss(*args, **kwargs):
+        del args
+        assert kwargs["visible_trajectory_mode"] == "student"
+        value, tokens = next(values)
+        scalar = torch.tensor(value)
+        return type(
+            "Result",
+            (),
+            {
+                "loss": scalar,
+                "unclipped_kl": scalar,
+                "answer_tokens": tokens,
+                "event_relative_l2_displacements": (),
+                "teacher_trajectory_event_relative_l2_displacements": (),
+            },
+        )()
+
+    monkeypatch.setattr(distill_trainer, "distillation_example_loss", fake_loss)
+    config = _distillation_train_config(
+        distillation=DistillationConfig(
+            teacher_trajectory_mode="reasoning_only",
+            visible_trajectory_mode="student",
+            close_reasoning_at_eos=False,
+        )
+    )
+    metrics = distill_trainer._evaluate_locked_examples(
+        model,
+        [example, example],
+        BGTDecodeSession(model, process_every=2),
+        config,
+        torch.device("cpu"),
+    )
+
+    assert metrics["objective_aggregation"] == "equal_example_mean"
+    assert metrics["objective_mean_loss"] == pytest.approx(2.0)
+    assert metrics["objective_mean_unclipped_kl"] == pytest.approx(2.0)
+    assert metrics["answer_tokens"] == 12
+    assert "token_weighted_unclipped_kl" not in metrics
 
 
 def test_distillation_trainer_reuses_fixed_trace_across_overfit_epochs(tmp_path, monkeypatch):
@@ -1968,6 +2609,21 @@ def test_teacher_fingerprint_invalidates_seed_limit_and_chat_template(tmp_path):
         distillation=DistillationConfig(max_teacher_reasoning_tokens=8),
     )
     baseline = distill_trainer._teacher_fingerprint(base, (6, 7), (8, 9), tokenizer)
+    replace = __import__("dataclasses").replace
+    assert base.model.cache_processor is not None
+    changed_gate = replace(
+        base,
+        model=replace(
+            base.model,
+            cache_processor=replace(base.model.cache_processor, gate_init=-3.0),
+        ),
+    )
+    assert (
+        distill_trainer._teacher_fingerprint(
+            changed_gate, (6, 7), (8, 9), tokenizer
+        )
+        == baseline
+    )
     changed_seed = _distillation_train_config(
         backbone_checkpoint=str(checkpoint),
         seed=8,
@@ -2134,6 +2790,64 @@ def test_native_teacher_sampling_uses_static_cache(monkeypatch):
     )
     assert len(generated) == 3
 
+
+
+def test_batched_student_rollout_matches_independent_serial_generation():
+    model = _tiny_bgt()
+    prompts = (
+        ChatPrompt(base_ids=(1, 2), trigger_ids=(3,)),
+        ChatPrompt(base_ids=(4, 5), trigger_ids=(6,)),
+    )
+    session = BGTDecodeSession(
+        model,
+        process_every=2,
+        valid_vocab_size=model.config.vocab_size,
+    )
+    serial = tuple(
+        session.rollout(
+            prompt,
+            max_response_tokens=4,
+            eos_token_id=None,
+            temperature=1.0,
+            top_p=1.0,
+            top_k=1,
+            generator=torch.Generator().manual_seed(20 + index),
+        )
+        for index, prompt in enumerate(prompts)
+    )
+
+    batched = session.rollout_many(
+        prompts,
+        max_response_tokens=4,
+        eos_token_id=None,
+        temperature=1.0,
+        top_p=1.0,
+        top_k=1,
+        generators=tuple(
+            torch.Generator().manual_seed(20 + index) for index in range(len(prompts))
+        ),
+    )
+
+    assert batched == serial
+
+
+def test_batched_student_rollout_rejects_mixed_prompt_shapes():
+    model = _tiny_bgt()
+    session = BGTDecodeSession(model, process_every=2)
+
+    with pytest.raises(ValueError, match="equal base and trigger token lengths"):
+        session.rollout_many(
+            (
+                ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+                ChatPrompt(base_ids=(3, 4), trigger_ids=(5,)),
+            ),
+            max_response_tokens=2,
+            eos_token_id=None,
+            temperature=1.0,
+            top_p=1.0,
+            top_k=1,
+            generators=(torch.Generator(), torch.Generator()),
+        )
 
 
 def test_decode_session_can_disable_processor_for_matched_eval_control():

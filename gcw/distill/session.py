@@ -218,6 +218,143 @@ class BGTDecodeSession:
             event_cache_lengths=tuple(event_cache_lengths),
         )
 
+    @torch.no_grad()
+    def rollout_many(
+        self,
+        prompts: Sequence[ChatPrompt],
+        *,
+        max_response_tokens: int,
+        eos_token_id: int | None,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        generators: Sequence[torch.Generator | None],
+        stop_sequences: Sequence[Sequence[int]] = (),
+        greedy: bool = False,
+    ) -> tuple[RolloutResult, ...]:
+        prompt_list = tuple(prompts)
+        generator_list = tuple(generators)
+        if not prompt_list:
+            raise ValueError("batched rollout requires at least one prompt")
+        if len(generator_list) != len(prompt_list):
+            raise ValueError("batched rollout requires one generator per prompt")
+        if max_response_tokens <= 0:
+            raise ValueError("max_response_tokens must be positive")
+        base_length = len(prompt_list[0].base_ids)
+        trigger_length = len(prompt_list[0].trigger_ids)
+        if any(
+            len(prompt.base_ids) != base_length
+            or len(prompt.trigger_ids) != trigger_length
+            for prompt in prompt_list
+        ):
+            raise ValueError("batched rollout prompts must have equal base and trigger token lengths")
+        normalized_stop_sequences = tuple(tuple(sequence) for sequence in stop_sequences)
+        if any(not sequence for sequence in normalized_stop_sequences):
+            raise ValueError("stop sequences must be non-empty")
+        for prompt in prompt_list:
+            self._validate_total_length(prompt, max_response_tokens)
+
+        device = self.model.get_device()
+        num_kv_heads, head_dim = self.model.config.stored_cache_shape
+        full_length = base_length + trigger_length
+        cache = StaticCacheState.allocate(
+            batch_size=len(prompt_list),
+            num_layers=self.model.config.cache_num_layers,
+            num_kv_heads=num_kv_heads,
+            max_seq_len=full_length + max_response_tokens,
+            head_dim=head_dim,
+            device=device,
+            dtype=self.model.backbone.embed_tokens.weight.dtype,
+        )
+        base_ids = torch.tensor(
+            [prompt.base_ids for prompt in prompt_list], dtype=torch.long, device=device
+        )
+        trigger_ids = torch.tensor(
+            [prompt.trigger_ids for prompt in prompt_list], dtype=torch.long, device=device
+        )
+        _, cache = self.model.backbone.forward_chunk_static(
+            base_ids, 0, cache, logits=False
+        )
+        event_cache_lengths: list[list[int]] = [[] for _ in prompt_list]
+        if self.processor_enabled:
+            for events in event_cache_lengths:
+                events.append(cache.seq_len)
+            cache = self._process_static(cache)
+        trigger_logits, cache = self.model.backbone.forward_chunk_static(
+            trigger_ids, base_length, cache
+        )
+        next_logits = trigger_logits[:, -1, :]
+        response_ids: list[list[int]] = [[] for _ in prompt_list]
+        finished = [False] * len(prompt_list)
+        fill_token_id = eos_token_id if eos_token_id is not None else 0
+
+        for response_index in range(max_response_tokens):
+            sampled_rows: list[torch.Tensor] = []
+            for row, generator in enumerate(generator_list):
+                if finished[row]:
+                    sampled_rows.append(
+                        torch.tensor(fill_token_id, dtype=torch.long, device=device)
+                    )
+                elif greedy:
+                    logits = next_logits[row]
+                    if self.valid_vocab_size is not None:
+                        logits = logits[: self.valid_vocab_size]
+                    sampled_rows.append(torch.argmax(logits, dim=-1))
+                else:
+                    sampled_rows.append(
+                        sample_next_token(
+                            next_logits[row : row + 1],
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            valid_vocab_size=self.valid_vocab_size,
+                            generator=generator,
+                        )[0]
+                    )
+            sampled = torch.stack(sampled_rows)
+            consumed = response_index + 1
+            for row in range(len(prompt_list)):
+                if finished[row]:
+                    continue
+                token_id = int(sampled[row].item())
+                response_ids[row].append(token_id)
+                finished[row] = (
+                    eos_token_id is not None and token_id == eos_token_id
+                ) or any(
+                    len(response_ids[row]) >= len(sequence)
+                    and tuple(response_ids[row][-len(sequence) :]) == sequence
+                    for sequence in normalized_stop_sequences
+                )
+            will_continue = [
+                not finished[row] and consumed < max_response_tokens
+                for row in range(len(prompt_list))
+            ]
+            if not any(will_continue):
+                break
+            token_position = full_length + response_index
+            token_logits, cache = self.model.backbone.forward_chunk_static(
+                sampled[:, None], token_position, cache
+            )
+            next_logits = token_logits[:, -1, :]
+            if self.processor_enabled and recurrent_event_due(
+                consumed_response_tokens=consumed,
+                process_every=self.process_every,
+                will_continue=True,
+            ):
+                for row, active in enumerate(will_continue):
+                    if active:
+                        event_cache_lengths[row].append(cache.seq_len)
+                cache = self._process_static(cache)
+                refreshed_logits, cache = self.model.backbone.forward_chunk_static(
+                    sampled[:, None], token_position, cache
+                )
+                next_logits = refreshed_logits[:, -1, :]
+
+        return tuple(
+            RolloutResult(tuple(tokens), tuple(events))
+            for tokens, events in zip(response_ids, event_cache_lengths, strict=True)
+        )
+
     def _start_static(
         self,
         prompt: ChatPrompt,

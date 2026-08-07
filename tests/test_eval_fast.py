@@ -132,3 +132,53 @@ def test_opsd_generate_until_trims_online_stop_with_eot_argument(monkeypatch):
     output = GCWEvalLM._generate_until_opsd(fake, [request])
 
     assert output == ["5"]
+
+
+def test_opsd_generate_until_batches_equal_shape_requests(monkeypatch):
+    from gcw.distill.prompt import ChatPrompt
+    from gcw.distill.session import RolloutResult
+    from gcw.eval import GCWEvalLM
+    from gcw.opsd_eval import OpsdEvalCondition
+
+    class Tokenizer:
+        eot_id = 99
+
+        def encode(self, text, add_special_tokens=False):
+            del add_special_tokens
+            assert text == "STOP"
+            return [9]
+
+    calls = []
+    fake = SimpleNamespace(
+        model=object(),
+        tokenizer=Tokenizer(),
+        opsd_condition=OpsdEvalCondition(False, False),
+        opsd_generation_records=[],
+        batch_size=8,
+        tok_decode=lambda token_ids: ",".join(str(token_id) for token_id in token_ids),
+        eot_token_id=99,
+    )
+    monkeypatch.setattr(
+        "gcw.eval.build_opsd_eval_prompt",
+        lambda *args, **kwargs: ChatPrompt(base_ids=(1,), trigger_ids=(2,)),
+    )
+
+    def fake_batch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return (
+            RolloutResult(response_ids=(5, 9), event_cache_lengths=()),
+            RolloutResult(response_ids=(6, 9), event_cache_lengths=()),
+        )
+
+    monkeypatch.setattr("gcw.eval.greedy_opsd_responses", fake_batch)
+    requests = [
+        SimpleNamespace(args=("question one", {"until": ["STOP"], "max_gen_toks": 12})),
+        SimpleNamespace(args=("question two", {"until": ["STOP"], "max_gen_toks": 12})),
+    ]
+
+    output = GCWEvalLM._generate_until_opsd(fake, requests)
+
+    assert output == ["5", "6"]
+    assert len(calls) == 1
+    assert calls[0][1]["prompts"] == ("question one", "question two")
+    assert [row["request_index"] for row in fake.opsd_generation_records] == [0, 1]

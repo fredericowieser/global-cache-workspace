@@ -410,6 +410,7 @@ class DistillationConfig:
     epochs: int = 1
     overfit_diagnostic: bool = False
     record_cache_displacements: bool = False
+    cache_displacement_audit_every_optimizer_steps: int = 1
     expected_locked_examples: int | None = None
     teacher_thinking: bool = True
     student_thinking: bool = False
@@ -426,13 +427,22 @@ class DistillationConfig:
     response_process_every: int = 64
     boundary_selection: Literal["configured", "all"] = "configured"
     gradient_accumulation_steps: int = 1
+    execution_microbatch_size: int = 1
+    require_precomputed_teacher_traces: bool = False
     max_optimizer_steps: int | None = None
     reasoning_open_text: str = "<think>\n"
     reasoning_close_text: str = "</think>\n\n"
     close_reasoning_at_eos: bool = True
     skip_invalid_traces: bool = True
+    heldout_source_indices: tuple[int, ...] = ()
+    minimum_heldout_examples: int = 0
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "heldout_source_indices",
+            tuple(self.heldout_source_indices),
+        )
         if self.epochs <= 0:
             raise ValueError("distillation epochs must be positive")
         if self.epochs != 1 and not self.overfit_diagnostic:
@@ -443,6 +453,24 @@ class DistillationConfig:
             raise ValueError("overfit diagnostic requires positive expected_locked_examples")
         if not self.overfit_diagnostic and self.expected_locked_examples is not None:
             raise ValueError("expected_locked_examples is only valid for an overfit diagnostic")
+        if any(
+            not isinstance(index, int) or isinstance(index, bool) or index < 0
+            for index in self.heldout_source_indices
+        ):
+            raise ValueError("heldout_source_indices must contain non-negative integers")
+        if len(set(self.heldout_source_indices)) != len(self.heldout_source_indices):
+            raise ValueError("heldout_source_indices must be unique")
+        if self.heldout_source_indices:
+            if not 0 < self.minimum_heldout_examples <= len(self.heldout_source_indices):
+                raise ValueError(
+                    "held-out validation requires minimum_heldout_examples within the candidate set"
+                )
+            if self.overfit_diagnostic:
+                raise ValueError("held-out validation is incompatible with overfit diagnostics")
+        elif self.minimum_heldout_examples != 0:
+            raise ValueError(
+                "minimum_heldout_examples requires non-empty heldout_source_indices"
+            )
         if not self.teacher_thinking or self.student_thinking:
             raise ValueError("cot_distillation requires a thinking teacher and thinking-off student")
         if self.max_teacher_reasoning_tokens <= 0 or self.max_response_tokens <= 0:
@@ -469,12 +497,28 @@ class DistillationConfig:
             )
         if self.kl_sequence_chunk_size <= 0:
             raise ValueError("distillation kl_sequence_chunk_size must be positive")
+        if self.cache_displacement_audit_every_optimizer_steps <= 0:
+            raise ValueError("cache displacement audit cadence must be positive")
         if self.response_process_every <= 0:
             raise ValueError("distillation response_process_every must be positive")
         if self.boundary_selection not in {"configured", "all"}:
             raise ValueError("distillation boundary_selection must be 'configured' or 'all'")
         if self.gradient_accumulation_steps <= 0:
             raise ValueError("distillation gradient_accumulation_steps must be positive")
+        if self.execution_microbatch_size <= 0 or (
+            self.gradient_accumulation_steps % self.execution_microbatch_size != 0
+        ):
+            raise ValueError(
+                "distillation execution_microbatch_size must be positive and divide "
+                "gradient_accumulation_steps"
+            )
+        if (
+            self.execution_microbatch_size > 1
+            and not self.require_precomputed_teacher_traces
+        ):
+            raise ValueError(
+                "distillation execution microbatching requires precomputed teacher traces"
+            )
         if self.max_optimizer_steps is not None and self.max_optimizer_steps <= 0:
             raise ValueError("distillation max_optimizer_steps must be positive when set")
         if not self.reasoning_close_text:
