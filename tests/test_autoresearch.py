@@ -167,7 +167,11 @@ def test_spend_approval_phrase_binds_exact_envelope_and_finite_money(tmp_path):
             requested_hours=12.01,
         )
 
-    routed_approval = {**approval, "project_id": "project-existing-h200"}
+    routed_approval = {
+        **approval,
+        "project_id": "project-existing-h200",
+        "region": "us-central1",
+    }
     routed_path = tmp_path / "routed-approval.json"
     routed_path.write_text(json.dumps(routed_approval))
     assert _validate_spend_approval(
@@ -176,6 +180,7 @@ def test_spend_approval_phrase_binds_exact_envelope_and_finite_money(tmp_path):
         protocol_sha256=protocol_sha256,
         requested_hours=11.5,
         provider_project_id="project-existing-h200",
+        provider_region="us-central1",
     ) == routed_approval
     with pytest.raises(RuntimeError, match="project_id"):
         _validate_spend_approval(
@@ -183,6 +188,15 @@ def test_spend_approval_phrase_binds_exact_envelope_and_finite_money(tmp_path):
             source_revision=source_revision,
             protocol_sha256=protocol_sha256,
             requested_hours=11.5,
+        )
+
+    with pytest.raises(RuntimeError, match="region"):
+        _validate_spend_approval(
+            routed_path,
+            source_revision=source_revision,
+            protocol_sha256=protocol_sha256,
+            requested_hours=11.5,
+            provider_project_id="project-existing-h200",
         )
 
     approval["maximum_spend_usd"] = 110.0
