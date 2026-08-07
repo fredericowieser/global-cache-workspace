@@ -6,9 +6,12 @@
   "base_config": "configs/train/opsd/qwen3_06b_opsd_native_base_pragmatic_steps1000_bs16_v1.yaml",
   "maximum_wall_seconds": 86400,
   "matrix_reserve_seconds": 43200,
-  "output_root": "/mnt/jfs-01/shared/gcw/experiments/qwen3_06b_opsd_h200_autoresearch_v1",
-  "teacher_precompute_initial_rows": 64,
+  "output_root": "/mnt/jfs-01/shared/gcw/experiments/qwen3_06b_opsd_h200_autoresearch_v1_accelerated",
+  "teacher_precompute_initial_rows": 128,
+  "integrated_probe_examples": 16,
   "teacher_precompute_rows": 2048,
+  "teacher_precompute_workers": 4,
+  "capacity_workers": 2,
   "teacher_precompute_pilot_max_seconds": 14400,
   "minimum_teacher_valid_yield_fraction": 0.25,
   "minimum_teacher_realized_batch_size": 2,
@@ -46,6 +49,7 @@
     "cache_displacement_audit_every_optimizer_steps": 16
   },
   "evaluation": {
+    "max_workers": 2,
     "tasks": [
       "gsm8k_openmath",
       "svamp",

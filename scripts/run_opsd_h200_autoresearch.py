@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 import yaml
 
+from gcw.distill.data import iter_openmath_prompts
 from gcw.autoresearch import (
     choose_capacity_cells,
     decision_dose_steps,
@@ -31,6 +32,7 @@ from gcw.autoresearch import (
     require_complete_capacity_promotion,
     require_heldout_improvement,
     require_realized_teacher_batch,
+    select_disjoint_heldout_indices,
     select_evaluation_limit,
     validate_autoresearch_protocol,
     validate_opsd_task_shard,
@@ -445,10 +447,16 @@ class Campaign:
         max_workers: int,
         max_attempts: int = 3,
         reserve_seconds: float = 300.0,
+        maximum_seconds: float | None = None,
         success_validators: dict[str, Callable[[], bool]] | None = None,
     ) -> float:
-        if max_workers <= 0 or max_attempts <= 0 or reserve_seconds < 0:
-            raise ValueError("parallel campaign workers and attempts must be positive")
+        if (
+            max_workers <= 0
+            or max_attempts <= 0
+            or reserve_seconds < 0
+            or (maximum_seconds is not None and maximum_seconds <= 0)
+        ):
+            raise ValueError("parallel campaign workers, attempts, and budgets must be positive")
         if not commands:
             return 0.0
         parallel_started = time.monotonic()
@@ -481,13 +489,30 @@ class Campaign:
                 oom = "out of memory" in text or "cuda error: out of memory" in text
             return name, outcome, time.monotonic() - started, log_path, oom
 
+        def validate_published_output(name: str) -> bool | None:
+            validator = (
+                success_validators.get(name)
+                if success_validators is not None
+                else None
+            )
+            if validator is None:
+                return None
+            try:
+                return bool(validator())
+            except Exception as exc:
+                self.phase(
+                    name,
+                    "output_validation_failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                return False
+
         for attempt in range(1, max_attempts + 1):
             if _SHUTDOWN_REQUESTED:
                 raise RuntimeError("campaign shutdown requested during parallel execution")
             if success_validators:
                 for name in tuple(pending):
-                    validator = success_validators.get(name)
-                    if validator is not None and validator():
+                    if validate_published_output(name) is True:
                         pending.pop(name)
                         self.phase(
                             name,
@@ -500,7 +525,14 @@ class Campaign:
             saw_oom = False
             items = list(pending.items())
             for offset in range(0, len(items), workers):
-                if self.remaining() <= reserve_seconds:
+                campaign_available = self.remaining() - reserve_seconds
+                phase_available = (
+                    math.inf
+                    if maximum_seconds is None
+                    else maximum_seconds - (time.monotonic() - parallel_started)
+                )
+                timeout = min(campaign_available, phase_available)
+                if timeout <= 0:
                     unstarted = dict(items[offset:])
                     failures.update(unstarted)
                     self.phase(
@@ -508,12 +540,13 @@ class Campaign:
                         "stopped",
                         attempt=attempt,
                         unstarted_shards=sorted(unstarted),
+                        campaign_available_seconds=campaign_available,
+                        phase_available_seconds=phase_available,
                     )
                     raise RuntimeError(
                         "campaign deadline reserve reached before queued shards started"
                     )
                 batch = items[offset : offset + workers]
-                timeout = self.remaining() - reserve_seconds
                 self.assert_source_identity()
                 with ThreadPoolExecutor(max_workers=len(batch)) as pool:
                     futures = {
@@ -522,8 +555,15 @@ class Campaign:
                     }
                     for future in as_completed(futures):
                         name, outcome, elapsed, log_path, oom = future.result()
+                        validation = validate_published_output(name)
+                        recovered = outcome.returncode != 0 and validation is True
+                        invalid_success = outcome.returncode == 0 and validation is False
                         status = "completed"
-                        if outcome.error_kind == "timeout":
+                        if recovered:
+                            status = "recovered_published_output"
+                        elif invalid_success:
+                            status = "invalid_output"
+                        elif outcome.error_kind == "timeout":
                             status = "timed_out"
                         elif outcome.returncode != 0:
                             status = "failed"
@@ -538,21 +578,11 @@ class Campaign:
                             command_elapsed_seconds=elapsed,
                             oom=oom,
                         )
-                        if outcome.returncode != 0:
-                            validator = (
-                                success_validators.get(name)
-                                if success_validators is not None
-                                else None
-                            )
-                            if validator is not None and validator():
-                                self.phase(
-                                    name,
-                                    "recovered_published_output",
-                                    attempt=attempt,
-                                )
-                            else:
-                                failures[name] = pending[name]
-                                saw_oom = saw_oom or oom
+                        if recovered:
+                            continue
+                        if outcome.returncode != 0 or invalid_success:
+                            failures[name] = pending[name]
+                            saw_oom = saw_oom or oom
                 self.assert_source_identity()
             if not failures:
                 return time.monotonic() - parallel_started
@@ -590,6 +620,359 @@ def _write_config(campaign: Campaign, experiment_id: str, config: dict[str, Any]
 def _copy_trace(trace: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=False)
     shutil.copy2(trace, output_dir / "teacher-traces.jsonl")
+
+
+def _require_contiguous_prompt_prefix(source: Path, *, rows: int) -> None:
+    if rows <= 0:
+        raise ValueError("teacher prefix row count must be positive")
+    indices = [
+        record.source_index
+        for record in iter_openmath_prompts(source, skip_rows=0, take_rows=rows)
+    ]
+    if indices != list(range(rows)):
+        raise RuntimeError(
+            "registered teacher prompt prefix is not contiguous; range sharding is unsafe"
+        )
+
+
+def _teacher_shard_config(
+    base: dict[str, Any],
+    *,
+    output_dir: Path,
+    start_row: int,
+    stop_row: int,
+) -> dict[str, Any]:
+    if start_row < 0 or stop_row <= start_row:
+        raise ValueError("teacher shard config range is invalid")
+    config = copy.deepcopy(base)
+    config["output_dir"] = str(output_dir)
+    config["data"]["sft_skip_rows"] = start_row
+    config["data"]["sft_take_rows"] = stop_row - start_row
+    config["wandb"]["enabled"] = False
+    return config
+
+
+def _teacher_shard_ranges(
+    start: int,
+    stop: int,
+    *,
+    workers: int,
+    batch_size: int,
+) -> list[tuple[int, int]]:
+    if start < 0 or stop <= start or workers <= 0 or batch_size <= 0:
+        raise ValueError("teacher shard range contract is invalid")
+    total = stop - start
+    batch_groups = math.ceil(total / batch_size)
+    active_workers = min(workers, batch_groups)
+    base_groups, extra_groups = divmod(batch_groups, active_workers)
+    ranges: list[tuple[int, int]] = []
+    cursor = start
+    for worker_index in range(active_workers):
+        groups = base_groups + int(worker_index < extra_groups)
+        shard_stop = min(stop, cursor + groups * batch_size)
+        ranges.append((cursor, shard_stop))
+        cursor = shard_stop
+    if cursor != stop:
+        raise RuntimeError("teacher shard planning did not close the requested row range")
+    return ranges
+
+
+def _merge_teacher_trace_shards(
+    shard_dirs: list[Path],
+    target_dir: Path,
+    *,
+    expected_source_indices: range,
+    source_revision: str,
+    batch_size: int,
+    elapsed_seconds: float,
+    historical_shard_count: int = 0,
+) -> dict[str, Any]:
+    if (
+        not shard_dirs
+        or batch_size <= 0
+        or elapsed_seconds <= 0
+        or historical_shard_count < 0
+        or historical_shard_count >= len(shard_dirs)
+    ):
+        raise ValueError("teacher shard merge contract is invalid")
+    expected = list(expected_source_indices)
+    if not expected or expected != sorted(set(expected)):
+        raise ValueError("expected teacher source indices must be non-empty and unique")
+
+    rows: dict[int, str] = {}
+    manifests: list[dict[str, Any]] = []
+    fingerprint: str | None = None
+    for shard_dir in shard_dirs:
+        manifest_path = shard_dir / "teacher-precompute.json"
+        trace_path = shard_dir / "teacher-traces.jsonl"
+        manifest = json.loads(manifest_path.read_text())
+        if (
+            manifest.get("source_revision") != source_revision
+            or int(manifest.get("batch_size", 0)) != batch_size
+            or "H200" not in str(manifest.get("gpu_name"))
+            or manifest.get("trace_sha256") != _sha256(trace_path)
+        ):
+            raise RuntimeError(f"teacher shard provenance mismatch: {shard_dir}")
+        shard_fingerprint = str(manifest.get("teacher_fingerprint", ""))
+        if not shard_fingerprint:
+            raise RuntimeError(f"teacher shard lacks a fingerprint: {shard_dir}")
+        if fingerprint is None:
+            fingerprint = shard_fingerprint
+        elif shard_fingerprint != fingerprint:
+            raise RuntimeError("teacher shards have conflicting fingerprints")
+
+        shard_records = 0
+        with trace_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                source_index = int(payload["source_index"])
+                if payload.get("fingerprint") != shard_fingerprint:
+                    raise RuntimeError(
+                        f"teacher trace fingerprint mismatch at source index {source_index}"
+                    )
+                if "failure_reason" not in payload:
+                    reasoning_ids = payload.get("reasoning_ids")
+                    visible_ids = payload.get("visible_response_ids")
+                    full_ids = payload.get("full_completion_ids")
+                    if (
+                        not isinstance(reasoning_ids, list)
+                        or not isinstance(visible_ids, list)
+                        or not isinstance(full_ids, list)
+                        or reasoning_ids + visible_ids != full_ids
+                    ):
+                        raise RuntimeError(
+                            f"malformed teacher native trajectory at source index {source_index}"
+                        )
+                if source_index in rows:
+                    raise RuntimeError(
+                        f"duplicate teacher trace source index: {source_index}"
+                    )
+                rows[source_index] = json.dumps(
+                    payload, sort_keys=True, separators=(",", ":")
+                ) + "\n"
+                shard_records += 1
+        if shard_records != int(manifest.get("records", -1)):
+            raise RuntimeError(f"teacher shard record count mismatch: {shard_dir}")
+        manifests.append(manifest)
+
+    actual = sorted(rows)
+    if actual != expected:
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        raise RuntimeError(
+            f"teacher shard coverage mismatch: missing={missing[:20]} extra={extra[:20]}"
+        )
+
+    if target_dir.exists() and not target_dir.is_symlink():
+        raise RuntimeError("canonical teacher target must be absent or a version symlink")
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
+    version_dir = Path(
+        tempfile.mkdtemp(
+            dir=target_dir.parent,
+            prefix=f".{target_dir.name}-version-",
+        )
+    )
+    trace_path = version_dir / "teacher-traces.jsonl"
+    with trace_path.open("x", encoding="utf-8") as handle:
+        for source_index in expected:
+            handle.write(rows[source_index])
+        handle.flush()
+        os.fsync(handle.fileno())
+
+    valid = sum(
+        1 for line in rows.values() if "failure_reason" not in json.loads(line)
+    )
+    historical_manifests = manifests[:historical_shard_count]
+    current_manifests = manifests[historical_shard_count:]
+    historical_peak = max(
+        (int(row.get("peak_cuda_memory_bytes", 0)) for row in historical_manifests),
+        default=0,
+    )
+    current_peak = sum(
+        int(row.get("peak_cuda_memory_bytes", 0)) for row in current_manifests
+    )
+    current_completion_tokens = sum(
+        int(row.get("completion_tokens", 0)) for row in current_manifests
+    )
+    total_completion_tokens = sum(
+        int(row.get("completion_tokens", 0)) for row in manifests
+    )
+    manifest = {
+        "schema_version": 2,
+        "kind": "opsd_native_teacher_trace_precompute_sharded",
+        "source_revision": source_revision,
+        "teacher_fingerprint": fingerprint,
+        "trace_path": str((target_dir / "teacher-traces.jsonl").absolute()),
+        "trace_sha256": _sha256(trace_path),
+        "batch_size": batch_size,
+        "worker_count": len(current_manifests),
+        "historical_shard_count": historical_shard_count,
+        "elapsed_seconds": elapsed_seconds,
+        "completion_tokens_per_second": current_completion_tokens / elapsed_seconds,
+        "device": "cuda",
+        "gpu_name": "NVIDIA H200",
+        "peak_cuda_memory_bytes": max(historical_peak, current_peak),
+        "historical_peak_cuda_memory_bytes": historical_peak,
+        "current_peak_cuda_memory_bytes": current_peak,
+        "records": len(rows),
+        "cached": sum(int(row.get("cached", 0)) for row in manifests),
+        "generated": sum(int(row.get("generated", 0)) for row in manifests),
+        "invocation_cached": sum(
+            int(row.get("cached", 0)) for row in current_manifests
+        ),
+        "invocation_generated": sum(
+            int(row.get("generated", 0)) for row in current_manifests
+        ),
+        "valid": valid,
+        "invalid": len(rows) - valid,
+        "completion_tokens": total_completion_tokens,
+        "invocation_completion_tokens": current_completion_tokens,
+        "generation_batches": sum(
+            int(row.get("generation_batches", 0)) for row in manifests
+        ),
+        "singleton_batches": sum(
+            int(row.get("singleton_batches", 0)) for row in manifests
+        ),
+        "max_observed_batch_size": max(
+            int(row.get("max_observed_batch_size", 0)) for row in manifests
+        ),
+        "shard_manifests": [
+            str((shard_dir / "teacher-precompute.json").resolve())
+            for shard_dir in shard_dirs
+        ],
+    }
+    _atomic_json(version_dir / "teacher-precompute.json", manifest)
+    directory_fd = os.open(version_dir, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    temporary_link = target_dir.parent / (
+        f".{target_dir.name}.{os.getpid()}.{time.monotonic_ns()}.tmp"
+    )
+    temporary_link.symlink_to(version_dir.name, target_is_directory=True)
+    os.replace(temporary_link, target_dir)
+    parent_fd = os.open(target_dir.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+    return manifest
+
+
+def _run_sharded_teacher_precompute(
+    campaign: Campaign,
+    *,
+    uv: str,
+    base_config: dict[str, Any],
+    target_dir: Path,
+    start_row: int,
+    stop_row: int,
+    workers: int,
+    batch_size: int,
+    source_revision: str,
+    phase_name: str,
+    reserve_seconds: float,
+    maximum_seconds: float,
+) -> tuple[dict[str, Any], float]:
+    ranges = _teacher_shard_ranges(
+        start_row,
+        stop_row,
+        workers=workers,
+        batch_size=batch_size,
+    )
+    shard_root = campaign.root / "teacher-shards" / phase_name
+    shard_root.mkdir(parents=True, exist_ok=False)
+    shard_dirs: list[Path] = []
+    if start_row > 0:
+        existing = shard_root / "existing"
+        existing.mkdir()
+        shutil.copy2(target_dir / "teacher-traces.jsonl", existing / "teacher-traces.jsonl")
+        shutil.copy2(
+            target_dir / "teacher-precompute.json",
+            existing / "teacher-precompute.json",
+        )
+        shard_dirs.append(existing)
+
+    commands: dict[str, list[str]] = {}
+    validators: dict[str, Callable[[], bool]] = {}
+    for worker_index, (shard_start, shard_stop) in enumerate(ranges):
+        worker_name = f"{phase_name}-worker-{worker_index}"
+        worker_output = shard_root / f"worker-{worker_index}"
+        worker_config = _teacher_shard_config(
+            base_config,
+            output_dir=worker_output,
+            start_row=shard_start,
+            stop_row=shard_stop,
+        )
+        config_path = _write_config(campaign, worker_name, worker_config)
+        commands[worker_name] = [
+            uv,
+            "run",
+            "--locked",
+            "--extra",
+            "gpu",
+            "--extra",
+            "convert",
+            "python",
+            "scripts/precompute_opsd_teacher_traces.py",
+            "--config",
+            str(config_path),
+            "--batch-size",
+            str(batch_size),
+            "--source-revision",
+            source_revision,
+        ]
+
+        def validate(
+            output: Path = worker_output,
+            expected: list[int] = list(range(shard_start, shard_stop)),
+        ) -> bool:
+            manifest_path = output / "teacher-precompute.json"
+            trace_path = output / "teacher-traces.jsonl"
+            if not manifest_path.is_file() or not trace_path.is_file():
+                return False
+            manifest = json.loads(manifest_path.read_text())
+            return (
+                manifest.get("source_revision") == source_revision
+                and int(manifest.get("batch_size", 0)) == batch_size
+                and manifest.get("trace_sha256") == _sha256(trace_path)
+                and _all_trace_indices(trace_path) == expected
+            )
+
+        validators[worker_name] = validate
+        shard_dirs.append(worker_output)
+
+    elapsed = campaign.run_parallel(
+        commands,
+        max_workers=min(workers, len(commands)),
+        max_attempts=1,
+        reserve_seconds=reserve_seconds,
+        maximum_seconds=maximum_seconds,
+        success_validators=validators,
+    )
+    manifest = _merge_teacher_trace_shards(
+        shard_dirs,
+        target_dir,
+        expected_source_indices=range(stop_row),
+        source_revision=source_revision,
+        batch_size=batch_size,
+        elapsed_seconds=elapsed,
+        historical_shard_count=int(start_row > 0),
+    )
+    campaign.phase(
+        phase_name,
+        "completed",
+        worker_count=len(commands),
+        start_row=start_row,
+        stop_row=stop_row,
+        records=int(manifest["records"]),
+        valid=int(manifest["valid"]),
+        elapsed_seconds=elapsed,
+    )
+    return manifest, elapsed
 
 
 def _valid_trace_indices(trace: Path) -> list[int]:
@@ -947,6 +1330,16 @@ def main() -> None:
     campaign._publish_state()
     base = _load_yaml(repo / protocol["base_config"])
     validate_autoresearch_protocol(protocol, base)
+    teacher_rows = int(protocol["teacher_precompute_rows"])
+    _require_contiguous_prompt_prefix(
+        Path(base["data"]["data_dir"]),
+        rows=teacher_rows,
+    )
+    campaign.phase(
+        "teacher-shard-input-gate",
+        "passed",
+        contiguous_source_rows=teacher_rows,
+    )
     uv = "uv"
 
     try:
@@ -1059,33 +1452,20 @@ def main() -> None:
             visible_trajectory_mode="both",
             displacement_audit_every=16,
         )
-        teacher_config_path = _write_config(campaign, teacher_id, teacher_config)
-        teacher_pilot_seconds = campaign.run(
-            "teacher-precompute-pilot",
-            [
-                uv,
-                "run",
-                "--locked",
-                "--extra",
-                "gpu",
-                "--extra",
-                "convert",
-                "python",
-                "scripts/precompute_opsd_teacher_traces.py",
-                "--config",
-                str(teacher_config_path),
-                "--batch-size",
-                str(selected_teacher_batch),
-                "--source-revision",
-                args.source_revision,
-            ],
-            timeout=min(
-                float(protocol["teacher_precompute_pilot_max_seconds"]),
-                campaign.remaining() - matrix_reserve,
-            ),
-        )
-        teacher_manifest = json.loads(
-            (teacher_output / "teacher-precompute.json").read_text()
+        _write_config(campaign, teacher_id, teacher_config)
+        teacher_manifest, teacher_pilot_seconds = _run_sharded_teacher_precompute(
+            campaign,
+            uv=uv,
+            base_config=teacher_config,
+            target_dir=teacher_output,
+            start_row=0,
+            stop_row=int(protocol["teacher_precompute_initial_rows"]),
+            workers=int(protocol["teacher_precompute_workers"]),
+            batch_size=selected_teacher_batch,
+            source_revision=args.source_revision,
+            phase_name="teacher-precompute-pilot",
+            reserve_seconds=matrix_reserve,
+            maximum_seconds=float(protocol["teacher_precompute_pilot_max_seconds"]),
         )
         trace = teacher_output / "teacher-traces.jsonl"
         if (
@@ -1151,12 +1531,15 @@ def main() -> None:
         dose = protocol["decision_dose"]
         heldout_candidate_count = int(dose["heldout_candidate_examples"])
         heldout_minimum = int(dose["minimum_heldout_examples"])
-        heldout_candidates = valid_indices[
-            -min(heldout_candidate_count, len(valid_indices)) :
-        ]
-        if len(heldout_candidates) < heldout_minimum:
-            raise RuntimeError("initial teacher pilot lacks the minimum held-out pool")
         required_locked = int(protocol["capacity"]["locked_examples"])
+        integrated_probe_examples = int(protocol["integrated_probe_examples"])
+        heldout_candidates = select_disjoint_heldout_indices(
+            valid_indices,
+            locked_examples=required_locked,
+            candidate_examples=heldout_candidate_count,
+            minimum_examples=heldout_minimum,
+            reserved_non_heldout_examples=integrated_probe_examples,
+        )
         if len(valid_indices) < required_locked:
             raise RuntimeError("teacher precompute produced too few valid traces for capacity screen")
         if set(valid_indices[:required_locked]) & set(heldout_candidates):
@@ -1169,15 +1552,11 @@ def main() -> None:
         minimum_cell_budget = float(
             protocol["capacity"].get("minimum_cell_budget_seconds", 1800)
         )
+        if campaign.remaining() <= capacity_reserve + minimum_cell_budget:
+            raise RuntimeError("insufficient budget for the complete capacity grid")
+        capacity_commands: dict[str, list[str]] = {}
+        capacity_validators: dict[str, Callable[[], bool]] = {}
         for cell in cells:
-            if campaign.remaining() <= capacity_reserve + minimum_cell_budget:
-                campaign.phase(
-                    "capacity-screen",
-                    "stopped",
-                    reason="evaluation reserve reached before complete grid",
-                    completed_cells=sorted(capacity_summaries),
-                )
-                break
             output = campaign.root / "capacity" / cell["id"]
             _copy_trace(trace, output)
             config = _capacity_config(
@@ -1188,22 +1567,39 @@ def main() -> None:
                 expected_locked_examples=required_locked,
                 epochs=int(protocol["capacity"]["epochs"]),
             )
-
             config_path = _write_config(campaign, f"capacity-{cell['id']}", config)
-            try:
-                campaign.run(
-                    f"capacity-{cell['id']}",
-                    [uv, "run", "--locked", "--extra", "gpu", "--extra", "convert", "gcw", "train", "--config", str(config_path)],
-                    timeout=campaign.remaining() - capacity_reserve,
-                )
-            except CampaignCommandTimeout:
-                campaign.phase(
-                    "capacity-screen",
-                    "stopped",
-                    reason="capacity cell reached evaluation reserve",
-                    cell_id=cell["id"],
-                )
-                break
+            command_name = f"capacity-{cell['id']}"
+            capacity_commands[command_name] = [
+                uv,
+                "run",
+                "--locked",
+                "--extra",
+                "gpu",
+                "--extra",
+                "convert",
+                "gcw",
+                "train",
+                "--config",
+                str(config_path),
+            ]
+
+            def validate(output_dir: Path = output) -> bool:
+                try:
+                    _capacity_summary(output_dir)
+                except (FileNotFoundError, KeyError, TypeError, ValueError):
+                    return False
+                return True
+
+            capacity_validators[command_name] = validate
+        campaign.run_parallel(
+            capacity_commands,
+            max_workers=int(protocol["capacity_workers"]),
+            max_attempts=1,
+            reserve_seconds=capacity_reserve,
+            success_validators=capacity_validators,
+        )
+        for cell in cells:
+            output = campaign.root / "capacity" / cell["id"]
             capacity_summaries[cell["id"]] = _capacity_summary(output)
             capacity_outputs[cell["id"]] = output
         promoted = choose_capacity_cells(
@@ -1236,7 +1632,10 @@ def main() -> None:
         end_to_end_speedup: float | None = None
         integrated_step_seconds: float | None = None
         training_valid_fraction: float | None = None
-        if len(valid_indices) >= 16 and campaign.remaining() > matrix_reserve + 1800.0:
+        if (
+            len(valid_indices) - len(heldout_candidates) >= integrated_probe_examples
+            and campaign.remaining() > matrix_reserve + 1800.0
+        ):
             probe_id = f"integrated-probe-{best_capacity}-bs16"
             probe_output = campaign.root / "integrated-probe" / probe_id
             _copy_trace(trace, probe_output)
@@ -1378,40 +1777,23 @@ def main() -> None:
                     visible_trajectory_mode="both",
                     displacement_audit_every=16,
                 )
-                extension_path = _write_config(
-                    campaign, extension_id, extension_config
+                _write_config(campaign, extension_id, extension_config)
+                teacher_manifest, extension_seconds = _run_sharded_teacher_precompute(
+                    campaign,
+                    uv=uv,
+                    base_config=extension_config,
+                    target_dir=teacher_output,
+                    start_row=teacher_pilot_rows,
+                    stop_row=extension_rows,
+                    workers=int(protocol["teacher_precompute_workers"]),
+                    batch_size=selected_teacher_batch,
+                    source_revision=args.source_revision,
+                    phase_name=extension_id,
+                    reserve_seconds=matrix_reserve + 1800.0,
+                    maximum_seconds=available_extension_seconds,
                 )
-                try:
-                    extension_seconds = campaign.run(
-                        extension_id,
-                        [
-                            uv,
-                            "run",
-                            "--locked",
-                            "--extra",
-                            "gpu",
-                            "--extra",
-                            "convert",
-                            "python",
-                            "scripts/precompute_opsd_teacher_traces.py",
-                            "--config",
-                            str(extension_path),
-                            "--batch-size",
-                            str(selected_teacher_batch),
-                            "--source-revision",
-                            args.source_revision,
-                        ],
-                        timeout=available_extension_seconds,
-                    )
-                except CampaignCommandTimeout as exc:
-                    raise RuntimeError(
-                        "teacher trace extension reached the evaluation reserve"
-                    ) from exc
                 teacher_total_seconds += extension_seconds
                 valid_indices = _valid_trace_indices(trace)
-                teacher_manifest = json.loads(
-                    (teacher_output / "teacher-precompute.json").read_text()
-                )
                 extension_records = int(teacher_manifest["records"])
                 extension_valid = int(teacher_manifest["valid"])
                 extension_invalid = int(teacher_manifest["invalid"])
@@ -1578,7 +1960,7 @@ def main() -> None:
 
         evaluation = protocol["evaluation"]
         eval_batch = min(selected_batch, max(int(value) for value in evaluation["batch_candidates"]))
-        concurrency = 1
+        concurrency = int(evaluation["max_workers"])
         full_task_counts = {
             str(task): int(count)
             for task, count in evaluation["full_task_sample_counts"].items()

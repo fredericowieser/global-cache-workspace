@@ -48,7 +48,8 @@ def validate_autoresearch_protocol(
     if dict(hard) != expected_hard:
         raise ValueError("autoresearch hard invariant contract mismatch")
     if (
-        protocol.get("teacher_precompute_initial_rows") != 64
+        protocol.get("teacher_precompute_initial_rows") != 128
+        or protocol.get("integrated_probe_examples") != 16
         or not isinstance(protocol.get("minimum_teacher_realized_batch_size"), int)
         or isinstance(protocol.get("minimum_teacher_realized_batch_size"), bool)
         or int(protocol["minimum_teacher_realized_batch_size"]) <= 0
@@ -70,6 +71,20 @@ def validate_autoresearch_protocol(
     evaluation = protocol.get("evaluation")
     if not isinstance(evaluation, Mapping):
         raise ValueError("autoresearch evaluation contract is missing")
+    worker_values = {
+        "teacher_precompute_workers": protocol.get("teacher_precompute_workers"),
+        "capacity_workers": protocol.get("capacity_workers"),
+        "evaluation.max_workers": evaluation.get("max_workers"),
+    }
+    if any(
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= 8
+        for value in worker_values.values()
+    ):
+        raise ValueError(
+            "autoresearch worker counts must be reviewed integers between 1 and 8"
+        )
     tasks = evaluation.get("tasks")
     conditions = evaluation.get("conditions")
     if (
@@ -86,6 +101,33 @@ def validate_autoresearch_protocol(
         ]
     ):
         raise ValueError("autoresearch evaluation grid is not the reviewed 5×4 contract")
+
+
+def select_disjoint_heldout_indices(
+    valid_indices: Sequence[int],
+    *,
+    locked_examples: int,
+    candidate_examples: int,
+    minimum_examples: int,
+    reserved_non_heldout_examples: int = 0,
+) -> list[int]:
+    indices = [int(index) for index in valid_indices]
+    if (
+        indices != sorted(set(indices))
+        or locked_examples <= 0
+        or candidate_examples <= 0
+        or minimum_examples <= 0
+        or reserved_non_heldout_examples < 0
+    ):
+        raise ValueError("held-out selection contract is invalid")
+    eligible = indices[locked_examples:]
+    reserved = max(locked_examples, reserved_non_heldout_examples)
+    maximum_heldout = max(0, len(indices) - reserved)
+    heldout_count = min(candidate_examples, len(eligible), maximum_heldout)
+    heldout = eligible[-heldout_count:] if heldout_count else []
+    if len(heldout) < minimum_examples:
+        raise RuntimeError("teacher pilot lacks the minimum held-out pool after locking capacity examples")
+    return heldout
 
 
 def decision_dose_steps(
