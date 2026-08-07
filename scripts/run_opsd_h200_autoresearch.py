@@ -109,6 +109,7 @@ def _validate_spend_approval(
     source_revision: str,
     protocol_sha256: str,
     requested_hours: float,
+    provider_project_id: str = "project-e01d0ymrpr004k0s993tba",
 ) -> dict[str, Any]:
     approval = json.loads(path.resolve(strict=True).read_text())
     expected = {
@@ -116,7 +117,7 @@ def _validate_spend_approval(
         "source_revision": source_revision,
         "protocol_sha256": protocol_sha256,
         "provider": "nebius",
-        "project_id": "project-e01d0ymrpr004k0s993tba",
+        "project_id": provider_project_id,
         "region": "eu-west1",
         "gpu_model": "H200",
         "gpu_count": 1,
@@ -883,6 +884,7 @@ def main() -> None:
     parser.add_argument("--protocol", type=Path, required=True)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--spend-approval", type=Path, required=True)
+    parser.add_argument("--provider-project-id", required=True)
     parser.add_argument("--hours", type=float, default=24.0)
     args = parser.parse_args()
     _install_shutdown_manager()
@@ -919,6 +921,7 @@ def main() -> None:
         source_revision=args.source_revision,
         protocol_sha256=hashlib.sha256(reviewed_protocol).hexdigest(),
         requested_hours=args.hours,
+        provider_project_id=args.provider_project_id,
     )
     campaign = Campaign(
         repo=repo,
