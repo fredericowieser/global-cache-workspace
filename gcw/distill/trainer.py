@@ -1657,8 +1657,45 @@ def _teacher_fingerprint(
             "close_reasoning_at_eos": distill.close_reasoning_at_eos,
         },
     }
+    if distill.teacher_trace_backend == "hf_dynamic":
+        teacher_checkpoint = Path(distill.teacher_trace_checkpoint or "")
+        payload["schema"] = "gcw.teacher-trace.v7"
+        payload["teacher_backend"] = {
+            "name": "hf_dynamic",
+            "batch_size": distill.teacher_trace_batch_size,
+            "checkpoint": str(teacher_checkpoint),
+            "checkpoint_identity_sha256": _hf_checkpoint_identity_sha256(
+                teacher_checkpoint
+            ),
+        }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _hf_checkpoint_identity_sha256(checkpoint: Path) -> str:
+    """Hash local HF model/config files without depending on the directory path."""
+    checkpoint = checkpoint.resolve(strict=True)
+    if checkpoint.is_file():
+        files = (checkpoint,)
+        root = checkpoint.parent
+    else:
+        model_files = tuple(sorted(checkpoint.glob("*.safetensors")))
+        if not model_files:
+            model_files = tuple(sorted(checkpoint.glob("pytorch_model*.bin")))
+        config_file = checkpoint / "config.json"
+        files = ((config_file,) if config_file.is_file() else ()) + model_files
+        root = checkpoint
+    if not files:
+        raise FileNotFoundError(f"HF checkpoint has no model weights: {checkpoint}")
+    digest = hashlib.sha256()
+    for path in files:
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        with path.open("rb") as handle:
+            while chunk := handle.read(8 * 1024 * 1024):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _validate_native_trajectory_caps(

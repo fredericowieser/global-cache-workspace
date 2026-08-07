@@ -429,6 +429,9 @@ class DistillationConfig:
     gradient_accumulation_steps: int = 1
     execution_microbatch_size: int = 1
     require_precomputed_teacher_traces: bool = False
+    teacher_trace_backend: Literal["gcw_static", "hf_dynamic"] = "gcw_static"
+    teacher_trace_checkpoint: str | None = None
+    teacher_trace_batch_size: int = 1
     max_optimizer_steps: int | None = None
     reasoning_open_text: str = "<think>\n"
     reasoning_close_text: str = "</think>\n\n"
@@ -519,6 +522,23 @@ class DistillationConfig:
             raise ValueError(
                 "distillation execution microbatching requires precomputed teacher traces"
             )
+        if self.teacher_trace_backend not in {"gcw_static", "hf_dynamic"}:
+            raise ValueError("teacher_trace_backend must be 'gcw_static' or 'hf_dynamic'")
+        if (
+            isinstance(self.teacher_trace_batch_size, bool)
+            or not isinstance(self.teacher_trace_batch_size, int)
+            or self.teacher_trace_batch_size <= 0
+        ):
+            raise ValueError("teacher_trace_batch_size must be a positive integer")
+        if self.teacher_trace_backend == "hf_dynamic":
+            if not self.teacher_trace_checkpoint:
+                raise ValueError("hf_dynamic requires teacher_trace_checkpoint")
+            if self.teacher_trajectory_mode != "native_full":
+                raise ValueError("hf_dynamic requires teacher_trajectory_mode='native_full'")
+            if not self.require_precomputed_teacher_traces:
+                raise ValueError("hf_dynamic requires precomputed teacher traces")
+        elif self.teacher_trace_checkpoint is not None:
+            raise ValueError("teacher_trace_checkpoint is only valid for hf_dynamic")
         if self.max_optimizer_steps is not None and self.max_optimizer_steps <= 0:
             raise ValueError("distillation max_optimizer_steps must be positive when set")
         if not self.reasoning_close_text:
