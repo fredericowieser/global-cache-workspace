@@ -543,6 +543,7 @@ def precompute_teacher_traces_from_config(
             config.data.data_dir or "",
             skip_rows=config.data.sft_skip_rows,
             take_rows=config.data.sft_take_rows,
+            prompt_suffix=config.data.prompt_suffix,
         )
     )
     if device.type == "cuda":

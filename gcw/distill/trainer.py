@@ -797,6 +797,7 @@ def _epoch_training_items(
         config.data.data_dir or "",
         skip_rows=config.data.sft_skip_rows,
         take_rows=config.data.sft_take_rows,
+        prompt_suffix=config.data.prompt_suffix,
     )
     heldout = set(config.distillation.heldout_source_indices) if config.distillation else set()
     return ((record, None) for record in records if record.source_index not in heldout)
@@ -877,6 +878,7 @@ def _prepare_locked_examples(
         config.data.data_dir or "",
         skip_rows=config.data.sft_skip_rows,
         take_rows=config.data.sft_take_rows,
+        prompt_suffix=config.data.prompt_suffix,
     )
     for record in records:
         attempts += 1
@@ -933,6 +935,7 @@ def _prepare_heldout_examples(
         config.data.data_dir or "",
         skip_rows=config.data.sft_skip_rows,
         take_rows=config.data.sft_take_rows,
+        prompt_suffix=config.data.prompt_suffix,
     )
     for record in records:
         if record.source_index not in requested:
@@ -1667,7 +1670,11 @@ def _teacher_fingerprint(
             "checkpoint_identity_sha256": _hf_checkpoint_identity_sha256(
                 teacher_checkpoint
             ),
+            "prompt_suffix": config.data.prompt_suffix,
         }
+    elif config.data.prompt_suffix:
+        payload["schema"] = "gcw.teacher-trace.v7"
+        payload["prompt_transform"] = {"suffix": config.data.prompt_suffix}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 

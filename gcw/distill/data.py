@@ -18,6 +18,7 @@ def iter_openmath_prompts(
     *,
     skip_rows: int = 0,
     take_rows: int | None = None,
+    prompt_suffix: str = "",
 ) -> Iterator[PromptRecord]:
     """Yield finite prompt-only OpenMath records without reading answer fields."""
     if skip_rows < 0:
@@ -34,6 +35,8 @@ def iter_openmath_prompts(
         prompt = _prompt_only(row)
         if not prompt:
             continue
+        if prompt_suffix.strip():
+            prompt = f"{prompt}\n\n{prompt_suffix.strip()}"
         yield PromptRecord(source_index=source_index, prompt=prompt)
         retained += 1
         if take_rows is not None and retained >= take_rows:

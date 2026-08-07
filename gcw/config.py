@@ -371,6 +371,7 @@ class DataConfig:
     sft_skip_rows: int = 0
     sft_take_rows: int | None = None
     response_prefix: str = ""
+    prompt_suffix: str = ""
 
 
 @dataclass(frozen=True)

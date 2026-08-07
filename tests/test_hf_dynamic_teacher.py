@@ -16,7 +16,7 @@ from gcw.config import (
     TrainConfig,
     to_dict,
 )
-from gcw.distill.data import PromptRecord
+from gcw.distill.data import PromptRecord, iter_openmath_prompts
 from gcw.distill import precompute
 from gcw.distill.traces import TeacherTraceStore
 from gcw.distill.trainer import _teacher_fingerprint
@@ -179,11 +179,17 @@ def test_hf_dynamic_fingerprint_uses_new_schema_and_checkpoint_identity(
     different_batch = _teacher_fingerprint(
         different_batch_config, (8, 9), (6, 7), tokenizer
     )
+    suffix_config = _config(checkpoint, distill)
+    suffix_config.data.prompt_suffix = "Return only the final answer."
+    different_suffix = _teacher_fingerprint(
+        suffix_config, (8, 9), (6, 7), tokenizer
+    )
     weights.write_bytes(b"hf-weights-v2")
     second = _teacher_fingerprint(config, (8, 9), (6, 7), tokenizer)
 
     assert first != second
     assert first != different_batch
+    assert first != different_suffix
     assert first != _legacy_static_fingerprint(config, (8, 9), (6, 7), tokenizer)
 
 
@@ -215,6 +221,25 @@ def test_variable_length_fixed_chunks_and_left_padding_are_stable() -> None:
     assert attention_mask.tolist() == [[0, 0, 1], [1, 1, 1]]
     assert position_ids.tolist() == [[0, 0, 0], [0, 1, 2]]
     assert lengths.tolist() == [1, 3]
+
+
+def test_openmath_prompt_suffix_is_shared_and_deterministic(tmp_path: Path) -> None:
+    source = tmp_path / "prompts.jsonl"
+    source.write_text('{"question":"What is 2 + 2?"}\n')
+
+    records = list(
+        iter_openmath_prompts(
+            source,
+            prompt_suffix="  Return only the final answer.  ",
+        )
+    )
+
+    assert records == [
+        PromptRecord(
+            source_index=0,
+            prompt="What is 2 + 2?\n\nReturn only the final answer.",
+        )
+    ]
 
 
 class FakeHFModel:
