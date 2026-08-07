@@ -18,6 +18,7 @@ from scripts.run_opsd_h200_autoresearch import (
     _benchmark_choices,
     _process_group_exists,
     _run_process,
+    _runtime_matrix_reserve,
     _terminate_registered_process_groups,
     _validate_spend_approval,
 )
@@ -44,6 +45,25 @@ def test_decision_dose_steps_uses_predeclared_speed_gates():
     assert decision_dose_steps(4.0, below_4x=0, middle=32, high=64) == 32
     assert decision_dose_steps(7.49, below_4x=0, middle=32, high=64) == 32
     assert decision_dose_steps(7.5, below_4x=0, middle=32, high=64) == 64
+
+
+def test_runtime_matrix_reserve_scales_to_authorised_window():
+    assert _runtime_matrix_reserve(
+        deadline_seconds=43_200,
+        configured_reserve_seconds=43_200,
+        closure_reserve_seconds=3_600,
+    ) == 21_600
+    assert _runtime_matrix_reserve(
+        deadline_seconds=86_400,
+        configured_reserve_seconds=43_200,
+        closure_reserve_seconds=3_600,
+    ) == 43_200
+    with pytest.raises(ValueError, match="leave work time"):
+        _runtime_matrix_reserve(
+            deadline_seconds=7_200,
+            configured_reserve_seconds=43_200,
+            closure_reserve_seconds=3_600,
+        )
 
 
 def test_process_group_cleanup_kills_term_ignoring_descendants():

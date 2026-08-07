@@ -85,6 +85,24 @@ def _canonical_sha256(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _runtime_matrix_reserve(
+    *,
+    deadline_seconds: float,
+    configured_reserve_seconds: float,
+    closure_reserve_seconds: float,
+) -> float:
+    values = (
+        deadline_seconds,
+        configured_reserve_seconds,
+        closure_reserve_seconds,
+    )
+    if not all(math.isfinite(value) and value > 0 for value in values):
+        raise ValueError("campaign deadline and reserves must be finite and positive")
+    if deadline_seconds <= 2.0 * closure_reserve_seconds:
+        raise ValueError("campaign deadline must leave work time before closure reserve")
+    return min(configured_reserve_seconds, deadline_seconds / 2.0)
+
+
 def _validate_spend_approval(
     path: Path,
     *,
@@ -909,8 +927,17 @@ def main() -> None:
         deadline_seconds=int(args.hours * 3600),
     )
     protocol = campaign.protocol
+    matrix_reserve = _runtime_matrix_reserve(
+        deadline_seconds=float(campaign.deadline_seconds),
+        configured_reserve_seconds=float(protocol["matrix_reserve_seconds"]),
+        closure_reserve_seconds=float(protocol["evaluation"]["closure_reserve_seconds"]),
+    )
     campaign.state["spend_approval"] = spend_approval
     campaign.state["spend_approval_sha256"] = _sha256(args.spend_approval)
+    campaign.state["configured_matrix_reserve_seconds"] = float(
+        protocol["matrix_reserve_seconds"]
+    )
+    campaign.state["effective_matrix_reserve_seconds"] = matrix_reserve
     campaign._publish_state()
     base = _load_yaml(repo / protocol["base_config"])
     validate_autoresearch_protocol(protocol, base)
@@ -1048,7 +1075,7 @@ def main() -> None:
             ],
             timeout=min(
                 float(protocol["teacher_precompute_pilot_max_seconds"]),
-                campaign.remaining() - float(protocol["matrix_reserve_seconds"]),
+                campaign.remaining() - matrix_reserve,
             ),
         )
         teacher_manifest = json.loads(
@@ -1132,7 +1159,7 @@ def main() -> None:
         capacity_summaries: dict[str, dict[str, float]] = {}
         capacity_outputs: dict[str, Path] = {}
         cells = list(protocol["capacity_cells"])
-        capacity_reserve = float(protocol["matrix_reserve_seconds"])
+        capacity_reserve = matrix_reserve
         minimum_cell_budget = float(
             protocol["capacity"].get("minimum_cell_budget_seconds", 1800)
         )
@@ -1203,7 +1230,6 @@ def main() -> None:
         end_to_end_speedup: float | None = None
         integrated_step_seconds: float | None = None
         training_valid_fraction: float | None = None
-        matrix_reserve = float(protocol["matrix_reserve_seconds"])
         if len(valid_indices) >= 16 and campaign.remaining() > matrix_reserve + 1800.0:
             probe_id = f"integrated-probe-{best_capacity}-bs16"
             probe_output = campaign.root / "integrated-probe" / probe_id
