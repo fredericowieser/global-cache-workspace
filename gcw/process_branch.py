@@ -100,6 +100,76 @@ def branch_answer_loss(
     )
 
 
+@torch.no_grad()
+def generate_process_branch(
+    model: Longshot,
+    *,
+    prompt_ids: torch.Tensor,
+    answer_prefix_ids: torch.Tensor,
+    cycles: int,
+    max_new_tokens: int,
+    eos_token_id: int | None,
+    valid_vocab_size: int | None = None,
+) -> torch.Tensor:
+    if prompt_ids.ndim != 1 or prompt_ids.numel() == 0:
+        raise ValueError("process-branch generation requires one non-empty prompt")
+    if answer_prefix_ids.ndim != 1 or answer_prefix_ids.numel() == 0:
+        raise ValueError("process-branch generation requires a non-empty answer prefix")
+    if max_new_tokens < 0:
+        raise ValueError("max_new_tokens must be non-negative")
+    if max_new_tokens == 0:
+        return prompt_ids.new_empty((0,))
+
+    placeholder = prompt_ids.new_empty((0,))
+    example = ProcessBranchTokenExample(
+        prompt_ids=prompt_ids,
+        step_response_prefix_ids=answer_prefix_ids,
+        answer_response_prefix_ids=answer_prefix_ids,
+        reasoning_step_ids=(),
+        final_answer_ids=placeholder,
+    )
+    state = build_process_branch_state(model, example, cycles=cycles)
+    branch_cache = _longshot_processor(model).write_for_readout(
+        state.prompt_cache,
+        state.source,
+        state.workspace,
+    )
+    hidden, decode_cache = model.backbone.forward_chunk(
+        answer_prefix_ids.unsqueeze(0),
+        branch_cache.seq_len,
+        branch_cache,
+        logits=False,
+        cache_format="windowed",
+    )
+    if not isinstance(decode_cache, WindowedCache):
+        raise TypeError("process-branch generation requires a WindowedCache")
+
+    generated = []
+    next_logits = model.backbone.logits_from_hidden(hidden[:, -1:])[:, -1]
+    vocab_size = valid_vocab_size or next_logits.shape[-1]
+    if vocab_size <= 0 or vocab_size > next_logits.shape[-1]:
+        raise ValueError("valid_vocab_size must be within the model vocabulary")
+    for token_index in range(max_new_tokens):
+        next_token = torch.argmax(next_logits[:, :vocab_size], dim=-1)
+        generated.append(next_token)
+        if eos_token_id is not None and bool(torch.all(next_token == eos_token_id)):
+            break
+        if token_index + 1 >= max_new_tokens:
+            break
+        hidden, next_cache = model.backbone.forward_chunk(
+            next_token[:, None],
+            decode_cache.seq_len,
+            decode_cache,
+            logits=False,
+            cache_format="windowed",
+        )
+        if not isinstance(next_cache, WindowedCache):
+            raise TypeError("process-branch generation requires a WindowedCache")
+        decode_cache = next_cache
+        next_logits = model.backbone.logits_from_hidden(hidden[:, -1:])[:, -1]
+    return torch.cat(generated, dim=0)
+
+
 def tokenize_process_record(
     record: ProcessBranchRecord,
     tokenizer: Any,

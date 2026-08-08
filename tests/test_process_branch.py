@@ -18,6 +18,7 @@ from gcw.process_branch import (
     branch_answer_loss,
     branch_next_token_loss,
     build_process_branch_state,
+    generate_process_branch,
     process_branch_example_loss,
     tokenize_process_record,
 )
@@ -186,6 +187,26 @@ def test_answer_control_can_swap_workspace_without_changing_prompt_source() -> N
     assert torch.isfinite(shuffled)
     assert not torch.equal(matched, shuffled)
     assert torch.equal(first_state.prompt_cache.values, source_values)
+
+
+def test_process_branch_generation_decodes_from_answer_prefix() -> None:
+    torch.manual_seed(19)
+    model = _tiny_longshot()
+
+    generated = generate_process_branch(
+        model,
+        prompt_ids=torch.tensor([4, 5, 6, 7]),
+        answer_prefix_ids=torch.tensor([8, 9]),
+        cycles=1,
+        max_new_tokens=3,
+        eos_token_id=None,
+        valid_vocab_size=64,
+    )
+
+    assert generated.shape == (3,)
+    assert generated.dtype == torch.long
+    assert generated.min().item() >= 0
+    assert generated.max().item() < 64
 
 
 def _process_train_config(model_config: ModelConfig) -> TrainConfig:
