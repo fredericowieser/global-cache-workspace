@@ -546,11 +546,52 @@ class DistillationConfig:
             raise ValueError("distillation reasoning_close_text must not be empty")
 
 
+@dataclass(frozen=True)
+class ProcessBranchConfig:
+    cycle_choices: tuple[int, ...] = (1,)
+    process_weight: float = 1.0
+    answer_weight: float = 1.0
+    step_response_prefix: str = "Reasoning step:\n"
+    gradient_accumulation_steps: int = 1
+    max_optimizer_steps: int = 100
+    max_prompt_tokens: int = 384
+    max_step_tokens: int = 128
+    max_answer_tokens: int = 32
+    heldout_skip_rows: int = 0
+    heldout_take_rows: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "cycle_choices", tuple(self.cycle_choices))
+        if not self.cycle_choices or any(
+            isinstance(cycle, bool) or not isinstance(cycle, int) or cycle <= 0
+            for cycle in self.cycle_choices
+        ):
+            raise ValueError("process_branch.cycle_choices must contain positive integers")
+        if tuple(sorted(set(self.cycle_choices))) != self.cycle_choices:
+            raise ValueError("process_branch.cycle_choices must be sorted and unique")
+        if self.process_weight < 0.0:
+            raise ValueError("process_branch.process_weight must be non-negative")
+        if self.answer_weight <= 0.0:
+            raise ValueError("process_branch.answer_weight must be positive")
+        if not self.step_response_prefix:
+            raise ValueError("process_branch.step_response_prefix must not be empty")
+        if self.gradient_accumulation_steps <= 0:
+            raise ValueError("process_branch.gradient_accumulation_steps must be positive")
+        if self.max_optimizer_steps <= 0:
+            raise ValueError("process_branch.max_optimizer_steps must be positive")
+        if min(self.max_prompt_tokens, self.max_step_tokens, self.max_answer_tokens) <= 0:
+            raise ValueError("process_branch token caps must be positive")
+        if self.heldout_skip_rows < 0 or self.heldout_take_rows < 0:
+            raise ValueError("process_branch held-out row bounds must be non-negative")
+        if self.heldout_take_rows == 1:
+            raise ValueError("process_branch shuffled control requires at least two held-out rows")
+
+
 @dataclass
 class TrainConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
-    mode: Literal["pretrain", "sft", "cot_distillation"] = "pretrain"
+    mode: Literal["pretrain", "sft", "cot_distillation", "process_branch"] = "pretrain"
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     freeze_backbone: bool = False
     backbone_checkpoint: str | None = None
@@ -579,6 +620,7 @@ class TrainConfig:
     eval_on_start: bool = False
     wandb: WandbConfig = field(default_factory=WandbConfig)
     distillation: DistillationConfig | None = None
+    process_branch: ProcessBranchConfig | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -590,6 +632,8 @@ class TrainConfig:
             self.wandb = WandbConfig(**self.wandb)
         if isinstance(self.distillation, dict):
             self.distillation = DistillationConfig(**self.distillation)
+        if isinstance(self.process_branch, dict):
+            self.process_branch = ProcessBranchConfig(**self.process_branch)
         if isinstance(self.resume, dict):
             self.resume = ResumeConfig(**self.resume)
         if self.resume is not None and self.backbone_checkpoint is not None:
@@ -626,6 +670,44 @@ class TrainConfig:
                 raise ValueError("cot_distillation V0 does not yet support exact optimiser resume")
             if self.max_steps != 1:
                 raise ValueError("cot_distillation uses one finite epoch and requires max_steps=1")
+        if self.mode == "process_branch":
+            if self.process_branch is None:
+                raise ValueError("process_branch mode requires process_branch configuration")
+            if self.model.variant != "longshot":
+                raise ValueError("process_branch mode requires a Longshot model")
+            processor = self.model.cache_processor
+            if processor is None:
+                raise ValueError("process_branch mode requires a cache processor")
+            if processor.update_stream != "v":
+                raise ValueError("process_branch mode initially requires value-only cache writes")
+            if processor.attention_dropout != 0.0:
+                raise ValueError("process_branch mode requires zero processor attention dropout")
+            if self.model.flow_processor is not None:
+                raise ValueError("process_branch canary does not support Flow solver substeps")
+            if not self.freeze_backbone:
+                raise ValueError("process_branch mode requires a frozen backbone")
+            if self.backbone_checkpoint is None:
+                raise ValueError("process_branch mode requires backbone_checkpoint")
+            if self.batch_size != 1:
+                raise ValueError("process_branch mode initially requires batch_size=1")
+            if self.data.kind != "process_branch_jsonl" or not self.data.data_dir:
+                raise ValueError("process_branch mode requires process_branch_jsonl data.data_dir")
+            if self.data.tokenizer != "hf" and not self.data.tokenizer.startswith("hf:"):
+                raise ValueError("process_branch mode requires a Hugging Face tokenizer")
+            if self.data.tokenizer == "hf" and not self.data.tokenizer_source:
+                raise ValueError("process_branch tokenizer='hf' requires tokenizer_source")
+            if not self.data.response_prefix:
+                raise ValueError("process_branch mode requires a non-empty response_prefix")
+            if self.process_branch.step_response_prefix == self.data.response_prefix:
+                raise ValueError("process_branch step and answer response prefixes must differ")
+            if self.distributed != "none":
+                raise ValueError("process_branch mode initially supports one process")
+            if self.resume is not None:
+                raise ValueError("process_branch mode does not yet support exact optimiser resume")
+            if self.max_steps != 1:
+                raise ValueError("process_branch uses a finite record loop and requires max_steps=1")
+        elif self.process_branch is not None:
+            raise ValueError("process_branch configuration is only valid in process_branch mode")
 
 
 @dataclass

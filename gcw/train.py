@@ -36,6 +36,11 @@ def train(config: TrainConfig) -> None:
 
         train_distillation(config)
         return
+    if config.mode == "process_branch":
+        from gcw.process_branch_trainer import train_process_branch
+
+        train_process_branch(config)
+        return
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
     _, rank, _, world_size = dist_info()

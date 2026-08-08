@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from typing import cast
 
 import torch
@@ -29,6 +30,14 @@ CacheLike = CacheState | StaticCacheState | WindowedCache
 
 EncoderMethod = CacheEncoderMethod
 EncoderQuerySource = CacheEncoderQuerySource
+
+
+@dataclass(frozen=True)
+class LongshotWorkspaceSource:
+    merged: torch.Tensor
+    indices: torch.Tensor
+    selected_heads: torch.Tensor
+    latest_indices: torch.Tensor
 
 
 class ProcessorAttention(nn.Module):
@@ -516,6 +525,88 @@ class GlobalCacheProcessor(nn.Module):
             return cache
         cache, _ = self._forward_once(cache, select_all=select_all)
         return cache
+
+    def encode_source(self, cache: CacheLike, *, select_all: bool = False) -> LongshotWorkspaceSource:
+        if self.config.score == "kv_norm" and not select_all:
+            all_indices = expand_cache_head_indices(cache.all_indices(), self.num_cache_heads)
+            merged_all = gather_per_cache_head_kv(
+                cache,
+                all_indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+            )
+            indices, selected_heads = self._select_indices_and_heads(cache, merged_all, select_all=False)
+            if indices.shape[-1] == 0:
+                raise ValueError("Longshot workspace source requires at least one selected position")
+            index = indices[..., None].expand(-1, -1, -1, merged_all.shape[-1])
+            merged = torch.gather(merged_all, dim=2, index=index)
+        else:
+            indices, selected_heads = self._select_indices_and_heads(cache, None, select_all)
+            if indices.shape[-1] == 0:
+                raise ValueError("Longshot workspace source requires at least one selected position")
+            merged = gather_per_cache_head_kv(
+                cache,
+                indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+            )
+        if selected_heads is None:
+            selected_heads = _select_heads_from_merged(merged, self.config.topk_heads)
+        return LongshotWorkspaceSource(
+            merged=merged,
+            indices=indices,
+            selected_heads=selected_heads,
+            latest_indices=latest_shared_indices(indices),
+        )
+
+    def initialise_workspace(self, source: LongshotWorkspaceSource) -> torch.Tensor:
+        return source.merged[:, :, -1, -self.block.output_dim :].clone()
+
+    def deliberate(self, workspace: torch.Tensor, source: LongshotWorkspaceSource) -> torch.Tensor:
+        expected = self.initialise_workspace(source)
+        if workspace.shape != expected.shape:
+            raise ValueError(
+                f"Longshot workspace shape must be {tuple(expected.shape)}, got {tuple(workspace.shape)}"
+            )
+        frontier = torch.cat(
+            [source.merged[:, :, -1, : -self.block.output_dim], workspace],
+            dim=-1,
+        )
+        cycle_input = torch.cat([source.merged[:, :, :-1], frontier[:, :, None]], dim=2)
+        return self.block(cycle_input, source.selected_heads)
+
+    def write_for_readout(
+        self,
+        cache: CacheLike,
+        source: LongshotWorkspaceSource,
+        workspace: torch.Tensor,
+    ) -> WindowedCache:
+        if self.config.update_stream != "v":
+            raise ValueError("Longshot workspace readout initially supports value-only writes")
+        if not isinstance(cache, WindowedCache):
+            raise TypeError("Longshot workspace readout requires a WindowedCache")
+        if cache.linear_states is not None:
+            raise ValueError("Longshot workspace readout does not support shared linear cache state")
+        expected = self.initialise_workspace(source)
+        if workspace.shape != expected.shape:
+            raise ValueError(
+                f"Longshot workspace shape must be {tuple(expected.shape)}, got {tuple(workspace.shape)}"
+            )
+        branch = WindowedCache(
+            keys=cache.keys.clone(),
+            values=cache.values.clone(),
+            scores=cache.scores.clone(),
+            linear_states=cache.linear_states,
+        )
+        values = _split_merged_values(
+            workspace[:, :, None],
+            self.num_layers,
+            self.num_kv_heads,
+            self.head_dim,
+        )
+        return cast(WindowedCache, _scatter_latest_values(branch, source.latest_indices, values))
 
     def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:
         if self.config.score == "kv_norm" and not select_all:
