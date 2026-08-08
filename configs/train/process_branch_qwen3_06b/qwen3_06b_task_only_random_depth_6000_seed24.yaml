@@ -1,0 +1,85 @@
+model:
+  variant: longshot
+  family: qwen3
+  sequence_len: 8192
+  vocab_size: 151936
+  hidden_size: 1024
+  intermediate_size: 3072
+  num_layers: 28
+  num_heads: 16
+  num_kv_heads: 8
+  head_dim: 128
+  rope_theta: 1000000.0
+  norm_eps: 1.0e-6
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 32
+    score: kv_norm
+    hidden_size: 1152
+    intermediate_size: 4608
+    num_layers: 1
+    num_heads: 16
+    num_kv_heads: 16
+    norm_eps: 1.0e-6
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+    gradient_checkpointing: true
+    encoder_method: query_attention
+    encoder_query_source: final_token
+    update_stream: v
+    unrope_keys: true
+  legacy_bottleneck_generate: false
+data:
+  kind: process_branch_jsonl
+  data_dir: /home/gcw/data/process_branch/gsm8k-strict-v1.jsonl
+  tokenizer: hf:/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1
+  sft_skip_rows: 0
+  sft_take_rows: 6000
+  response_prefix: "\n\n"
+  prompt_suffix: 'Solve the problem internally. Return only the final answer in \boxed{...} form.'
+mode: process_branch
+distributed: none
+freeze_backbone: true
+backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1
+output_dir: /mnt/jfs-01/shared/gcw/experiments/process_branch_qwen3_06b_random_depth_v1/seed-24
+batch_size: 1
+sequence_len: 512
+max_steps: 1
+learning_rate: 0.0001
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+weight_decay: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+wandb:
+  enabled: false
+process_branch:
+  cycle_choices: [1, 2, 4]
+  process_weight: 0.0
+  answer_weight: 1.0
+  step_response_prefix: "Reasoning step:\n"
+  gradient_accumulation_steps: 4
+  max_optimizer_steps: 1500
+  max_prompt_tokens: 256
+  max_step_tokens: 128
+  max_answer_tokens: 32
+  heldout_skip_rows: 6000
+  heldout_take_rows: 512
+metadata:
+  experiment: process_branch_qwen3_06b_random_depth_v1
+  arm: task_only_random_depth
+  protocol: immutable_prompt_random_depth_value_only_select_all
+  source_dataset: openai/gsm8k-main-train
+  source_dataset_sha256: af48ccbb613e88107eda520e780686ddd497ffee39b15bebe93d4961c122e161
+  train_records: 6000
+  heldout_records: 512
+  processor_params: 21750273
+  backbone_non_embedding_params: 440460288
+  processor_fraction: 0.04938078095249304
