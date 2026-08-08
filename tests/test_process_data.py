@@ -6,6 +6,7 @@ import pytest
 
 from gcw.process_data import (
     ProcessDataError,
+    parse_gsm8k_eval_record,
     parse_gsm8k_process_record,
     prepare_gsm8k_process_records,
     read_process_branch_records,
@@ -30,6 +31,19 @@ def test_gsm8k_parser_verifies_calculations_and_segments_steps() -> None:
         "Natalia sold 48/2 = 24 clips in May.",
         "Natalia sold 48+24 = 72 clips altogether.",
     )
+
+
+def test_gsm8k_eval_parser_keeps_authoritative_target_without_calculator_gate() -> None:
+    record = parse_gsm8k_eval_record(
+        source_split="test",
+        source_index=7,
+        question="What is six times seven?",
+        answer="A prose solution without annotations.\n#### 42",
+    )
+
+    assert record.source_id == "gsm8k-test:7"
+    assert record.final_answer == "\\boxed{42}"
+    assert record.reasoning_steps == ("A prose solution without annotations.",)
 
 
 def test_gsm8k_parser_rejects_incorrect_calculator_annotation() -> None:

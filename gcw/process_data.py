@@ -26,6 +26,36 @@ class ProcessBranchRecord:
     reasoning_steps: tuple[str, ...]
 
 
+def parse_gsm8k_eval_record(
+    *,
+    source_split: str,
+    source_index: int,
+    question: str,
+    answer: str,
+) -> ProcessBranchRecord:
+    if not re.fullmatch(r"[a-z0-9_-]+", source_split):
+        raise ValueError("invalid GSM8K source split")
+    prompt = question.strip()
+    if not prompt:
+        raise ProcessDataError("empty_prompt")
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    if not lines:
+        raise ProcessDataError("empty_answer")
+    final_match = _FINAL_ANSWER_RE.fullmatch(lines[-1])
+    if final_match is None:
+        raise ProcessDataError("missing_final_answer")
+    final_value = _parse_number(final_match.group(1), error_code="unsupported_final_answer")
+    reasoning_steps = tuple(lines[:-1])
+    if not reasoning_steps:
+        raise ProcessDataError("missing_reasoning_steps")
+    return ProcessBranchRecord(
+        source_id=f"gsm8k-{source_split}:{source_index}",
+        prompt=prompt,
+        final_answer=f"\\boxed{{{_format_fraction(final_value)}}}",
+        reasoning_steps=reasoning_steps,
+    )
+
+
 def parse_gsm8k_process_record(
     *,
     source_index: int,
@@ -98,6 +128,54 @@ def prepare_gsm8k_process_records(
                     continue
                 try:
                     record = parse_gsm8k_process_record(
+                        source_index=source_index,
+                        question=question,
+                        answer=answer,
+                    )
+                except ProcessDataError as exc:
+                    rejection_reasons[str(exc)] += 1
+                    continue
+                payload = asdict(record)
+                payload["reasoning_steps"] = list(record.reasoning_steps)
+                handle.write(json.dumps(payload, sort_keys=True, ensure_ascii=False) + "\n")
+                accepted_rows += 1
+    except Exception:
+        if created:
+            output_path.unlink(missing_ok=True)
+        raise
+    return {
+        "source_rows": source_rows,
+        "accepted_rows": accepted_rows,
+        "rejected_rows": source_rows - accepted_rows,
+        "rejection_reasons": dict(sorted(rejection_reasons.items())),
+    }
+
+
+def prepare_gsm8k_eval_records(
+    rows: Iterable[dict],
+    output: str | Path,
+    *,
+    source_split: str,
+) -> dict[str, object]:
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    source_rows = 0
+    accepted_rows = 0
+    rejection_reasons: Counter[str] = Counter()
+    created = False
+    try:
+        with output_path.open("x", encoding="utf-8") as handle:
+            created = True
+            for source_index, row in enumerate(rows):
+                source_rows += 1
+                question = row.get("question") if isinstance(row, dict) else None
+                answer = row.get("answer") if isinstance(row, dict) else None
+                if not isinstance(question, str) or not isinstance(answer, str):
+                    rejection_reasons["invalid_schema"] += 1
+                    continue
+                try:
+                    record = parse_gsm8k_eval_record(
+                        source_split=source_split,
                         source_index=source_index,
                         question=question,
                         answer=answer,
