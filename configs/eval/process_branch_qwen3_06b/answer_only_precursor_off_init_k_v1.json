@@ -1,0 +1,55 @@
+{
+  "arms": {
+    "p0": {
+      "checkpoint": "artifacts/experiments/process_branch_qwen3_06b_answer_only_depth_v1/k1/seed-24/final",
+      "checkpoint_manifest_sha256": null,
+      "checkpoint_sha256": null,
+      "config_sha256": "f6c180976c7cebec20fedce6339ef7f789638490b1066b08189b0b06d0ad0caa",
+      "run_id": "p0-answer-only-k1-seed24",
+      "train_config": "configs/train/process_branch_qwen3_06b/qwen3_06b_answer_only_k1_6000_seed24.yaml"
+    },
+    "p1": {
+      "checkpoint": "artifacts/experiments/process_branch_qwen3_06b_answer_only_depth_v1/random-depth/seed-24/final",
+      "checkpoint_manifest_sha256": null,
+      "checkpoint_sha256": null,
+      "config_sha256": "bff09635e74143253cf457be2621d8dacfb989e1cb72aeeac3e601613fd2cc5e",
+      "run_id": "p1-answer-only-random-depth-seed24",
+      "train_config": "configs/train/process_branch_qwen3_06b/qwen3_06b_answer_only_random_depth_6000_seed24.yaml"
+    }
+  },
+  "conditions": [
+    "OFF",
+    "INIT",
+    "K1",
+    "K2",
+    "K4",
+    "K8"
+  ],
+  "dataset": {
+    "ordered_source_ids_sha256": "c0330c4dc7c13d36c87e75c03b34d2c616a0ee945d0c8c7e616353dc6de60e3f",
+    "path": "data/process_branch/gsm8k-answer-only-v1.jsonl",
+    "sha256": "feaff6bb9bee24a772c4c9d30a5a9c60d1e61bafa5d392f5a719f1e3cedf03c6"
+  },
+  "evaluator_version": "gcw.answer_only_eval.v1",
+  "generation": {
+    "answer_prefix": "\n\n",
+    "max_new_tokens": 32,
+    "prompt_suffix": "Solve the problem internally. Return only the final answer in \\boxed{...} form.",
+    "temperature": 0.0,
+    "top_k": 0,
+    "top_p": 1.0
+  },
+  "schema": "gcw.answer_only_eval.protocol.v1",
+  "splits": {
+    "final": {
+      "execution_allowed": false,
+      "skip_rows": 6256,
+      "take_rows": 256
+    },
+    "heldout": {
+      "execution_allowed": true,
+      "skip_rows": 6000,
+      "take_rows": 256
+    }
+  }
+}

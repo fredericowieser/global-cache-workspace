@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, cast
 
 import torch
+from safetensors.torch import load as load_safetensors
 from safetensors.torch import load_file, save_file
 
 from gcw.config import ModelConfig, to_dict
@@ -32,20 +35,82 @@ def save_checkpoint(
         json.dump(train_state or {}, f, indent=2)
 
 
-def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
+def publish_final_checkpoint_manifest(
+    path: str | Path,
+    final_processor_sha256: str,
+    initial_processor_sha256: str,
+) -> str:
     path = Path(path)
-    with open(path / "config.json", "r", encoding="utf-8") as f:
-        cfg = ModelConfig(**json.load(f)["model"])
-    state_path = path / "train_state.json"
-    train_state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    weights = load_file(path / "model.safetensors", device=str(device))
+    for name, digest in (
+        ("final_processor_sha256", final_processor_sha256),
+        ("initial_processor_sha256", initial_processor_sha256),
+    ):
+        if (
+            len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError(f"{name} must be a lowercase sha256 digest")
+    required_files = (
+        "config.json",
+        "initial_processor.safetensors",
+        "model.safetensors",
+        "run_config.json",
+        "train_state.json",
+    )
+    files: dict[str, str] = {}
+    for name in required_files:
+        candidate = path / name
+        if not candidate.is_file():
+            raise FileNotFoundError(candidate)
+        files[name] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    payload = {
+        "schema": "gcw.final_checkpoint.manifest.v2",
+        "files": files,
+        "initial_processor_sha256": initial_processor_sha256,
+        "final_processor_sha256": final_processor_sha256,
+    }
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+        + "\n"
+    ).encode("utf-8")
+    with (path / "manifest.json").open("xb") as handle:
+        handle.write(encoded)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return hashlib.sha256(encoded).hexdigest()
+
+
+
+
+def load_checkpoint_bytes(
+    *,
+    config_bytes: bytes,
+    train_state_bytes: bytes,
+    model_bytes: bytes,
+    device: torch.device | str = "cpu",
+):
+    try:
+        config_payload = json.loads(config_bytes.decode("utf-8"))
+        train_state = json.loads(train_state_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("checkpoint JSON snapshot is invalid") from exc
+    if not isinstance(config_payload, dict) or set(config_payload) != {"model"}:
+        raise ValueError("checkpoint config snapshot fields are invalid")
+    if not isinstance(train_state, dict):
+        raise ValueError("checkpoint train-state snapshot must be an object")
+    cfg = ModelConfig(**config_payload["model"])
+    weights = load_safetensors(model_bytes)
     model = build_model(cfg)
     dtype_name = train_state.get("dtype")
     if dtype_name == "mixed_bfloat16_backbone_float32_processor":
         backbone = getattr(model, "backbone", None)
         cache_processor = getattr(model, "cache_processor", None)
-        if not isinstance(backbone, torch.nn.Module) or not isinstance(cache_processor, torch.nn.Module):
-            raise ValueError("mixed BGT checkpoint requires backbone and cache_processor modules")
+        if not isinstance(backbone, torch.nn.Module) or not isinstance(
+            cache_processor, torch.nn.Module
+        ):
+            raise ValueError(
+                "mixed BGT checkpoint requires backbone and cache_processor modules"
+            )
         cast(torch.nn.Module, backbone).to(dtype=torch.bfloat16)
         cast(torch.nn.Module, cache_processor).to(dtype=torch.float32)
     else:
@@ -58,6 +123,16 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
     model.load_state_dict(weights, strict=True)
     model.to(device)
     return model, cfg, train_state
+
+
+def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
+    path = Path(path)
+    return load_checkpoint_bytes(
+        config_bytes=(path / "config.json").read_bytes(),
+        train_state_bytes=(path / "train_state.json").read_bytes(),
+        model_bytes=(path / "model.safetensors").read_bytes(),
+        device=device,
+    )
 
 
 def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:

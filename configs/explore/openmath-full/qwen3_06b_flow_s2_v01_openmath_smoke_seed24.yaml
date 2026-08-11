@@ -1,0 +1,80 @@
+model:
+  variant: longshot
+  family: qwen3
+  sequence_len: 8192
+  vocab_size: 151936
+  hidden_size: 1024
+  intermediate_size: 3072
+  num_layers: 28
+  num_heads: 16
+  num_kv_heads: 8
+  head_dim: 128
+  rope_theta: 1000000.0
+  norm_eps: 1.0e-6
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 32
+    score: kv_norm
+    hidden_size: 1152
+    intermediate_size: 4608
+    num_layers: 1
+    num_heads: 16
+    num_kv_heads: 16
+    norm_eps: 1.0e-6
+    rope_theta: 10000.0
+    gate_init: 0.0
+    attention_dropout: 0.0
+    gradient_checkpointing: true
+    encoder_method: query_attention
+    encoder_query_source: final_token
+    update_stream: v
+    unrope_keys: true
+  legacy_bottleneck_generate: false
+  workspace_flow_refinement:
+    solver: midpoint
+    solver_steps: 2
+    max_velocity: 0.1
+
+data:
+  kind: sft
+  dataset: data/OpenMathInstruct-2/train_1M.jsonl
+  tokenizer: hf
+  tokenizer_source: artifacts/models/Qwen3-0.6B-base-v1
+  sft_skip_rows: 0
+  sft_take_rows: 64
+  response_prefix: "\n"
+
+mode: sft
+distributed: none
+freeze_backbone: true
+backbone_checkpoint: artifacts/checkpoints/base_backbones/qwen3_06b/tf-v1
+output_dir: artifacts/experiments/openmath-cache/smoke-flow-s2-v01-seed24
+batch_size: 4
+sequence_len: 512
+max_steps: 1
+total_batch_size: 2048
+learning_rate: 1.0e-4
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-8
+warmup_steps: 0
+warmdown_ratio: 0.0
+weight_decay: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 1
+wandb:
+  enabled: false
+metadata:
+  campaign: openmath_full_gsm8k_signal_v1
+  arm: smoke-flow-s2-v01-seed24
+  training_dataset: nvidia/OpenMathInstruct-2
+  training_dataset_revision: 469216e3f46f4dacf476b382e192485ea51a143e
+  training_dataset_split: train_1M
+  evaluation_dataset: openai/gsm8k-main-test
+  backbone_frozen: true

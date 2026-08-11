@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 import torch
@@ -9,7 +9,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from gcw.config import CacheEncoderMethod, CacheEncoderQuerySource, CacheProcessorConfig, FlowProcessorConfig, ModelConfig
+from gcw.config import (
+    CacheEncoderMethod,
+    CacheEncoderQuerySource,
+    CacheProcessorConfig,
+    FlowProcessorConfig,
+    ModelConfig,
+    WorkspaceFlowRefinementConfig,
+)
 from gcw.models.bgt import BGT
 from gcw.models.cache_processor_ops import (
     expand_cache_head_indices,
@@ -21,7 +28,7 @@ from gcw.models.cache_processor_ops import (
     select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_state import CacheState, StaticCacheState
-from gcw.models.flow import LatentFlow
+from gcw.models.flow import LatentFlow, sinusoidal_time_embedding
 from gcw.models.transformer import RMSNorm, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
 
@@ -491,6 +498,7 @@ class GlobalCacheProcessor(nn.Module):
         if model_config.cache_processor is None:
             raise ValueError("Longshot requires cache_processor config")
         self.config = model_config.cache_processor
+        self.workspace_flow_refinement = model_config.workspace_flow_refinement
         if self.config.processor_mode != "standard":
             raise ValueError("Longshot supports only cache_processor.processor_mode='standard'")
         if self.config.update_stream not in {"kv", "v"}:
@@ -564,18 +572,72 @@ class GlobalCacheProcessor(nn.Module):
     def initialise_workspace(self, source: LongshotWorkspaceSource) -> torch.Tensor:
         return source.merged[:, :, -1, -self.block.output_dim :].clone()
 
-    def deliberate(self, workspace: torch.Tensor, source: LongshotWorkspaceSource) -> torch.Tensor:
-        expected = self.initialise_workspace(source)
-        if workspace.shape != expected.shape:
+    def _validate_workspace_shape(
+        self,
+        workspace: torch.Tensor,
+        source: LongshotWorkspaceSource,
+    ) -> None:
+        expected_shape = source.merged[:, :, -1, -self.block.output_dim :].shape
+        if workspace.shape != expected_shape:
             raise ValueError(
-                f"Longshot workspace shape must be {tuple(expected.shape)}, got {tuple(workspace.shape)}"
+                f"Longshot workspace shape must be {tuple(expected_shape)}, got {tuple(workspace.shape)}"
             )
+
+    def deliberate(self, workspace: torch.Tensor, source: LongshotWorkspaceSource) -> torch.Tensor:
+        self._validate_workspace_shape(workspace, source)
+        cycle_input = self._workspace_cycle_input(workspace, source)
+        return self.block(cycle_input, source.selected_heads)
+
+    def _workspace_cycle_input(
+        self,
+        workspace: torch.Tensor,
+        source: LongshotWorkspaceSource,
+    ) -> torch.Tensor:
         frontier = torch.cat(
             [source.merged[:, :, -1, : -self.block.output_dim], workspace],
             dim=-1,
         )
-        cycle_input = torch.cat([source.merged[:, :, :-1], frontier[:, :, None]], dim=2)
-        return self.block(cycle_input, source.selected_heads)
+        return torch.cat([source.merged[:, :, :-1], frontier[:, :, None]], dim=2)
+
+    def refine_workspace(
+        self,
+        workspace: torch.Tensor,
+        source: LongshotWorkspaceSource,
+    ) -> torch.Tensor:
+        """Integrate the opt-in tied workspace field without changing source state."""
+        self._validate_workspace_shape(workspace, source)
+        config = self.workspace_flow_refinement
+        if config is None:
+            return workspace
+        state = workspace
+        step_size = 1.0 / config.solver_steps
+        for step in range(config.solver_steps):
+            time = step * step_size
+            if config.solver == "euler":
+                state = state + step_size * self._workspace_velocity(state, time, source, config)
+            else:
+                first_velocity = self._workspace_velocity(state, time, source, config)
+                midpoint = state + 0.5 * step_size * first_velocity
+                midpoint_velocity = self._workspace_velocity(
+                    midpoint,
+                    time + 0.5 * step_size,
+                    source,
+                    config,
+                )
+                state = state + step_size * midpoint_velocity
+        return state
+
+    def _workspace_velocity(
+        self,
+        workspace: torch.Tensor,
+        time: float,
+        source: LongshotWorkspaceSource,
+        config: WorkspaceFlowRefinementConfig,
+    ) -> torch.Tensor:
+        time_condition = sinusoidal_time_embedding(time, workspace.shape[-1], workspace)
+        cycle_input = self._workspace_cycle_input(workspace + time_condition, source)
+        raw_velocity = self.block.compute_update(cycle_input, source.selected_heads)
+        return config.max_velocity * torch.tanh(raw_velocity)
 
     def write_for_readout(
         self,
@@ -589,11 +651,8 @@ class GlobalCacheProcessor(nn.Module):
             raise TypeError("Longshot workspace readout requires a WindowedCache")
         if cache.linear_states is not None:
             raise ValueError("Longshot workspace readout does not support shared linear cache state")
-        expected = self.initialise_workspace(source)
-        if workspace.shape != expected.shape:
-            raise ValueError(
-                f"Longshot workspace shape must be {tuple(expected.shape)}, got {tuple(workspace.shape)}"
-            )
+        self._validate_workspace_shape(workspace, source)
+        workspace = self.refine_workspace(workspace, source)
         branch = WindowedCache(
             keys=cache.keys.clone(),
             values=cache.values.clone(),
@@ -671,6 +730,14 @@ class GlobalCacheProcessor(nn.Module):
 class Longshot(BGT):
     processor_cls = GlobalCacheProcessor
     variant = "longshot"
+
+    def __init__(self, config: ModelConfig):
+        # Do not propagate this Longshot-only mode into the TF backbone config.
+        refinement = config.workspace_flow_refinement
+        super().__init__(replace(config, workspace_flow_refinement=None))
+        self.config.workspace_flow_refinement = refinement
+        processor = cast(GlobalCacheProcessor, self.cache_processor)
+        processor.workspace_flow_refinement = refinement
 
 
 def _zero_projection(module: nn.Module) -> None:

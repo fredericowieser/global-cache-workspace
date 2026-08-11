@@ -428,11 +428,49 @@ class TF(nn.Module):
         logits: bool = True,
         cache_format: str = "list",
     ) -> tuple[torch.Tensor, CacheLike]:
-        x = self.embed_tokens(input_ids)
+        """Decode a token-ID chunk, preserving the original chunk API semantics."""
+        return self.forward_embedding_chunk(
+            self.embed_tokens(input_ids),
+            start_pos,
+            cache,
+            logits=logits,
+            cache_format=cache_format,
+        )
+
+    def forward_embedding_chunk(
+        self,
+        inputs_embeds: torch.Tensor,
+        start_pos: int,
+        cache: CacheLike | None = None,
+        *,
+        logits: bool = True,
+        cache_format: str = "list",
+    ) -> tuple[torch.Tensor, CacheLike]:
+        """Decode model-width embeddings as ordinary new causal positions.
+
+        This is the ``inputs_embeds`` counterpart of :meth:`forward_chunk`.
+        ``start_pos`` remains an absolute RoPE position and may differ from the
+        retained cache length when callers use cache compression. The returned
+        cache includes normal per-layer K/V for every supplied embedding.
+        """
+        if inputs_embeds.ndim != 3:
+            raise ValueError("inputs_embeds must have shape (batch, steps, hidden_size)")
+        if inputs_embeds.shape[-1] != self.config.hidden_size:
+            raise ValueError(f"inputs_embeds width must be {self.config.hidden_size}, got {inputs_embeds.shape[-1]}")
+        if inputs_embeds.shape[1] == 0:
+            raise ValueError("inputs_embeds must contain at least one causal position")
+        if not inputs_embeds.is_floating_point():
+            raise TypeError("inputs_embeds must be floating point")
+        if inputs_embeds.device != self.embed_tokens.weight.device:
+            raise ValueError("inputs_embeds must be on the transformer device")
+        if cache is not None and cache.scores.shape[0] != inputs_embeds.shape[0]:
+            raise ValueError("inputs_embeds and cache batch sizes must match")
+
+        x = inputs_embeds
         cos_sin = self.rotary.get_range(
             start_pos,
-            input_ids.shape[1],
-            input_ids.device,
+            inputs_embeds.shape[1],
+            inputs_embeds.device,
             _autocast_dtype(x.device) or x.dtype,
         )
         keys: list[torch.Tensor] = []
@@ -448,7 +486,9 @@ class TF(nn.Module):
         x = self.norm(x)
         out = self.logits_from_hidden(x) if logits else x
         chunk_scores = torch.stack(layer_scores).mean(dim=0)
-        old_scores = input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32) if cache is None else cache.scores
+        old_scores = (
+            inputs_embeds.new_empty(inputs_embeds.shape[0], 0, dtype=torch.float32) if cache is None else cache.scores
+        )
         new_scores = chunk_scores if old_scores.numel() == 0 else torch.cat([old_scores, chunk_scores], dim=1)
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
             return out, WindowedCache.from_lists(keys, values, new_scores)

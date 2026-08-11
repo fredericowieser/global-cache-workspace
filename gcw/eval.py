@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import os
@@ -33,6 +34,7 @@ from gcw.opsd_eval import (
     greedy_opsd_responses,
 )
 from gcw.prompt_identity import normalized_prompt_text_sha256, prompt_text_sha256
+from gcw.process_branch import generate_process_branch
 
 
 _encode_generate_prompt = encode_generate_prompt
@@ -74,6 +76,19 @@ OPSD_DATASET_FILE_PATTERNS = {
     "logiqa_opsd_generate": "logiqa-test.arrow",
     "agieval_gaokao_mathqa_opsd_generate": "agieval-gaokao-mathqa-test.arrow",
 }
+
+
+@dataclass(frozen=True)
+class ProcessBranchEvalCondition:
+    cycles: int
+    prompt_suffix: str
+    answer_prefix: str
+
+    def __post_init__(self) -> None:
+        if self.cycles < 0:
+            raise ValueError("process-branch evaluation cycles must be non-negative")
+        if not self.answer_prefix:
+            raise ValueError("process-branch evaluation answer prefix must be non-empty")
 
 
 @dataclass(frozen=True)
@@ -131,6 +146,7 @@ class GCWEvalLM(TemplateLM):
         tokenizer,
         batch_size: int = 8,
         opsd_condition: OpsdEvalCondition | None = None,
+        process_branch_condition: ProcessBranchEvalCondition | None = None,
     ):
         if not HAS_LM_EVAL:
             raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -142,6 +158,7 @@ class GCWEvalLM(TemplateLM):
         self.max_length = model.config.sequence_len
         self.add_special_tokens_for_generate = _legacy_generate_add_special_tokens(model)
         self.opsd_condition = opsd_condition
+        self.process_branch_condition = process_branch_condition
         self.opsd_generation_records: list[dict] = []
 
     @property
@@ -233,6 +250,8 @@ class GCWEvalLM(TemplateLM):
 
     @torch.no_grad()
     def generate_until(self, requests, disable_tqdm: bool = False):
+        if self.process_branch_condition is not None:
+            return self._generate_until_process_branch(requests)
         if self.opsd_condition is not None:
             return self._generate_until_opsd(requests)
         if os.environ.get("GCW_EVAL_REFERENCE_GENERATE") == "1":
@@ -274,6 +293,66 @@ class GCWEvalLM(TemplateLM):
                     tokens = _trim_generated_token_ids(tokens, stop_sequences, self.eot_token_id)
                     text = _trim_until(self.tok_decode(tokens), until)
                     outs[out_idx] = text
+        return outs
+
+    @torch.no_grad()
+    def _generate_until_process_branch(self, requests):
+        condition = self.process_branch_condition
+        if condition is None:
+            raise RuntimeError("process-branch generation requires an explicit condition")
+        device = self.model.get_device()
+        answer_prefix_ids = torch.tensor(
+            self.tokenizer.encode(condition.answer_prefix),
+            dtype=torch.long,
+            device=device,
+        )
+        if answer_prefix_ids.numel() == 0:
+            raise ValueError("process-branch answer prefix tokenised to an empty sequence")
+        outs = []
+        context = (
+            torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if device.type == "cuda"
+            else nullcontext()
+        )
+        with context:
+            for req in requests:
+                prompt, kwargs = req.args
+                max_new = int(kwargs.get("max_gen_toks", 256))
+                if max_new <= 0:
+                    raise ValueError("process-branch max_gen_toks must be positive")
+                until = _normalize_until(kwargs.get("until"))
+                stop_sequences = _stop_token_sequences(self.tokenizer, until)
+                full_prompt = prompt
+                if condition.prompt_suffix.strip():
+                    full_prompt = f"{prompt}\n\n{condition.prompt_suffix.strip()}"
+                max_prompt_tokens = self.max_length - answer_prefix_ids.numel() - max_new
+                if max_prompt_tokens <= 0:
+                    raise ValueError("process-branch generation exceeds model sequence length")
+                prompt_ids = torch.tensor(
+                    _encode_generate_prompt(
+                        self.tokenizer,
+                        full_prompt,
+                        max_prompt_tokens,
+                        add_special_tokens=self.add_special_tokens_for_generate,
+                    ),
+                    dtype=torch.long,
+                    device=device,
+                )
+                generated = generate_process_branch(
+                    self.model,
+                    prompt_ids=prompt_ids,
+                    answer_prefix_ids=answer_prefix_ids,
+                    cycles=condition.cycles,
+                    max_new_tokens=max_new,
+                    eos_token_id=self.eot_token_id,
+                    valid_vocab_size=self.tokenizer.get_vocab_size(),
+                )
+                tokens = _trim_generated_token_ids(
+                    generated.tolist(),
+                    stop_sequences,
+                    self.eot_token_id,
+                )
+                outs.append(_trim_until(self.tok_decode(tokens), until))
         return outs
 
     @torch.no_grad()
@@ -454,6 +533,7 @@ def run_task_groups(
     runs: list[tuple[list[str], int]],
     limit: int | None = None,
     batch_size: int = 8,
+    process_branch_condition: ProcessBranchEvalCondition | None = None,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -471,8 +551,16 @@ def run_task_groups(
     device = _eval_device(local_rank)
     model, cfg, state = load_checkpoint(checkpoint, device=device)
     tokenizer = _tokenizer_for(cfg, state)
-    lm = GCWEvalLM(model, tokenizer, batch_size=batch_size)
-    apply_chat_template = bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
+    lm = GCWEvalLM(
+        model,
+        tokenizer,
+        batch_size=batch_size,
+        process_branch_condition=process_branch_condition,
+    )
+    apply_chat_template = (
+        process_branch_condition is None
+        and bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
+    )
     task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
     merged = _load_partial_results(runs) or _empty_eval_results()
     _write_progress(_new_progress(runs), merged)
@@ -522,6 +610,7 @@ def run_opsd_screen(
     tasks: tuple[str, ...] = OPSD_SCREEN_TASKS,
     limit: int | None = 64,
     batch_size: int = 1,
+    max_response_tokens: int = 512,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -529,6 +618,8 @@ def run_opsd_screen(
         raise ValueError("OPSD screen limit must be positive when set")
     if batch_size <= 0:
         raise ValueError("OPSD screen batch_size must be positive")
+    if max_response_tokens <= 0:
+        raise ValueError("OPSD screen max_response_tokens must be positive")
     if len(source_revision) != 40 or any(
         character not in "0123456789abcdef" for character in source_revision
     ):
@@ -553,6 +644,7 @@ def run_opsd_screen(
     condition = OpsdEvalCondition(
         enable_thinking=enable_thinking,
         processor_enabled=processor_enabled,
+        max_response_tokens=max_response_tokens,
     )
     lm = GCWEvalLM(model, tokenizer, batch_size=batch_size, opsd_condition=condition)
     task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")

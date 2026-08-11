@@ -69,8 +69,17 @@ def test_training_checkpoint_restores_model_optimizer_and_resume_state(tmp_path)
         topology="same",
         current_world_size=1,
     )
+    for payload_name in (
+        "model.safetensors",
+        "optimizer.pt",
+        "rng.pt",
+        "config.json",
+        "train_state.json",
+    ):
+        (tmp_path / "checkpoint" / payload_name).write_bytes(b"replaced-after-open")
     checkpoint.restore_model(restored_model)
     checkpoint.restore_optimizer(restored_optimizer, device="cpu")
+    checkpoint.restore_rng(rank=0)
 
     assert checkpoint.resume_state == resume
     for expected, actual in zip(model.parameters(), restored_model.parameters(), strict=True):

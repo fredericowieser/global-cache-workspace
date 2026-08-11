@@ -23,6 +23,10 @@ class OpsdEvalCondition:
     reasoning_open_text: str = "<think>\n"
     max_response_tokens: int = 512
 
+    def __post_init__(self) -> None:
+        if self.max_response_tokens <= 0:
+            raise ValueError("max_response_tokens must be positive")
+
     @property
     def name(self) -> str:
         thinking = "cot-on" if self.enable_thinking else "cot-off"

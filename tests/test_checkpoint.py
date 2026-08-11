@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from gcw.checkpoint import load_checkpoint, save_checkpoint
+from gcw.checkpoint import load_checkpoint, publish_final_checkpoint_manifest, save_checkpoint
 from gcw.config import ModelConfig
 from gcw.eval import GCWEvalLM
 from gcw.eval_support import tokenizer_for_checkpoint
@@ -96,3 +96,41 @@ def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(tmp_path)
     assert {p.dtype for p in loaded.backbone.parameters()} == {torch.bfloat16}
     assert {p.dtype for p in loaded.cache_processor.parameters()} == {torch.float32}
     assert loaded.cache_processor.block.gate.item() == pytest.approx(-4.9896)
+
+
+def test_final_checkpoint_manifest_binds_all_loader_inputs(tmp_path):
+    checkpoint = tmp_path / "final"
+    checkpoint.mkdir()
+    (checkpoint / "model.safetensors").write_bytes(b"model")
+    (checkpoint / "initial_processor.safetensors").write_bytes(b"initial")
+    (checkpoint / "config.json").write_text("{}\n")
+    (checkpoint / "run_config.json").write_text("{}\n")
+    (checkpoint / "train_state.json").write_text("{}\n")
+
+    manifest_sha256 = publish_final_checkpoint_manifest(
+        checkpoint,
+        "a" * 64,
+        "b" * 64,
+    )
+
+    import hashlib
+    import json
+
+    manifest_path = checkpoint / "manifest.json"
+    assert manifest_sha256 == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest == {
+        "schema": "gcw.final_checkpoint.manifest.v2",
+        "files": {
+            name: hashlib.sha256((checkpoint / name).read_bytes()).hexdigest()
+            for name in (
+                "config.json",
+                "initial_processor.safetensors",
+                "model.safetensors",
+                "run_config.json",
+                "train_state.json",
+            )
+        },
+        "initial_processor_sha256": "b" * 64,
+        "final_processor_sha256": "a" * 64,
+    }

@@ -21,6 +21,8 @@ CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
 CacheProcessorIterationMode = Literal["internal", "external"]
 CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention", "kv_norm"]
+WorkspaceFlowSolver = Literal["euler", "midpoint"]
+ProcessBranchObjective = Literal["process_branch", "answer_only", "trajectory_replay"]
 
 _FLOAT32_MAX = 3.4028234663852886e38
 _FLOAT32_MIN_SUBNORMAL = 2.0**-149
@@ -141,6 +143,24 @@ class FlowProcessorConfig:
 
 
 @dataclass
+class WorkspaceFlowRefinementConfig:
+    solver: WorkspaceFlowSolver = "euler"
+    solver_steps: int = 1
+    max_velocity: float = 0.75
+
+    def __post_init__(self) -> None:
+        if self.solver not in {"euler", "midpoint"}:
+            raise ValueError("workspace_flow_refinement.solver must be 'euler' or 'midpoint'")
+        if isinstance(self.solver_steps, bool) or not isinstance(self.solver_steps, int) or self.solver_steps <= 0:
+            raise ValueError("workspace_flow_refinement.solver_steps must be a positive integer")
+        self.max_velocity = _validated_float32(
+            "workspace_flow_refinement.max_velocity",
+            self.max_velocity,
+            positive=True,
+        )
+
+
+@dataclass
 class ModelConfig:
     variant: Variant = "tf"
     family: Family = "smollm"
@@ -159,6 +179,7 @@ class ModelConfig:
     rotary_style: RotaryStyle = "ppt"
     cache_processor: CacheProcessorConfig | None = None
     flow_processor: FlowProcessorConfig | None = None
+    workspace_flow_refinement: WorkspaceFlowRefinementConfig | None = None
     legacy_bottleneck_generate: bool = False
     layer_types: list[str] | None = None
     processor_layer_indices: list[int] | None = None
@@ -192,8 +213,15 @@ class ModelConfig:
             self.cache_processor = CacheProcessorConfig(**self.cache_processor)
         if isinstance(self.flow_processor, dict):
             self.flow_processor = FlowProcessorConfig(**self.flow_processor)
+        if isinstance(self.workspace_flow_refinement, dict):
+            self.workspace_flow_refinement = WorkspaceFlowRefinementConfig(**self.workspace_flow_refinement)
         if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
             self.cache_processor = CacheProcessorConfig()
+        if self.workspace_flow_refinement is not None:
+            if self.variant != "longshot":
+                raise ValueError("workspace_flow_refinement requires variant 'longshot'")
+            if self.cache_processor is None or self.cache_processor.update_stream != "v":
+                raise ValueError("workspace_flow_refinement requires value-only cache writes")
         if self.flow_processor is not None:
             if self.variant not in {"bgt", "icarus", "longshot"}:
                 raise ValueError("flow_processor requires variant 'bgt', 'icarus', or 'longshot'")
@@ -372,18 +400,42 @@ class DataConfig:
     sft_take_rows: int | None = None
     response_prefix: str = ""
     prompt_suffix: str = ""
+    canonical_execution: bool = False
+    expected_artifact_sha256: str | None = None
+    expected_source_ids_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        hashes = (self.expected_artifact_sha256, self.expected_source_ids_sha256)
+        authenticated = all(
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+            and len(set(value)) > 1
+            for value in hashes
+        )
+        if self.canonical_execution and not authenticated:
+            raise ValueError(
+                "canonical data requires authenticated artifact and source-ID sha256 hashes"
+            )
 
 
 @dataclass(frozen=True)
 class ResumeConfig:
     checkpoint: str
     topology: Literal["same", "elastic_ddp"] = "same"
+    expected_manifest_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not self.checkpoint:
             raise ValueError("resume.checkpoint must not be empty")
         if self.topology not in {"same", "elastic_ddp"}:
             raise ValueError("resume.topology must be 'same' or 'elastic_ddp'")
+        digest = self.expected_manifest_sha256
+        if digest is not None and (
+            len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise ValueError("resume.expected_manifest_sha256 must be a lowercase sha256 or null")
 
 
 @dataclass
@@ -548,10 +600,13 @@ class DistillationConfig:
 
 @dataclass(frozen=True)
 class ProcessBranchConfig:
+    objective: ProcessBranchObjective = "process_branch"
     cycle_choices: tuple[int, ...] = (1,)
     process_weight: float = 1.0
     answer_weight: float = 1.0
     step_response_prefix: str = "Reasoning step:\n"
+    rationale_joiner: str = "\n"
+    reasoning_close_text: str = "\n</think>\n\n"
     gradient_accumulation_steps: int = 1
     max_optimizer_steps: int = 100
     max_prompt_tokens: int = 384
@@ -559,9 +614,21 @@ class ProcessBranchConfig:
     max_answer_tokens: int = 32
     heldout_skip_rows: int = 0
     heldout_take_rows: int = 0
+    require_frozen_identities: bool = False
+    expected_train_eligible_records: int | None = None
+    expected_train_eligible_source_ids_sha256: str | None = None
+    expected_heldout_eligible_records: int | None = None
+    expected_heldout_eligible_source_ids_sha256: str | None = None
+    expected_initial_backbone_sha256: str | None = None
+    expected_tokenizer_sha256: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cycle_choices", tuple(self.cycle_choices))
+        if self.objective not in {"process_branch", "answer_only", "trajectory_replay"}:
+            raise ValueError(
+                "process_branch.objective must be 'process_branch', 'answer_only', "
+                "or 'trajectory_replay'"
+            )
         if not self.cycle_choices or any(
             isinstance(cycle, bool) or not isinstance(cycle, int) or cycle <= 0
             for cycle in self.cycle_choices
@@ -569,12 +636,20 @@ class ProcessBranchConfig:
             raise ValueError("process_branch.cycle_choices must contain positive integers")
         if tuple(sorted(set(self.cycle_choices))) != self.cycle_choices:
             raise ValueError("process_branch.cycle_choices must be sorted and unique")
+        if not math.isfinite(self.process_weight) or not math.isfinite(self.answer_weight):
+            raise ValueError("process_branch loss weights must be finite")
         if self.process_weight < 0.0:
             raise ValueError("process_branch.process_weight must be non-negative")
+        if self.objective == "answer_only" and self.process_weight != 0.0:
+            raise ValueError("answer_only objective requires process_weight=0")
         if self.answer_weight <= 0.0:
             raise ValueError("process_branch.answer_weight must be positive")
         if not self.step_response_prefix:
             raise ValueError("process_branch.step_response_prefix must not be empty")
+        if not self.rationale_joiner:
+            raise ValueError("process_branch.rationale_joiner must not be empty")
+        if not self.reasoning_close_text:
+            raise ValueError("process_branch.reasoning_close_text must not be empty")
         if self.gradient_accumulation_steps <= 0:
             raise ValueError("process_branch.gradient_accumulation_steps must be positive")
         if self.max_optimizer_steps <= 0:
@@ -585,6 +660,33 @@ class ProcessBranchConfig:
             raise ValueError("process_branch held-out row bounds must be non-negative")
         if self.heldout_take_rows == 1:
             raise ValueError("process_branch shuffled control requires at least two held-out rows")
+        if not isinstance(self.require_frozen_identities, bool):
+            raise ValueError("process_branch.require_frozen_identities must be boolean")
+        for name, value in (
+            ("expected_train_eligible_records", self.expected_train_eligible_records),
+            ("expected_heldout_eligible_records", self.expected_heldout_eligible_records),
+        ):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                raise ValueError(f"process_branch.{name} must be a positive integer or null")
+        for name, digest_value in (
+            (
+                "expected_train_eligible_source_ids_sha256",
+                self.expected_train_eligible_source_ids_sha256,
+            ),
+            (
+                "expected_heldout_eligible_source_ids_sha256",
+                self.expected_heldout_eligible_source_ids_sha256,
+            ),
+            ("expected_initial_backbone_sha256", self.expected_initial_backbone_sha256),
+            ("expected_tokenizer_sha256", self.expected_tokenizer_sha256),
+        ):
+            if digest_value is not None and (
+                len(digest_value) != 64
+                or any(character not in "0123456789abcdef" for character in digest_value)
+            ):
+                raise ValueError(f"process_branch.{name} must be a lowercase sha256 or null")
 
 
 @dataclass
@@ -636,8 +738,16 @@ class TrainConfig:
             self.process_branch = ProcessBranchConfig(**self.process_branch)
         if isinstance(self.resume, dict):
             self.resume = ResumeConfig(**self.resume)
+        if not math.isfinite(self.grad_clip) or self.grad_clip <= 0.0:
+            raise ValueError("grad_clip must be finite and positive")
         if self.resume is not None and self.backbone_checkpoint is not None:
             raise ValueError("resume and backbone_checkpoint cannot be configured together")
+        if (
+            self.data.canonical_execution
+            and self.resume is not None
+            and self.resume.expected_manifest_sha256 is None
+        ):
+            raise ValueError("canonical training resume requires expected manifest sha256")
         if self.mode == "cot_distillation":
             if self.distillation is None:
                 raise ValueError("cot_distillation requires distillation configuration")
@@ -686,24 +796,38 @@ class TrainConfig:
                 raise ValueError("process_branch canary does not support Flow solver substeps")
             if not self.freeze_backbone:
                 raise ValueError("process_branch mode requires a frozen backbone")
-            if self.backbone_checkpoint is None:
-                raise ValueError("process_branch mode requires backbone_checkpoint")
+            if self.backbone_checkpoint is None and self.resume is None:
+                raise ValueError("process_branch mode requires backbone_checkpoint or resume")
             if self.batch_size != 1:
                 raise ValueError("process_branch mode initially requires batch_size=1")
-            if self.data.kind != "process_branch_jsonl" or not self.data.data_dir:
-                raise ValueError("process_branch mode requires process_branch_jsonl data.data_dir")
+            expected_data_kind = (
+                "answer_only_jsonl"
+                if self.process_branch.objective == "answer_only"
+                else "process_branch_jsonl"
+            )
+            if self.data.kind != expected_data_kind or not self.data.data_dir:
+                raise ValueError(
+                    f"process_branch {self.process_branch.objective} objective requires "
+                    f"{expected_data_kind} data.data_dir"
+                )
             if self.data.tokenizer != "hf" and not self.data.tokenizer.startswith("hf:"):
                 raise ValueError("process_branch mode requires a Hugging Face tokenizer")
             if self.data.tokenizer == "hf" and not self.data.tokenizer_source:
                 raise ValueError("process_branch tokenizer='hf' requires tokenizer_source")
             if not self.data.response_prefix:
                 raise ValueError("process_branch mode requires a non-empty response_prefix")
-            if self.process_branch.step_response_prefix == self.data.response_prefix:
+            if (
+                self.process_branch.objective == "process_branch"
+                and self.process_branch.step_response_prefix == self.data.response_prefix
+            ):
                 raise ValueError("process_branch step and answer response prefixes must differ")
+            if self.process_branch.heldout_take_rows < 2:
+                raise ValueError("process_branch mode requires at least two held-out rows")
             if self.distributed != "none":
                 raise ValueError("process_branch mode initially supports one process")
-            if self.resume is not None:
-                raise ValueError("process_branch mode does not yet support exact optimiser resume")
+            if self.resume is not None and self.resume.topology != "same":
+                raise ValueError("process_branch mode supports only exact same-topology resume")
+
             if self.max_steps != 1:
                 raise ValueError("process_branch uses a finite record loop and requires max_steps=1")
         elif self.process_branch is not None:
@@ -732,18 +856,45 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     return data
 
 
+def load_train_config_bytes(payload: bytes) -> TrainConfig:
+    try:
+        decoded = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("training config must be UTF-8 YAML") from exc
+    data = yaml.safe_load(decoded)
+    if not isinstance(data, dict):
+        raise ValueError("training config must decode to a mapping")
+    return TrainConfig(**data)
+
+
 def load_train_config(path: str | Path) -> TrainConfig:
-    return TrainConfig(**load_yaml(path))
+    return load_train_config_bytes(Path(path).read_bytes())
 
 
 def to_dict(value: Any) -> Any:
     if is_dataclass(value):
         return {f.name: to_dict(getattr(value, f.name)) for f in fields(value)}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [to_dict(x) for x in value]
     if isinstance(value, dict):
         return {k: to_dict(v) for k, v in value.items()}
     return value
+
+
+def process_branch_training_contract(config: TrainConfig) -> dict[str, Any]:
+    """Return the path-independent scientific contract bound into final checkpoints."""
+    payload = to_dict(config)
+    if not isinstance(payload, dict):
+        raise TypeError("training configuration did not serialize to an object")
+    for operational_field in ("output_dir", "resume", "backbone_checkpoint"):
+        payload.pop(operational_field, None)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise TypeError("training configuration data did not serialize to an object")
+    for location_field in ("data_dir", "heldout_data_path", "tokenizer_source"):
+        data.pop(location_field, None)
+    data["tokenizer"] = "authenticated_local_hf"
+    return payload
 
 
 def dump_yaml(path: str | Path, value: Any) -> None:

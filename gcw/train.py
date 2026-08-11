@@ -68,6 +68,7 @@ def train(config: TrainConfig) -> None:
             expected_fingerprint=fingerprint,
             topology=config.resume.topology,
             current_world_size=world_size,
+            expected_manifest_sha256=config.resume.expected_manifest_sha256,
         )
         start_step = checkpoint.resume_state.step
         if start_step > config.max_steps:
@@ -389,18 +390,25 @@ def _save_training_state(
         if rank == 0:
             save_checkpoint(path, model, config.model, {**resume_state.metadata, "step": resume_state.step})
         return
-    checkpoint_kwargs = {}
     if config.freeze_backbone:
-        checkpoint_kwargs["backbone_source_path"] = config.backbone_checkpoint
-    save_training_checkpoint(
-        path,
-        model,
-        config.model,
-        optimizer,
-        resume_state,
-        fingerprint,
-        **checkpoint_kwargs,
-    )
+        save_training_checkpoint(
+            path,
+            model,
+            config.model,
+            optimizer,
+            resume_state,
+            fingerprint,
+            backbone_source_path=config.backbone_checkpoint,
+        )
+    else:
+        save_training_checkpoint(
+            path,
+            model,
+            config.model,
+            optimizer,
+            resume_state,
+            fingerprint,
+        )
 
 
 def _save_step_checkpoint(

@@ -93,6 +93,62 @@ def test_opsd_eval_chat_prompt_controls_thinking_without_changing_base():
 
 
 
+def test_process_branch_generate_until_uses_explicit_branch_contract(monkeypatch):
+    import torch
+
+    from gcw.eval import GCWEvalLM, ProcessBranchEvalCondition
+
+    class Tokenizer:
+        eot_id = 99
+
+        def encode(self, text, add_special_tokens=False):
+            del add_special_tokens
+            if text == "STOP":
+                return [9]
+            return [ord(character) % 64 for character in text]
+
+        def decode(self, token_ids):
+            return ",".join(str(token_id) for token_id in token_ids)
+
+        def get_vocab_size(self):
+            return 64
+
+    calls = []
+
+    def fake_generate(model, **kwargs):
+        calls.append((model, kwargs))
+        return torch.tensor([5, 9, 6])
+
+    monkeypatch.setattr("gcw.eval.generate_process_branch", fake_generate)
+    fake = SimpleNamespace(
+        model=SimpleNamespace(
+            get_device=lambda: torch.device("cpu"),
+            config=SimpleNamespace(sequence_len=128),
+        ),
+        tokenizer=Tokenizer(),
+        process_branch_condition=ProcessBranchEvalCondition(
+            cycles=1,
+            prompt_suffix="suffix",
+            answer_prefix="prefix",
+        ),
+        add_special_tokens_for_generate=False,
+        max_length=128,
+        tok_decode=lambda token_ids: ",".join(str(token_id) for token_id in token_ids),
+        eot_token_id=99,
+    )
+    request = SimpleNamespace(args=("question", {"until": ["STOP"], "max_gen_toks": 12}))
+
+    output = GCWEvalLM._generate_until_process_branch(fake, [request])
+
+    assert output == ["5"]
+    assert len(calls) == 1
+    kwargs = calls[0][1]
+    assert kwargs["cycles"] == 1
+    assert kwargs["max_new_tokens"] == 12
+    assert kwargs["answer_prefix_ids"].tolist() == fake.tokenizer.encode("prefix")
+    assert kwargs["prompt_ids"].tolist() == fake.tokenizer.encode("question\n\nsuffix")
+
+
 def test_opsd_generate_until_trims_online_stop_with_eot_argument(monkeypatch):
     from types import SimpleNamespace
 
@@ -152,7 +208,7 @@ def test_opsd_generate_until_batches_equal_shape_requests(monkeypatch):
     fake = SimpleNamespace(
         model=object(),
         tokenizer=Tokenizer(),
-        opsd_condition=OpsdEvalCondition(False, False),
+        opsd_condition=OpsdEvalCondition(False, False, max_response_tokens=2048),
         opsd_generation_records=[],
         batch_size=8,
         tok_decode=lambda token_ids: ",".join(str(token_id) for token_id in token_ids),
@@ -181,4 +237,6 @@ def test_opsd_generate_until_batches_equal_shape_requests(monkeypatch):
     assert output == ["5", "6"]
     assert len(calls) == 1
     assert calls[0][1]["prompts"] == ("question one", "question two")
+    assert calls[0][1]["max_response_tokens"] == 2048
+    assert all(row["max_response_tokens"] == 2048 for row in fake.opsd_generation_records)
     assert [row["request_index"] for row in fake.opsd_generation_records] == [0, 1]

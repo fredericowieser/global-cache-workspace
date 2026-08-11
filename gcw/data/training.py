@@ -40,7 +40,13 @@ class SFTCursor:
     kind: str = "sft"
 
 
-LoaderCursor = RandomCursor | FineWebCursor | SFTCursor
+@dataclass(frozen=True)
+class ProcessBranchCursor:
+    process_cursor: dict[str, Any]
+    kind: str = "process_branch"
+
+
+LoaderCursor = RandomCursor | FineWebCursor | SFTCursor | ProcessBranchCursor
 
 
 class TrainingBatchStream(Protocol):
@@ -280,6 +286,11 @@ def cursor_from_dict(value: dict[str, Any]) -> LoaderCursor:
         return FineWebCursor(**fields)
     if kind == "sft":
         return SFTCursor(**fields)
+    if kind == "process_branch":
+        process_cursor = fields.get("process_cursor")
+        if not isinstance(process_cursor, dict) or set(fields) != {"process_cursor"}:
+            raise ValueError("process_branch loader cursor has invalid fields")
+        return ProcessBranchCursor(process_cursor=process_cursor)
     raise ValueError(f"unsupported loader cursor kind: {kind!r}")
 
 

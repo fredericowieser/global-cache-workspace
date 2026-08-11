@@ -114,6 +114,7 @@ def main(argv: list[str] | None = None) -> None:
     opsd.add_argument("--tasks", default=",".join(OPSD_SCREEN_TASKS))
     opsd.add_argument("--limit", type=int, default=None)
     opsd.add_argument("--batch-size", type=int, default=1)
+    opsd.add_argument("--max-response-tokens", type=int, default=512)
     opsd.add_argument("--out", required=True)
     opsd_aggregate = eval_sub.add_parser("opsd-aggregate")
     opsd_aggregate.add_argument("--inputs", nargs=4, required=True)
@@ -226,6 +227,7 @@ def main(argv: list[str] | None = None) -> None:
                 tasks=tasks,
                 limit=args.limit,
                 batch_size=args.batch_size,
+                max_response_tokens=args.max_response_tokens,
             )
         else:
             runners = {"core": run_core, "math": run_math, "paper7": run_paper7, "ppt": run_ppt}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import random
@@ -13,6 +14,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 import torch.distributed as dist
+from safetensors.torch import load as load_safetensors
 from safetensors.torch import load_file, save_file
 
 from gcw.config import ModelConfig, to_dict
@@ -21,6 +23,8 @@ from gcw.data.training import FineWebCursor, LoaderCursor, cursor_from_dict, cur
 
 FORMAT_VERSION = 2
 PAYLOAD_FILES = frozenset({"model.safetensors", "optimizer.pt", "rng.pt", "config.json", "train_state.json"})
+INITIAL_PROCESSOR_FILE = "initial_processor.safetensors"
+OPTIONAL_PAYLOAD_FILES = frozenset({INITIAL_PROCESSOR_FILE})
 
 
 class TrainingCheckpointError(RuntimeError):
@@ -58,12 +62,14 @@ class TrainingCheckpoint:
         *,
         elastic_seeds: list[int] | None,
         rank_loader_cursors: list[LoaderCursor],
+        payloads: dict[str, bytes],
     ) -> None:
         self.path = path
         self.resume_state = resume_state
         self.manifest = manifest
         self._elastic_seeds = elastic_seeds
         self._rank_loader_cursors = rank_loader_cursors
+        self._payloads = payloads
 
     @classmethod
     def open(
@@ -73,12 +79,21 @@ class TrainingCheckpoint:
         expected_fingerprint: dict[str, Any],
         topology: Literal["same", "elastic_ddp"],
         current_world_size: int,
+        expected_manifest_sha256: str | None = None,
     ) -> TrainingCheckpoint:
         if expected_fingerprint.get("distributed") == "fsdp":
             raise UnsupportedTopologyError("FSDP training resume is not supported")
         resolved = _resolve_checkpoint_path(Path(path))
-        manifest = _read_manifest(resolved)
-        _verify_files(resolved, manifest)
+        try:
+            manifest_bytes = (resolved / "manifest.json").read_bytes()
+        except OSError as exc:
+            raise TrainingCheckpointError(f"invalid checkpoint manifest in {resolved}: {exc}") from exc
+        if expected_manifest_sha256 is not None:
+            actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+            if actual_manifest_sha256 != expected_manifest_sha256:
+                raise TrainingCheckpointError("training checkpoint manifest sha256 mismatch")
+        manifest = _parse_manifest_bytes(manifest_bytes, resolved)
+        payloads = _capture_verified_payloads(resolved, manifest)
         saved_fingerprint = manifest.get("training_fingerprint")
         if saved_fingerprint != expected_fingerprint:
             differing = sorted(
@@ -87,7 +102,7 @@ class TrainingCheckpoint:
                 if (saved_fingerprint or {}).get(key) != expected_fingerprint.get(key)
             )
             raise CheckpointCompatibilityError(f"training fingerprint differs for: {', '.join(differing)}")
-        train_state = json.loads((resolved / "train_state.json").read_text(encoding="utf-8"))
+        train_state = json.loads(payloads["train_state.json"].decode("utf-8"))
         reserved = {
             "step",
             "smooth_loss",
@@ -136,6 +151,7 @@ class TrainingCheckpoint:
             manifest,
             elastic_seeds=elastic_seeds,
             rank_loader_cursors=rank_loader_cursors,
+            payloads=payloads,
         )
 
     def loader_cursor(self, *, rank: int) -> LoaderCursor:
@@ -147,11 +163,29 @@ class TrainingCheckpoint:
 
     def restore_model(self, model: torch.nn.Module) -> None:
         device = next(model.parameters()).device
-        weights = load_file(self.path / "model.safetensors", device=str(device))
+        weights = load_safetensors(self._payloads["model.safetensors"])
+        weights = {name: tensor.to(device) for name, tensor in weights.items()}
         model.load_state_dict(weights, strict=True)
 
+    def load_initial_processor_state(
+        self, *, device: torch.device | str = "cpu"
+    ) -> dict[str, torch.Tensor]:
+        payload = self._payloads.get(INITIAL_PROCESSOR_FILE)
+        if payload is None:
+            raise CheckpointCompatibilityError(
+                "training checkpoint has no authenticated initial processor state"
+            )
+        return {
+            name: tensor.to(device)
+            for name, tensor in load_safetensors(payload).items()
+        }
+
     def restore_optimizer(self, optimizer: torch.optim.Optimizer, *, device: torch.device | str) -> None:
-        state = torch.load(self.path / "optimizer.pt", map_location="cpu", weights_only=True)
+        state = torch.load(
+            io.BytesIO(self._payloads["optimizer.pt"]),
+            map_location="cpu",
+            weights_only=True,
+        )
         optimizer.load_state_dict(state)
         target = torch.device(device)
         for value in optimizer.state.values():
@@ -168,10 +202,39 @@ class TrainingCheckpoint:
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
             return
-        states = torch.load(self.path / "rng.pt", map_location="cpu", weights_only=False)
+        states = torch.load(
+            io.BytesIO(self._payloads["rng.pt"]),
+            map_location="cpu",
+            weights_only=False,
+        )
         if rank >= len(states):
             raise CheckpointCompatibilityError(f"checkpoint has no RNG state for rank {rank}")
         _restore_rng_state(states[rank])
+
+
+def _capture_verified_payloads(
+    path: Path,
+    manifest: dict[str, Any],
+) -> dict[str, bytes]:
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        raise TrainingCheckpointError("checkpoint manifest files must be an object")
+    expected_names = PAYLOAD_FILES | ({INITIAL_PROCESSOR_FILE} if INITIAL_PROCESSOR_FILE in files else set())
+    if set(files) != expected_names:
+        raise TrainingCheckpointError("checkpoint manifest payload roles differ from required schema")
+    payloads: dict[str, bytes] = {}
+    for name in sorted(expected_names):
+        expected = files.get(name)
+        if not isinstance(expected, str) or len(expected) != 64:
+            raise TrainingCheckpointError(f"checkpoint manifest digest is invalid for {name}")
+        try:
+            payload = (path / name).read_bytes()
+        except OSError as exc:
+            raise TrainingCheckpointError(f"checkpoint payload is missing: {name}") from exc
+        if hashlib.sha256(payload).hexdigest() != expected:
+            raise TrainingCheckpointError(f"checkpoint payload digest differs for {name}")
+        payloads[name] = payload
+    return payloads
 
 
 def verify_training_checkpoint_files(path: str | Path) -> dict[str, Any]:
@@ -196,6 +259,7 @@ def save_training_checkpoint(
     training_fingerprint: dict[str, Any],
     *,
     backbone_source_path: str | Path | None = None,
+    initial_processor_state: dict[str, torch.Tensor] | None = None,
 ) -> None:
     distributed = dist.is_available() and dist.is_initialized()
     rank = dist.get_rank() if distributed else 0
@@ -219,6 +283,7 @@ def save_training_checkpoint(
                 training_fingerprint,
                 gathered_runtime or [],
                 backbone_source_path=backbone_source_path,
+                initial_processor_state=initial_processor_state,
             )
             status[0] = {"ok": True}
         except Exception as exc:  # broadcast recoverable rank-zero failures before raising
@@ -276,6 +341,7 @@ def _write_checkpoint(
     runtime_states: list[dict[str, Any]],
     *,
     backbone_source_path: str | Path | None = None,
+    initial_processor_state: dict[str, torch.Tensor] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = Path(tempfile.mkdtemp(prefix=f".{path.name}.tmp-", dir=path.parent))
@@ -286,6 +352,16 @@ def _write_checkpoint(
         if backbone_source_path is not None:
             _replace_with_source_backbone(model_state, Path(backbone_source_path))
         save_file(model_state, temp_path / "model.safetensors")
+        payload_files = set(PAYLOAD_FILES)
+        if initial_processor_state is not None:
+            save_file(
+                {
+                    key: value.detach().cpu().contiguous()
+                    for key, value in initial_processor_state.items()
+                },
+                temp_path / INITIAL_PROCESSOR_FILE,
+            )
+            payload_files.add(INITIAL_PROCESSOR_FILE)
         torch.save(optimizer.state_dict(), temp_path / "optimizer.pt")
         torch.save([state["rng"] for state in runtime_states], temp_path / "rng.pt")
         _write_json(temp_path / "config.json", {"model": to_dict(model_config)})
@@ -308,7 +384,7 @@ def _write_checkpoint(
             "saved_world_size": resume_state.saved_world_size,
             "topology": training_fingerprint.get("distributed"),
             "training_fingerprint": training_fingerprint,
-            "files": {name: _sha256(temp_path / name) for name in sorted(PAYLOAD_FILES)},
+            "files": {name: _sha256(temp_path / name) for name in sorted(payload_files)},
         }
         _write_json(temp_path / "manifest.json", manifest)
         _fsync_tree(temp_path)
@@ -356,27 +432,37 @@ def _checkpoint_error(path: Path) -> TrainingCheckpointError | None:
     return None
 
 
-def _read_manifest(path: Path) -> dict[str, Any]:
+def _parse_manifest_bytes(payload: bytes, path: Path) -> dict[str, Any]:
     try:
-        manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise TrainingCheckpointError(f"invalid checkpoint manifest in {path}: {exc}") from exc
-    if manifest.get("format_version") != FORMAT_VERSION:
+    if not isinstance(manifest, dict) or manifest.get("format_version") != FORMAT_VERSION:
+        version = manifest.get("format_version") if isinstance(manifest, dict) else None
         raise TrainingCheckpointError(
-            f"unsupported training checkpoint version {manifest.get('format_version')!r}; expected {FORMAT_VERSION}"
+            f"unsupported training checkpoint version {version!r}; expected {FORMAT_VERSION}"
         )
     if manifest.get("complete") is not True:
         raise TrainingCheckpointError(f"incomplete training checkpoint: {path}")
     return manifest
 
 
+def _read_manifest(path: Path) -> dict[str, Any]:
+    try:
+        payload = (path / "manifest.json").read_bytes()
+    except OSError as exc:
+        raise TrainingCheckpointError(f"invalid checkpoint manifest in {path}: {exc}") from exc
+    return _parse_manifest_bytes(payload, path)
+
+
 def _verify_files(path: Path, manifest: dict[str, Any]) -> None:
     files = manifest.get("files")
     if not isinstance(files, dict):
         raise TrainingCheckpointError("checkpoint manifest has no file hashes")
-    if set(files) != PAYLOAD_FILES:
-        missing = sorted(PAYLOAD_FILES - set(files))
-        unexpected = sorted(set(files) - PAYLOAD_FILES)
+    file_names = set(files)
+    if not PAYLOAD_FILES <= file_names or not file_names <= PAYLOAD_FILES | OPTIONAL_PAYLOAD_FILES:
+        missing = sorted(PAYLOAD_FILES - file_names)
+        unexpected = sorted(file_names - PAYLOAD_FILES - OPTIONAL_PAYLOAD_FILES)
         raise TrainingCheckpointError(
             f"checkpoint manifest does not contain exactly the required file hashes; missing={missing}, unexpected={unexpected}"
         )

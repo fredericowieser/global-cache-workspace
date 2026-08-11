@@ -8,7 +8,7 @@ import torch
 from gcw.models.longshot import GlobalCacheProcessor, Longshot, LongshotWorkspaceSource
 from gcw.models.transformer import TF
 from gcw.models.windowed_cache import WindowedCache
-from gcw.process_data import ProcessBranchRecord
+from gcw.process_data import AnswerOnlyRecord, ProcessBranchRecord
 
 
 class InvalidProcessBranchExample(ValueError):
@@ -29,6 +29,19 @@ class ProcessBranchTokenExample:
 
 
 @dataclass(frozen=True)
+class AnswerOnlyTokenExample:
+    prompt_ids: torch.Tensor
+    answer_response_prefix_ids: torch.Tensor
+    final_answer_ids: torch.Tensor
+
+
+@dataclass(frozen=True)
+class AnswerOnlyLoss:
+    answer_loss: torch.Tensor
+    cycles: int
+
+
+@dataclass(frozen=True)
 class ProcessBranchLosses:
     total_loss: torch.Tensor
     process_loss: torch.Tensor
@@ -46,7 +59,7 @@ class ProcessBranchState:
 
 def build_process_branch_state(
     model: Longshot,
-    example: ProcessBranchTokenExample,
+    example: ProcessBranchTokenExample | AnswerOnlyTokenExample,
     *,
     cycles: int,
 ) -> ProcessBranchState:
@@ -78,7 +91,7 @@ def build_process_branch_state(
 
 def branch_answer_loss(
     model: Longshot,
-    example: ProcessBranchTokenExample,
+    example: ProcessBranchTokenExample | AnswerOnlyTokenExample,
     state: ProcessBranchState,
     *,
     workspace_override: torch.Tensor | None = None,
@@ -97,6 +110,19 @@ def branch_answer_loss(
         start_pos=example.prompt_ids.numel(),
         response_prefix_ids=example.answer_response_prefix_ids.unsqueeze(0),
         target_ids=example.final_answer_ids.unsqueeze(0),
+    )
+
+
+def answer_only_example_loss(
+    model: Longshot,
+    example: AnswerOnlyTokenExample,
+    *,
+    cycles: int,
+) -> AnswerOnlyLoss:
+    state = build_process_branch_state(model, example, cycles=cycles)
+    return AnswerOnlyLoss(
+        answer_loss=branch_answer_loss(model, example, state),
+        cycles=state.cycles,
     )
 
 
@@ -168,6 +194,37 @@ def generate_process_branch(
         decode_cache = next_cache
         next_logits = model.backbone.logits_from_hidden(hidden[:, -1:])[:, -1]
     return torch.cat(generated, dim=0)
+
+
+def tokenize_answer_only_record(
+    record: AnswerOnlyRecord,
+    tokenizer: Any,
+    *,
+    answer_response_prefix: str,
+    prompt_suffix: str,
+    max_prompt_tokens: int,
+    max_answer_tokens: int,
+    device: torch.device | str = "cpu",
+) -> AnswerOnlyTokenExample:
+    prompt = record.prompt
+    if prompt_suffix.strip():
+        prompt = f"{prompt}\n\n{prompt_suffix.strip()}"
+    prompt_ids = tokenizer.encode(prompt)
+    answer_prefix_ids = tokenizer.encode(answer_response_prefix)
+    if not answer_prefix_ids:
+        raise InvalidProcessBranchExample("empty_answer_response_prefix")
+    if not prompt_ids:
+        raise InvalidProcessBranchExample("empty_prompt")
+    if len(prompt_ids) > max_prompt_tokens:
+        raise InvalidProcessBranchExample("prompt_too_long")
+    answer_ids = tokenizer.encode(record.final_answer) + [int(tokenizer.eot_id)]
+    if len(answer_ids) > max_answer_tokens:
+        raise InvalidProcessBranchExample("answer_too_long")
+    return AnswerOnlyTokenExample(
+        prompt_ids=torch.tensor(prompt_ids, dtype=torch.long, device=device),
+        answer_response_prefix_ids=torch.tensor(answer_prefix_ids, dtype=torch.long, device=device),
+        final_answer_ids=torch.tensor(answer_ids, dtype=torch.long, device=device),
+    )
 
 
 def tokenize_process_record(

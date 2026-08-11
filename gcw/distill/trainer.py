@@ -1682,6 +1682,7 @@ def _teacher_fingerprint(
 def _hf_checkpoint_identity_sha256(checkpoint: Path) -> str:
     """Hash local HF model/config files without depending on the directory path."""
     checkpoint = checkpoint.resolve(strict=True)
+    files: tuple[Path, ...]
     if checkpoint.is_file():
         files = (checkpoint,)
         root = checkpoint.parent
