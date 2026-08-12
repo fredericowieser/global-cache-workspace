@@ -1700,6 +1700,44 @@ def test_longshot_linear_state_cache_validates_supported_combinations():
         )
 
 
+@pytest.mark.parametrize("variant", ["icarus", "longshot"])
+@pytest.mark.parametrize(
+    ("head_dim", "partial_rotary_factor"),
+    [(3, 1.0), (8, 0.01)],
+)
+def test_unrope_processor_requires_positive_even_partial_rotary_width(
+    variant,
+    head_dim: int,
+    partial_rotary_factor: float,
+):
+    with pytest.raises(ValueError, match="positive even rotary width"):
+        ModelConfig(
+            variant=variant,
+            family="qwen3_5",
+            vocab_size=32,
+            hidden_size=2 * head_dim,
+            intermediate_size=4 * head_dim,
+            num_layers=2,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=head_dim,
+            sequence_len=8,
+            layer_types=["linear_attention", "full_attention"],
+            processor_layer_indices=[1],
+            partial_rotary_factor=partial_rotary_factor,
+            cache_processor=CacheProcessorConfig(
+                process_every=2,
+                topk=1,
+                topk_heads=1,
+                hidden_size=4,
+                intermediate_size=8,
+                num_heads=1,
+                num_kv_heads=1,
+                unrope_keys=True,
+            ),
+        )
+
+
 def test_self_head_kv_attention_is_config_gated_at_init():
     default_config = CacheProcessorConfig(
         hidden_size=8,

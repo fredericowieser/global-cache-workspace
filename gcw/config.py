@@ -318,6 +318,16 @@ class ModelConfig:
             raise ValueError("num_heads must be divisible by num_kv_heads")
         if not 0.0 < self.partial_rotary_factor <= 1.0:
             raise ValueError("partial_rotary_factor must be in (0, 1]")
+        if self.cache_processor is not None and self.cache_processor.unrope_keys:
+            rotary_widths = {
+                int(self.head_dim_for_layer(layer_idx) * self.partial_rotary_factor)
+                for layer_idx in self.cache_layer_indices
+            }
+            if any(width <= 0 or width % 2 for width in rotary_widths):
+                raise ValueError(
+                    "cache_processor.unrope_keys requires a positive even rotary width "
+                    "for every stored cache layer"
+                )
         if self.cache_processor is not None and self.cache_processor.linear_state_cache:
             if self.variant != "longshot":
                 raise ValueError("cache_processor.linear_state_cache is supported only for variant='longshot'")
