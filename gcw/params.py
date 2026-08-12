@@ -4,7 +4,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
-from gcw.config import CacheProcessorConfig, ModelConfig, Variant, dump_yaml, to_dict
+from gcw.config import (
+    CacheProcessorConfig,
+    ModelConfig,
+    Variant,
+    dump_yaml,
+    linear_attention_following_cache_indices,
+    to_dict,
+)
 from gcw.models.transformer import estimate_non_embedding_params
 
 
@@ -104,7 +111,7 @@ def _longshot_processor_params(config: ModelConfig) -> int:
     in_proj_dim = input_dim if cp.encoder_method == "query_attention" else input_dim * _longshot_encoder_seq_len(cp)
     out_proj_dim = _head_dim(config) if cp.update_stream == "v" else input_dim
     query = _longshot_query_params(input_dim, cache_heads, cp)
-    return query + _processor_block_params_with_dims(
+    return query + _longshot_linear_state_params(config) + _processor_block_params_with_dims(
         input_norm_dim=input_dim,
         in_proj_dim=in_proj_dim,
         out_proj_dim=out_proj_dim,
@@ -126,6 +133,44 @@ def _longshot_query_params(input_dim: int, cache_heads: int, config: CacheProces
 
 def _longshot_encoder_seq_len(config: CacheProcessorConfig) -> int:
     return config.encoder_seq_len or config.process_every + max(config.topk, 0)
+
+
+def _longshot_linear_state_heads(config: ModelConfig) -> int:
+    cp = config.cache_processor
+    if cp is None or not cp.linear_state_cache:
+        return 0
+    return len(linear_attention_following_cache_indices(config)) * int(config.linear_num_value_heads or config.num_heads)
+
+
+def _longshot_linear_state_params(config: ModelConfig) -> int:
+    cp = config.cache_processor
+    if cp is None or not cp.linear_state_cache:
+        return 0
+    layer_pairs = linear_attention_following_cache_indices(config)
+    if not layer_pairs:
+        return 0
+    layer_count = len(layer_pairs)
+    linear_key_dim = int(config.linear_key_head_dim or _head_dim(config))
+    linear_value_dim = int(config.linear_value_head_dim or linear_key_dim)
+    linear_value_heads = int(config.linear_num_value_heads or config.num_heads)
+    context_dim = cp.hidden_size
+    if cp.linear_state_query_mode == "per_linear_state":
+        query_count = layer_count
+        query_out = linear_value_heads * linear_key_dim
+    elif cp.linear_state_query_mode == "shared":
+        query_count = len({following_cache_idx for _, following_cache_idx in layer_pairs})
+        query_out = linear_key_dim
+    elif cp.linear_state_query_mode == "global":
+        query_count = 1
+        query_out = linear_key_dim
+    else:
+        raise ValueError(f"unsupported cache_processor.linear_state_query_mode: {cp.linear_state_query_mode}")
+    query = query_count * (context_dim * query_out + query_out)
+    feature_dim = linear_key_dim + linear_value_dim
+    query_context_norm = context_dim
+    input_adapter = feature_dim + feature_dim * cp.hidden_size + cp.hidden_size
+    output_adapter = cp.hidden_size * feature_dim + feature_dim
+    return query + query_context_norm + input_adapter + output_adapter
 
 
 def fit_processor_config(

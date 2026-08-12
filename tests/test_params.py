@@ -79,6 +79,49 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
     assert processor_params(v_cfg) < processor_params(kv_cfg)
 
 
+def test_qwen35_longshot_linear_state_processor_params_match_model():
+    cp = CacheProcessorConfig(
+        process_every=4,
+        topk=2,
+        topk_heads=2,
+        hidden_size=8,
+        intermediate_size=16,
+        num_heads=1,
+        num_kv_heads=1,
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+    )
+    cfg = ModelConfig(
+        variant="longshot",
+        family="qwen3_5",
+        vocab_size=128,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=32,
+        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        processor_layer_indices=[1, 3],
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        cache_processor=cp,
+    )
+    model = build_model(cfg)
+    default_cfg = replace(cfg, cache_processor=replace(cp, linear_state_cache=False))
+    shared_cfg = replace(cfg, cache_processor=replace(cp, linear_state_query_mode="shared"))
+    per_linear_state_cfg = replace(cfg, cache_processor=replace(cp, linear_state_query_mode="per_linear_state"))
+
+    assert processor_params(cfg) == sum(p.numel() for p in model.cache_processor.parameters())
+    assert processor_params(cfg) > processor_params(default_cfg)
+    assert processor_params(cfg) < processor_params(shared_cfg)
+    assert processor_params(shared_cfg) < processor_params(per_linear_state_cfg)
+
+
 def test_matched_total_uses_one_backbone_under_tf_target():
     target = estimate_non_embedding_params(smollm360m_backbone())
     backbone, _ = fit_matched_total_backbone(target, fraction=0.05)

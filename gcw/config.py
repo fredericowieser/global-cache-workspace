@@ -21,6 +21,7 @@ CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
 CacheProcessorIterationMode = Literal["internal", "external"]
 CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention", "kv_norm"]
+CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
 ProcessBranchObjective = Literal["process_branch", "answer_only", "trajectory_replay"]
 
@@ -54,6 +55,7 @@ class CacheProcessorConfig:
     process_every: int = 64
     topk: int = 32
     topk_heads: int = 32
+    topk_linear_heads: int | None = None
     score: str = "attn_l2"
     hidden_size: int = 512
     intermediate_size: int = 2048
@@ -82,12 +84,17 @@ class CacheProcessorConfig:
     iterations: int = 1
     iteration_mode: CacheProcessorIterationMode = "internal"
     internal_iteration_score: CacheProcessorInternalIterationScore = "attn_l2"
+    linear_state_cache: bool = False
+    linear_state_query_mode: CacheLinearStateQueryMode = "global"
+    gate_linear_state_delta: bool = True
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError("cache_processor.score must be 'attn_l2' or 'kv_norm'")
         if self.topk_heads <= 0:
             raise ValueError("cache_processor.topk_heads must be positive")
+        if self.topk_linear_heads is not None and self.topk_linear_heads < 0:
+            raise ValueError("cache_processor.topk_linear_heads must be non-negative when set")
         if self.update_stream not in {"kv", "v"}:
             raise ValueError("cache_processor.update_stream must be 'kv' or 'v'")
         if self.out_proj_init not in {"normal", "zero"}:
@@ -115,6 +122,10 @@ class CacheProcessorConfig:
         if self.internal_iteration_score not in {"attn_l2", "cache_head_attention", "kv_norm"}:
             raise ValueError(
                 "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', or 'kv_norm'"
+            )
+        if self.linear_state_query_mode not in {"per_linear_state", "shared", "global"}:
+            raise ValueError(
+                "cache_processor.linear_state_query_mode must be 'per_linear_state', 'shared', or 'global'"
             )
 
     @property
@@ -307,6 +318,18 @@ class ModelConfig:
             raise ValueError("num_heads must be divisible by num_kv_heads")
         if not 0.0 < self.partial_rotary_factor <= 1.0:
             raise ValueError("partial_rotary_factor must be in (0, 1]")
+        if self.cache_processor is not None and self.cache_processor.linear_state_cache:
+            if self.variant != "longshot":
+                raise ValueError("cache_processor.linear_state_cache is supported only for variant='longshot'")
+            if self.family not in {"qwen3_5", "qwen3_5_moe"}:
+                raise ValueError("cache_processor.linear_state_cache requires family='qwen3_5' or 'qwen3_5_moe'")
+            if self.cache_processor.encoder_method != "query_attention":
+                raise ValueError("cache_processor.linear_state_cache requires encoder_method='query_attention'")
+            if self.cache_processor.encoder_query_source != "final_token":
+                raise ValueError("cache_processor.linear_state_cache requires encoder_query_source='final_token'")
+            if self.cache_processor.update_stream != "kv":
+                raise ValueError("cache_processor.linear_state_cache requires update_stream='kv'")
+
     @property
     def architecture_name(self) -> str:
         if self.flow_processor is not None:
@@ -385,6 +408,23 @@ class ModelConfig:
     @property
     def _experts_implementation(self) -> str:
         return self.moe_experts_implementation
+
+
+def linear_attention_following_cache_indices(config: ModelConfig, *, require_layer_types: bool = False) -> list[tuple[int, int]]:
+    if config.layer_types is None:
+        if require_layer_types:
+            raise ValueError("Longshot linear_state_cache requires layer_types")
+        return []
+    pairs: list[tuple[int, int]] = []
+    cache_layer_indices = config.cache_layer_indices
+    for layer_idx, layer_type in enumerate(config.layer_types):
+        if layer_type != "linear_attention":
+            continue
+        following = next((cache_idx for cache_idx, full_idx in enumerate(cache_layer_indices) if full_idx > layer_idx), None)
+        if following is None:
+            raise ValueError(f"linear_attention layer {layer_idx} has no following full-attention cache layer")
+        pairs.append((layer_idx, following))
+    return pairs
 
 
 @dataclass

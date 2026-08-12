@@ -1,11 +1,12 @@
 import types
+from dataclasses import replace
 
 import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gcw.config import CacheProcessorConfig, ModelConfig, gemma4_default_layer_types
+from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig, gemma4_default_layer_types
 from gcw.models import build_model
 from gcw.models import gemma4 as gemma4_module
 from gcw.models.gemma4 import _gemma4_attention
@@ -16,6 +17,7 @@ from gcw.models.cache_processor_ops import (
     expand_cache_head_indices,
     gather_per_cache_head_scores,
     gather_per_cache_head_kv,
+    rotate_cache_keys,
     select_heads_from_per_cache_head_scores,
     select_per_cache_head_kv_norm_indices_from_scores,
 )
@@ -468,6 +470,305 @@ def test_qwen35_processors_use_full_attention_cache_heads_only():
             assert len(model.cache_processor.blocks) == 2
         else:
             assert model.cache_processor.num_cache_heads == 2
+
+
+def test_qwen35_longshot_linear_state_heads_are_opt_in_and_mapped_to_following_kv_layers():
+    model = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+        )
+    )
+
+    assert model.cache_processor.num_kv_cache_heads == 2
+    assert model.cache_processor.num_linear_state_heads == 4
+    assert model.cache_processor.num_cache_heads == 6
+    assert [(spec.layer_idx, spec.following_cache_idx, spec.head_count) for spec in model.cache_processor.linear_state_specs] == [
+        (0, 0, 2),
+        (2, 1, 2),
+    ]
+    query_projs = model.cache_processor.block.linear_state_adapter.query_projs
+    assert list(query_projs) == ["global"]
+    assert query_projs["global"].out_features == 4
+    assert query_projs["global"].in_features == model.config.cache_processor.hidden_size
+
+    shared_following = build_model(
+        replace(
+            tiny_qwen35_config(
+                "longshot",
+                encoder_method="query_attention",
+                encoder_query_source="final_token",
+                linear_state_cache=True,
+                linear_state_query_mode="shared",
+            ),
+            layer_types=["linear_attention", "linear_attention", "full_attention", "full_attention"],
+            processor_layer_indices=[2, 3],
+        )
+    )
+    assert [(spec.layer_idx, spec.following_cache_idx, spec.head_count) for spec in shared_following.cache_processor.linear_state_specs] == [
+        (0, 0, 2),
+        (1, 0, 2),
+    ]
+    assert list(shared_following.cache_processor.block.linear_state_adapter.query_projs) == ["cache:0"]
+
+    per_linear_state = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+            linear_state_query_mode="per_linear_state",
+        )
+    )
+    per_linear_projs = per_linear_state.cache_processor.block.linear_state_adapter.query_projs
+    assert list(per_linear_projs) == ["layer:0", "layer:2"]
+    assert per_linear_projs["layer:0"].out_features == 8
+
+    global_query = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+            linear_state_query_mode="global",
+        )
+    )
+    assert list(global_query.cache_processor.block.linear_state_adapter.query_projs) == ["global"]
+
+    per_head = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+            per_cache_head_projections=True,
+        )
+    )
+    assert per_head.cache_processor.block.in_proj.weight.shape[0] == per_head.cache_processor.num_kv_cache_heads
+    assert per_head.cache_processor.block.out_proj.weight.shape[0] == per_head.cache_processor.num_kv_cache_heads
+    assert (
+        per_head.cache_processor.block.time_encoder.query_proj.weight.shape[0]
+        == per_head.cache_processor.num_kv_cache_heads
+    )
+
+
+def test_qwen35_longshot_linear_state_head_selection_is_split_from_kv_heads():
+    cfg = tiny_qwen35_config(
+        "longshot",
+        topk_linear_heads=2,
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+    )
+    model = build_model(replace(cfg, cache_processor=replace(cfg.cache_processor, topk_heads=1)))
+    processor = model.cache_processor
+    linear_inputs = longshot_module.LinearStateInputs(
+        features=torch.tensor([[[0.0], [2.0], [5.0], [3.0]]]),
+        specs=[],
+    )
+
+    selected = processor._select_combined_heads(
+        batch=1,
+        kv_head_scores=torch.tensor([[1.0, 10.0]]),
+        linear_inputs=linear_inputs,
+        select_all=False,
+        device=torch.device("cpu"),
+    )
+
+    assert torch.equal(selected, torch.tensor([[1, 4, 5]]))
+
+    no_linear_cfg = tiny_qwen35_config(
+        "longshot",
+        topk_linear_heads=0,
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+    )
+    no_linear = build_model(replace(no_linear_cfg, cache_processor=replace(no_linear_cfg.cache_processor, topk_heads=1)))
+    selected = no_linear.cache_processor._select_combined_heads(
+        batch=1,
+        kv_head_scores=torch.tensor([[1.0, 10.0]]),
+        linear_inputs=linear_inputs,
+        select_all=False,
+        device=torch.device("cpu"),
+    )
+
+    assert torch.equal(selected, torch.tensor([[1]]))
+
+
+def test_qwen35_longshot_internal_reselection_preserves_kv_and_linear_quotas():
+    class RecordingLayer(nn.Module):
+        def __init__(self, scores: torch.Tensor):
+            super().__init__()
+            self.register_buffer("scores", scores)
+            self.calls = []
+
+        def forward(self, x, selected_heads, return_attn_scores=False):
+            self.calls.append(selected_heads.detach().clone())
+            x = x + 1.0
+            if return_attn_scores:
+                return x, self.scores[None, :].expand(x.shape[0], -1)
+            return x
+
+    base = tiny_qwen35_config(
+        "longshot",
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+    )
+    assert base.cache_processor is not None
+    config = replace(
+        base,
+        cache_processor=replace(
+            base.cache_processor,
+            iterations=2,
+            topk_heads=1,
+            topk_linear_heads=2,
+        ),
+    )
+    model = build_model(config)
+    processor = model.cache_processor
+    block = processor.block
+    layer = RecordingLayer(torch.tensor([10.0, 1.0, 100.0, 90.0, 80.0, 70.0]))
+    block.layers = nn.ModuleList([layer])
+    merged = torch.randn(1, processor.num_kv_cache_heads, 3, 2 * processor.head_dim)
+    kv_hidden = torch.randn(1, processor.num_kv_cache_heads, config.cache_processor.hidden_size)
+    linear_features = torch.randn(1, processor.num_linear_state_heads, 8)
+
+    block.forward_with_linear_state_features(
+        merged,
+        kv_hidden,
+        linear_features,
+        torch.tensor([[0, 2, 3]]),
+    )
+
+    assert len(layer.calls) == 2
+    assert torch.equal(layer.calls[0], torch.tensor([[0, 2, 3]]))
+    assert torch.equal(layer.calls[1], torch.tensor([[0, 2, 3]]))
+
+
+def test_qwen35_longshot_linear_state_processor_updates_recurrent_state_only():
+    torch.manual_seed(11)
+    model = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+            gate_mode="direct",
+            gate_init=1.0,
+        )
+    ).eval()
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 5))
+    with torch.no_grad():
+        _, cache = model.backbone.forward_chunk(x, 0)
+        before = {
+            layer_idx: (conv.clone(), recurrent.clone())
+            for layer_idx, (conv, recurrent) in cache.linear_states.items()
+        }
+        model.cache_processor(cache, select_all=True)
+
+    assert cache.linear_states is not None
+    for layer_idx, (old_conv, old_recurrent) in before.items():
+        new_conv, new_recurrent = cache.linear_states[layer_idx]
+        assert torch.equal(new_conv, old_conv)
+        assert not torch.allclose(new_recurrent, old_recurrent)
+
+
+def test_qwen35_longshot_linear_state_delta_gate_can_be_disabled():
+    changed_by_gate_setting = {}
+    for gate_linear_state_delta in (False, True):
+        torch.manual_seed(13)
+        model = build_model(
+            tiny_qwen35_config(
+                "longshot",
+                encoder_method="query_attention",
+                encoder_query_source="final_token",
+                linear_state_cache=True,
+                gate_mode="direct",
+                gate_init=0.0,
+                gate_linear_state_delta=gate_linear_state_delta,
+            )
+        ).eval()
+        model.init_weights()
+        x = torch.randint(0, 128, (2, 5))
+        with torch.no_grad():
+            _, cache = model.backbone.forward_chunk(x, 0)
+            before = {
+                layer_idx: recurrent.clone()
+                for layer_idx, (_, recurrent) in cache.linear_states.items()
+            }
+            model.cache_processor(cache, select_all=True)
+
+        changed_by_gate_setting[gate_linear_state_delta] = any(
+            not torch.allclose(cache.linear_states[layer_idx][1], old_recurrent)
+            for layer_idx, old_recurrent in before.items()
+        )
+
+    assert changed_by_gate_setting[False]
+    assert not changed_by_gate_setting[True]
+
+
+def test_qwen35_longshot_linear_state_adapter_receives_gradients():
+    torch.manual_seed(17)
+    model = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+        )
+    )
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+
+    loss = model(x, x)
+    loss.backward()
+
+    adapter_grads = [
+        param.grad
+        for name, param in model.cache_processor.named_parameters()
+        if name.startswith("block.linear_state_adapter")
+    ]
+    assert adapter_grads
+    assert any(grad is not None and torch.isfinite(grad).all() for grad in adapter_grads)
+
+
+def test_qwen35_longshot_linear_state_processor_composes_with_flow_and_external_iterations():
+    torch.manual_seed(19)
+    base = tiny_qwen35_config(
+        "longshot",
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+    )
+    assert base.cache_processor is not None
+    config = replace(
+        base,
+        cache_processor=replace(base.cache_processor, iterations=2, iteration_mode="external"),
+        flow_processor=FlowProcessorConfig(num_steps=2),
+    )
+    model = build_model(config)
+    model.init_weights()
+    x = torch.randint(0, 128, (2, 9))
+
+    loss = model(x, x)
+    loss.backward()
+
+    flow = model.cache_processor.block.flow
+    assert flow is not None
+    assert torch.isfinite(loss)
+    assert flow.flow_gate.grad is not None and torch.isfinite(flow.flow_gate.grad).all()
+    adapter_grads = [
+        param.grad
+        for name, param in model.cache_processor.named_parameters()
+        if name.startswith("block.linear_state_adapter")
+    ]
+    assert adapter_grads
+    assert all(grad is not None and torch.isfinite(grad).all() for grad in adapter_grads)
 
 
 def test_tiny_qwen35_moe_forward_backward_and_cache_layers():
@@ -1291,6 +1592,7 @@ def test_bottleneck_state_dict_keys_stay_compatible():
 def test_cache_processor_experimental_defaults_preserve_current_behavior():
     cp = CacheProcessorConfig()
     assert cp.topk_heads == 32
+    assert cp.topk_linear_heads is None
     assert cp.per_cache_head_projections is False
     assert cp.gradient_checkpointing is False
     assert cp.update_stream == "kv"
@@ -1305,6 +1607,9 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.iterations == 1
     assert cp.iteration_mode == "internal"
     assert cp.internal_iteration_score == "attn_l2"
+    assert cp.linear_state_cache is False
+    assert cp.linear_state_query_mode == "global"
+    assert cp.gate_linear_state_delta is True
     assert cp.stream_factor == 2
 
 
@@ -1316,6 +1621,11 @@ def test_cache_processor_iterations_must_be_positive():
 def test_cache_processor_topk_heads_must_be_positive():
     with pytest.raises(ValueError, match="topk_heads"):
         CacheProcessorConfig(topk_heads=0)
+
+
+def test_cache_processor_topk_linear_heads_must_be_non_negative():
+    with pytest.raises(ValueError, match="topk_linear_heads"):
+        CacheProcessorConfig(topk_linear_heads=-1)
 
 
 def test_cache_processor_iteration_mode_must_be_known():
@@ -1331,6 +1641,63 @@ def test_cache_processor_internal_iteration_score_must_be_known():
 def test_cache_processor_internal_iteration_score_accepts_kv_norm():
     cp = CacheProcessorConfig(internal_iteration_score="kv_norm")
     assert cp.internal_iteration_score == "kv_norm"
+
+
+def test_longshot_linear_state_cache_validates_supported_combinations():
+    with pytest.raises(ValueError, match="variant='longshot'"):
+        ModelConfig(
+            variant="bgt",
+            family="qwen3_5",
+            num_layers=1,
+            layer_types=["linear_attention"],
+            cache_processor=CacheProcessorConfig(linear_state_cache=True),
+        )
+    with pytest.raises(ValueError, match="encoder_method='query_attention'"):
+        tiny_qwen35_config("longshot", linear_state_cache=True)
+    with pytest.raises(ValueError, match="encoder_query_source='final_token'"):
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            linear_state_cache=True,
+        )
+    with pytest.raises(ValueError, match="update_stream='kv'"):
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            update_stream="v",
+            linear_state_cache=True,
+        )
+    with pytest.raises(ValueError, match="no following full-attention"):
+        build_model(
+            ModelConfig(
+                variant="longshot",
+                family="qwen3_5",
+                vocab_size=128,
+                hidden_size=16,
+                intermediate_size=32,
+                num_layers=2,
+                num_heads=2,
+                num_kv_heads=1,
+                head_dim=8,
+                sequence_len=32,
+                layer_types=["full_attention", "linear_attention"],
+                processor_layer_indices=[0],
+                linear_key_head_dim=4,
+                linear_value_head_dim=4,
+                linear_num_key_heads=1,
+                linear_num_value_heads=2,
+                cache_processor=CacheProcessorConfig(
+                    hidden_size=8,
+                    intermediate_size=16,
+                    num_heads=1,
+                    num_kv_heads=1,
+                    encoder_method="query_attention",
+                    encoder_query_source="final_token",
+                    linear_state_cache=True,
+                ),
+            )
+        )
 
 
 def test_self_head_kv_attention_is_config_gated_at_init():
@@ -1638,6 +2005,17 @@ def test_unrope_global_processors_preserve_rope_space_with_zero_update():
         model.cache_processor(actual, select_all=True)
 
         _assert_cache_close(actual, cache)
+
+
+def test_rotate_cache_keys_preserves_partial_rotary_tail():
+    keys = torch.randn(2, 3, 4, 8)
+    indices = torch.tensor([[[0, 1, 2, 3], [1, 2, 3, 4], [2, 3, 4, 5]], [[3, 4, 5, 6], [4, 5, 6, 7], [5, 6, 7, 8]]])
+
+    rotated = rotate_cache_keys(keys, indices, theta=10000.0, rotary_style="llama", rotary_dim=4)
+    restored = rotate_cache_keys(rotated, indices, theta=10000.0, rotary_style="llama", inverse=True, rotary_dim=4)
+
+    assert torch.equal(rotated[..., 4:], keys[..., 4:])
+    assert torch.allclose(restored, keys, atol=1e-6)
 
 
 def test_direct_gate_remains_in_gradient_graph_with_zero_out_init():

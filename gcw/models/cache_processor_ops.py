@@ -30,9 +30,13 @@ def rotate_cache_keys(
     theta: float,
     rotary_style: str,
     inverse: bool = False,
+    rotary_dim: int | None = None,
 ) -> torch.Tensor:
     """Apply or undo RoPE on layer-major or flattened cache-key tensors."""
-    cos, sin = rotary_for_indices(indices, keys.shape[-1], theta, keys.dtype)
+    rotary_dim = keys.shape[-1] if rotary_dim is None else rotary_dim
+    if rotary_dim <= 0 or rotary_dim > keys.shape[-1] or rotary_dim % 2:
+        raise ValueError("rotary_dim must be a positive even value no larger than the key dimension")
+    cos, sin = rotary_for_indices(indices, rotary_dim, theta, keys.dtype)
     if keys.shape[:-1] == indices.shape:
         cos = cos.squeeze(-2)
         sin = sin.squeeze(-2)
@@ -43,7 +47,10 @@ def rotate_cache_keys(
         raise ValueError("keys and indices shapes are not compatible for cache-key RoPE")
     if inverse:
         sin = -sin
-    return apply_rotary(keys, cos, sin, style=rotary_style)
+    rotated = apply_rotary(keys[..., :rotary_dim], cos, sin, style=rotary_style)
+    if rotary_dim == keys.shape[-1]:
+        return rotated
+    return torch.cat([rotated, keys[..., rotary_dim:]], dim=-1)
 
 
 def expand_cache_head_indices(indices: torch.Tensor, num_cache_heads: int) -> torch.Tensor:
@@ -101,6 +108,7 @@ def gather_per_cache_head_kv(
     unrope_keys: bool = False,
     rope_theta: float = 10000.0,
     rotary_style: str = "llama",
+    rotary_dim: int | None = None,
 ) -> torch.Tensor:
     keys, values = _cache_tensors(cache)
     keys = _flatten_cache_heads(keys)
@@ -111,7 +119,14 @@ def gather_per_cache_head_kv(
     keys = torch.gather(keys, dim=2, index=index)
     values = torch.gather(values, dim=2, index=index)
     if unrope_keys:
-        keys = rotate_cache_keys(keys, indices, theta=rope_theta, rotary_style=rotary_style, inverse=True)
+        keys = rotate_cache_keys(
+            keys,
+            indices,
+            theta=rope_theta,
+            rotary_style=rotary_style,
+            inverse=True,
+            rotary_dim=rotary_dim,
+        )
     return torch.cat([keys, values], dim=-1)
 
 
