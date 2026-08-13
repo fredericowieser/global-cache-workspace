@@ -4,9 +4,9 @@ from fractions import Fraction
 
 import pytest
 
-from gcw.evaluation.qwen_gsm8k import (
+from gcw.evaluation.benchmarks import (
     MAX_NEW_TOKENS,
-    QwenGSM8KConfig,
+    BenchmarkConfig,
     apply_qwen_chat_template,
     extract_gsm8k_target,
     score_numeric_response,
@@ -42,6 +42,6 @@ def test_gsm8k_target_and_response_use_exact_numeric_values():
 
 def test_config_rejects_protocol_drift():
     with pytest.raises(ValueError, match=f"max_new_tokens={MAX_NEW_TOKENS}"):
-        QwenGSM8KConfig(model_path="model", output_dir="out", max_new_tokens=512)
+        BenchmarkConfig(model_path="model", output_dir="out", max_new_tokens=512)
     with pytest.raises(ValueError, match="duplicates"):
-        QwenGSM8KConfig(model_path="model", output_dir="out", modes=("thinking_off", "thinking_off"))
+        BenchmarkConfig(model_path="model", output_dir="out", modes=("thinking_off", "thinking_off"))

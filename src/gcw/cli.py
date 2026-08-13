@@ -36,9 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
     eval_sub = eval_p.add_subparsers(dest="suite", required=True)
     for suite in ("all", "math", "general"):
         command = eval_sub.add_parser(suite)
-        command.add_argument("--checkpoint", required=True)
+        target = command.add_mutually_exclusive_group(required=True)
+        target.add_argument("--checkpoint")
+        target.add_argument("--hf-model")
+        command.add_argument("--processor", choices=["on", "off"], default="on")
         command.add_argument("--limit", type=int, default=None)
         command.add_argument("--batch-size", type=int, default=8)
+        command.add_argument(
+            "--prompt-mode",
+            choices=["auto", "plain", "thinking_off", "thinking_on"],
+            default="auto",
+        )
         command.add_argument("--out", default=None)
     fineweb = eval_sub.add_parser("fineweb")
     fineweb.add_argument("--checkpoint", required=True)
@@ -92,7 +100,14 @@ def dispatch(args: argparse.Namespace) -> None:
             )
         else:
             runners = {"all": run_all, "math": run_math, "general": run_general}
-            results = runners[args.suite](args.checkpoint, limit=args.limit, batch_size=args.batch_size)
+            results = runners[args.suite](
+                args.checkpoint,
+                limit=args.limit,
+                batch_size=args.batch_size,
+                prompt_mode=args.prompt_mode,
+                hf_model=args.hf_model,
+                processor_enabled=args.processor == "on",
+            )
         if not is_main_process():
             return
         text = json.dumps(results, indent=2, default=str)

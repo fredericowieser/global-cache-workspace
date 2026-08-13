@@ -35,15 +35,21 @@ usage: gcw eval [-h] {all,math,general,fineweb} ...
 ## `gcw eval all`
 
 ```text
-usage: gcw eval all [-h] --checkpoint CHECKPOINT [--limit LIMIT]
-                    [--batch-size BATCH_SIZE] [--out OUT]
+usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
+                    [--processor {on,off}] [--limit LIMIT]
+                    [--batch-size BATCH_SIZE]
+                    [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                    [--out OUT]
 ```
 
 | Argument | Contract |
 |---|---|
-| `--checkpoint` | required |
+| `--checkpoint` | flag |
+| `--hf-model` | flag |
+| `--processor` | choices: `on`, `off`; default: `on` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
+| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
 | `--out` | flag |
 
 ## `gcw eval fineweb`
@@ -65,29 +71,41 @@ usage: gcw eval fineweb [-h] --checkpoint CHECKPOINT [--data-dir DATA_DIR]
 ## `gcw eval general`
 
 ```text
-usage: gcw eval general [-h] --checkpoint CHECKPOINT [--limit LIMIT]
-                        [--batch-size BATCH_SIZE] [--out OUT]
+usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
+                        [--processor {on,off}] [--limit LIMIT]
+                        [--batch-size BATCH_SIZE]
+                        [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                        [--out OUT]
 ```
 
 | Argument | Contract |
 |---|---|
-| `--checkpoint` | required |
+| `--checkpoint` | flag |
+| `--hf-model` | flag |
+| `--processor` | choices: `on`, `off`; default: `on` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
+| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
 | `--out` | flag |
 
 ## `gcw eval math`
 
 ```text
-usage: gcw eval math [-h] --checkpoint CHECKPOINT [--limit LIMIT]
-                     [--batch-size BATCH_SIZE] [--out OUT]
+usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
+                     [--processor {on,off}] [--limit LIMIT]
+                     [--batch-size BATCH_SIZE]
+                     [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                     [--out OUT]
 ```
 
 | Argument | Contract |
 |---|---|
-| `--checkpoint` | required |
+| `--checkpoint` | flag |
+| `--hf-model` | flag |
+| `--processor` | choices: `on`, `off`; default: `on` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
+| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
 | `--out` | flag |
 
 ## `gcw params`

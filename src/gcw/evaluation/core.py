@@ -6,8 +6,10 @@ from pathlib import Path
 import os
 import tempfile
 import time
+from typing import Any, cast
 
 import torch
+import torch.nn as nn
 
 from gcw.checkpoint import load_checkpoint
 from gcw.runtime import base_dir
@@ -78,6 +80,7 @@ class GCWEvalLM(TemplateLM):
         self.batch_size = batch_size
         self.max_length = model.config.sequence_len
         self.add_special_tokens_for_generate = False
+        self.prompt_mode = "auto"
 
     @property
     def tokenizer_name(self) -> str:
@@ -88,11 +91,14 @@ class GCWEvalLM(TemplateLM):
         return self.tokenizer.eot_id
 
     def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt=True) -> str:
-        return self.tokenizer.apply_chat_template(
-            chat_history,
-            tokenize=False,
-            add_generation_prompt=add_generation_prompt,
-        )
+        kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": add_generation_prompt,
+        }
+        prompt_mode = getattr(self, "prompt_mode", "auto")
+        if prompt_mode in {"thinking_off", "thinking_on"}:
+            kwargs["enable_thinking"] = prompt_mode == "thinking_on"
+        return self.tokenizer.apply_chat_template(chat_history, **kwargs)
 
     def tok_encode(self, string: str, **kwargs) -> list[int]:
         return self.tokenizer.encode(string)
@@ -202,16 +208,64 @@ class GCWEvalLM(TemplateLM):
         return outs
 
 
-def run_all(checkpoint: str | Path, limit: int | None = None, batch_size: int = 8) -> dict:
-    return run_task_groups(checkpoint, [*GENERAL_RUNS, *MATH_RUNS], limit=limit, batch_size=batch_size)
+def run_all(
+    checkpoint: str | Path | None = None,
+    limit: int | None = None,
+    batch_size: int = 8,
+    prompt_mode: str = "auto",
+    *,
+    hf_model: str | Path | None = None,
+    processor_enabled: bool = True,
+) -> dict:
+    return run_task_groups(
+        checkpoint,
+        [*GENERAL_RUNS, *MATH_RUNS],
+        limit=limit,
+        batch_size=batch_size,
+        prompt_mode=prompt_mode,
+        hf_model=hf_model,
+        processor_enabled=processor_enabled,
+    )
 
 
-def run_general(checkpoint: str | Path, limit: int | None = None, batch_size: int = 8) -> dict:
-    return run_task_groups(checkpoint, GENERAL_RUNS, limit=limit, batch_size=batch_size)
+def run_general(
+    checkpoint: str | Path | None = None,
+    limit: int | None = None,
+    batch_size: int = 8,
+    prompt_mode: str = "auto",
+    *,
+    hf_model: str | Path | None = None,
+    processor_enabled: bool = True,
+) -> dict:
+    return run_task_groups(
+        checkpoint,
+        GENERAL_RUNS,
+        limit=limit,
+        batch_size=batch_size,
+        prompt_mode=prompt_mode,
+        hf_model=hf_model,
+        processor_enabled=processor_enabled,
+    )
 
 
-def run_math(checkpoint: str | Path, limit: int | None = None, batch_size: int = 8) -> dict:
-    return run_task_groups(checkpoint, MATH_RUNS, limit=limit, batch_size=batch_size)
+def run_math(
+    checkpoint: str | Path | None = None,
+    limit: int | None = None,
+    batch_size: int = 8,
+    prompt_mode: str = "auto",
+    *,
+    hf_model: str | Path | None = None,
+    processor_enabled: bool = True,
+) -> dict:
+    return run_task_groups(
+        checkpoint,
+        MATH_RUNS,
+        limit=limit,
+        batch_size=batch_size,
+        prompt_mode=prompt_mode,
+        hf_model=hf_model,
+        processor_enabled=processor_enabled,
+    )
 
 
 def run_fineweb(
@@ -238,10 +292,14 @@ def run_fineweb(
 
 
 def run_task_groups(
-    checkpoint: str | Path,
+    checkpoint: str | Path | None,
     runs: list[tuple[list[str], int]],
     limit: int | None = None,
     batch_size: int = 8,
+    prompt_mode: str = "auto",
+    *,
+    hf_model: str | Path | None = None,
+    processor_enabled: bool = True,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -257,13 +315,20 @@ def run_task_groups(
     from lm_eval.tasks import TaskManager, get_task_dict
     dist_state, local_rank, world_size = _distributed_eval_state()
     device = _eval_device(local_rank)
-    model, cfg, state = load_checkpoint(checkpoint, device=device)
-    tokenizer = _tokenizer_for(cfg, state)
+    model, tokenizer = _load_eval_target(
+        checkpoint=checkpoint,
+        hf_model=hf_model,
+        processor_enabled=processor_enabled,
+        device=device,
+    )
     lm = GCWEvalLM(
         model,
         tokenizer,
         batch_size=batch_size,
     )
+    if prompt_mode not in {"auto", "plain", "thinking_off", "thinking_on"}:
+        raise ValueError(f"unknown prompt mode: {prompt_mode}")
+    lm.prompt_mode = prompt_mode
     apply_chat_template = bool(
         getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None)
     )
@@ -352,6 +417,94 @@ class _NoopAccelerator:
     def gather(x):
         return x
 
+
+class ProcessorBypass(nn.Module):
+    """Expose a composed checkpoint's exact loaded backbone for control cells."""
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        backbone = getattr(model, "backbone", None)
+        if not isinstance(backbone, nn.Module):
+            raise ValueError("processor bypass requires a composed GCW checkpoint")
+        self.backbone = backbone
+        self.config = getattr(backbone, "config")
+
+    def get_device(self) -> torch.device:
+        return cast(Any, self.backbone).get_device()
+
+    def forward(self, *args, **kwargs):
+        return cast(Any, self.backbone)(*args, **kwargs)
+
+    def generate(self, *args, **kwargs):
+        return cast(Any, self.backbone).generate(*args, **kwargs)
+
+    def generate_fast(self, *args, **kwargs):
+        return cast(Any, self.backbone).generate_fast(*args, **kwargs)
+
+
+def _load_eval_target(
+    *,
+    checkpoint: str | Path | None,
+    hf_model: str | Path | None,
+    processor_enabled: bool,
+    device: torch.device,
+):
+    if (checkpoint is None) == (hf_model is None):
+        raise ValueError("choose exactly one evaluation target: checkpoint or hf_model")
+    if hf_model is not None:
+        if not processor_enabled:
+            raise ValueError("HF evaluation targets do not have a GCW processor to bypass")
+        return _load_hf_eval_target(hf_model, device)
+    model, cfg, state = load_checkpoint(cast(str | Path, checkpoint), device=device)
+    tokenizer = _tokenizer_for(cfg, state)
+    if not processor_enabled:
+        model = ProcessorBypass(model)
+    return model, tokenizer
+
+
+def _load_hf_eval_target(source: str | Path, device: torch.device):
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from gcw.evaluation.scoring import HFTokenizerAdapter
+
+    tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
+    hf_model = cast(
+        Any,
+        AutoModelForCausalLM.from_pretrained(
+            source,
+            trust_remote_code=False,
+            torch_dtype=torch.bfloat16 if device.type == "cuda" else torch.float32,
+        ),
+    ).to(device)
+    adapter = HFCausalLMAdapter(hf_model)
+    return adapter, HFTokenizerAdapter(tokenizer, str(source))
+
+
+class HFCausalLMAdapter(nn.Module):
+    """Minimal native interface used by GCW's lm-eval adapter."""
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+        max_length = int(getattr(model.config, "max_position_embeddings", 2048))
+        self.config = type("EvalConfig", (), {"sequence_len": max_length})()
+
+    def get_device(self) -> torch.device:
+        return next(self.model.parameters()).device
+
+    def forward(self, input_ids: torch.Tensor, *_args, **_kwargs) -> torch.Tensor:
+        return cast(Any, self.model)(input_ids=input_ids).logits
+
+    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, eos_token_id: int | None = None):
+        return cast(Any, self.model).generate(
+            input_ids=input_ids,
+            attention_mask=torch.ones_like(input_ids),
+            do_sample=False,
+            max_new_tokens=max_new_tokens,
+            eos_token_id=eos_token_id,
+            pad_token_id=eos_token_id,
+            use_cache=True,
+        )
 
 
 def _normalize_until(until) -> tuple[str, ...]:

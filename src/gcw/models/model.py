@@ -121,7 +121,7 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
         return build_backbone(config)
 
     processor = build_cache_processor(config)
-    backbone_config = replace(config, flow_processor=None)
+    backbone_config = replace(config, flow_processor=None, diffusion_processor=None)
     if config.variant == "longshot":
         backbone_config = replace(backbone_config, workspace_flow_refinement=None)
     backbone = build_backbone(backbone_config)

@@ -175,7 +175,10 @@ def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> f
     cache_heads = config.cache_num_heads
     per_layer_dim = cp.stream_factor * config.num_kv_heads * head_dim
     total = 0.0
-    field_evaluations = config.flow_processor.num_steps if config.flow_processor is not None else 1
+    if config.diffusion_processor is not None:
+        field_evaluations = config.diffusion_processor.num_steps
+    else:
+        field_evaluations = config.flow_processor.num_steps if config.flow_processor is not None else 1
     for start in range(cp.process_every, seq_len, cp.process_every):
         selected = _selected_count(start, cp.process_every, cp.topk)
         if config.variant == "bt":

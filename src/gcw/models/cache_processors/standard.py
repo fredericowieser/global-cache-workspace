@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, DiffusionProcessorConfig, FlowProcessorConfig, ModelConfig
 from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
@@ -27,6 +27,7 @@ from gcw.models.cache_processors.ops import (
     workspace_writer_kv,
     workspace_writer_values,
 )
+from gcw.models.cache_processors.diffusion import TaskDirectedDiffusion
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.backbones.transformer import RMSNorm, apply_rotary, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
@@ -90,6 +91,7 @@ class CacheProcessor(nn.Module):
         input_dim: int,
         config: CacheProcessorConfig,
         flow_config: FlowProcessorConfig | None = None,
+        diffusion_config: DiffusionProcessorConfig | None = None,
     ):
         super().__init__()
         self.config = config
@@ -99,7 +101,14 @@ class CacheProcessor(nn.Module):
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
         self.out_proj = nn.Linear(config.hidden_size, input_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        if flow_config is not None and diffusion_config is not None:
+            raise ValueError("cache processor cannot combine flow and diffusion")
         self.flow = LatentFlow(config.hidden_size, flow_config) if flow_config is not None else None
+        self.diffusion = (
+            TaskDirectedDiffusion(config.hidden_size, diffusion_config)
+            if diffusion_config is not None
+            else None
+        )
         self.init_weights()
 
     def init_weights(self, std: float = 0.02) -> None:
@@ -120,6 +129,12 @@ class CacheProcessor(nn.Module):
         initial = self.in_proj(self.in_norm(x))
         if self.flow is not None:
             displacement = self.flow(
+                initial,
+                lambda state, _time: self.out_norm(self._run_layers(state, positions)),
+            )
+            return self.out_proj(displacement)
+        if self.diffusion is not None:
+            displacement = self.diffusion(
                 initial,
                 lambda state, _time: self.out_norm(self._run_layers(state, positions)),
             )
@@ -195,7 +210,12 @@ class GlobalCacheProcessor(CacheProcessorBase):
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         self.num_cache_heads = self.num_layers * self.num_kv_heads
-        self.block = CacheProcessor(self.num_layers * per_layer, self.config, model_config.flow_processor)
+        self.block = CacheProcessor(
+            self.num_layers * per_layer,
+            self.config,
+            model_config.flow_processor,
+            model_config.diffusion_processor,
+        )
         if self.config.score == "kv_norm":
             init = torch.tensor([self.config.kv_score_init_k, self.config.kv_score_init_v], dtype=torch.float32)
             self.salience_logits = nn.Parameter(init.clamp_min(1e-8).log())

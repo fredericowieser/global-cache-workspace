@@ -155,6 +155,34 @@ class FlowProcessorConfig:
 
 
 @dataclass
+class DiffusionProcessorConfig:
+    num_steps: int = 4
+    time_conditioning: bool = True
+    eta_max: float = 1.0
+    refinement_gate_init: float = -4.0
+    noise_scale: float = 0.15
+    conditioning_scale: float = 1.0
+
+    def __post_init__(self) -> None:
+        if isinstance(self.num_steps, bool) or not isinstance(self.num_steps, int) or self.num_steps <= 0:
+            raise ValueError("diffusion_processor.num_steps must be a positive integer")
+        if not isinstance(self.time_conditioning, bool):
+            raise ValueError("diffusion_processor.time_conditioning must be a boolean")
+        self.eta_max = _validated_float32("diffusion_processor.eta_max", self.eta_max, positive=True)
+        self.refinement_gate_init = _validated_float32(
+            "diffusion_processor.refinement_gate_init", self.refinement_gate_init
+        )
+        self.noise_scale = _validated_float32("diffusion_processor.noise_scale", self.noise_scale)
+        self.conditioning_scale = _validated_float32(
+            "diffusion_processor.conditioning_scale", self.conditioning_scale
+        )
+        if self.noise_scale < 0.0:
+            raise ValueError("diffusion_processor.noise_scale must be non-negative")
+        if self.conditioning_scale < 0.0:
+            raise ValueError("diffusion_processor.conditioning_scale must be non-negative")
+
+
+@dataclass
 class WorkspaceFlowRefinementConfig:
     solver: WorkspaceFlowSolver = "euler"
     solver_steps: int = 1
@@ -191,6 +219,7 @@ class ModelConfig:
     rotary_style: RotaryStyle = "ppt"
     cache_processor: CacheProcessorConfig | None = None
     flow_processor: FlowProcessorConfig | None = None
+    diffusion_processor: DiffusionProcessorConfig | None = None
     workspace_flow_refinement: WorkspaceFlowRefinementConfig | None = None
     layer_types: list[str] | None = None
     processor_layer_indices: list[int] | None = None
@@ -224,6 +253,10 @@ class ModelConfig:
             self.cache_processor = CacheProcessorConfig(**self.cache_processor)
         if isinstance(self.flow_processor, dict):
             self.flow_processor = FlowProcessorConfig(**self.flow_processor)
+        if isinstance(self.diffusion_processor, dict):
+            self.diffusion_processor = DiffusionProcessorConfig(**self.diffusion_processor)
+        if self.flow_processor is not None and self.diffusion_processor is not None:
+            raise ValueError("flow_processor and diffusion_processor are mutually exclusive")
         if isinstance(self.workspace_flow_refinement, dict):
             self.workspace_flow_refinement = WorkspaceFlowRefinementConfig(**self.workspace_flow_refinement)
         if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
@@ -322,6 +355,8 @@ class ModelConfig:
 
     @property
     def architecture_name(self) -> str:
+        if self.diffusion_processor is not None:
+            return f"diffusion_{self.variant}"
         if self.flow_processor is not None:
             return f"flow_{self.variant}"
         return self.variant

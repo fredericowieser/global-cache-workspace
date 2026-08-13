@@ -40,6 +40,7 @@ def _has_fields(value: object, *names: str) -> bool:
 
 
 _MODEL_CONFIG_VALIDATION_CODES = {
+    "diffusion_variant",
     "flow_recurrence",
     "flow_variant",
     "linear_state_encoder",
@@ -393,11 +394,12 @@ def resolve_experiment(
         if processor is None
         else f"{processor.iteration_mode}:{processor.iterations}"
     )
-    flow_plan = (
-        "none"
-        if config.model.flow_processor is None
-        else f"latent_flow:{config.model.flow_processor.num_steps}"
-    )
+    if config.model.diffusion_processor is not None:
+        flow_plan = f"task_directed_diffusion:{config.model.diffusion_processor.num_steps}"
+    elif config.model.flow_processor is not None:
+        flow_plan = f"latent_flow:{config.model.flow_processor.num_steps}"
+    else:
+        flow_plan = "none"
     checkpoint_contracts = ["gcw.native_final.v1"]
     if config.resume is not None or config.mode in {"pretrain", "sft"}:
         checkpoint_contracts.append("gcw.training.resume.v2")
@@ -449,6 +451,25 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
             "flow_variant",
             "flow_processor requires variant 'bgt', 'icarus', or 'longshot'",
             "model.flow_processor",
+        )
+    diffusion = config.diffusion_processor
+    if diffusion is not None and not _has_fields(diffusion, "num_steps", "noise_scale"):
+        add(
+            "diffusion_config",
+            "diffusion_processor must be a DiffusionProcessorConfig",
+            "model.diffusion_processor",
+        )
+    if diffusion is not None and config.variant != "bgt":
+        add(
+            "diffusion_variant",
+            "diffusion_processor requires variant 'bgt'",
+            "model.diffusion_processor",
+        )
+    if diffusion is not None and flow is not None:
+        add(
+            "iterative_processor_conflict",
+            "flow_processor and diffusion_processor are mutually exclusive",
+            "model.diffusion_processor",
         )
 
     refinement = config.workspace_flow_refinement
@@ -643,7 +664,11 @@ def _processor_assembly(config: ModelConfig) -> ProcessorAssembly | None:
         pipeline=("select", "encode", "process", "decode", "writeback"),
         writable_domains=tuple(writes),
         recurrence_mode=f"{processor.iteration_mode}:{processor.iterations}",
-        flow_solver_steps=0 if config.flow_processor is None else config.flow_processor.num_steps,
+        flow_solver_steps=(
+            config.diffusion_processor.num_steps
+            if config.diffusion_processor is not None
+            else 0 if config.flow_processor is None else config.flow_processor.num_steps
+        ),
     )
 
 
@@ -735,6 +760,8 @@ def _model_capabilities(
         capabilities.update({"cache_intervention", "processor_training"})
     if config.flow_processor is not None:
         capabilities.add("latent_flow")
+    if config.diffusion_processor is not None:
+        capabilities.add("task_directed_diffusion")
     if config.variant == "longshot":
         capabilities.add("persistent_workspace")
     if any(domain.domain == "qwen35_linear_recurrent" for domain in domains):
@@ -775,6 +802,8 @@ def _intervention_schedule(
         schedule.append(f"recurrence:{processor.iteration_mode}:{processor.iterations}")
     if config.model.flow_processor is not None:
         schedule.append(f"latent_flow_steps:{config.model.flow_processor.num_steps}")
+    if config.model.diffusion_processor is not None:
+        schedule.append(f"task_directed_diffusion_steps:{config.model.diffusion_processor.num_steps}")
     return tuple(schedule)
 
 

@@ -21,6 +21,7 @@ getting-started/operate-repository
 concepts/overview
 concepts/transformer-cache
 concepts/cache-processing
+concepts/task-directed-diffusion
 concepts/model-variants
 concepts/data-and-tokenization
 concepts/research-boundaries

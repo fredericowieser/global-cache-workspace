@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from gcw.evaluation.qwen_gsm8k import MAX_NEW_TOKENS, QwenGSM8KConfig, run_qwen_gsm8k
+from gcw.evaluation.benchmarks import MAX_NEW_TOKENS, BenchmarkConfig, run_benchmark_matrix
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,8 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    result = run_qwen_gsm8k(
-        QwenGSM8KConfig(
+    result = run_benchmark_matrix(
+        BenchmarkConfig(
             model_path=args.model_path,
             output_dir=args.output_dir,
             batch_size=args.batch_size,

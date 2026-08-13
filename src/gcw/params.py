@@ -35,7 +35,7 @@ def estimate_processor_params(config: ModelConfig) -> int:
     per_layer_dim = config.cache_processor.stream_factor * config.num_kv_heads * head_dim
     if config.variant == "bt":
         return cache_layers * _processor_block_params(per_layer_dim, config.cache_processor)
-    flow_params = 1 if config.flow_processor is not None else 0
+    flow_params = 1 if config.flow_processor is not None or config.diffusion_processor is not None else 0
     if config.variant == "bgt":
         return _processor_block_params(cache_layers * per_layer_dim, config.cache_processor) + _salience_params(config) + flow_params
     if config.variant == "icarus":

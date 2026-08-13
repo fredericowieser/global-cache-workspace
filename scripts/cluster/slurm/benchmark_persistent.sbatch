@@ -40,21 +40,21 @@ print("device", torch.cuda.get_device_name(0), torch.cuda.get_device_capability(
 print("cuda_tensor", torch.ones(1, device="cuda").item())
 PY
 
-"$PYTHON" scripts/analysis/run_qwen_gsm8k.py \
+"$PYTHON" scripts/analysis/run_benchmarks.py \
   --model-path "$MODEL_PATH" \
   --output-dir "$RUN_ROOT/smoke-off" \
   --limit 8 \
   --batch-size 1 \
   --modes thinking_off
 
-"$PYTHON" scripts/analysis/run_qwen_gsm8k.py \
+"$PYTHON" scripts/analysis/run_benchmarks.py \
   --model-path "$MODEL_PATH" \
   --output-dir "$RUN_ROOT/smoke-on" \
   --limit 8 \
   --batch-size 1 \
   --modes thinking_on
 
-"$PYTHON" scripts/analysis/run_qwen_gsm8k.py \
+"$PYTHON" scripts/analysis/run_benchmarks.py \
   --model-path "$MODEL_PATH" \
   --output-dir "$RUN_ROOT/full" \
   --batch-size 16

@@ -23,7 +23,7 @@ DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
 MAX_NEW_TOKENS = 2_048
 DEFAULT_BATCH_SIZE = 16
-RESULT_SCHEMA = "gcw.qwen3_gsm8k_baseline.v1"
+RESULT_SCHEMA = "gcw.benchmark_matrix.v1"
 MODEL_FILE_SHA256 = {
     "config.json": "660db3b73d788119c04535e48cf9be5f55bc3100841a718637ae695b442f27dd",
     "generation_config.json": "2325da0f15bb848e018c5ae071b7943332e9f871d6b60e2ed22ca97d4cb993d2",
@@ -36,7 +36,7 @@ MODEL_FILE_SHA256 = {
 
 
 @dataclass(frozen=True)
-class QwenGSM8KConfig:
+class BenchmarkConfig:
     model_path: str
     output_dir: str
     batch_size: int = DEFAULT_BATCH_SIZE
@@ -299,7 +299,7 @@ def _publish_json(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def run_qwen_gsm8k(config: QwenGSM8KConfig, repository: str | Path = ".") -> dict[str, Any]:
+def run_benchmark_matrix(config: BenchmarkConfig, repository: str | Path = ".") -> dict[str, Any]:
     repository_path = Path(repository).resolve()
     if subprocess.check_output(["git", "-C", str(repository_path), "status", "--porcelain"], text=True).strip():
         raise ValueError("Qwen GSM8K evaluation requires a clean Git checkout")
