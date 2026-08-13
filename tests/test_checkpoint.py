@@ -1,11 +1,27 @@
 import torch
 import pytest
 
-from gcw.checkpoint import load_checkpoint, publish_final_checkpoint_manifest, save_checkpoint
+from gcw.checkpoint import (
+    _model_config_from_checkpoint,
+    load_checkpoint,
+    publish_final_checkpoint_manifest,
+    save_checkpoint,
+)
 from gcw.config import ModelConfig
 from gcw.evaluation.core import GCWEvalLM
 from gcw.evaluation.scoring import HFTokenizerAdapter, tokenizer_for_checkpoint
 from gcw.models import build_model
+
+
+def test_legacy_generation_flag_maps_to_explicit_policy():
+    config = _model_config_from_checkpoint(
+        {
+            "variant": "bgt",
+            "family": "qwen3",
+            "legacy_bottleneck_generate": True,
+        }
+    )
+    assert config.processor_generation_mode == "post_prefill_relative"
 
 
 def test_checkpoint_roundtrip(tmp_path):

@@ -98,7 +98,7 @@ def load_checkpoint_bytes(
         raise ValueError("checkpoint config snapshot fields are invalid")
     if not isinstance(train_state, dict):
         raise ValueError("checkpoint train-state snapshot must be an object")
-    cfg = ModelConfig(**config_payload["model"])
+    cfg = _model_config_from_checkpoint(config_payload["model"])
     weights = load_safetensors(model_bytes)
     model = build_model(cfg)
     dtype_name = train_state.get("dtype")
@@ -123,6 +123,21 @@ def load_checkpoint_bytes(
     model.load_state_dict(weights, strict=True)
     model.to(device)
     return model, cfg, train_state
+
+
+def _model_config_from_checkpoint(payload: Any) -> ModelConfig:
+    if not isinstance(payload, dict):
+        raise ValueError("checkpoint model configuration must be an object")
+    model_payload = dict(payload)
+    legacy_generate = model_payload.pop("legacy_bottleneck_generate", None)
+    if legacy_generate is not None:
+        if not isinstance(legacy_generate, bool):
+            raise ValueError("legacy_bottleneck_generate must be boolean")
+        model_payload.setdefault(
+            "processor_generation_mode",
+            "post_prefill_relative" if legacy_generate else "windowed",
+        )
+    return ModelConfig(**model_payload)
 
 
 def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
