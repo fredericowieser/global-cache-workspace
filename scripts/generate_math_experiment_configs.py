@@ -141,6 +141,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
     rows = int(data_manifest["rows"])
     max_steps = getattr(args, "max_steps", None) or math.ceil(rows / args.global_batch_rows)
     learning_rates = _learning_rates(args)
+    screen_mode = getattr(args, "screen_mode", False)
     contract = {
         "schema": "gcw.math_experiment.v1",
         "dataset_sha256": data_manifest["dataset_sha256"],
@@ -198,8 +199,9 @@ def generate(args: argparse.Namespace) -> list[Path]:
             "grad_clip": 1.0,
             "bf16": True,
             "seed": args.seed,
-            "save_every": max_steps,
-            "eval_every": max(1, max_steps // 10),
+            "save_every": 0 if screen_mode else max_steps,
+            "save_final": not screen_mode,
+            "eval_every": max_steps if screen_mode else max(1, max_steps // 10),
             "eval_batches": getattr(args, "eval_batches", 64),
             "eval_on_start": True,
             "wandb": {
@@ -254,6 +256,7 @@ def main() -> None:
     parser.add_argument("--disable-wandb", action="store_true")
     parser.add_argument("--learning-rates")
     parser.add_argument("--eval-batches", type=int, default=64)
+    parser.add_argument("--screen-mode", action="store_true")
     paths = generate(parser.parse_args())
     print("\n".join(str(path) for path in paths))
 

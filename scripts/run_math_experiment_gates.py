@@ -92,6 +92,8 @@ def main() -> None:
         payload = yaml.safe_load(source.read_text())
         payload["output_dir"] = str(output / "runs" / arm)
         payload["wandb"]["enabled"] = False
+        payload["eval_on_start"] = False
+        payload["eval_every"] = 0
         config = output / f"{arm}.yaml"
         config.write_text(yaml.safe_dump(payload, sort_keys=False))
         bypass = _bypass_gate(config, output / f"{arm}-bypass.json")

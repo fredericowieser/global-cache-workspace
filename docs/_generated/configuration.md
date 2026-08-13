@@ -168,6 +168,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `bf16` | `bool` | `False` |
 | `seed` | `int` | `24` |
 | `save_every` | `int` | `0` |
+| `save_final` | `bool` | `True` |
 | `eval_every` | `int` | `0` |
 | `eval_batches` | `int` | `10` |
 | `eval_on_start` | `bool` | `False` |

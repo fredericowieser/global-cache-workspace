@@ -297,7 +297,7 @@ def train(config: TrainConfig) -> None:
                     initial_processor_state=initial_processor_state,
                 )
 
-    if last_checkpoint_step != config.max_steps:
+    if config.save_final and last_checkpoint_step != config.max_steps:
         _save_step_checkpoint(
             Path(config.output_dir) / "checkpoint",
             model,
