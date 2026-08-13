@@ -129,11 +129,10 @@ class GCWBenchmarkBackend:
         }
 
     def generate(self, input_ids: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
-        return cast(Any, self.model).generate_fast(
+        return cast(Any, self.model).generate(
             input_ids,
             max_new_tokens=max_new_tokens,
             eos_token_id=self.eos_ids[0],
-            pad_token_id=self.pad_id,
         )
 
 
