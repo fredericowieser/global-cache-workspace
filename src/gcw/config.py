@@ -23,7 +23,7 @@ CacheProcessorIterationMode = Literal["internal", "external"]
 CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention", "kv_norm"]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
-TrainableComponents = Literal["all", "backbone", "cache_processor"]
+TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
 DiffusionInferenceMode = Literal["deterministic", "stochastic"]
@@ -206,6 +206,35 @@ class WorkspaceFlowRefinementConfig:
 
 
 @dataclass
+class LoRAConfig:
+    rank: int = 32
+    alpha: float = 32.0
+    dropout: float = 0.0
+    targets: tuple[str, ...] = (
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    )
+
+    def __post_init__(self) -> None:
+        if isinstance(self.rank, bool) or self.rank <= 0:
+            raise ValueError("lora.rank must be a positive integer")
+        self.alpha = _validated_float32("lora.alpha", self.alpha, positive=True)
+        self.dropout = _validated_float32("lora.dropout", self.dropout)
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError("lora.dropout must be in [0, 1)")
+        self.targets = tuple(str(target) for target in self.targets)
+        if not self.targets or any(not target for target in self.targets):
+            raise ValueError("lora.targets must contain module names")
+        if len(set(self.targets)) != len(self.targets):
+            raise ValueError("lora.targets must be unique")
+
+
+@dataclass
 class ModelConfig:
     variant: Variant = "tf"
     family: Family = "smollm"
@@ -223,6 +252,7 @@ class ModelConfig:
     qk_norm: bool = False
     rotary_style: RotaryStyle = "ppt"
     cache_processor: CacheProcessorConfig | None = None
+    lora: LoRAConfig | None = None
     flow_processor: FlowProcessorConfig | None = None
     diffusion_processor: DiffusionProcessorConfig | None = None
     processor_generation_mode: ProcessorGenerationMode = "windowed"
@@ -257,6 +287,8 @@ class ModelConfig:
     def __post_init__(self) -> None:
         if isinstance(self.cache_processor, dict):
             self.cache_processor = CacheProcessorConfig(**self.cache_processor)
+        if isinstance(self.lora, dict):
+            self.lora = LoRAConfig(**self.lora)
         if isinstance(self.flow_processor, dict):
             self.flow_processor = FlowProcessorConfig(**self.flow_processor)
         if isinstance(self.diffusion_processor, dict):
@@ -481,6 +513,7 @@ class DataConfig:
     canonical_execution: bool = False
     expected_artifact_sha256: str | None = None
     expected_source_ids_sha256: str | None = None
+    campaign_manifest: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.sft_chat_template, bool) or not isinstance(self.sft_enable_thinking, bool):
@@ -585,8 +618,10 @@ class TrainConfig:
             self.wandb = WandbConfig(**self.wandb)
         if isinstance(self.resume, dict):
             self.resume = ResumeConfig(**self.resume)
-        if self.trainable not in {"all", "backbone", "cache_processor"}:
-            raise ValueError("trainable must be 'all', 'backbone', or 'cache_processor'")
+        if self.trainable not in {"all", "backbone", "lora", "cache_processor"}:
+            raise ValueError("trainable must be 'all', 'backbone', 'lora', or 'cache_processor'")
+        if self.trainable == "lora" and self.model.lora is None:
+            raise ValueError("trainable='lora' requires model.lora")
         if not math.isfinite(self.grad_clip) or self.grad_clip <= 0.0:
             raise ValueError("grad_clip must be finite and positive")
         from gcw.architecture import require_train_config

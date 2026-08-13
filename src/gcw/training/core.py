@@ -28,6 +28,7 @@ from gcw.data.training import TrainingBatchStream, build_training_stream, cursor
 from gcw.flops import total_training_flops, training_flops_per_token
 from gcw.models import build_model
 from gcw.models.backbones.transformer import Block
+from gcw.models.lora import LoRALinear
 from gcw.params import processor_params, total_non_embedding_params
 from gcw.tracking import RunTracker
 from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
@@ -159,10 +160,16 @@ def train(config: TrainConfig) -> None:
         step_start = time.perf_counter()
         opt.zero_grad(set_to_none=True)
         loss_total = 0.0
+        batch_non_padding_tokens = 0
+        batch_supervised_tokens = 0
         for micro_step in range(grad_accum_steps):
             batch = next(stream)
             if step == 0 and micro_step == 0:
                 _validate_train_batch(batch.x, batch.y, config)
+            batch_non_padding_tokens += int(
+                batch.x.numel() if batch.attention_mask is None else batch.attention_mask.sum().item()
+            )
+            batch_supervised_tokens += int((batch.y != -100).sum().item())
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
@@ -194,6 +201,8 @@ def train(config: TrainConfig) -> None:
             "train/loss": train_loss,
             "train/loss_smooth": debiased_loss,
             "train/perplexity": math.exp(min(20.0, train_loss)),
+            "train/non_padding_tokens": batch_non_padding_tokens,
+            "train/supervised_tokens": batch_supervised_tokens,
             "train/lr": config.learning_rate * lr_scale,
             "train/lr_scale": lr_scale,
             "train/tokens": tokens_seen,
@@ -335,6 +344,15 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
         backbone.requires_grad_(True)
         if isinstance(processor, torch.nn.Module):
             processor.requires_grad_(False)
+        return
+    if policy == "lora":
+        model.requires_grad_(False)
+        adapters = [module for module in backbone.modules() if isinstance(module, LoRALinear)]
+        if not adapters:
+            raise ValueError("trainable='lora' requires attached LoRA projections")
+        for adapter in adapters:
+            adapter.lora_a.requires_grad_(True)
+            adapter.lora_b.requires_grad_(True)
         return
     if policy == "cache_processor":
         if not isinstance(processor, torch.nn.Module):

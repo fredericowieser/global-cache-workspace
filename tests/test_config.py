@@ -1,6 +1,6 @@
 import pytest
 
-from gcw.config import DataConfig, ModelConfig, ResumeConfig, TrainConfig, WandbConfig, load_train_config
+from gcw.config import DataConfig, LoRAConfig, ModelConfig, ResumeConfig, TrainConfig, WandbConfig, load_train_config
 
 
 def test_train_config_builds_explicit_resume_and_wandb_state():
@@ -35,6 +35,13 @@ def test_train_config_accepts_explicit_trainable_policy(trainable):
         trainable=trainable,
     )
     assert config.trainable == trainable
+
+
+def test_lora_policy_requires_adapters():
+    with pytest.raises(ValueError, match="requires model.lora"):
+        TrainConfig(trainable="lora")
+    config = TrainConfig(model=ModelConfig(lora=LoRAConfig(rank=8)), trainable="lora")
+    assert config.model.lora == LoRAConfig(rank=8)
 
 
 def test_processor_only_policy_requires_a_processor():

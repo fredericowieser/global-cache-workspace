@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig, gemma4_default_layer_types
+from gcw.config import CacheProcessorConfig, FlowProcessorConfig, LoRAConfig, ModelConfig, gemma4_default_layer_types
 from gcw.models import build_model
 from gcw.models.backbones import gemma4 as gemma4_module
 from gcw.models.backbones.gemma4 import _gemma4_attention
@@ -31,6 +31,7 @@ from gcw.models.cache_processors.longshot import GlobalCacheProcessor as Longsho
 from gcw.models.cache_processors.longshot import CacheProcessor as LongshotCacheProcessor
 from gcw.models.cache_processors.longshot import ProcessorAttention as LongshotProcessorAttention
 from gcw.models.cache_processors.longshot import QueryAttentionTimeEncoder
+from gcw.models.lora import LoRALinear
 from gcw.models.backbones.transformer import _matches_stop_sequence, apply_rotary
 from gcw.models.cache_processors.windowed import WindowedCache
 
@@ -1167,6 +1168,23 @@ def test_longshot_iterative_checkpointing_includes_score_collection(monkeypatch)
         {"use_reentrant": False},
         {"use_reentrant": False},
     ]
+
+
+def test_lora_starts_as_exact_backbone_and_trains_only_adapters():
+    torch.manual_seed(41)
+    base_config = tiny_config("tf")
+    base = build_model(base_config)
+    base.init_weights()
+    adapted_config = replace(base_config, lora=LoRAConfig(rank=4, alpha=8.0))
+    adapted = build_model(adapted_config)
+    adapted.init_weights()
+    adapted.load_state_dict(base.state_dict(), strict=False)
+    x = torch.randint(0, 128, (2, 9))
+
+    assert torch.equal(adapted(x), base(x))
+    adapters = [module for module in adapted.modules() if isinstance(module, LoRALinear)]
+    assert adapters
+    assert all(torch.count_nonzero(module.lora_b) == 0 for module in adapters)
 
 
 def test_tiny_models_bf16_autocast_forward_backward():

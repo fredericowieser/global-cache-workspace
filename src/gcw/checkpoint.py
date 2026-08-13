@@ -164,6 +164,8 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
         if source_key not in weights and key == "lm_head.weight" and "backbone.embed_tokens.weight" in weights:
             source_key = "backbone.embed_tokens.weight"
         if source_key not in weights:
+            if key.endswith((".lora_a", ".lora_b")):
+                continue
             missing.append(key)
             continue
         tensor = weights[source_key]

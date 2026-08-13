@@ -20,7 +20,7 @@ _SUPPORTED_DATA_KINDS = (
     "fineweb",
     "sft",
 )
-_SUPPORTED_TRAINABLE_POLICIES = ("all", "backbone", "cache_processor")
+_SUPPORTED_TRAINABLE_POLICIES = ("all", "backbone", "lora", "cache_processor")
 _SUPPORTED_CHECKPOINT_FORMATS = ("native_safetensors",)
 
 
@@ -604,6 +604,12 @@ def _experiment_issues(config: TrainConfig) -> list[CompatibilityIssue]:
         add(
             "unknown_trainable_policy",
             f"unsupported trainable policy: {config.trainable}",
+            "trainable",
+        )
+    if config.trainable == "lora" and config.model.lora is None:
+        add(
+            "lora_training_without_adapters",
+            "trainable='lora' requires model.lora",
             "trainable",
         )
     if config.trainable == "cache_processor" and config.model.variant == "tf":

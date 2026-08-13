@@ -13,6 +13,15 @@ from gcw.config import (
     to_dict,
 )
 from gcw.models.backbones.transformer import estimate_non_embedding_params
+from gcw.models.lora import LoRALinear
+
+
+def trainable_adapter_params(model) -> int:
+    return sum(
+        module.lora_a.numel() + module.lora_b.numel()
+        for module in model.modules()
+        if isinstance(module, LoRALinear)
+    )
 
 
 def processor_params(config: ModelConfig) -> int:
