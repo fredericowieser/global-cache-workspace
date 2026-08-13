@@ -122,7 +122,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
     model.sequence_len = args.sequence_length
     model_payload = _plain(model)
     rows = int(data_manifest["rows"])
-    max_steps = math.ceil(rows / args.global_batch_rows)
+    max_steps = getattr(args, "max_steps", None) or math.ceil(rows / args.global_batch_rows)
     contract = {
         "schema": "gcw.math_campaign.v1",
         "dataset_sha256": data_manifest["dataset_sha256"],
@@ -182,7 +182,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
             "seed": args.seed,
             "save_every": max(1, max_steps // 10),
             "wandb": {
-                "enabled": True,
+                "enabled": not getattr(args, "disable_wandb", False),
                 "entity": WAND_ENTITY,
                 "project": WAND_PROJECT,
                 "name": name,
@@ -229,6 +229,8 @@ def main() -> None:
     parser.add_argument("--processor-width", type=int, default=1024)
     parser.add_argument("--distributed", choices=("none", "ddp", "fsdp"), default="none")
     parser.add_argument("--seed", type=int, default=24)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--disable-wandb", action="store_true")
     paths = generate(parser.parse_args())
     print("\n".join(str(path) for path in paths))
 
