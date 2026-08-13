@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from array import array
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, BinaryIO, Literal, Protocol
 
 import torch
 
 from gcw.config import TrainConfig
 from gcw.data.shards import default_data_dir, list_shards, read_shard
-from gcw.data.sft import iter_jsonl, sft_batch
+from gcw.data.sft import sft_batch
 from gcw.data.tokenizers import get_tokenizer
 
 
@@ -147,10 +150,63 @@ class FineWebBatchStream:
         self._cursor = FineWebCursor(epoch=epoch, shard_index=shard_index, step_in_shard=0)
 
 
+class IndexedJSONL(Sequence[dict[str, Any]]):
+    """Random-access JSONL without retaining parsed rows in memory."""
+
+    def __init__(self, path: str | Path):
+        self.path = Path(path).expanduser()
+        self.offsets = array("Q")
+        offset = 0
+        with self.path.open("rb") as handle:
+            for line in handle:
+                if line.strip():
+                    self.offsets.append(offset)
+                offset += len(line)
+        if not self.offsets:
+            raise ValueError(f"JSONL dataset is empty: {self.path}")
+        self._handle: BinaryIO | None = None
+
+    def __len__(self) -> int:
+        return len(self.offsets)
+
+    def __getitem__(self, index: int | slice):
+        if isinstance(index, slice):
+            return [self[position] for position in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        handle = self._handle
+        if handle is None or handle.closed:
+            handle = self.path.open("rb")
+            self._handle = handle
+        handle.seek(self.offsets[index])
+        return json.loads(handle.readline())
+
+
+class _RowSlice(Sequence[dict[str, Any]]):
+    def __init__(self, rows: Sequence[dict[str, Any]], start: int, stop: int):
+        self.rows = rows
+        self.start = start
+        self.stop = stop
+
+    def __len__(self) -> int:
+        return self.stop - self.start
+
+    def __getitem__(self, index: int | slice):
+        if isinstance(index, slice):
+            return [self[position] for position in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        return self.rows[self.start + index]
+
+
 class SFTBatchStream:
     def __init__(
         self,
-        rows: list[dict[str, Any]],
+        rows: Sequence[dict[str, Any]],
         tokenizer,
         *,
         batch_size: int,
@@ -243,13 +299,14 @@ def build_training_stream(
             if config.data.tokenizer_source is None:
                 raise ValueError("data.tokenizer_source is required when data.tokenizer='hf'")
             tokenizer_name = f"hf:{config.data.tokenizer_source}"
-        rows = list(iter_jsonl(config.data.dataset))
-        if config.data.sft_skip_rows:
-            if config.data.sft_skip_rows >= len(rows):
-                raise ValueError(f"data.sft_skip_rows={config.data.sft_skip_rows} exceeds dataset length {len(rows)}")
-            rows = rows[config.data.sft_skip_rows :]
-        if config.data.sft_take_rows is not None:
-            rows = rows[: config.data.sft_take_rows]
+        source_rows: Sequence[dict[str, Any]] = IndexedJSONL(config.data.dataset)
+        start = config.data.sft_skip_rows
+        if start >= len(source_rows):
+            raise ValueError(f"data.sft_skip_rows={start} exceeds dataset length {len(source_rows)}")
+        stop = len(source_rows) if config.data.sft_take_rows is None else min(
+            len(source_rows), start + config.data.sft_take_rows
+        )
+        rows = source_rows if start == 0 and stop == len(source_rows) else _RowSlice(source_rows, start, stop)
         if cursor is not None and not isinstance(cursor, SFTCursor):
             raise TypeError(f"expected SFTCursor, got {type(cursor).__name__}")
         sft_cursor = cursor if isinstance(cursor, SFTCursor) else None

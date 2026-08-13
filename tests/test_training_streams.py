@@ -1,8 +1,10 @@
+import json
+
 import torch
 import pytest
 
 from gcw.data.shards import ShardWriter
-from gcw.data.training import FineWebBatchStream, RandomBatchStream, SFTBatchStream
+from gcw.data.training import FineWebBatchStream, IndexedJSONL, RandomBatchStream, SFTBatchStream
 
 
 class TinyTokenizer:
@@ -94,6 +96,16 @@ def test_sft_stream_partitions_global_rows_between_ranks():
         assert batch.attention_mask.dtype == torch.bool
         assert batch.attention_mask.shape == batch.x.shape
         assert batch.attention_mask.all()
+
+
+def test_indexed_jsonl_supports_random_access_and_slices(tmp_path):
+    path = tmp_path / "rows.jsonl"
+    path.write_text("\n".join(json.dumps({"prompt": str(i), "answer": "x"}) for i in range(4)) + "\n")
+    rows = IndexedJSONL(path)
+
+    assert len(rows) == 4
+    assert rows[2]["prompt"] == "2"
+    assert [row["prompt"] for row in rows[1:3]] == ["1", "2"]
 
 
 def test_sft_stream_rejects_a_global_batch_larger_than_the_dataset():
