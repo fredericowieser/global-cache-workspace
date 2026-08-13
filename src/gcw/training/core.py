@@ -5,6 +5,7 @@ import math
 import os
 import time
 from contextlib import nullcontext
+from copy import deepcopy
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -655,7 +656,14 @@ def _clip_grad_norm(
 
 @torch.no_grad()
 def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device) -> dict[str, float]:
-    if config.mode != "pretrain" or config.data.kind == "random":
+    if config.mode == "sft" and config.data.validation_dataset is not None:
+        validation_config = deepcopy(config)
+        validation_config.data.dataset = config.data.validation_dataset
+        validation_config.data.sft_skip_rows = 0
+        validation_config.data.sft_take_rows = config.batch_size * max(1, config.eval_batches)
+        stream = build_training_stream(validation_config, device, rank=0, world_size=1)
+        loader = _training_batch_loader(stream)
+    elif config.mode != "pretrain" or config.data.kind == "random":
         loader = _random_loader(config, device)
     else:
         loader = data_loader(
@@ -687,6 +695,12 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
         "val/perplexity": math.exp(min(20.0, val_loss)),
         "val/tokens": float(total_tokens.cpu()),
     }
+
+
+def _training_batch_loader(stream: TrainingBatchStream):
+    while True:
+        batch = next(stream)
+        yield batch.x, batch.y, batch.attention_mask
 
 
 def _random_loader(config: TrainConfig, device: torch.device):

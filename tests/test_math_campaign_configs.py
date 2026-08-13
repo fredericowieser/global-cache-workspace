@@ -17,6 +17,7 @@ def test_campaign_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatch)
                 "rows": 129,
                 "dataset_path": str(dataset.resolve()),
                 "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
+                "validation_path": str(dataset.resolve()),
                 "source_ids_sha256": "12" * 32,
                 "tokenizer_identity_sha256": "23" * 32,
             }

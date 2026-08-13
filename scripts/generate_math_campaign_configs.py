@@ -151,6 +151,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
             "data": {
                 "kind": "sft",
                 "dataset": data_manifest["dataset_path"],
+                "validation_dataset": data_manifest["validation_path"],
                 "tokenizer": "hf",
                 "tokenizer_source": args.model,
                 "sft_chat_template": True,

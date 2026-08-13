@@ -223,22 +223,38 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             )
 
     random.Random(args.seed).shuffle(rows)
-    for index, row in enumerate(rows):
+    validation: list[dict[str, Any]] = []
+    validation_counts: Counter[str] = Counter()
+    training: list[dict[str, Any]] = []
+    for row in rows:
+        source = str(row["source_arm"])
+        if validation_counts[source] < args.validation_rows_per_source:
+            validation.append(row)
+            validation_counts[source] += 1
+        else:
+            training.append(row)
+    for index, row in enumerate(training):
         row["campaign_order"] = index
     dataset_path = output / "train.jsonl"
-    dataset_sha256 = _atomic_jsonl(dataset_path, rows)
+    validation_path = output / "validation.jsonl"
+    dataset_sha256 = _atomic_jsonl(dataset_path, training)
+    validation_sha256 = _atomic_jsonl(validation_path, validation)
     source_ids_sha256 = hashlib.sha256(
-        "\n".join(str(row["source_id"]) for row in rows).encode()
+        "\n".join(str(row["source_id"]) for row in training).encode()
     ).hexdigest()
-    source_counts = Counter(str(row["source_arm"]) for row in rows)
+    source_counts = Counter(str(row["source_arm"]) for row in training)
     manifest = {
         "schema": "gcw.math_campaign_data.v1",
         "sequence_length": args.sequence_length,
         "seed": args.seed,
-        "rows": len(rows),
+        "rows": len(training),
+        "validation_rows": len(validation),
         "source_counts": dict(source_counts),
         "dataset_path": str(dataset_path.resolve()),
         "dataset_sha256": dataset_sha256,
+        "validation_path": str(validation_path.resolve()),
+        "validation_sha256": validation_sha256,
+        "validation_source_counts": dict(validation_counts),
         "source_ids_sha256": source_ids_sha256,
         "tokenizer": args.tokenizer,
         "tokenizer_identity_sha256": tokenizer.identity_sha256(),
@@ -266,6 +282,7 @@ def main() -> None:
     parser.add_argument("--sequence-length", type=int, default=4096)
     parser.add_argument("--caps", type=int, nargs="+", default=DEFAULT_CAPS)
     parser.add_argument("--seed", type=int, default=24)
+    parser.add_argument("--validation-rows-per-source", type=int, default=2048)
     parser.add_argument("--exclude-jsonl", action="append", default=[])
     parser.add_argument("--openr1-repo", default="open-r1/OpenR1-Math-220k")
     parser.add_argument("--openr1-config", default="all")

@@ -499,6 +499,7 @@ class DataConfig:
     kind: Literal["random", "fineweb", "sft"] = "fineweb"
     data_dir: str | None = None
     dataset: str | None = None
+    validation_dataset: str | None = None
     tokenizer: str = "cosmo2"
     tokenizer_source: str | None = None
     text_field: str = "text"

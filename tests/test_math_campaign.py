@@ -45,6 +45,7 @@ def test_campaign_builder_filters_overlap_length_and_shuffles_deterministically(
         sequence_length=8,
         caps=[4, 6, 8],
         seed=24,
+        validation_rows_per_source=0,
         exclude_jsonl=[],
         openr1_repo="repo",
         openr1_config="all",
