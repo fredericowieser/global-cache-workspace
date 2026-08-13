@@ -1,0 +1,2 @@
+training budget: tokens=8,192 flops/token=6.548404e+09 total_flops=5.364453e+13 non_embedding_params=624,658,626 micro_tokens=8,192 grad_accum=1
+step 1/1 loss=0.4242

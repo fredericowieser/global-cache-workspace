@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-08-13T19:12:42.050052+00:00",
+  "execution_id": "ff556e8689f6",
+  "experiment_name": "diffusion-bgt-t4-sigma0",
+  "kind": "training",
+  "schema": "gcw.run_record.v1",
+  "source": null
+}

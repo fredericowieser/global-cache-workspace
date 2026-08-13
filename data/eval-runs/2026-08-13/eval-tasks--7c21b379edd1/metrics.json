@@ -1,0 +1,35 @@
+{
+  "groups": {},
+  "higher_is_better": {
+    "gsm8k_openmath": {
+      "exact_match": true
+    }
+  },
+  "n-samples": {
+    "gsm8k_openmath": {
+      "effective": 1319,
+      "original": 1319
+    }
+  },
+  "n-shot": {
+    "gsm8k_openmath": 0
+  },
+  "results": {
+    "gsm8k_openmath": {
+      "alias": "gsm8k_openmath",
+      "exact_match,answer_is": 0.0,
+      "exact_match,boxed": 0.55420773313116,
+      "exact_match,flexible": 0.5329795299469295,
+      "exact_match,strict_match": 0.0,
+      "exact_match_stderr,answer_is": "N/A",
+      "exact_match_stderr,boxed": "N/A",
+      "exact_match_stderr,flexible": "N/A",
+      "exact_match_stderr,strict_match": "N/A",
+      "name": "gsm8k_openmath",
+      "sample_len": 1319
+    }
+  },
+  "versions": {
+    "gsm8k_openmath": 1.1
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-08-13T09:00:17.626253+00:00",
+  "execution_id": "f303d907ffe4",
+  "experiment_name": "output",
+  "kind": "training",
+  "schema": "gcw.run_record.v1",
+  "source": null
+}

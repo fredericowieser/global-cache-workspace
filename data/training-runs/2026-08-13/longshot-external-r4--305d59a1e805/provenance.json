@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-08-13T19:59:10.952056+00:00",
+  "execution_id": "305d59a1e805",
+  "experiment_name": "longshot-external-r4",
+  "kind": "training",
+  "schema": "gcw.run_record.v1",
+  "source": null
+}

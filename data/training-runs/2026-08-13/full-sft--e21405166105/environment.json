@@ -1,0 +1,13 @@
+{
+  "cuda_available": true,
+  "cuda_devices": [
+    "NVIDIA H100 80GB HBM3"
+  ],
+  "cuda_runtime": "12.8",
+  "platform": "Linux-6.8.0-111-generic-x86_64-with-glibc2.39",
+  "python": "3.12.12 (main, Jan 27 2026, 23:58:14) [Clang 21.1.4 ]",
+  "schema": "gcw.run_record.v1",
+  "slurm_job_id": "23217",
+  "torch": "2.10.0+cu128",
+  "world_size": 1
+}

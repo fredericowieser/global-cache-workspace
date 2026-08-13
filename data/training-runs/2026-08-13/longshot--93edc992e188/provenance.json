@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-08-13T19:30:12.491271+00:00",
+  "execution_id": "93edc992e188",
+  "experiment_name": "longshot",
+  "kind": "training",
+  "schema": "gcw.run_record.v1",
+  "source": null
+}

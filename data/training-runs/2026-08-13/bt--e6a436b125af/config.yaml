@@ -1,0 +1,150 @@
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-08
+backbone_checkpoint: /mnt/jfs-00/team-agent/home/f50056118/gcw-checkpoints/qwen3-06b-instruct-c1899de-native
+batch_size: 1
+bf16: true
+checkpoint_format: native_safetensors
+data:
+  campaign_manifest: /mnt/jfs-00/team-agent/home/f50056118/gcw-campaigns/qwen3-06b-instruct-math-v1/canary-configs/campaign.json
+  canonical_execution: true
+  data_dir: null
+  dataset: /mnt/jfs-00/team-agent/home/f50056118/gcw-data/qwen3-06b-instruct-math-v1/train.jsonl
+  expected_artifact_sha256: 6f316b45fc5606e164e8480ad260d672674b58faa6abd294239be2d53e950383
+  expected_source_ids_sha256: 9bf05e5bdfff35a351fe7d13640ac4ee0616d34bc41640a5b63bd6dd676ba8f9
+  kind: sft
+  max_length: 2048
+  prompt_suffix: ''
+  response_prefix: ''
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  sft_skip_rows: 0
+  sft_take_rows: null
+  text_field: text
+  tokenizer: hf
+  tokenizer_source: /mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1
+  validation_dataset: /mnt/jfs-00/team-agent/home/f50056118/gcw-data/qwen3-06b-instruct-math-v1/validation.jsonl
+distributed: none
+eval_batches: 10
+eval_every: 0
+eval_on_start: false
+final_lr_frac: 0.0
+global_batch_rows: 64
+grad_clip: 1.0
+init_checkpoint: null
+learning_rate: 0.0001
+max_steps: 1
+metadata:
+  arm: bt
+  campaign: qwen3-06b-instruct-openmath-openr1-v1
+  data_manifest: /mnt/jfs-00/team-agent/home/f50056118/gcw-data/qwen3-06b-instruct-math-v1/manifest.json
+mode: sft
+model:
+  attention_k_eq_v: false
+  cache_processor:
+    attention_dropout: 0.0
+    encoder_method: linear
+    encoder_query_source: learned
+    encoder_seq_len: null
+    gate_init: -5.0
+    gate_linear_state_delta: true
+    gate_mode: sigmoid
+    gradient_checkpointing: true
+    hidden_size: 1024
+    include_self_head_kv: false
+    intermediate_size: 4096
+    internal_iteration_score: attn_l2
+    iteration_mode: internal
+    iterations: 1
+    kv_score_init_k: 0.25
+    kv_score_init_v: 0.75
+    linear_state_cache: false
+    linear_state_query_mode: global
+    norm_eps: 1.0e-06
+    num_heads: 8
+    num_kv_heads: 8
+    num_layers: 1
+    out_proj_init: normal
+    per_cache_head_projections: false
+    process_every: 64
+    processor_mode: standard
+    rope_theta: 10000.0
+    salience_temperature: 1.0
+    score: attn_l2
+    topk: 32
+    topk_heads: 32
+    topk_linear_heads: null
+    unrope_keys: true
+    update_stream: kv
+    writer_head_fraction: 1.0
+  diffusion_processor: null
+  family: qwen3
+  final_logit_softcapping: null
+  flow_processor: null
+  global_head_dim: null
+  head_dim: 128
+  hidden_act: silu
+  hidden_size: 1024
+  hidden_size_per_layer_input: 0
+  intermediate_size: 3072
+  layer_types: null
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: null
+  linear_num_key_heads: null
+  linear_num_value_heads: null
+  linear_value_head_dim: null
+  lora: null
+  moe_experts_implementation: grouped_mm
+  moe_intermediate_size: null
+  norm_eps: 1.0e-06
+  num_experts: 0
+  num_experts_per_tok: 0
+  num_global_key_value_heads: null
+  num_heads: 16
+  num_kv_heads: 8
+  num_kv_shared_layers: 0
+  num_layers: 28
+  output_router_logits: false
+  partial_rotary_factor: 1.0
+  processor_generation_mode: windowed
+  processor_layer_indices: null
+  qk_norm: true
+  rope_parameters: null
+  rope_theta: 1000000.0
+  rotary_style: llama
+  router_aux_loss_coef: 0.0
+  sequence_len: 4096
+  shared_expert_intermediate_size: null
+  sliding_window: null
+  tie_embeddings: true
+  use_double_wide_mlp: false
+  variant: bt
+  vocab_size: 151936
+  vocab_size_per_layer_input: null
+  workspace_flow_refinement: null
+output_dir: /mnt/jfs-00/team-agent/home/f50056118/gcw-runs/qwen3-06b-instruct-math-v1-canaries-cb5814b/bt
+resume: null
+save_every: 1
+seed: 24
+sequence_len: 4096
+total_batch_size: 0
+trainable: cache_processor
+wandb:
+  enabled: false
+  entity: huawei-noahs-ark
+  group: qwen3-06b-instruct-openmath-openr1-v1
+  id: null
+  log_every: 1
+  mode: null
+  name: bt
+  project: global-cache-workspace
+  resume: null
+  tags:
+  - qwen3-0.6b
+  - instruct
+  - math-campaign
+  - bt
+warmdown_ratio: 0.1
+warmup_steps: 1
+weight_decay: 0.0

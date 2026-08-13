@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-08-13T19:56:49.415717+00:00",
+  "execution_id": "73253f59f2e5",
+  "experiment_name": "icarus",
+  "kind": "training",
+  "schema": "gcw.run_record.v1",
+  "source": null
+}

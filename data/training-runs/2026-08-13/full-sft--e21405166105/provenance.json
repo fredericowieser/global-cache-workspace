@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-08-13T19:03:52.421573+00:00",
+  "execution_id": "e21405166105",
+  "experiment_name": "full-sft",
+  "kind": "training",
+  "schema": "gcw.run_record.v1",
+  "source": null
+}

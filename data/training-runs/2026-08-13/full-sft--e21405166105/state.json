@@ -1,0 +1,4 @@
+{
+  "mutable_state_path": "/mnt/jfs-00/team-agent/home/f50056118/gcw-runs/qwen3-06b-instruct-math-v1-canaries-cb5814b/full-sft",
+  "schema": "gcw.run_record.v1"
+}

@@ -1,0 +1,11 @@
+batch_size: 1
+checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/qwen3_06b/bgt/final
+cmd: eval
+hf_model: null
+limit: 8
+out: /home/f50056118/gcw-runs/legacy-bgt-smoke-5913925-23217/on-thinking_on.json
+processor: 'on'
+prompt_mode: thinking_on
+suite: tasks
+tasks:
+- gsm8k_openmath

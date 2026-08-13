@@ -1,0 +1,8 @@
+{
+  "created_at": "2026-08-13T06:10:35.471157+00:00",
+  "execution_id": "afba5cacb954",
+  "experiment_name": "eval-tasks",
+  "kind": "evaluation",
+  "schema": "gcw.run_record.v1",
+  "source": null
+}
