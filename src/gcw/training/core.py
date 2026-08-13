@@ -15,6 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 from gcw.architecture import admission_receipt_metadata, resolve_experiment, resolve_model
 from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint, save_checkpoint
+from gcw.campaign import validate_campaign
 from gcw.runtime import (
     cleanup_distributed,
     dist_info,
@@ -39,6 +40,7 @@ def train_from_config(path: str | Path) -> None:
 
 
 def train(config: TrainConfig) -> None:
+    validate_campaign(config)
     _, model_receipt = resolve_model(config.model).require()
     resolve_experiment(config, model_receipt).require()
     torch.manual_seed(config.seed)
