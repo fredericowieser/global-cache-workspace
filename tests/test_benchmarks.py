@@ -121,7 +121,7 @@ def test_native_evaluation_keeps_exact_length_batches():
 
 
 def test_fast_benchmark_batch_is_the_default():
-    assert BenchmarkConfig(model_path="model", output_dir="out").batch_size == DEFAULT_BATCH_SIZE == 64
+    assert BenchmarkConfig(model_path="model", output_dir="out").batch_size == DEFAULT_BATCH_SIZE == 128
 
 
 def test_config_rejects_protocol_drift():
