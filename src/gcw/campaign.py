@@ -33,7 +33,7 @@ class CampaignContract:
         mismatches: list[str] = []
         checks: dict[str, tuple[Any, Any]] = {
             "sequence_length": (config.sequence_len, self.sequence_length),
-            "global_batch_rows": (config.total_batch_size, self.global_batch_rows),
+            "global_batch_rows": (config.global_batch_rows, self.global_batch_rows),
             "max_steps": (config.max_steps, self.max_steps),
             "dataset": (str(Path(config.data.dataset or "").expanduser().resolve()), self.dataset_path),
             "tokenizer_source": (config.data.tokenizer_source, self.tokenizer_source),

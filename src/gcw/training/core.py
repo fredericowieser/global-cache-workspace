@@ -47,10 +47,19 @@ def train(config: TrainConfig) -> None:
     device = init_distributed(config.distributed)
     _, rank, _, world_size = dist_info()
     micro_tokens = config.batch_size * config.sequence_len * world_size
-    tokens_per_step = config.total_batch_size or micro_tokens
-    if tokens_per_step % micro_tokens != 0:
-        raise ValueError(f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}")
-    grad_accum_steps = tokens_per_step // micro_tokens
+    micro_rows = config.batch_size * world_size
+    if config.global_batch_rows:
+        if config.global_batch_rows % micro_rows != 0:
+            raise ValueError(
+                f"global_batch_rows {config.global_batch_rows} must be divisible by micro batch rows {micro_rows}"
+            )
+        grad_accum_steps = config.global_batch_rows // micro_rows
+        tokens_per_step = grad_accum_steps * micro_tokens
+    else:
+        tokens_per_step = config.total_batch_size or micro_tokens
+        if tokens_per_step % micro_tokens != 0:
+            raise ValueError(f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}")
+        grad_accum_steps = tokens_per_step // micro_tokens
     fingerprint = _training_fingerprint(config, world_size, micro_tokens, tokens_per_step, grad_accum_steps)
     audit_output = os.environ.get("GCW_TRAIN_AUDIT_OUT")
     if audit_output is not None and world_size != 1:
@@ -122,6 +131,7 @@ def train(config: TrainConfig) -> None:
         "micro_tokens_per_step": micro_tokens,
         "grad_accum_steps": grad_accum_steps,
         "tokens_per_step": tokens_per_step,
+        "rows_per_step": micro_rows * grad_accum_steps,
         "total_training_tokens": target_tokens,
         "training_flops_per_token": flops_per_tok,
         "total_training_flops": total_training_flops(config.model, target_tokens, config.sequence_len),
@@ -140,7 +150,8 @@ def train(config: TrainConfig) -> None:
         f"tokens={target_tokens:,} flops/token={flops_per_tok:.6e} "
         f"total_flops={run_meta['total_training_flops']:.6e} "
         f"non_embedding_params={run_meta['non_embedding_params']:,} "
-        f"micro_tokens={micro_tokens:,} grad_accum={grad_accum_steps}"
+        f"micro_tokens={micro_tokens:,} rows/step={micro_rows * grad_accum_steps:,} "
+        f"grad_accum={grad_accum_steps}"
     )
     print0(budget_message)
     tracker = RunTracker.for_training(config, run_meta) if rank == 0 else None
@@ -214,6 +225,7 @@ def train(config: TrainConfig) -> None:
             "train/grad_accum_steps": grad_accum_steps,
             "train/micro_tokens_per_step": micro_tokens,
             "train/tokens_per_step": tokens_per_step,
+            "train/rows_per_step": micro_rows * grad_accum_steps,
             "timing/step_seconds": step_seconds,
             "timing/tokens_per_second": tokens_per_step / max(step_seconds, 1e-12),
             "timing/flops_per_second": (flops_per_tok * tokens_per_step) / max(step_seconds, 1e-12),
@@ -425,6 +437,7 @@ def _training_fingerprint(
             "sequence_len": config.sequence_len,
             "micro_tokens": micro_tokens,
             "tokens_per_step": tokens_per_step,
+            "global_batch_rows": config.global_batch_rows,
             "grad_accum_steps": grad_accum_steps,
         },
     }

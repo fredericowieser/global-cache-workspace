@@ -591,6 +591,7 @@ class TrainConfig:
     sequence_len: int = 128
     max_steps: int = 2
     total_batch_size: int = 0
+    global_batch_rows: int = 0
     learning_rate: float = 3e-4
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
@@ -622,6 +623,10 @@ class TrainConfig:
             raise ValueError("trainable must be 'all', 'backbone', 'lora', or 'cache_processor'")
         if self.trainable == "lora" and self.model.lora is None:
             raise ValueError("trainable='lora' requires model.lora")
+        if self.total_batch_size and self.global_batch_rows:
+            raise ValueError("set only one of total_batch_size and global_batch_rows")
+        if self.global_batch_rows < 0:
+            raise ValueError("global_batch_rows must be non-negative")
         if not math.isfinite(self.grad_clip) or self.grad_clip <= 0.0:
             raise ValueError("grad_clip must be finite and positive")
         from gcw.architecture import require_train_config

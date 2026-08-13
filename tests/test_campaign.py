@@ -41,7 +41,7 @@ def test_campaign_contract_accepts_only_matched_execution(tmp_path):
         mode="sft",
         backbone_checkpoint="/models/qwen",
         sequence_len=4096,
-        total_batch_size=64,
+        global_batch_rows=64,
         max_steps=10,
     )
 

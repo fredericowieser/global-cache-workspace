@@ -13,6 +13,11 @@ def test_train_config_builds_explicit_resume_and_wandb_state():
     assert config.wandb == WandbConfig(enabled=True, id="run-123", resume="must")
 
 
+def test_row_and_token_batch_contracts_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="only one"):
+        TrainConfig(total_batch_size=1024, global_batch_rows=64)
+
+
 def test_train_config_rejects_conflicting_checkpoint_sources():
     with pytest.raises(ValueError, match="mutually exclusive"):
         TrainConfig(
