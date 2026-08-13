@@ -464,12 +464,19 @@ class DataConfig:
     sft_skip_rows: int = 0
     sft_take_rows: int | None = None
     response_prefix: str = ""
+    prompt_suffix: str = ""
+    sft_chat_template: bool = False
+    sft_enable_thinking: bool = False
     sft_loss_scope: SFTLossScope = "answer_only"
     canonical_execution: bool = False
     expected_artifact_sha256: str | None = None
     expected_source_ids_sha256: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.sft_chat_template, bool) or not isinstance(self.sft_enable_thinking, bool):
+            raise ValueError("SFT chat-template controls must be booleans")
+        if self.sft_chat_template and self.response_prefix:
+            raise ValueError("data.response_prefix must be empty with sft_chat_template")
         if self.sft_loss_scope not in {"answer_only", "full_sequence"}:
             raise ValueError("data.sft_loss_scope must be 'answer_only' or 'full_sequence'")
         hashes = (self.expected_artifact_sha256, self.expected_source_ids_sha256)

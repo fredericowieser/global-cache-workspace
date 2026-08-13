@@ -159,6 +159,9 @@ class SFTBatchStream:
         rank: int,
         world_size: int,
         response_prefix: str = "",
+        prompt_suffix: str = "",
+        chat_template: bool = False,
+        enable_thinking: bool = False,
         loss_scope: Literal["answer_only", "full_sequence"] = "answer_only",
         cursor: SFTCursor | None = None,
     ) -> None:
@@ -175,6 +178,9 @@ class SFTBatchStream:
         if len(rows) < global_rows:
             raise ValueError(f"SFT dataset has {len(rows)} rows but global batch requires {global_rows} disjoint rows")
         self.response_prefix = response_prefix
+        self.prompt_suffix = prompt_suffix
+        self.chat_template = chat_template
+        self.enable_thinking = enable_thinking
         self.loss_scope = loss_scope
         self._cursor = cursor or SFTCursor()
         if self._cursor.row >= len(rows):
@@ -193,6 +199,9 @@ class SFTBatchStream:
             self.sequence_len,
             device=self.device,
             response_prefix=self.response_prefix,
+            prompt_suffix=self.prompt_suffix,
+            chat_template=self.chat_template,
+            enable_thinking=self.enable_thinking,
             loss_scope=self.loss_scope,
             return_attention_mask=True,
         )
@@ -253,6 +262,9 @@ def build_training_stream(
             rank=rank,
             world_size=world_size,
             response_prefix=config.data.response_prefix,
+            prompt_suffix=config.data.prompt_suffix,
+            chat_template=config.data.sft_chat_template,
+            enable_thinking=config.data.sft_enable_thinking,
             loss_scope=config.data.sft_loss_scope,
             cursor=sft_cursor,
         )

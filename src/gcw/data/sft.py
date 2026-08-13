@@ -79,6 +79,9 @@ def sft_batch(
     max_length: int,
     device: torch.device | str = "cpu",
     response_prefix: str = "",
+    prompt_suffix: str = "",
+    chat_template: bool = False,
+    enable_thinking: bool = False,
     loss_scope: Literal["answer_only", "full_sequence"] = "answer_only",
     return_attention_mask: Literal[False] = False,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
@@ -91,6 +94,9 @@ def sft_batch(
     max_length: int,
     device: torch.device | str = "cpu",
     response_prefix: str = "",
+    prompt_suffix: str = "",
+    chat_template: bool = False,
+    enable_thinking: bool = False,
     loss_scope: Literal["answer_only", "full_sequence"] = "answer_only",
     return_attention_mask: Literal[True] = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
@@ -102,18 +108,44 @@ def sft_batch(
     max_length: int,
     device: torch.device | str = "cpu",
     response_prefix: str = "",
+    prompt_suffix: str = "",
+    chat_template: bool = False,
+    enable_thinking: bool = False,
     loss_scope: Literal["answer_only", "full_sequence"] = "answer_only",
     return_attention_mask: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     if loss_scope not in {"answer_only", "full_sequence"}:
         raise ValueError("loss_scope must be 'answer_only' or 'full_sequence'")
+    if chat_template and response_prefix:
+        raise ValueError("response_prefix must be empty with chat_template")
     ids = []
     targets = []
     for row in rows:
         prompt = row.get("prompt") or row.get("question") or row.get("instruction") or ""
         answer = row.get("answer") or row.get("response") or row.get("output") or ""
-        prompt_ids = tokenizer.encode(prompt)
-        answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [tokenizer.eot_id]
+        if prompt_suffix.strip():
+            prompt = f"{prompt}\n\n{prompt_suffix.strip()}"
+        if chat_template:
+            row_thinking = row.get("enable_thinking", enable_thinking)
+            if not isinstance(row_thinking, bool):
+                raise ValueError("row enable_thinking must be boolean")
+            messages = row.get("messages")
+            if isinstance(messages, list) and messages:
+                prompt_messages = [message for message in messages if message.get("role") != "assistant"]
+                if messages[-1].get("role") == "assistant":
+                    answer = messages[-1].get("content", answer)
+            else:
+                prompt_messages = [{"role": "user", "content": prompt}]
+            prompt_ids = tokenizer.apply_chat_template(
+                prompt_messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                enable_thinking=row_thinking,
+            )
+            answer_ids = tokenizer.encode(str(answer)) + [tokenizer.eot_id]
+        else:
+            prompt_ids = tokenizer.encode(prompt)
+            answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [tokenizer.eot_id]
         seq = (prompt_ids + answer_ids)[:max_length]
         labels = answer_ids if loss_scope == "answer_only" else prompt_ids + answer_ids
         prefix_mask = [-100] * len(prompt_ids) if loss_scope == "answer_only" else []
