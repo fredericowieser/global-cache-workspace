@@ -15,6 +15,7 @@ MODEL_PATH="/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1"
 RUN_ROOT="$HOME/gcw-runs/qwen3-06b-gsm8k-$SOURCE_COMMIT-$SLURM_JOB_ID"
 
 cd "$PROJECT"
+export PYTHONPATH="$PROJECT/src:$PROJECT"
 test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" || {
   printf 'Wrong source commit: expected %s, found %s\n' "$SOURCE_COMMIT" "$(git rev-parse HEAD)" >&2
   exit 3
@@ -33,28 +34,31 @@ printf 'job=%s node=%s source=%s run_root=%s started=%s\n' \
   "$SLURM_JOB_ID" "$(hostname)" "$SOURCE_COMMIT" "$RUN_ROOT" "$(date -u +%FT%TZ)"
 nvidia-smi --query-gpu=driver_version,name --format=csv,noheader
 "$PYTHON" - <<'PY'
+import gcw
 import torch
+print("gcw", gcw.__file__)
+assert gcw.__file__ is not None and "/src/gcw/" in gcw.__file__
 print("torch", torch.__version__, "compiled_cuda", torch.version.cuda)
 assert torch.cuda.is_available()
 print("device", torch.cuda.get_device_name(0), torch.cuda.get_device_capability(0))
 print("cuda_tensor", torch.ones(1, device="cuda").item())
 PY
 
-"$PYTHON" scripts/analysis/run_benchmarks.py \
+"$PYTHON" -m scripts.analysis.run_benchmarks \
   --model-path "$MODEL_PATH" \
   --output-dir "$RUN_ROOT/smoke-off" \
   --limit 8 \
   --batch-size 1 \
   --modes thinking_off
 
-"$PYTHON" scripts/analysis/run_benchmarks.py \
+"$PYTHON" -m scripts.analysis.run_benchmarks \
   --model-path "$MODEL_PATH" \
   --output-dir "$RUN_ROOT/smoke-on" \
   --limit 8 \
   --batch-size 1 \
   --modes thinking_on
 
-"$PYTHON" scripts/analysis/run_benchmarks.py \
+"$PYTHON" -m scripts.analysis.run_benchmarks \
   --model-path "$MODEL_PATH" \
   --output-dir "$RUN_ROOT/full" \
   --batch-size 16
