@@ -666,10 +666,10 @@ def _random_loader(config: TrainConfig, device: torch.device):
 
 def _gradient_audit(model: torch.nn.Module) -> dict[str, Any]:
     processor_grad_nonzero = False
-    flow_gate_grad_nonzero = False
+    refinement_gate_grad_nonzero = False
     backbone_grad_tensors = 0
     processor_grad_tensors = 0
-    flow_gate_grad_tensors = 0
+    refinement_gate_grad_tensors = 0
     nonfinite_grad_tensors = 0
     for name, parameter in _unwrap(model).named_parameters():
         gradient = parameter.grad
@@ -686,16 +686,16 @@ def _gradient_audit(model: torch.nn.Module) -> dict[str, Any]:
             continue
         if torch.count_nonzero(gradient).item() > 0:
             processor_grad_nonzero = True
-            if name.endswith("flow_gate"):
-                flow_gate_grad_nonzero = True
-        if name.endswith("flow_gate"):
-            flow_gate_grad_tensors += 1
+            if name.endswith(("flow_gate", "refinement_gate")):
+                refinement_gate_grad_nonzero = True
+        if name.endswith(("flow_gate", "refinement_gate")):
+            refinement_gate_grad_tensors += 1
     return {
         "processor_grad_nonzero": processor_grad_nonzero,
-        "flow_gate_grad_nonzero": flow_gate_grad_nonzero,
+        "refinement_gate_grad_nonzero": refinement_gate_grad_nonzero,
         "backbone_grad_tensors": backbone_grad_tensors,
         "processor_grad_tensors": processor_grad_tensors,
-        "flow_gate_grad_tensors": flow_gate_grad_tensors,
+        "refinement_gate_grad_tensors": refinement_gate_grad_tensors,
         "nonfinite_grad_tensors": nonfinite_grad_tensors,
     }
 

@@ -184,7 +184,7 @@ def test_train_writes_flow_pilot_gradient_and_runtime_audit(monkeypatch, tmp_pat
 
     audit = json.loads(audit_path.read_text())
     assert audit["processor_grad_nonzero"] is True
-    assert audit["flow_gate_grad_nonzero"] is True
+    assert audit["refinement_gate_grad_nonzero"] is True
     assert audit["backbone_grad_tensors"] == 0
     assert audit["nonfinite_grad_tensors"] == 0
     assert audit["tokens_per_second"] > 0.0
