@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_p = sub.add_parser("eval")
     eval_sub = eval_p.add_subparsers(dest="suite", required=True)
-    for suite in ("all", "math", "general"):
+    for suite in ("all", "math", "general", "tasks"):
         command = eval_sub.add_parser(suite)
         target = command.add_mutually_exclusive_group(required=True)
         target.add_argument("--checkpoint")
@@ -47,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
             choices=["auto", "plain", "thinking_off", "thinking_on"],
             default="auto",
         )
+        if suite == "tasks":
+            command.add_argument("--tasks", nargs="+", required=True)
         command.add_argument("--out", default=None)
     fineweb = eval_sub.add_parser("fineweb")
     fineweb.add_argument("--checkpoint", required=True)
@@ -99,15 +101,18 @@ def dispatch(args: argparse.Namespace) -> None:
                 batch_size=args.batch_size,
             )
         else:
+            from gcw.evaluation.core import run_tasks
+
             runners = {"all": run_all, "math": run_math, "general": run_general}
-            results = runners[args.suite](
-                args.checkpoint,
-                limit=args.limit,
-                batch_size=args.batch_size,
-                prompt_mode=args.prompt_mode,
-                hf_model=args.hf_model,
-                processor_enabled=args.processor == "on",
-            )
+            common = {
+                "checkpoint": args.checkpoint,
+                "limit": args.limit,
+                "batch_size": args.batch_size,
+                "prompt_mode": args.prompt_mode,
+                "hf_model": args.hf_model,
+                "processor_enabled": args.processor == "on",
+            }
+            results = run_tasks(args.tasks, **common) if args.suite == "tasks" else runners[args.suite](**common)
         if not is_main_process():
             return
         text = json.dumps(results, indent=2, default=str)

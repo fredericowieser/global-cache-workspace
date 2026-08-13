@@ -125,6 +125,9 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `sft_skip_rows` | `int` | `0` |
 | `sft_take_rows` | `int \| None` | `None` |
 | `response_prefix` | `str` | `''` |
+| `prompt_suffix` | `str` | `''` |
+| `sft_chat_template` | `bool` | `False` |
+| `sft_enable_thinking` | `bool` | `False` |
 | `sft_loss_scope` | `Literal['answer_only', 'full_sequence']` | `'answer_only'` |
 | `canonical_execution` | `bool` | `False` |
 | `expected_artifact_sha256` | `str \| None` | `None` |
@@ -135,7 +138,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | Field | Type | Default |
 |---|---|---|
 | `model` | `gcw.config.ModelConfig` | `ModelConfig(variant='tf', family='smollm', sequence_len=2048, vocab_size=49152, hidden_size=960, intermediate_size=2560, num_layers=32, num_heads=15, num_kv_heads=5, head_dim=64, rope_theta=10000.0, norm_eps=1e-05, tie_embeddings=True, qk_norm=False, rotary_style='ppt', cache_processor=None, flow_processor=None, diffusion_processor=None, workspace_flow_refinement=None, layer_types=None, processor_layer_indices=None, partial_rotary_factor=1.0, linear_conv_kernel_dim=4, linear_key_head_dim=None, linear_value_head_dim=None, linear_num_key_heads=None, linear_num_value_heads=None, moe_intermediate_size=None, num_experts=0, num_experts_per_tok=0, shared_expert_intermediate_size=None, hidden_act='silu', moe_experts_implementation='grouped_mm', router_aux_loss_coef=0.0, output_router_logits=False, sliding_window=None, num_global_key_value_heads=None, global_head_dim=None, attention_k_eq_v=False, num_kv_shared_layers=0, hidden_size_per_layer_input=0, vocab_size_per_layer_input=None, final_logit_softcapping=None, rope_parameters=None, use_double_wide_mlp=False)` |
-| `data` | `gcw.config.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None)` |
+| `data` | `gcw.config.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None)` |
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
 | `trainable` | `Literal['all', 'backbone', 'cache_processor']` | `'all'` |

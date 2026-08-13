@@ -61,6 +61,11 @@ GENERAL_RUNS = [
     (["mmlu"], 5),
 ]
 MATH_RUNS = [([task], 0) for task in MATH_TASKS]
+TASK_FEWSHOT = {
+    task: fewshot
+    for tasks, fewshot in [*GENERAL_RUNS, *MATH_RUNS]
+    for task in tasks
+}
 
 
 
@@ -268,6 +273,31 @@ def run_math(
     )
 
 
+def run_tasks(
+    tasks: list[str],
+    checkpoint: str | Path | None = None,
+    limit: int | None = None,
+    batch_size: int = 8,
+    prompt_mode: str = "auto",
+    *,
+    hf_model: str | Path | None = None,
+    processor_enabled: bool = True,
+) -> dict:
+    unknown = sorted(set(tasks) - set(TASK_FEWSHOT))
+    if unknown:
+        raise ValueError(f"unknown benchmark tasks: {unknown}")
+    runs = [([task], TASK_FEWSHOT[task]) for task in tasks]
+    return run_task_groups(
+        checkpoint,
+        runs,
+        limit=limit,
+        batch_size=batch_size,
+        prompt_mode=prompt_mode,
+        hf_model=hf_model,
+        processor_enabled=processor_enabled,
+    )
+
+
 def run_fineweb(
     checkpoint: str | Path,
     data_dir: str | Path | None = None,
@@ -452,12 +482,10 @@ def _load_eval_target(
     if (checkpoint is None) == (hf_model is None):
         raise ValueError("choose exactly one evaluation target: checkpoint or hf_model")
     if hf_model is not None:
-        if not processor_enabled:
-            raise ValueError("HF evaluation targets do not have a GCW processor to bypass")
         return _load_hf_eval_target(hf_model, device)
     model, cfg, state = load_checkpoint(cast(str | Path, checkpoint), device=device)
     tokenizer = _tokenizer_for(cfg, state)
-    if not processor_enabled:
+    if not processor_enabled and hasattr(model, "backbone"):
         model = ProcessorBypass(model)
     return model, tokenizer
 

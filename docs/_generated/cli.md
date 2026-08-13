@@ -29,7 +29,7 @@ usage: gcw convert hf [-h] --family {llama,qwen3,qwen3_5,qwen3_5_moe,gemma4}
 ## `gcw eval`
 
 ```text
-usage: gcw eval [-h] {all,math,general,fineweb} ...
+usage: gcw eval [-h] {all,math,general,tasks,fineweb} ...
 ```
 
 ## `gcw eval all`
@@ -106,6 +106,27 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--out` | flag |
+
+## `gcw eval tasks`
+
+```text
+usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
+                      [--processor {on,off}] [--limit LIMIT]
+                      [--batch-size BATCH_SIZE]
+                      [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                      --tasks TASKS [TASKS ...] [--out OUT]
+```
+
+| Argument | Contract |
+|---|---|
+| `--checkpoint` | flag |
+| `--hf-model` | flag |
+| `--processor` | choices: `on`, `off`; default: `on` |
+| `--limit` | type: `int` |
+| `--batch-size` | default: `8`; type: `int` |
+| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--tasks` | required |
 | `--out` | flag |
 
 ## `gcw params`
