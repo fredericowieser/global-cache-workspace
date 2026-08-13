@@ -154,7 +154,7 @@ def train(config: TrainConfig) -> None:
         f"grad_accum={grad_accum_steps}"
     )
     print0(budget_message)
-    tracker = RunTracker.for_training(config, run_meta) if rank == 0 else None
+    tracker = RunTracker.for_training(config, run_meta, model=model) if rank == 0 else None
     if tracker is not None:
         tracker.log_message(budget_message)
     if start_step == 0 and config.eval_on_start and config.eval_every:

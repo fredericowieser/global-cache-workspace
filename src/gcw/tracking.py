@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from gcw.config import TrainConfig, to_dict
+from gcw.params import trainable_adapter_params
 from gcw.runs import RunRecord
 
 
@@ -18,7 +19,12 @@ class RunTracker:
         self._last_metrics: dict[str, Any] = {}
 
     @classmethod
-    def for_training(cls, config: TrainConfig, metadata: Mapping[str, Any]) -> RunTracker:
+    def for_training(
+        cls,
+        config: TrainConfig,
+        metadata: Mapping[str, Any],
+        model: Any | None = None,
+    ) -> RunTracker:
         """Create a local training record and its optional W&B mirror."""
         name = config.wandb.name or Path(config.output_dir).name
         record = RunRecord.create(
@@ -27,7 +33,13 @@ class RunTracker:
             config=config,
             state_path=config.output_dir,
         )
-        run = _start_wandb(config, metadata, record)
+        run_metadata = dict(metadata)
+        if model is not None:
+            run_metadata["trainable_params"] = sum(
+                parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+            )
+            run_metadata["lora_params"] = trainable_adapter_params(model)
+        run = _start_wandb(config, run_metadata, record)
         record.bind_wandb(
             run_id=getattr(run, "id", None),
             url=getattr(run, "url", None),
@@ -98,7 +110,14 @@ def _start_wandb(config: TrainConfig, metadata: Mapping[str, Any], record: RunRe
         run.define_metric("train/step")
         run.define_metric("*", step_metric="train/step")
         run.summary["architecture"] = config.model.architecture_name
-        for key in ("non_embedding_params", "processor_params", "total_training_tokens", "total_training_flops"):
+        for key in (
+            "non_embedding_params",
+            "processor_params",
+            "trainable_params",
+            "lora_params",
+            "total_training_tokens",
+            "total_training_flops",
+        ):
             if key in metadata:
                 run.summary[key] = metadata[key]
         return run
