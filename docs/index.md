@@ -45,6 +45,7 @@ guides/add-a-cache-processor
 :maxdepth: 2
 :caption: Campaigns
 
+campaigns/qwen3-math-adaptation
 campaigns/smollm-matched-total
 ```
 
