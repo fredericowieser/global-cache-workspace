@@ -9,6 +9,8 @@ from gcw.evaluation.benchmarks import (
     BenchmarkConfig,
     apply_qwen_chat_template,
     extract_gsm8k_target,
+    extract_lm_eval_flexible,
+    score_lm_eval_flexible,
     score_numeric_response,
 )
 
@@ -40,8 +42,17 @@ def test_gsm8k_target_and_response_use_exact_numeric_values():
     assert not score_numeric_response("The answer is 1,235.", Fraction(1234))
 
 
+def test_lm_eval_flexible_protocol_matches_historical_last_regex():
+    response = r"work with 12, then final $18."
+    assert extract_lm_eval_flexible(response) == "$18."
+    assert score_lm_eval_flexible(response, "work\n#### 18")
+    assert not score_lm_eval_flexible("answer 17", "work\n#### 18")
+
+
 def test_config_rejects_protocol_drift():
     with pytest.raises(ValueError, match=f"max_new_tokens={MAX_NEW_TOKENS}"):
         BenchmarkConfig(model_path="model", output_dir="out", max_new_tokens=512)
     with pytest.raises(ValueError, match="duplicates"):
         BenchmarkConfig(model_path="model", output_dir="out", modes=("thinking_off", "thinking_off"))
+    with pytest.raises(ValueError, match="no GCW processor"):
+        BenchmarkConfig(model_path="model", output_dir="out", target_kind="hf", processor_enabled=False)
