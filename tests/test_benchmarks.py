@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from gcw.evaluation.benchmarks import (
+    DEFAULT_BATCH_SIZE,
     MAX_NEW_TOKENS,
     BenchmarkConfig,
     apply_qwen_chat_template,
@@ -117,6 +118,10 @@ def test_native_evaluation_keeps_exact_length_batches():
     assert len(backend.calls) == 2
     assert all(bool(mask.all()) for _, mask in backend.calls)
     assert result["generation"]["grouping"] == "exact_prompt_token_length"
+
+
+def test_fast_benchmark_batch_is_the_default():
+    assert BenchmarkConfig(model_path="model", output_dir="out").batch_size == DEFAULT_BATCH_SIZE == 64
 
 
 def test_config_rejects_protocol_drift():
