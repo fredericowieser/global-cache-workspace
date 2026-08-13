@@ -1,8 +1,21 @@
 import torch
 
+from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.state import processor_call_count, select_l2_indices
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
+
+
+def test_processor_call_counter_is_consumable():
+    class Processor(CacheProcessorBase):
+        def forward(self, cache, *, select_all=False):
+            return cache
+
+    processor = Processor()
+    marker = object()
+    assert processor(marker) is marker
+    assert processor.pop_call_count() == 1
+    assert processor.pop_call_count() == 0
 
 
 def test_processor_call_count_matches_window_rule():

@@ -356,6 +356,7 @@ def run_task_groups(
         tokenizer,
         batch_size=batch_size,
     )
+    processor = getattr(model, "cache_processor", None)
     if prompt_mode not in {"auto", "plain", "thinking_off", "thinking_on"}:
         raise ValueError(f"unknown prompt mode: {prompt_mode}")
     lm.prompt_mode = prompt_mode
@@ -374,6 +375,9 @@ def run_task_groups(
             with dist_state.main_process_first():
                 if local_rank == 0:
                     get_task_dict(tasks, task_manager)
+        started = time.monotonic()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
         try:
             out = lm_eval.simple_evaluate(
                 model=lm,
@@ -392,6 +396,19 @@ def run_task_groups(
             raise
         if out is None:
             continue
+        elapsed = time.monotonic() - started
+        pop_calls = getattr(processor, "pop_call_count", None)
+        calls = int(pop_calls()) if callable(pop_calls) else 0
+        out.setdefault("gcw_runtime", {})[",".join(tasks)] = {
+            "elapsed_seconds": elapsed,
+            "processor_calls": calls,
+            "processor_enabled": processor is not None,
+            "peak_memory_mib": (
+                torch.cuda.max_memory_allocated(device) / 1024 / 1024
+                if torch.cuda.is_available()
+                else 0.0
+            ),
+        }
         for key in merged:
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
@@ -635,7 +652,15 @@ def _write_partial_results(results: dict) -> None:
 
 
 def _empty_eval_results() -> dict:
-    return {"results": {}, "groups": {}, "n-samples": {}, "n-shot": {}, "versions": {}, "higher_is_better": {}}
+    return {
+        "results": {},
+        "groups": {},
+        "n-samples": {},
+        "n-shot": {},
+        "versions": {},
+        "higher_is_better": {},
+        "gcw_runtime": {},
+    }
 
 
 def _validate_partial_results(payload: dict, runs: list[tuple[list[str], int]]) -> dict:
