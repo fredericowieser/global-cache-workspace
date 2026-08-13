@@ -9,6 +9,7 @@ from gcw.config import (
     CacheProcessorConfig,
     DataConfig,
     FlowProcessorConfig,
+    LoRAConfig,
     ModelConfig,
     ResumeConfig,
     TrainConfig,
@@ -19,6 +20,7 @@ from gcw.data.shards import ShardWriter
 from gcw.data.training import build_training_stream
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
+from gcw.models.lora import LoRALinear
 from gcw.training.core import (
     _build_training_model,
     _checkpoint_metadata,
@@ -97,6 +99,28 @@ def tiny_train_config(tmp_path):
         eval_on_start=True,
         wandb=WandbConfig(enabled=True, project="test-project", name="tiny", mode="offline", log_every=1),
     )
+
+
+def test_lora_trainable_policy_freezes_base_weights():
+    config = ModelConfig(
+        variant="tf",
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        lora=LoRAConfig(rank=4),
+    )
+    model = build_model(config)
+
+    _apply_trainable_policy(model, "lora")
+
+    adapters = [module for module in model.modules() if isinstance(module, LoRALinear)]
+    adapter_ids = {id(parameter) for module in adapters for parameter in (module.lora_a, module.lora_b)}
+    assert adapters
+    assert all(parameter.requires_grad == (id(parameter) in adapter_ids) for parameter in model.parameters())
 
 
 def test_trainable_policy_selects_backbone_processor_or_both():
