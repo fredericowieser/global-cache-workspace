@@ -19,7 +19,7 @@
 
 3. Inspect the JSON output and provenance before increasing the limit.
 
-Evaluation constructs independent state. It does not mutate a training checkpoint. Campaign pages define stricter task sets, controls, and evidence gates.
+Evaluation constructs independent state. It does not mutate a training checkpoint. Experiment pages define stricter task sets, controls, and evidence gates.
 
 ## Qwen3 GSM8K reproduction matrix
 

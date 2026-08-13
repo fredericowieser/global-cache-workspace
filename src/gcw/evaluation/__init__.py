@@ -1,3 +1,3 @@
-"""Reproducible evaluation, scoring, and campaign evidence validation."""
+"""Reproducible evaluation, scoring, and experiment evidence validation."""
 
 __all__: list[str] = []

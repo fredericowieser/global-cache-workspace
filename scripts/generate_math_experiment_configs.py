@@ -6,10 +6,11 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
+from gcw.config import Variant
 from gcw.convert import config_from_hf
 from gcw.params import fit_processor_config
 
@@ -30,7 +31,9 @@ def _fitted_processor(model: Any, variant: str, *, longshot: bool = False) -> di
         overrides["topk_heads"] = 56
     if longshot:
         overrides.update(encoder_method="query_attention", encoder_query_source="final_token")
-    fitted, _ = fit_processor_config(model, variant, fraction=0.05, cache_processor_overrides=overrides)
+    fitted, _ = fit_processor_config(
+        model, cast(Variant, variant), fraction=0.05, cache_processor_overrides=overrides
+    )
     if fitted.cache_processor is None:
         raise RuntimeError(f"failed to fit {variant} processor")
     from gcw.config import to_dict
@@ -125,7 +128,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
     rows = int(data_manifest["rows"])
     max_steps = getattr(args, "max_steps", None) or math.ceil(rows / args.global_batch_rows)
     contract = {
-        "schema": "gcw.math_campaign.v1",
+        "schema": "gcw.math_experiment.v1",
         "dataset_sha256": data_manifest["dataset_sha256"],
         "tokenizer_identity_sha256": data_manifest["tokenizer_identity_sha256"],
         "backbone_sha256": _sha256_file(Path(args.backbone_checkpoint) / "model.safetensors"),
@@ -137,7 +140,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
         "backbone_checkpoint": str(Path(args.backbone_checkpoint).resolve()),
         "sequence_length_decision": "approved_4k_compute_tradeoff",
     }
-    contract_path = output / "campaign.json"
+    contract_path = output / "experiment.json"
     contract_path.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
 
     paths: list[Path] = []
@@ -162,7 +165,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
                 "canonical_execution": True,
                 "expected_artifact_sha256": data_manifest["dataset_sha256"],
                 "expected_source_ids_sha256": data_manifest["source_ids_sha256"],
-                "campaign_manifest": str(contract_path.resolve()),
+                "experiment_manifest": str(contract_path.resolve()),
             },
             "mode": "sft",
             "distributed": args.distributed,
@@ -187,11 +190,11 @@ def generate(args: argparse.Namespace) -> list[Path]:
                 "entity": WAND_ENTITY,
                 "project": WAND_PROJECT,
                 "name": name,
-                "group": args.campaign,
-                "tags": ["qwen3-0.6b", "instruct", "math-campaign", name],
+                "group": args.experiment,
+                "tags": ["qwen3-0.6b", "instruct", "math-experiment", name],
             },
             "metadata": {
-                "campaign": args.campaign,
+                "experiment": args.experiment,
                 "arm": name,
                 "data_manifest": str(Path(args.data_manifest).resolve()),
             },
@@ -217,13 +220,13 @@ def _sha256_file(path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate the matched Qwen3-0.6B campaign matrix")
+    parser = argparse.ArgumentParser(description="Generate the matched Qwen3-0.6B experiment matrix")
     parser.add_argument("--model", required=True)
     parser.add_argument("--backbone-checkpoint", required=True)
     parser.add_argument("--data-manifest", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--run-root", required=True)
-    parser.add_argument("--campaign", default="qwen3-06b-instruct-openmath-openr1-v1")
+    parser.add_argument("--experiment", default="qwen3-06b-instruct-openmath-openr1-v1")
     parser.add_argument("--sequence-length", type=int, default=4096)
     parser.add_argument("--global-batch-rows", type=int, default=64)
     parser.add_argument("--micro-batch", type=int, default=1)

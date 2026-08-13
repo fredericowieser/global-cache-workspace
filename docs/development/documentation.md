@@ -6,7 +6,7 @@ Use short declarative sentences. Use one stable term for one concept. Preserve e
 
 Handwritten MyST explains mechanisms and decisions. Python signatures and docstrings generate API facts. Typed config schemas generate configuration facts. `build_parser()` generates CLI facts. Never edit `docs/_generated/` by hand.
 
-Label campaign and proposal pages as Maintained, Experimental, Historical, or Proposal. Distinguish mathematical consequences, implementation facts, observations, interpretations, and hypotheses.
+Label experiment and proposal pages as Maintained, Experimental, Historical, or Proposal. Distinguish mathematical consequences, implementation facts, observations, interpretations, and hypotheses.
 
 For an important mechanism, connect the idea, equation, symbol definitions, tensor shapes, short code, implementation owner, and parity tests. Comments explain intent or invariants. They do not narrate syntax.
 

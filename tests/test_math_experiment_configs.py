@@ -5,10 +5,10 @@ import hashlib
 import json
 from gcw.config import ModelConfig, load_train_config
 from gcw.params import estimate_non_embedding_params, processor_params
-from scripts import generate_math_campaign_configs as generator
+from scripts import generate_math_experiment_configs as generator
 
 
-def test_campaign_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatch):
+def test_experiment_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatch):
     dataset = tmp_path / "train.jsonl"
     dataset.write_text("{}\n")
     data_manifest = tmp_path / "data.json"
@@ -57,7 +57,7 @@ def test_campaign_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatch)
         micro_batch=1,
         distributed="none",
         seed=24,
-        campaign="campaign",
+        experiment="experiment",
     )
 
     paths = generator.generate(args)

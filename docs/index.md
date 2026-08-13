@@ -2,7 +2,7 @@
 
 GCW tests whether small learned processors can select, transform, and rewrite a causal language model's internal cache. The package supports native transformer backbones, BT, BGT, Icarus, Longshot, exact training resume, controlled evaluation, and scientific provenance.
 
-Start with the CPU run. Read the concepts before changing cache semantics. Use campaign pages to reproduce scientific results.
+Start with the CPU run. Read the concepts before changing cache semantics. Use experiment pages to reproduce scientific results.
 
 ```{toctree}
 :maxdepth: 2
@@ -43,10 +43,10 @@ guides/add-a-cache-processor
 
 ```{toctree}
 :maxdepth: 2
-:caption: Campaigns
+:caption: Experiments
 
-campaigns/qwen3-math-adaptation
-campaigns/smollm-matched-total
+experiments/qwen3-math-adaptation
+experiments/smollm-matched-total
 ```
 
 ```{toctree}

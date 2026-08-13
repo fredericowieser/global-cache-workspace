@@ -9,7 +9,7 @@ from gcw.evaluation.core import run_all
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate one campaign target in declared prompt modes")
+    parser = argparse.ArgumentParser(description="Evaluate one experiment target in declared prompt modes")
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--checkpoint")
     target.add_argument("--hf-model")

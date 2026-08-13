@@ -3,7 +3,7 @@ from __future__ import annotations
 from argparse import Namespace
 import json
 
-from scripts import prepare_math_campaign as campaign
+from scripts import prepare_math_experiment as experiment
 
 
 class Tokenizer:
@@ -22,7 +22,7 @@ class Tokenizer:
         return "1" * 64
 
 
-def test_campaign_builder_filters_overlap_length_and_shuffles_deterministically(tmp_path, monkeypatch):
+def test_experiment_builder_filters_overlap_length_and_shuffles_deterministically(tmp_path, monkeypatch):
     source = tmp_path / "openmath.jsonl"
     source.write_text(
         "\n".join(
@@ -31,10 +31,10 @@ def test_campaign_builder_filters_overlap_length_and_shuffles_deterministically(
         )
         + "\n"
     )
-    monkeypatch.setattr(campaign, "get_tokenizer", lambda _name: Tokenizer())
-    monkeypatch.setattr(campaign, "_load_benchmark_hashes", lambda: ({campaign._prompt_hash("benchmark")}, {"x": 1}))
+    monkeypatch.setattr(experiment, "get_tokenizer", lambda _name: Tokenizer())
+    monkeypatch.setattr(experiment, "_load_benchmark_hashes", lambda: ({experiment._prompt_hash("benchmark")}, {"x": 1}))
     monkeypatch.setattr(
-        campaign,
+        experiment,
         "_verified_openr1_rows",
         lambda *_args: iter((("reasoning row", "<think>x</think> 2", "r1"),)),
     )
@@ -52,13 +52,13 @@ def test_campaign_builder_filters_overlap_length_and_shuffles_deterministically(
         openr1_revision="revision",
     )
 
-    manifest = campaign.build(args)
+    manifest = experiment.build(args)
     rows = [json.loads(line) for line in (tmp_path / "out/train.jsonl").read_text().splitlines()]
 
     assert manifest["rows"] == 2
     assert manifest["source_counts"] == {"openmath": 1, "openr1": 1}
     assert manifest["rejection_counts"]["openmath:benchmark_overlap"] == 1
     assert manifest["rejection_counts"]["openmath:over_context"] == 1
-    assert [row["campaign_order"] for row in rows] == [0, 1]
+    assert [row["experiment_order"] for row in rows] == [0, 1]
     assert {row["enable_thinking"] for row in rows} == {False, True}
     assert len(manifest["dataset_sha256"]) == 64

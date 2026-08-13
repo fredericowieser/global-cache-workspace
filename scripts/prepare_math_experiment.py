@@ -234,7 +234,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         else:
             training.append(row)
     for index, row in enumerate(training):
-        row["campaign_order"] = index
+        row["experiment_order"] = index
     dataset_path = output / "train.jsonl"
     validation_path = output / "validation.jsonl"
     dataset_sha256 = _atomic_jsonl(dataset_path, training)
@@ -244,7 +244,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     ).hexdigest()
     source_counts = Counter(str(row["source_arm"]) for row in training)
     manifest = {
-        "schema": "gcw.math_campaign_data.v1",
+        "schema": "gcw.math_experiment_data.v1",
         "sequence_length": args.sequence_length,
         "seed": args.seed,
         "rows": len(training),
@@ -275,7 +275,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the authenticated Qwen math campaign dataset")
+    parser = argparse.ArgumentParser(description="Build the authenticated Qwen math experiment dataset")
     parser.add_argument("--openmath", required=True)
     parser.add_argument("--tokenizer", required=True)
     parser.add_argument("--out-dir", required=True)

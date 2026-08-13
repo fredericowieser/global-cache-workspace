@@ -11,7 +11,7 @@ from gcw.data.tokenizers import get_tokenizer
 
 
 @dataclass(frozen=True)
-class CampaignContract:
+class ExperimentContract:
     schema: str
     dataset_sha256: str
     tokenizer_identity_sha256: str
@@ -25,10 +25,10 @@ class CampaignContract:
     sequence_length_decision: str | None = None
 
     @classmethod
-    def load(cls, path: str | Path) -> "CampaignContract":
+    def load(cls, path: str | Path) -> "ExperimentContract":
         payload = json.loads(Path(path).read_text())
         if not isinstance(payload, dict):
-            raise ValueError("campaign manifest must contain an object")
+            raise ValueError("experiment manifest must contain an object")
         return cls(**payload)
 
     def validate(self, config: TrainConfig) -> None:
@@ -46,23 +46,23 @@ class CampaignContract:
                 mismatches.append(f"{name}: observed {observed!r}, expected {expected!r}")
         dataset = Path(config.data.dataset or "").expanduser()
         if not dataset.is_file() or _sha256_file(dataset) != self.dataset_sha256:
-            mismatches.append("dataset_sha256 does not match the campaign contract")
+            mismatches.append("dataset_sha256 does not match the experiment contract")
         tokenizer = get_tokenizer(f"hf:{config.data.tokenizer_source}")
         if tokenizer.identity_sha256() != self.tokenizer_identity_sha256:
-            mismatches.append("tokenizer_identity_sha256 does not match the campaign contract")
+            mismatches.append("tokenizer_identity_sha256 does not match the experiment contract")
         checkpoint = Path(config.backbone_checkpoint or "").expanduser() / "model.safetensors"
         if not checkpoint.is_file() or _sha256_file(checkpoint) != self.backbone_sha256:
-            mismatches.append("backbone_sha256 does not match the campaign contract")
+            mismatches.append("backbone_sha256 does not match the experiment contract")
         if mismatches:
-            raise ValueError("campaign contract mismatch: " + "; ".join(mismatches))
+            raise ValueError("experiment contract mismatch: " + "; ".join(mismatches))
 
 
-def validate_campaign(config: TrainConfig) -> CampaignContract | None:
-    if config.data.campaign_manifest is None:
+def validate_experiment(config: TrainConfig) -> ExperimentContract | None:
+    if config.data.experiment_manifest is None:
         return None
-    contract = CampaignContract.load(config.data.campaign_manifest)
-    if contract.schema != "gcw.math_campaign.v1":
-        raise ValueError(f"unsupported campaign schema: {contract.schema}")
+    contract = ExperimentContract.load(config.data.experiment_manifest)
+    if contract.schema != "gcw.math_experiment.v1":
+        raise ValueError(f"unsupported experiment schema: {contract.schema}")
     contract.validate(config)
     return contract
 

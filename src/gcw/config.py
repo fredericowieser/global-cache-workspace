@@ -514,7 +514,7 @@ class DataConfig:
     canonical_execution: bool = False
     expected_artifact_sha256: str | None = None
     expected_source_ids_sha256: str | None = None
-    campaign_manifest: str | None = None
+    experiment_manifest: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.sft_chat_template, bool) or not isinstance(self.sft_enable_thinking, bool):

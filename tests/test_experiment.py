@@ -5,28 +5,28 @@ import json
 
 import pytest
 
-from gcw.campaign import validate_campaign
+from gcw.experiment import validate_experiment
 from gcw.config import DataConfig, TrainConfig
 
 
-def test_campaign_contract_accepts_only_matched_execution(tmp_path, monkeypatch):
+def test_experiment_contract_accepts_only_matched_execution(tmp_path, monkeypatch):
     class Tokenizer:
         @staticmethod
         def identity_sha256():
             return "1" * 64
 
-    monkeypatch.setattr("gcw.campaign.get_tokenizer", lambda _: Tokenizer())
+    monkeypatch.setattr("gcw.experiment.get_tokenizer", lambda _: Tokenizer())
     dataset = tmp_path / "train.jsonl"
     dataset.write_text('{}\n')
     digest = hashlib.sha256(dataset.read_bytes()).hexdigest()
     checkpoint = tmp_path / "model.safetensors"
     checkpoint.write_bytes(b"weights")
     checkpoint_digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
-    manifest = tmp_path / "campaign.json"
+    manifest = tmp_path / "experiment.json"
     manifest.write_text(
         json.dumps(
             {
-                "schema": "gcw.math_campaign.v1",
+                "schema": "gcw.math_experiment.v1",
                 "dataset_sha256": digest,
                 "tokenizer_identity_sha256": "1" * 64,
                 "backbone_sha256": checkpoint_digest,
@@ -45,7 +45,7 @@ def test_campaign_contract_accepts_only_matched_execution(tmp_path, monkeypatch)
             dataset=str(dataset),
             tokenizer="hf",
             tokenizer_source="Qwen/Qwen3-0.6B",
-            campaign_manifest=str(manifest),
+            experiment_manifest=str(manifest),
         ),
         mode="sft",
         backbone_checkpoint=str(tmp_path),
@@ -54,7 +54,7 @@ def test_campaign_contract_accepts_only_matched_execution(tmp_path, monkeypatch)
         max_steps=10,
     )
 
-    assert validate_campaign(config) is not None
+    assert validate_experiment(config) is not None
     config.max_steps = 11
     with pytest.raises(ValueError, match="max_steps"):
-        validate_campaign(config)
+        validate_experiment(config)
