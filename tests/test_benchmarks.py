@@ -3,6 +3,7 @@ from __future__ import annotations
 from fractions import Fraction
 
 import pytest
+import torch
 
 from gcw.evaluation.benchmarks import (
     MAX_NEW_TOKENS,
@@ -10,6 +11,7 @@ from gcw.evaluation.benchmarks import (
     apply_qwen_chat_template,
     extract_gsm8k_target,
     extract_lm_eval_flexible,
+    evaluate_mode,
     score_lm_eval_flexible,
     score_numeric_response,
 )
@@ -47,6 +49,74 @@ def test_lm_eval_flexible_protocol_matches_historical_last_regex():
     assert extract_lm_eval_flexible(response) == "$18."
     assert score_lm_eval_flexible(response, "work\n#### 18")
     assert not score_lm_eval_flexible("answer 17", "work\n#### 18")
+
+
+class RecordingBackend:
+    identity = {}
+    eos_ids = (9,)
+    pad_id = 0
+    device = torch.device("cpu")
+
+    def __init__(self, supports_left_padding: bool) -> None:
+        self.supports_left_padding = supports_left_padding
+        self.calls = []
+
+    def generate(self, input_ids, attention_mask, _max_new_tokens):
+        self.calls.append((input_ids.clone(), attention_mask.clone()))
+        suffix = torch.tensor([[7, 9]] * input_ids.shape[0])
+        return torch.cat((input_ids, suffix), dim=1)
+
+
+class EvaluationTokenizer(FakeTokenizer):
+    def apply_chat_template(self, messages, **kwargs):
+        width = len(messages[0]["content"])
+        return list(range(1, width + 1))
+
+    @staticmethod
+    def decode(_tokens, **_kwargs):
+        return "7"
+
+
+def test_hf_evaluation_left_pads_variable_length_prompts():
+    backend = RecordingBackend(supports_left_padding=True)
+    result = evaluate_mode(
+        backend,
+        EvaluationTokenizer(),
+        [
+            {"question": "abc", "answer": "#### 7"},
+            {"question": "x", "answer": "#### 7"},
+        ],
+        mode="thinking_off",
+        batch_size=2,
+        max_new_tokens=MAX_NEW_TOKENS,
+        scoring_protocol="lm_eval_flexible_exact",
+    )
+
+    input_ids, attention_mask = backend.calls[0]
+    assert input_ids.tolist() == [[0, 0, 1], [1, 2, 3]]
+    assert attention_mask.tolist() == [[0, 0, 1], [1, 1, 1]]
+    assert result["generation"]["grouping"] == "length_sorted_left_padding"
+    assert result["correct"] == 2
+
+
+def test_native_evaluation_keeps_exact_length_batches():
+    backend = RecordingBackend(supports_left_padding=False)
+    result = evaluate_mode(
+        backend,
+        EvaluationTokenizer(),
+        [
+            {"question": "abc", "answer": "#### 7"},
+            {"question": "x", "answer": "#### 7"},
+        ],
+        mode="thinking_off",
+        batch_size=2,
+        max_new_tokens=MAX_NEW_TOKENS,
+        scoring_protocol="lm_eval_flexible_exact",
+    )
+
+    assert len(backend.calls) == 2
+    assert all(bool(mask.all()) for _, mask in backend.calls)
+    assert result["generation"]["grouping"] == "exact_prompt_token_length"
 
 
 def test_config_rejects_protocol_drift():

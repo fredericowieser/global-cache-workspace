@@ -75,8 +75,14 @@ class BenchmarkBackend(Protocol):
     eos_ids: tuple[int, ...]
     pad_id: int
     device: torch.device
+    supports_left_padding: bool
 
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int) -> torch.Tensor: ...
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        max_new_tokens: int,
+    ) -> torch.Tensor: ...
 
 
 class HFBenchmarkBackend:
@@ -93,14 +99,20 @@ class HFBenchmarkBackend:
             ),
         ).to(device).eval()
         self.device = device
+        self.supports_left_padding = True
         self.eos_ids = _eos_ids(self.model, None)
         self.pad_id = int(getattr(self.model.generation_config, "pad_token_id", None) or self.eos_ids[0])
         self.identity = _directory_identity(source, kind="hf")
 
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        max_new_tokens: int,
+    ) -> torch.Tensor:
         return self.model.generate(
             input_ids=input_ids,
-            attention_mask=torch.ones_like(input_ids),
+            attention_mask=attention_mask,
             do_sample=False,
             max_new_tokens=max_new_tokens,
             eos_token_id=self.eos_ids[0] if len(self.eos_ids) == 1 else list(self.eos_ids),
@@ -119,6 +131,7 @@ class GCWBenchmarkBackend:
             model = ProcessorBypass(model)
         self.model = model.eval()
         self.device = device
+        self.supports_left_padding = False
         self.eos_ids: tuple[int, ...] = (int(state.get("eos_token_id", 151645)),)
         self.pad_id = int(state.get("pad_token_id", self.eos_ids[0]))
         self.identity = {
@@ -128,11 +141,19 @@ class GCWBenchmarkBackend:
             "checkpoint_state": state,
         }
 
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
-        return cast(Any, self.model).generate(
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        max_new_tokens: int,
+    ) -> torch.Tensor:
+        if not bool(attention_mask.all()):
+            raise ValueError("native GCW generation does not support padded prompts")
+        return cast(Any, self.model).generate_fast(
             input_ids,
             max_new_tokens=max_new_tokens,
             eos_token_id=self.eos_ids[0],
+            pad_token_id=self.pad_id,
         )
 
 
@@ -302,49 +323,65 @@ def evaluate_mode(
     scoring_protocol: ScoringProtocol,
 ) -> dict[str, Any]:
     examples = _prepare(rows, tokenizer, mode == "thinking_on")
-    groups: dict[int, list[PreparedExample]] = defaultdict(list)
-    for example in examples:
-        groups[len(example.prompt_ids)].append(example)
+    if backend.supports_left_padding:
+        batches = [
+            sorted(examples, key=lambda example: len(example.prompt_ids))[offset : offset + batch_size]
+            for offset in range(0, len(examples), batch_size)
+        ]
+        grouping = "length_sorted_left_padding"
+    else:
+        groups: dict[int, list[PreparedExample]] = defaultdict(list)
+        for example in examples:
+            groups[len(example.prompt_ids)].append(example)
+        batches = [
+            group[offset : offset + batch_size]
+            for _, group in sorted(groups.items())
+            for offset in range(0, len(group), batch_size)
+        ]
+        grouping = "exact_prompt_token_length"
     generated_rows: list[dict[str, Any] | None] = [None] * len(examples)
     started = time.monotonic()
-    for prompt_length, group in sorted(groups.items()):
-        for offset in range(0, len(group), batch_size):
-            chunk = group[offset : offset + batch_size]
-            input_ids = torch.tensor(
-                [example.prompt_ids for example in chunk],
-                dtype=torch.long,
-                device=backend.device,
+    for chunk in batches:
+        prompt_width = max(len(example.prompt_ids) for example in chunk)
+        input_ids = torch.full(
+            (len(chunk), prompt_width),
+            backend.pad_id,
+            dtype=torch.long,
+            device=backend.device,
+        )
+        attention_mask = torch.zeros_like(input_ids)
+        for row_index, example in enumerate(chunk):
+            prompt = torch.tensor(example.prompt_ids, dtype=torch.long, device=backend.device)
+            input_ids[row_index, -len(prompt) :] = prompt
+            attention_mask[row_index, -len(prompt) :] = 1
+        output = backend.generate(input_ids, attention_mask, max_new_tokens)
+        for example, token_row in zip(chunk, output[:, prompt_width:].detach().cpu().tolist(), strict=True):
+            response_ids, termination = _trim_at_eos(token_row, backend.eos_ids)
+            response = tokenizer.decode(
+                response_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
             )
-            output = backend.generate(input_ids, max_new_tokens)
-            for example, token_row in zip(chunk, output[:, prompt_length:].detach().cpu().tolist(), strict=True):
-                response_ids, termination = _trim_at_eos(token_row, backend.eos_ids)
-                response = tokenizer.decode(
-                    response_ids,
-                    skip_special_tokens=True,
-                    clean_up_tokenization_spaces=False,
-                )
-                numeric_correct = score_numeric_response(response, example.target_answer)
-                flexible_correct = score_lm_eval_flexible(response, example.target_text)
-                primary_correct = (
-                    numeric_correct if scoring_protocol == "numeric_last_answer" else flexible_correct
-                )
-                generated_rows[example.index] = {
-                    "index": example.index,
-                    "question": example.question,
-                    "target_text": example.target_text,
-                    "target_answer": str(example.target_answer),
-                    "prompt_tokens": len(example.prompt_ids),
-                    "response_tokens": len(response_ids),
-                    "termination": termination,
-                    "response": response,
-                    "numeric_prediction": (
-                        None if extract_numeric_answer(response) is None else str(extract_numeric_answer(response))
-                    ),
-                    "flexible_prediction": extract_lm_eval_flexible(response),
-                    "numeric_correct": numeric_correct,
-                    "flexible_exact_correct": flexible_correct,
-                    "correct": primary_correct,
-                }
+            numeric_correct = score_numeric_response(response, example.target_answer)
+            flexible_correct = score_lm_eval_flexible(response, example.target_text)
+            primary_correct = numeric_correct if scoring_protocol == "numeric_last_answer" else flexible_correct
+            generated_rows[example.index] = {
+                "index": example.index,
+                "question": example.question,
+                "target_text": example.target_text,
+                "target_answer": str(example.target_answer),
+                "prompt_tokens": len(example.prompt_ids),
+                "response_tokens": len(response_ids),
+                "termination": termination,
+                "response": response,
+                "numeric_prediction": (
+                    None if extract_numeric_answer(response) is None else str(extract_numeric_answer(response))
+                ),
+                "flexible_prediction": extract_lm_eval_flexible(response),
+                "numeric_correct": numeric_correct,
+                "flexible_exact_correct": flexible_correct,
+                "correct": primary_correct,
+            }
     if any(row is None for row in generated_rows):
         raise RuntimeError("generation did not produce every GSM8K row")
     final_rows = [row for row in generated_rows if row is not None]
@@ -363,7 +400,7 @@ def evaluate_mode(
             "do_sample": False,
             "max_new_tokens": max_new_tokens,
             "batch_size": batch_size,
-            "grouping": "exact_prompt_token_length",
+            "grouping": grouping,
             "eos_token_ids": list(backend.eos_ids),
             "pad_token_id": backend.pad_id,
         },
