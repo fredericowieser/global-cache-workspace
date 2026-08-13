@@ -123,8 +123,6 @@ def sft_batch(
     for row in rows:
         prompt = row.get("prompt") or row.get("question") or row.get("instruction") or ""
         answer = row.get("answer") or row.get("response") or row.get("output") or ""
-        if prompt_suffix.strip():
-            prompt = f"{prompt}\n\n{prompt_suffix.strip()}"
         if chat_template:
             row_thinking = row.get("enable_thinking", enable_thinking)
             if not isinstance(row_thinking, bool):
@@ -136,6 +134,14 @@ def sft_batch(
                     answer = messages[-1].get("content", answer)
             else:
                 prompt_messages = [{"role": "user", "content": prompt}]
+            if prompt_suffix.strip():
+                prompt_messages = [dict(message) for message in prompt_messages]
+                for message in reversed(prompt_messages):
+                    if message.get("role") == "user":
+                        message["content"] = f"{message.get('content', '')}\n\n{prompt_suffix.strip()}"
+                        break
+                else:
+                    raise ValueError("prompt_suffix requires a user message")
             prompt_ids = tokenizer.apply_chat_template(
                 prompt_messages,
                 tokenize=True,
@@ -144,6 +150,8 @@ def sft_batch(
             )
             answer_ids = tokenizer.encode(str(answer)) + [tokenizer.eot_id]
         else:
+            if prompt_suffix.strip():
+                prompt = f"{prompt}\n\n{prompt_suffix.strip()}"
             prompt_ids = tokenizer.encode(prompt)
             answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [tokenizer.eot_id]
         seq = (prompt_ids + answer_ids)[:max_length]

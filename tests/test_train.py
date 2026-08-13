@@ -602,6 +602,32 @@ def test_resume_rejects_changed_training_dynamics(tmp_path):
     with pytest.raises(CheckpointCompatibilityError, match="optimizer"):
         train(resumed)
 
+def test_sft_chat_template_applies_suffix_to_message_rows():
+    class ChatTokenizer:
+        eot_id = 9
+
+        def __init__(self):
+            self.messages = None
+
+        def apply_chat_template(self, messages, **_kwargs):
+            self.messages = messages
+            return [1]
+
+        @staticmethod
+        def encode(_text):
+            return [2]
+
+    tokenizer = ChatTokenizer()
+    sft_batch(
+        [{"messages": [{"role": "user", "content": "problem"}, {"role": "assistant", "content": "answer"}]}],
+        tokenizer,
+        8,
+        prompt_suffix="return boxed",
+        chat_template=True,
+    )
+    assert tokenizer.messages == [{"role": "user", "content": "problem\n\nreturn boxed"}]
+
+
 def test_sft_full_sequence_loss_includes_prompt_tokens():
     _, answer_only = sft_batch(
         [{"prompt": "AB", "answer": "CD"}],
