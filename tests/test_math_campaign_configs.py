@@ -4,6 +4,7 @@ from argparse import Namespace
 import hashlib
 import json
 from gcw.config import ModelConfig, load_train_config
+from gcw.params import estimate_non_embedding_params, processor_params
 from scripts import generate_math_campaign_configs as generator
 
 
@@ -69,3 +70,6 @@ def test_campaign_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatch)
     assert {config.data.dataset for config in configs} == {str(dataset.resolve())}
     assert {config.wandb.entity for config in configs} == {"huawei-noahs-ark"}
     assert {config.wandb.project for config in configs} == {"global-cache-workspace"}
+    for config in configs:
+        if config.model.variant != "tf" and estimate_non_embedding_params(config.model) > 1_000_000:
+            assert processor_params(config.model) <= 0.05 * estimate_non_embedding_params(config.model)

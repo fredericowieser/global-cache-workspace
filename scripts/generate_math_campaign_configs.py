@@ -11,37 +11,38 @@ from typing import Any
 import yaml
 
 from gcw.convert import config_from_hf
+from gcw.params import fit_processor_config
 
 
 WAND_ENTITY = "huawei-noahs-ark"
 WAND_PROJECT = "global-cache-workspace"
 
 
-def _processor(*, width: int, layers: int = 1, longshot: bool = False) -> dict[str, Any]:
-    config: dict[str, Any] = {
-        "process_every": 64,
-        "topk": 32,
-        "topk_heads": 32,
+def _fitted_processor(model: Any, variant: str, *, longshot: bool = False) -> dict[str, Any]:
+    overrides = {
         "score": "kv_norm" if longshot else "attn_l2",
-        "hidden_size": width,
-        "intermediate_size": 4 * width,
-        "num_layers": layers,
-        "num_heads": max(1, width // 128),
-        "num_kv_heads": max(1, width // 128),
-        "gate_init": -5.0,
+        "topk_heads": 32,
         "gradient_checkpointing": True,
         "update_stream": "kv",
         "unrope_keys": True,
     }
+    if variant == "icarus":
+        overrides["topk_heads"] = 56
     if longshot:
-        config.update(encoder_method="query_attention", encoder_query_source="final_token")
-    return config
+        overrides.update(encoder_method="query_attention", encoder_query_source="final_token")
+    fitted, _ = fit_processor_config(model, variant, fraction=0.05, cache_processor_overrides=overrides)
+    if fitted.cache_processor is None:
+        raise RuntimeError(f"failed to fit {variant} processor")
+    from gcw.config import to_dict
+
+    return to_dict(fitted.cache_processor)
 
 
-def _arms(width: int) -> dict[str, dict[str, Any]]:
-    standard = _processor(width=width)
-    icarus = {**standard, "topk_heads": 56}
-    longshot = _processor(width=width, longshot=True)
+def _arms(model: Any) -> dict[str, dict[str, Any]]:
+    bt = _fitted_processor(model, "bt")
+    standard = _fitted_processor(model, "bgt")
+    icarus = _fitted_processor(model, "icarus")
+    longshot = _fitted_processor(model, "longshot", longshot=True)
     return {
         "full-sft": {"variant": "tf", "trainable": "backbone", "lr": 1e-5},
         "lora-r32": {
@@ -50,7 +51,7 @@ def _arms(width: int) -> dict[str, dict[str, Any]]:
             "lr": 1e-4,
             "lora": {"rank": 32, "alpha": 32.0, "dropout": 0.0},
         },
-        "bt": {"variant": "bt", "trainable": "cache_processor", "lr": 1e-4, "cache_processor": standard},
+        "bt": {"variant": "bt", "trainable": "cache_processor", "lr": 1e-4, "cache_processor": bt},
         "bgt": {"variant": "bgt", "trainable": "cache_processor", "lr": 1e-4, "cache_processor": standard},
         "icarus": {"variant": "icarus", "trainable": "cache_processor", "lr": 1e-4, "cache_processor": icarus},
         "longshot": {
@@ -140,7 +141,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
     contract_path.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
 
     paths: list[Path] = []
-    for name, arm in _arms(args.processor_width).items():
+    for name, arm in _arms(model).items():
         arm_model = deepcopy(model_payload)
         arm_model["variant"] = arm["variant"]
         arm_model["cache_processor"] = arm.get("cache_processor")
