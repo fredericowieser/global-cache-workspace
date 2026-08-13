@@ -17,7 +17,7 @@ model:
   cache_processor:
     process_every: 64
     topk: 32
-    topk_heads: 12
+    topk_heads: 3
     topk_linear_heads: 72
     linear_state_cache: true
     linear_state_query_mode: global

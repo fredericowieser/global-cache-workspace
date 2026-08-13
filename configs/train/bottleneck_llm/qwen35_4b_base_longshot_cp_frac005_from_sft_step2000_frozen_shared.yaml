@@ -1,0 +1,141 @@
+model:
+  variant: longshot
+  family: qwen3_5
+  sequence_len: 262144
+  vocab_size: 248320
+  hidden_size: 2560
+  intermediate_size: 9216
+  num_layers: 32
+  num_heads: 16
+  num_kv_heads: 4
+  head_dim: 256
+  rope_theta: 10000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 8
+    topk_linear_heads: 192
+    linear_state_cache: true
+    linear_state_query_mode: global
+    gate_linear_state_delta: true
+    score: kv_norm
+    hidden_size: 1664
+    intermediate_size: 6656
+    num_layers: 4
+    num_heads: 13
+    num_kv_heads: 13
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -2.0
+    attention_dropout: 0.0
+    per_cache_head_projections: false
+    gradient_checkpointing: true
+    encoder_method: query_attention
+    encoder_query_source: final_token
+    unrope_keys: true
+  legacy_bottleneck_generate: true
+  layer_types:
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  processor_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  - 19
+  - 23
+  - 27
+  - 31
+  partial_rotary_factor: 0.25
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: 128
+  linear_value_head_dim: 128
+  linear_num_key_heads: 16
+  linear_num_value_heads: 32
+  hidden_act: silu
+data:
+  kind: sft
+  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
+  tokenizer: hf
+  tokenizer_source: Qwen/Qwen3.5-4B-Base
+  sft_take_rows: 128000
+  response_prefix: "\n"
+  sft_skip_rows: 128000
+mode: sft
+distributed: ddp
+freeze_backbone: true
+backbone_checkpoint: runs/bottleneck_llm/qwen35_4b_base_tf_sft/checkpoint-2000
+output_dir: runs/bottleneck_llm/qwen35_4b_base_longshot_query_final_token_unrope_kv_norm_cp_frac005_from_sft_step2000_frozen_shared
+batch_size: 2
+sequence_len: 512
+max_steps: 2000
+total_batch_size: 65536
+learning_rate: 0.0001
+adam_beta2: 0.999
+warmup_steps: 0
+warmdown_ratio: 0.0
+weight_decay: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 100
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: qwen35-4b-base-longshot-query-final-token-unrope-kv-norm-cp-frac005-from-sft-step2000-frozen-shared
+  group: bottleneck-llm-reproduction
+  tags:
+  - bottleneck-llm
+  - longshot
+  - final-token-query
+  - qwen3.5-4b-base
+  - openmath
+  - frozen-backbone
+  - sft-step-2000
+  - shared-projection
+  - unrope-keys
+  - kv-norm
+  - per-head-token-selection
+  - cp-frac-005
+  - target-processor-fraction-0.05
+metadata:
+  backbone_non_embedding_params: 3570052096
+  processor_params: 180282497
+  total_non_embedding_params: 3750334593
+  processor_fraction: 0.050498561968323724
+  target_processor_fraction: 0.05
+  target_processor_params: 178502605
