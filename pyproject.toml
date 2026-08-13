@@ -40,7 +40,12 @@ qwen35 = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "black>=26.5.1",
+]
 
 [tool.uv]
 default-groups = []
@@ -104,3 +109,6 @@ line-length = 120
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+
+[tool.black]
+line-length = 80

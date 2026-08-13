@@ -29,7 +29,9 @@ def test_normalize_until_accepts_string_list_and_none():
 
 
 def test_legacy_bottleneck_generation_prompts_add_special_tokens():
-    model = SimpleNamespace(config=SimpleNamespace(legacy_bottleneck_generate=True, family="llama"))
+    model = SimpleNamespace(
+        config=SimpleNamespace(legacy_bottleneck_generate=True, family="llama")
+    )
     assert _legacy_generate_add_special_tokens(model)
 
     class Tokenizer:
@@ -37,12 +39,18 @@ def test_legacy_bottleneck_generation_prompts_add_special_tokens():
             ids = [ord(ch) for ch in text]
             return [1, *ids] if add_special_tokens else ids
 
-    assert _encode_generate_prompt(Tokenizer(), "ab", 8, add_special_tokens=True) == [1, 97, 98]
-    assert _encode_generate_prompt(Tokenizer(), "ab", 2, add_special_tokens=True) == [97, 98]
+    assert _encode_generate_prompt(
+        Tokenizer(), "ab", 8, add_special_tokens=True
+    ) == [1, 97, 98]
+    assert _encode_generate_prompt(
+        Tokenizer(), "ab", 2, add_special_tokens=True
+    ) == [97, 98]
 
 
 def test_non_legacy_generation_prompts_do_not_add_special_tokens():
-    model = SimpleNamespace(config=SimpleNamespace(legacy_bottleneck_generate=False, family="llama"))
+    model = SimpleNamespace(
+        config=SimpleNamespace(legacy_bottleneck_generate=False, family="llama")
+    )
     assert not _legacy_generate_add_special_tokens(model)
 
 
@@ -53,14 +61,24 @@ def test_legacy_bottleneck_loglikelihood_uses_boundary_path_only_for_cp_models()
         cache_processor=object(),
     )
     assert _legacy_bottleneck_cache_eval(model)
-    assert not _legacy_bottleneck_cache_eval(SimpleNamespace(config=SimpleNamespace(legacy_bottleneck_generate=True, variant="tf")))
+    assert not _legacy_bottleneck_cache_eval(
+        SimpleNamespace(
+            config=SimpleNamespace(
+                legacy_bottleneck_generate=True, variant="tf"
+            )
+        )
+    )
 
 
 def test_context_continuation_truncation_keeps_at_least_one_context_token():
-    ctx, cont = _truncate_context_continuation([1, 2, 3, 4], [5, 6], max_length=4)
+    ctx, cont = _truncate_context_continuation(
+        [1, 2, 3, 4], [5, 6], max_length=4
+    )
     assert ctx == [2, 3, 4]
     assert cont == [5, 6]
 
-    ctx, cont = _truncate_context_continuation([1], [2, 3, 4, 5, 6], max_length=3)
+    ctx, cont = _truncate_context_continuation(
+        [1], [2, 3, 4, 5, 6], max_length=3
+    )
     assert ctx == [3]
     assert cont == [4, 5, 6]

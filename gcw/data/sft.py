@@ -14,7 +14,9 @@ def iter_jsonl(path: str | Path) -> Iterable[dict]:
                 yield json.loads(line)
 
 
-def prepare_openmath(source: str | Path, out: str | Path, limit: int | None = None) -> int:
+def prepare_openmath(
+    source: str | Path, out: str | Path, limit: int | None = None
+) -> int:
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -23,7 +25,12 @@ def prepare_openmath(source: str | Path, out: str | Path, limit: int | None = No
             prompt, answer = _prompt_answer(row)
             if not prompt or not answer:
                 continue
-            f.write(json.dumps({"prompt": prompt, "answer": answer}, ensure_ascii=False) + "\n")
+            f.write(
+                json.dumps(
+                    {"prompt": prompt, "answer": answer}, ensure_ascii=False
+                )
+                + "\n"
+            )
             count += 1
             if limit is not None and count >= limit:
                 break
@@ -43,7 +50,9 @@ def _iter_openmath_rows(source: str | Path) -> Iterable[dict]:
     try:
         from datasets import DatasetDict, load_from_disk
     except ImportError as exc:
-        raise ImportError("Install datasets to prepare OpenMathInstruct Arrow data.") from exc
+        raise ImportError(
+            "Install datasets to prepare OpenMathInstruct Arrow data."
+        ) from exc
     data = load_from_disk(str(path))
     if isinstance(data, DatasetDict):
         data = data["train"] if "train" in data else next(iter(data.values()))
@@ -54,10 +63,28 @@ def _iter_openmath_rows(source: str | Path) -> Iterable[dict]:
 def _prompt_answer(row: dict) -> tuple[str, str]:
     messages = row.get("messages")
     if isinstance(messages, list) and messages:
-        prompt_parts = [str(msg.get("content", "")) for msg in messages[:-1] if isinstance(msg, dict)]
-        answer = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
-        return "\n".join(part for part in prompt_parts if part).strip(), str(answer).strip()
-    prompt = row.get("prompt") or row.get("question") or row.get("problem") or row.get("instruction") or row.get("input") or ""
+        prompt_parts = [
+            str(msg.get("content", ""))
+            for msg in messages[:-1]
+            if isinstance(msg, dict)
+        ]
+        answer = (
+            messages[-1].get("content", "")
+            if isinstance(messages[-1], dict)
+            else ""
+        )
+        return (
+            "\n".join(part for part in prompt_parts if part).strip(),
+            str(answer).strip(),
+        )
+    prompt = (
+        row.get("prompt")
+        or row.get("question")
+        or row.get("problem")
+        or row.get("instruction")
+        or row.get("input")
+        or ""
+    )
     answer = (
         row.get("answer")
         or row.get("generated_solution")
@@ -78,14 +105,26 @@ def sft_batch(
     device: torch.device | str = "cpu",
     response_prefix: str = "",
     return_attention_mask: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> (
+    tuple[torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+):
     ids = []
     targets = []
     for row in rows:
-        prompt = row.get("prompt") or row.get("question") or row.get("instruction") or ""
-        answer = row.get("answer") or row.get("response") or row.get("output") or ""
+        prompt = (
+            row.get("prompt")
+            or row.get("question")
+            or row.get("instruction")
+            or ""
+        )
+        answer = (
+            row.get("answer") or row.get("response") or row.get("output") or ""
+        )
         prompt_ids = tokenizer.encode(prompt)
-        answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [tokenizer.eot_id]
+        answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [
+            tokenizer.eot_id
+        ]
         seq = (prompt_ids + answer_ids)[:max_length]
         hf_labels = ([-100] * len(prompt_ids) + answer_ids)[: len(seq)]
         target = hf_labels[1:] + [-100]

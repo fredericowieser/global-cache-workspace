@@ -21,4 +21,12 @@ def build_model(config: ModelConfig):
     raise ValueError(f"unknown model variant: {config.variant}")
 
 
-__all__ = ["BGT", "BT", "Icarus", "Longshot", "TF", "build_backbone", "build_model"]
+__all__ = [
+    "BGT",
+    "BT",
+    "Icarus",
+    "Longshot",
+    "TF",
+    "build_backbone",
+    "build_model",
+]

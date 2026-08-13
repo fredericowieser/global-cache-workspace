@@ -24,7 +24,12 @@ def test_cache_storage_selects_all_heads():
     values = [torch.zeros(1, 3, 4, 2) for _ in range(2)]
     scores = torch.zeros(1, 4)
     cache = CacheState(keys, values, scores)
-    static = StaticCacheState([k.clone() for k in keys], [v.clone() for v in values], scores.clone(), 4)
+    static = StaticCacheState(
+        [k.clone() for k in keys],
+        [v.clone() for v in values],
+        scores.clone(),
+        4,
+    )
     windowed = WindowedCache.from_cache_state(cache)
 
     assert cache.all_heads().tolist() == [[0, 1, 2, 3, 4, 5]]

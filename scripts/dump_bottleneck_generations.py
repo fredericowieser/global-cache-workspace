@@ -15,7 +15,9 @@ class _Request:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Dump legacy bottleneck_llm raw generations for parity debugging.")
+    parser = argparse.ArgumentParser(
+        description="Dump legacy bottleneck_llm raw generations for parity debugging."
+    )
     parser.add_argument("--repo", default="/home/f50056118/bottleneck_llm")
     parser.add_argument("--config", default="bgt/Llama3.2-1B")
     parser.add_argument("--checkpoint", required=True)
@@ -40,8 +42,14 @@ def main() -> None:
         batch_size=args.batch_size,
         eval_recurrence_steps=1,
     )
-    examples = load_examples([task.strip() for task in args.tasks.split(",") if task.strip()], limit=args.limit)
-    requests = [_Request(example.prompt, request_kwargs(example)) for example in examples]
+    examples = load_examples(
+        [task.strip() for task in args.tasks.split(",") if task.strip()],
+        limit=args.limit,
+    )
+    requests = [
+        _Request(example.prompt, request_kwargs(example))
+        for example in examples
+    ]
     generations = model.generate_until(requests)
 
     out.parent.mkdir(parents=True, exist_ok=True)

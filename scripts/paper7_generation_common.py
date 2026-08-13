@@ -4,8 +4,13 @@ from dataclasses import dataclass
 import re
 from typing import Iterable
 
-
-UNTIL = ("</s>", "<|end_of_text|>", "<|eot_id|>", "\n\nQuestion:", "\nQuestion:")
+UNTIL = (
+    "</s>",
+    "<|end_of_text|>",
+    "<|eot_id|>",
+    "\n\nQuestion:",
+    "\nQuestion:",
+)
 
 
 @dataclass(frozen=True)
@@ -17,7 +22,9 @@ class EvalExample:
     max_gen_toks: int
 
 
-def load_examples(tasks: Iterable[str], limit: int | None = None) -> list[EvalExample]:
+def load_examples(
+    tasks: Iterable[str], limit: int | None = None
+) -> list[EvalExample]:
     from datasets import load_dataset
 
     examples: list[EvalExample] = []
@@ -27,20 +34,37 @@ def load_examples(tasks: Iterable[str], limit: int | None = None) -> list[EvalEx
             for i, row in enumerate(data):
                 if limit is not None and i >= limit:
                     break
-                examples.append(EvalExample(task, i, str(row["question"]), str(row["answer"]), 512))
+                examples.append(
+                    EvalExample(
+                        task, i, str(row["question"]), str(row["answer"]), 512
+                    )
+                )
         elif task == "svamp":
             data = load_dataset("ChilleD/SVAMP", split="test")
             for i, row in enumerate(data):
                 if limit is not None and i >= limit:
                     break
-                examples.append(EvalExample(task, i, str(row["question_concat"]), str(row["Answer"]), 256))
+                examples.append(
+                    EvalExample(
+                        task,
+                        i,
+                        str(row["question_concat"]),
+                        str(row["Answer"]),
+                        256,
+                    )
+                )
         else:
             raise ValueError(f"unsupported task for generation parity: {task}")
     return examples
 
 
 def request_kwargs(example: EvalExample) -> dict:
-    return {"until": list(UNTIL), "do_sample": False, "temperature": 0.0, "max_gen_toks": example.max_gen_toks}
+    return {
+        "until": list(UNTIL),
+        "do_sample": False,
+        "temperature": 0.0,
+        "max_gen_toks": example.max_gen_toks,
+    }
 
 
 def trim_until(text: str) -> str:

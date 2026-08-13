@@ -5,7 +5,6 @@ import csv
 import json
 from pathlib import Path
 
-
 TASK_COLUMNS = {
     "gsm8k_openmath": "GSM8K",
     "svamp": "SVAMP",
@@ -35,10 +34,14 @@ TARGET_BGT = {
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Flatten GCW paper7 eval JSON into the BT/BGT paper table.")
+    parser = argparse.ArgumentParser(
+        description="Flatten GCW paper7 eval JSON into the BT/BGT paper table."
+    )
     parser.add_argument("--json", required=True, help="GCW eval results JSON")
     parser.add_argument("--csv", default=None, help="Optional CSV output path")
-    parser.add_argument("--md", default=None, help="Optional Markdown output path")
+    parser.add_argument(
+        "--md", default=None, help="Optional Markdown output path"
+    )
     args = parser.parse_args()
 
     payload = json.loads(Path(args.json).read_text())
@@ -51,7 +54,10 @@ def main() -> None:
 
 def _extract_row(payload: dict) -> dict[str, float | None]:
     results = payload.get("results", {})
-    row = {TASK_COLUMNS[task]: _accuracy(results.get(task, {}), TASK_METRICS[task]) for task in TASK_ORDER}
+    row = {
+        TASK_COLUMNS[task]: _accuracy(results.get(task, {}), TASK_METRICS[task])
+        for task in TASK_ORDER
+    }
     values = [value for value in row.values() if value is not None]
     row["AVG"] = sum(values) / len(values) if values else None
     return row
@@ -80,16 +86,34 @@ def _markdown(row: dict[str, float | None]) -> str:
     target = _target_for_row(row)
     header = "| Model | " + " | ".join(columns) + " |"
     sep = "|---" * (len(columns) + 1) + "|"
-    values = "| GCW BGT | " + " | ".join(_format(row[col]) for col in columns) + " |"
-    targets = "| Target BGT | " + " | ".join(_format(target[col]) for col in columns) + " |"
-    deltas = "| Delta | " + " | ".join(_delta(row[col], target[col]) for col in columns) + " |"
+    values = (
+        "| GCW BGT | " + " | ".join(_format(row[col]) for col in columns) + " |"
+    )
+    targets = (
+        "| Target BGT | "
+        + " | ".join(_format(target[col]) for col in columns)
+        + " |"
+    )
+    deltas = (
+        "| Delta | "
+        + " | ".join(_delta(row[col], target[col]) for col in columns)
+        + " |"
+    )
     return "\n".join([header, sep, values, targets, deltas])
 
 
 def _target_for_row(row: dict[str, float | None]) -> dict[str, float | None]:
     target = {column: TARGET_BGT[column] for column in TASK_COLUMNS.values()}
-    present = [column for column in TASK_COLUMNS.values() if row.get(column) is not None]
-    target["AVG"] = sum(TARGET_BGT[column] for column in present) / len(present) if present else None
+    present = [
+        column
+        for column in TASK_COLUMNS.values()
+        if row.get(column) is not None
+    ]
+    target["AVG"] = (
+        sum(TARGET_BGT[column] for column in present) / len(present)
+        if present
+        else None
+    )
     return target
 
 

@@ -10,21 +10,58 @@ import torch
 from gcw.checkpoint import load_checkpoint
 from gcw.common import base_dir
 from gcw.data.shards import data_loader
-from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, IntTokenizer, get_token_bytes, get_tokenizer
+from gcw.data.tokenizers import (
+    COSMO2_VOCAB_SIZE,
+    IntTokenizer,
+    get_token_bytes,
+    get_tokenizer,
+)
 from gcw.loss_eval import evaluate_nll_bpb
 
 try:
     from lm_eval.api.model import TemplateLM
+
     HAS_LM_EVAL = True
 except ImportError:
     TemplateLM = object
     HAS_LM_EVAL = False
 
-PPT_TASKS = ["lambada_openai", "hellaswag", "piqa", "winogrande", "arc_easy", "arc_challenge", "mmlu"]
-PPT_FEWSHOT = {"lambada_openai": 0, "hellaswag": 0, "piqa": 0, "winogrande": 5, "arc_easy": 25, "arc_challenge": 25, "mmlu": 5}
+PPT_TASKS = [
+    "lambada_openai",
+    "hellaswag",
+    "piqa",
+    "winogrande",
+    "arc_easy",
+    "arc_challenge",
+    "mmlu",
+]
+PPT_FEWSHOT = {
+    "lambada_openai": 0,
+    "hellaswag": 0,
+    "piqa": 0,
+    "winogrande": 5,
+    "arc_easy": 25,
+    "arc_challenge": 25,
+    "mmlu": 5,
+}
 ACC_NORM_TASKS = {"hellaswag", "piqa", "arc_easy", "arc_challenge"}
-MATH_TASKS = ["gsm8k_openmath", "hendrycks_math", "svamp", "theoremqa", "logiqa", "agieval_gaokao_mathqa", "gsm8k_hard"]
-PAPER7_TASKS = ["gsm8k_openmath", "svamp", "theoremqa", "logiqa", "agieval_gaokao_mathqa", "gsm8k_hard"]
+MATH_TASKS = [
+    "gsm8k_openmath",
+    "hendrycks_math",
+    "svamp",
+    "theoremqa",
+    "logiqa",
+    "agieval_gaokao_mathqa",
+    "gsm8k_hard",
+]
+PAPER7_TASKS = [
+    "gsm8k_openmath",
+    "svamp",
+    "theoremqa",
+    "logiqa",
+    "agieval_gaokao_mathqa",
+    "gsm8k_hard",
+]
 MATH_RUNS = [(MATH_TASKS, 0)]
 PAPER7_RUNS = [([task], 0) for task in PAPER7_TASKS]
 PPT_RUNS = [
@@ -64,17 +101,23 @@ class GCWEvalLM(TemplateLM):
         self.tokenizer = tokenizer
         self.batch_size = batch_size
         self.max_length = model.config.sequence_len
-        self.add_special_tokens_for_generate = _legacy_generate_add_special_tokens(model)
+        self.add_special_tokens_for_generate = (
+            _legacy_generate_add_special_tokens(model)
+        )
 
     @property
     def tokenizer_name(self) -> str:
-        return getattr(self.tokenizer, "name_or_path", self.tokenizer.__class__.__name__)
+        return getattr(
+            self.tokenizer, "name_or_path", self.tokenizer.__class__.__name__
+        )
 
     @property
     def eot_token_id(self) -> int:
         return self.tokenizer.eot_id
 
-    def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt=True) -> str:
+    def apply_chat_template(
+        self, chat_history: list[dict[str, str]], add_generation_prompt=True
+    ) -> str:
         return self.tokenizer.apply_chat_template(
             chat_history,
             tokenize=False,
@@ -93,7 +136,10 @@ class GCWEvalLM(TemplateLM):
             return self._loglikelihood_tokens_legacy_boundary(requests)
         device = self.model.get_device()
         out = [None] * len(requests)
-        order = sorted(range(len(requests)), key=lambda i: len(requests[i][1]) + len(requests[i][2]))
+        order = sorted(
+            range(len(requests)),
+            key=lambda i: len(requests[i][1]) + len(requests[i][2]),
+        )
         for start in range(0, len(order), self.batch_size):
             idxs = order[start : start + self.batch_size]
             inputs, continuations = [], []
@@ -103,9 +149,13 @@ class GCWEvalLM(TemplateLM):
                 inputs.append(full[:-1])
                 continuations.append(cont[-self.max_length :])
             max_len = max(len(x) for x in inputs)
-            padded = torch.zeros(len(inputs), max_len, dtype=torch.long, device=device)
+            padded = torch.zeros(
+                len(inputs), max_len, dtype=torch.long, device=device
+            )
             for row, inp in enumerate(inputs):
-                padded[row, : len(inp)] = torch.tensor(inp, dtype=torch.long, device=device)
+                padded[row, : len(inp)] = torch.tensor(
+                    inp, dtype=torch.long, device=device
+                )
             logprobs = torch.log_softmax(self.model(padded), dim=-1)
             for row, i in enumerate(idxs):
                 cont = continuations[row]
@@ -114,7 +164,10 @@ class GCWEvalLM(TemplateLM):
                 logp = logprobs[row, inp_len - cont_len : inp_len]
                 target = torch.tensor(cont, dtype=torch.long, device=device)
                 vals = logp.gather(-1, target[:, None]).squeeze(-1)
-                out[i] = (float(vals.sum().item()), bool((logp.argmax(-1) == target).all().item()))
+                out[i] = (
+                    float(vals.sum().item()),
+                    bool((logp.argmax(-1) == target).all().item()),
+                )
         return out
 
     @torch.no_grad()
@@ -131,26 +184,48 @@ class GCWEvalLM(TemplateLM):
                 out[i] = (0.0, True)
                 continue
 
-            ctx, cont = _truncate_context_continuation(ctx, cont, self.max_length)
-            ctx_ids = torch.tensor(ctx, dtype=torch.long, device=device).unsqueeze(0)
-            cont_ids = torch.tensor(cont, dtype=torch.long, device=device).unsqueeze(0)
+            ctx, cont = _truncate_context_continuation(
+                ctx, cont, self.max_length
+            )
+            ctx_ids = torch.tensor(
+                ctx, dtype=torch.long, device=device
+            ).unsqueeze(0)
+            cont_ids = torch.tensor(
+                cont, dtype=torch.long, device=device
+            ).unsqueeze(0)
 
             empty_scores = ctx_ids.new_empty(1, 0, dtype=torch.float32)
-            ctx_logits, cache = self.model.backbone.forward_chunk(ctx_ids, 0, CacheState([], [], empty_scores))
+            ctx_logits, cache = self.model.backbone.forward_chunk(
+                ctx_ids, 0, CacheState([], [], empty_scores)
+            )
             cache = self.model.cache_processor(cache, select_all=True)
-            cont_logits, _ = self.model.backbone.forward_chunk(cont_ids, len(ctx), cache)
-            logits = torch.cat([ctx_logits[:, -1:, :], cont_logits[:, :-1, :]], dim=1)
+            cont_logits, _ = self.model.backbone.forward_chunk(
+                cont_ids, len(ctx), cache
+            )
+            logits = torch.cat(
+                [ctx_logits[:, -1:, :], cont_logits[:, :-1, :]], dim=1
+            )
             logp = torch.log_softmax(logits[0], dim=-1)
             target = cont_ids[0]
             vals = logp.gather(-1, target[:, None]).squeeze(-1)
-            out[i] = (float(vals.sum().item()), bool((logits[0].argmax(-1) == target).all().item()))
+            out[i] = (
+                float(vals.sum().item()),
+                bool((logits[0].argmax(-1) == target).all().item()),
+            )
         return out
 
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         out = []
         for req in requests:
             text = req.args[0]
-            out.append(sum(x[0] for x in self._loglikelihood_tokens([(None, [self.eot_token_id], self.tok_encode(text))])))
+            out.append(
+                sum(
+                    x[0]
+                    for x in self._loglikelihood_tokens(
+                        [(None, [self.eot_token_id], self.tok_encode(text))]
+                    )
+                )
+            )
         return out
 
     @torch.no_grad()
@@ -159,7 +234,9 @@ class GCWEvalLM(TemplateLM):
             return self._generate_until_reference(requests)
         outs = [None] * len(requests)
         device = self.model.get_device()
-        groups: dict[tuple[int, int, tuple[str, ...]], list[tuple[int, list[int]]]] = {}
+        groups: dict[
+            tuple[int, int, tuple[str, ...]], list[tuple[int, list[int]]]
+        ] = {}
         for i, req in enumerate(requests):
             prompt, kwargs = req.args
             max_new = int(kwargs.get("max_gen_toks", 256))
@@ -178,7 +255,11 @@ class GCWEvalLM(TemplateLM):
             for start in range(0, len(rows), self.batch_size):
                 chunk = rows[start : start + self.batch_size]
                 prompt_len = len(chunk[0][1])
-                ids = torch.tensor([row_ids for _, row_ids in chunk], dtype=torch.long, device=device)
+                ids = torch.tensor(
+                    [row_ids for _, row_ids in chunk],
+                    dtype=torch.long,
+                    device=device,
+                )
                 if use_fast:
                     gen = self.model.generate_fast(
                         ids,
@@ -188,10 +269,16 @@ class GCWEvalLM(TemplateLM):
                         pad_token_id=self.eot_token_id,
                     )
                 else:
-                    gen = self.model.generate(ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)
+                    gen = self.model.generate(
+                        ids,
+                        max_new_tokens=max_new,
+                        eos_token_id=self.eot_token_id,
+                    )
                 for row, (out_idx, _) in enumerate(chunk):
                     tokens = gen[row, prompt_len:].tolist()
-                    tokens = _trim_generated_token_ids(tokens, stop_sequences, self.eot_token_id)
+                    tokens = _trim_generated_token_ids(
+                        tokens, stop_sequences, self.eot_token_id
+                    )
                     text = _trim_until(self.tok_decode(tokens), until)
                     outs[out_idx] = text
         return outs
@@ -214,26 +301,44 @@ class GCWEvalLM(TemplateLM):
                 dtype=torch.long,
                 device=device,
             ).unsqueeze(0)
-            gen = self.model.generate(ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)[0].tolist()
+            gen = self.model.generate(
+                ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id
+            )[0].tolist()
             text = self.tok_decode(gen[len(ids[0]) :])
             outs.append(_trim_until(text, until))
         return outs
 
 
-def run_core(checkpoint: str | Path, limit: int | None = None, batch_size: int = 8) -> dict:
-    return run_task_groups(checkpoint, [*PPT_RUNS, *MATH_RUNS], limit=limit, batch_size=batch_size)
+def run_core(
+    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+) -> dict:
+    return run_task_groups(
+        checkpoint, [*PPT_RUNS, *MATH_RUNS], limit=limit, batch_size=batch_size
+    )
 
 
-def run_ppt(checkpoint: str | Path, limit: int | None = None, batch_size: int = 8) -> dict:
-    return run_task_groups(checkpoint, PPT_RUNS, limit=limit, batch_size=batch_size)
+def run_ppt(
+    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+) -> dict:
+    return run_task_groups(
+        checkpoint, PPT_RUNS, limit=limit, batch_size=batch_size
+    )
 
 
-def run_math(checkpoint: str | Path, limit: int | None = None, batch_size: int = 8) -> dict:
-    return run_task_groups(checkpoint, MATH_RUNS, limit=limit, batch_size=batch_size)
+def run_math(
+    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+) -> dict:
+    return run_task_groups(
+        checkpoint, MATH_RUNS, limit=limit, batch_size=batch_size
+    )
 
 
-def run_paper7(checkpoint: str | Path, limit: int | None = None, batch_size: int = 8) -> dict:
-    return run_task_groups(checkpoint, PAPER7_RUNS, limit=limit, batch_size=batch_size)
+def run_paper7(
+    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+) -> dict:
+    return run_task_groups(
+        checkpoint, PAPER7_RUNS, limit=limit, batch_size=batch_size
+    )
 
 
 def run_fineweb(
@@ -245,9 +350,18 @@ def run_fineweb(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, cfg, state = load_checkpoint(checkpoint, device=device)
     if cfg.family != "smollm" or cfg.vocab_size != COSMO2_VOCAB_SIZE:
-        raise ValueError("FineWeb NLL/BPB eval currently expects a cosmo2 SmolLM checkpoint")
+        raise ValueError(
+            "FineWeb NLL/BPB eval currently expects a cosmo2 SmolLM checkpoint"
+        )
     steps = max(1, eval_tokens // (batch_size * cfg.sequence_len))
-    batches = data_loader(batch_size, cfg.sequence_len, split="val", device=device, data_dir=data_dir, infinite=True)
+    batches = data_loader(
+        batch_size,
+        cfg.sequence_len,
+        split="val",
+        device=device,
+        data_dir=data_dir,
+        infinite=True,
+    )
     nll, bpb = evaluate_nll_bpb(model, batches, steps, get_token_bytes(device))
     return {
         "model_step": state.get("step"),
@@ -270,26 +384,45 @@ def run_task_groups(
     runs = _filter_skipped_tasks(runs)
     try:
         import certifi
+
         os.environ.setdefault("SSL_CERT_FILE", certifi.where())
         os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
     except ImportError:
         pass
-    os.environ.setdefault("HF_DATASETS_CACHE", str(base_dir() / "hf_datasets_eval_v3"))
+    os.environ.setdefault(
+        "HF_DATASETS_CACHE", str(base_dir() / "hf_datasets_eval_v3")
+    )
     import lm_eval
     from lm_eval.tasks import TaskManager, get_task_dict
+
     dist_state, local_rank, world_size = _distributed_eval_state()
     device = _eval_device(local_rank)
     model, cfg, state = load_checkpoint(checkpoint, device=device)
     tokenizer = _tokenizer_for(cfg, state)
     lm = GCWEvalLM(model, tokenizer, batch_size=batch_size)
-    apply_chat_template = bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
-    task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
+    apply_chat_template = bool(
+        getattr(tokenizer, "chat_template", None)
+        or getattr(tokenizer, "default_chat_template", None)
+    )
+    task_manager = TaskManager(
+        include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR"
+    )
     merged = _load_partial_results() or _empty_eval_results()
     _write_progress(_new_progress(runs), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
         progress = _update_progress(run_idx, "running", runs, merged)
         if all(task in merged["results"] for task in tasks):
-            _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress, skipped=True), merged)
+            _write_progress(
+                _update_progress(
+                    run_idx,
+                    "completed",
+                    runs,
+                    merged,
+                    progress=progress,
+                    skipped=True,
+                ),
+                merged,
+            )
             continue
         if world_size > 1 and dist_state is not None:
             with dist_state.main_process_first():
@@ -309,7 +442,17 @@ def run_task_groups(
                 apply_chat_template=apply_chat_template,
             )
         except BaseException as exc:
-            _write_progress(_update_progress(run_idx, "failed", runs, merged, progress=progress, error=str(exc)), merged)
+            _write_progress(
+                _update_progress(
+                    run_idx,
+                    "failed",
+                    runs,
+                    merged,
+                    progress=progress,
+                    error=str(exc),
+                ),
+                merged,
+            )
             raise
         if out is None:
             continue
@@ -317,12 +460,23 @@ def run_task_groups(
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
         _write_partial_results(merged)
-        _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress), merged)
+        _write_progress(
+            _update_progress(
+                run_idx, "completed", runs, merged, progress=progress
+            ),
+            merged,
+        )
     return merged
 
 
-def _filter_skipped_tasks(runs: list[tuple[list[str], int]]) -> list[tuple[list[str], int]]:
-    skip = {task.strip() for task in os.environ.get("GCW_EVAL_SKIP_TASKS", "").split(",") if task.strip()}
+def _filter_skipped_tasks(
+    runs: list[tuple[list[str], int]],
+) -> list[tuple[list[str], int]]:
+    skip = {
+        task.strip()
+        for task in os.environ.get("GCW_EVAL_SKIP_TASKS", "").split(",")
+        if task.strip()
+    }
     if not skip:
         return runs
     filtered = []
@@ -358,14 +512,19 @@ def _accelerator():
         from accelerate import Accelerator, PartialState
     except ImportError:
         return _NoopAccelerator()
-    return Accelerator() if PartialState().num_processes > 1 else _NoopAccelerator()
+    return (
+        Accelerator()
+        if PartialState().num_processes > 1
+        else _NoopAccelerator()
+    )
 
 
 def _legacy_generate_add_special_tokens(model) -> bool:
     config = getattr(model, "config", None)
     return bool(
         getattr(config, "legacy_bottleneck_generate", False)
-        and getattr(config, "family", None) in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}
+        and getattr(config, "family", None)
+        in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}
     )
 
 
@@ -379,7 +538,9 @@ def _legacy_bottleneck_cache_eval(model) -> bool:
     )
 
 
-def _truncate_context_continuation(ctx: list[int], cont: list[int], max_length: int) -> tuple[list[int], list[int]]:
+def _truncate_context_continuation(
+    ctx: list[int], cont: list[int], max_length: int
+) -> tuple[list[int], list[int]]:
     full = ctx + cont
     if len(full) <= max_length + 1:
         return ctx, cont
@@ -390,7 +551,9 @@ def _truncate_context_continuation(ctx: list[int], cont: list[int], max_length: 
     return trimmed[:1], trimmed[1:]
 
 
-def _encode_generate_prompt(tokenizer, prompt: str, max_length: int, *, add_special_tokens: bool = False) -> list[int]:
+def _encode_generate_prompt(
+    tokenizer, prompt: str, max_length: int, *, add_special_tokens: bool = False
+) -> list[int]:
     try:
         ids = tokenizer.encode(prompt, add_special_tokens=add_special_tokens)
     except TypeError:
@@ -406,11 +569,19 @@ class _NoopAccelerator:
 
 def _tokenizer_for(config, state):
     source = state.get("source") or state.get("tokenizer_source")
-    if source and config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}:
+    if source and config.family in {
+        "llama",
+        "qwen3",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "gemma4",
+    }:
         try:
             from transformers import AutoTokenizer
         except ImportError as exc:
-            raise ImportError("Converted HF checkpoints require transformers for eval tokenization.") from exc
+            raise ImportError(
+                "Converted HF checkpoints require transformers for eval tokenization."
+            ) from exc
         tok = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
         return _HFTokenizerAdapter(tok, str(source))
     if config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}:
@@ -429,10 +600,16 @@ class _HFTokenizerAdapter:
         self.name_or_path = name_or_path
         self.eot_id = tokenizer.eos_token_id or tokenizer.pad_token_id or 0
         self.chat_template = getattr(tokenizer, "chat_template", None)
-        self.default_chat_template = getattr(tokenizer, "default_chat_template", None)
+        self.default_chat_template = getattr(
+            tokenizer, "default_chat_template", None
+        )
 
-    def encode(self, text: str, add_special_tokens: bool | None = None) -> list[int]:
-        return self.tokenizer.encode(text, add_special_tokens=bool(add_special_tokens))
+    def encode(
+        self, text: str, add_special_tokens: bool | None = None
+    ) -> list[int]:
+        return self.tokenizer.encode(
+            text, add_special_tokens=bool(add_special_tokens)
+        )
 
     def decode(self, ids) -> str:
         return self.tokenizer.decode(list(ids), skip_special_tokens=False)
@@ -470,7 +647,9 @@ def _stop_token_sequences(tokenizer, until: tuple[str, ...]) -> list[list[int]]:
     return sequences
 
 
-def _trim_generated_token_ids(tokens: list[int], stop_sequences: list[list[int]], eos_token_id: int | None) -> list[int]:
+def _trim_generated_token_ids(
+    tokens: list[int], stop_sequences: list[list[int]], eos_token_id: int | None
+) -> list[int]:
     end = len(tokens)
     if eos_token_id is not None:
         for i, token in enumerate(tokens):
@@ -506,7 +685,14 @@ def _write_partial_results(results: dict) -> None:
 
 
 def _empty_eval_results() -> dict:
-    return {"results": {}, "groups": {}, "n-samples": {}, "n-shot": {}, "versions": {}, "higher_is_better": {}}
+    return {
+        "results": {},
+        "groups": {},
+        "n-samples": {},
+        "n-shot": {},
+        "versions": {},
+        "higher_is_better": {},
+    }
 
 
 def _load_partial_results() -> dict | None:
@@ -543,7 +729,13 @@ def _new_progress(runs: list[tuple[list[str], int]]) -> dict:
         "updated_at": _format_time(now),
         "total_runs": len(runs),
         "runs": [
-            {"tasks": tasks, "fewshot": fewshot, "status": "pending", "start_time": None, "end_time": None}
+            {
+                "tasks": tasks,
+                "fewshot": fewshot,
+                "status": "pending",
+                "start_time": None,
+                "end_time": None,
+            }
             for tasks, fewshot in runs
         ],
     }
@@ -574,17 +766,29 @@ def _update_progress(
         entry["ended_at"] = _format_time(now)
         entry["duration_sec"] = max(0.0, now - float(entry["start_time"]))
     progress["updated_at"] = _format_time(now)
-    progress["completed_runs"] = sum(1 for item in progress["runs"] if item.get("status") == "completed")
+    progress["completed_runs"] = sum(
+        1 for item in progress["runs"] if item.get("status") == "completed"
+    )
     progress["completed_tasks"] = sorted(merged.get("results", {}))
-    progress["elapsed_sec"] = max(0.0, now - float(progress.get("started_time", now)))
+    progress["elapsed_sec"] = max(
+        0.0, now - float(progress.get("started_time", now))
+    )
     progress["eta_sec"] = _estimate_eta(progress)
     return progress
 
 
 def _estimate_eta(progress: dict) -> float | None:
     runs = progress.get("runs", [])
-    completed = [float(item["duration_sec"]) for item in runs if item.get("status") == "completed" and not item.get("skipped") and item.get("duration_sec")]
-    remaining = sum(1 for item in runs if item.get("status") not in {"completed", "failed"})
+    completed = [
+        float(item["duration_sec"])
+        for item in runs
+        if item.get("status") == "completed"
+        and not item.get("skipped")
+        and item.get("duration_sec")
+    ]
+    remaining = sum(
+        1 for item in runs if item.get("status") not in {"completed", "failed"}
+    )
     if not completed or remaining <= 0:
         return None
     return sum(completed) / len(completed) * remaining

@@ -9,7 +9,16 @@ from gcw.models import build_model
 
 
 def test_checkpoint_roundtrip(tmp_path):
-    cfg = ModelConfig(vocab_size=64, hidden_size=16, intermediate_size=32, num_layers=1, num_heads=2, num_kv_heads=1, head_dim=8, sequence_len=16)
+    cfg = ModelConfig(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+    )
     model = build_model(cfg).to(dtype=torch.bfloat16)
     model.init_weights()
     save_checkpoint(tmp_path, model, cfg, {"step": 3})
@@ -40,7 +49,11 @@ def test_hf_family_eval_requires_tokenizer_source():
 
 def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
     class FakeModel:
-        config = type("Config", (), {"sequence_len": 16, "legacy_bottleneck_generate": False})()
+        config = type(
+            "Config",
+            (),
+            {"sequence_len": 16, "legacy_bottleneck_generate": False},
+        )()
 
         def eval(self):
             return self
@@ -49,11 +62,16 @@ def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
         name_or_path = "qwen-tokenizer"
         eot_id = 0
 
-        def apply_chat_template(self, chat_history, tokenize=False, add_generation_prompt=True):
+        def apply_chat_template(
+            self, chat_history, tokenize=False, add_generation_prompt=True
+        ):
             assert tokenize is False
             return f"{chat_history[0]['role']}:{chat_history[0]['content']}:{add_generation_prompt}"
 
     lm = GCWEvalLM(FakeModel(), FakeTokenizer())
 
     assert lm.tokenizer_name == "qwen-tokenizer"
-    assert lm.apply_chat_template([{"role": "user", "content": "hi"}]) == "user:hi:True"
+    assert (
+        lm.apply_chat_template([{"role": "user", "content": "hi"}])
+        == "user:hi:True"
+    )

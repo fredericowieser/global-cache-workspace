@@ -1,4 +1,9 @@
-from gcw.config import CacheProcessorConfig, EvalConfig, ModelConfig, TrainConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    EvalConfig,
+    ModelConfig,
+    TrainConfig,
+)
 from gcw.models.bgt import BGT
 from gcw.models.bt import BT
 from gcw.models.cache_processor import CacheProcessor

@@ -17,7 +17,6 @@ from gcw.eval import (
     _trim_until,
 )
 
-
 DEFAULT_PROMPTS = [
     "Question: Janet's ducks lay 16 eggs per day. She eats three for breakfast and bakes muffins with four. "
     "She sells the rest for $2 per egg. How much money does she make per day?\nAnswer:",
@@ -26,7 +25,9 @@ DEFAULT_PROMPTS = [
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a cheap generation smoke test for a GCW checkpoint.")
+    parser = argparse.ArgumentParser(
+        description="Run a cheap generation smoke test for a GCW checkpoint."
+    )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--prompt", action="append", default=None)
     parser.add_argument("--max-new-tokens", type=int, default=128)
@@ -41,14 +42,30 @@ def main() -> None:
     model.eval()
     tokenizer = _tokenizer_for(cfg, state)
     add_special_tokens = _legacy_generate_add_special_tokens(model)
-    stop_sequences = _stop_token_sequences(tokenizer, ("</s>", "<|end_of_text|>", "<|eot_id|>", "\n\nQuestion:", "\nQuestion:"))
+    stop_sequences = _stop_token_sequences(
+        tokenizer,
+        (
+            "</s>",
+            "<|end_of_text|>",
+            "<|eot_id|>",
+            "\n\nQuestion:",
+            "\nQuestion:",
+        ),
+    )
     prompts = args.prompt or DEFAULT_PROMPTS
 
     rows = []
     failures = []
     for prompt in prompts:
-        ids = _encode_generate_prompt(tokenizer, prompt, cfg.sequence_len, add_special_tokens=add_special_tokens)
-        input_ids = torch.tensor(ids, dtype=torch.long, device=device).unsqueeze(0)
+        ids = _encode_generate_prompt(
+            tokenizer,
+            prompt,
+            cfg.sequence_len,
+            add_special_tokens=add_special_tokens,
+        )
+        input_ids = torch.tensor(
+            ids, dtype=torch.long, device=device
+        ).unsqueeze(0)
         if hasattr(model, "generate_fast"):
             generated = model.generate_fast(
                 input_ids,
@@ -58,8 +75,14 @@ def main() -> None:
                 pad_token_id=tokenizer.eot_id,
             )[0].tolist()
         else:
-            generated = model.generate(input_ids, max_new_tokens=args.max_new_tokens, eos_token_id=tokenizer.eot_id)[0].tolist()
-        new_tokens = _trim_generated_token_ids(generated[len(ids) :], stop_sequences, tokenizer.eot_id)
+            generated = model.generate(
+                input_ids,
+                max_new_tokens=args.max_new_tokens,
+                eos_token_id=tokenizer.eot_id,
+            )[0].tolist()
+        new_tokens = _trim_generated_token_ids(
+            generated[len(ids) :], stop_sequences, tokenizer.eot_id
+        )
         text = _trim_until(tokenizer.decode(new_tokens), tuple())
         report = _quality_report(text)
         row = {"prompt": prompt, "generation": text, **report}

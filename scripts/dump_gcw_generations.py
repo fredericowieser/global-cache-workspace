@@ -19,7 +19,9 @@ from paper7_generation_common import load_examples
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Dump GCW raw generations for paper7 parity debugging.")
+    parser = argparse.ArgumentParser(
+        description="Dump GCW raw generations for paper7 parity debugging."
+    )
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--tasks", default="gsm8k_openmath,svamp")
@@ -32,15 +34,34 @@ def main() -> None:
     model.eval()
     tokenizer = _tokenizer_for(cfg, state)
     add_special_tokens = _legacy_generate_add_special_tokens(model)
-    examples = load_examples([task.strip() for task in args.tasks.split(",") if task.strip()], limit=args.limit)
+    examples = load_examples(
+        [task.strip() for task in args.tasks.split(",") if task.strip()],
+        limit=args.limit,
+    )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    stop_sequences = _stop_token_sequences(tokenizer, ("</s>", "<|end_of_text|>", "<|eot_id|>", "\n\nQuestion:", "\nQuestion:"))
+    stop_sequences = _stop_token_sequences(
+        tokenizer,
+        (
+            "</s>",
+            "<|end_of_text|>",
+            "<|eot_id|>",
+            "\n\nQuestion:",
+            "\nQuestion:",
+        ),
+    )
 
     with out.open("w", encoding="utf-8") as f:
         for example in examples:
-            ids = _encode_generate_prompt(tokenizer, example.prompt, cfg.sequence_len, add_special_tokens=add_special_tokens)
-            input_ids = torch.tensor(ids, dtype=torch.long, device=device).unsqueeze(0)
+            ids = _encode_generate_prompt(
+                tokenizer,
+                example.prompt,
+                cfg.sequence_len,
+                add_special_tokens=add_special_tokens,
+            )
+            input_ids = torch.tensor(
+                ids, dtype=torch.long, device=device
+            ).unsqueeze(0)
             if args.mode == "fast":
                 generated = model.generate_fast(
                     input_ids,
@@ -55,7 +76,9 @@ def main() -> None:
                     max_new_tokens=example.max_gen_toks,
                     eos_token_id=tokenizer.eot_id,
                 )[0].tolist()
-            new_tokens = _trim_generated_token_ids(generated[len(ids) :], stop_sequences, tokenizer.eot_id)
+            new_tokens = _trim_generated_token_ids(
+                generated[len(ids) :], stop_sequences, tokenizer.eot_id
+            )
             text = _trim_until(tokenizer.decode(new_tokens), tuple())
             row = {
                 "runner": f"gcw:{args.mode}",

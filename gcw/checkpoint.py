@@ -40,7 +40,9 @@ def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
     model.load_state_dict(weights, strict=True)
     model.to(device)
     state_path = path / "train_state.json"
-    train_state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    train_state = (
+        json.loads(state_path.read_text()) if state_path.exists() else {}
+    )
     return model, cfg, train_state
 
 
@@ -53,9 +55,17 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     missing = []
     for key, expected in target_state.items():
         source_key = key if key in weights else f"backbone.{key}"
-        if source_key not in weights and key == "lm_head.weight" and "embed_tokens.weight" in weights:
+        if (
+            source_key not in weights
+            and key == "lm_head.weight"
+            and "embed_tokens.weight" in weights
+        ):
             source_key = "embed_tokens.weight"
-        if source_key not in weights and key == "lm_head.weight" and "backbone.embed_tokens.weight" in weights:
+        if (
+            source_key not in weights
+            and key == "lm_head.weight"
+            and "backbone.embed_tokens.weight" in weights
+        ):
             source_key = "backbone.embed_tokens.weight"
         if source_key not in weights:
             missing.append(key)

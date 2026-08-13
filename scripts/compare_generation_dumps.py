@@ -4,11 +4,17 @@ import argparse
 import json
 from pathlib import Path
 
-from paper7_generation_common import extract_boxed, extract_flexible, target_answer
+from paper7_generation_common import (
+    extract_boxed,
+    extract_flexible,
+    target_answer,
+)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare two paper7 generation JSONL dumps.")
+    parser = argparse.ArgumentParser(
+        description="Compare two paper7 generation JSONL dumps."
+    )
     parser.add_argument("left")
     parser.add_argument("right")
     parser.add_argument("--examples", type=int, default=8)
@@ -43,7 +49,9 @@ def main() -> None:
         boxed_same += int(same_boxed)
         left_correct += int(flex_a is not None and flex_a == target)
         right_correct += int(flex_b is not None and flex_b == target)
-        if (not same_text or not same_flex) and len(divergences) < args.examples:
+        if (not same_text or not same_flex) and len(
+            divergences
+        ) < args.examples:
             divergences.append(
                 {
                     "task": key[0],
@@ -59,11 +67,21 @@ def main() -> None:
             )
 
     print(f"Compared: {len(keys)}")
-    print(f"Text identical: {text_same}/{len(keys)} ({text_same / len(keys):.2%})")
-    print(f"Flexible answer identical: {flexible_same}/{len(keys)} ({flexible_same / len(keys):.2%})")
-    print(f"Boxed answer identical: {boxed_same}/{len(keys)} ({boxed_same / len(keys):.2%})")
-    print(f"Left flexible accuracy: {left_correct}/{len(keys)} ({left_correct / len(keys):.2%})")
-    print(f"Right flexible accuracy: {right_correct}/{len(keys)} ({right_correct / len(keys):.2%})")
+    print(
+        f"Text identical: {text_same}/{len(keys)} ({text_same / len(keys):.2%})"
+    )
+    print(
+        f"Flexible answer identical: {flexible_same}/{len(keys)} ({flexible_same / len(keys):.2%})"
+    )
+    print(
+        f"Boxed answer identical: {boxed_same}/{len(keys)} ({boxed_same / len(keys):.2%})"
+    )
+    print(
+        f"Left flexible accuracy: {left_correct}/{len(keys)} ({left_correct / len(keys):.2%})"
+    )
+    print(
+        f"Right flexible accuracy: {right_correct}/{len(keys)} ({right_correct / len(keys):.2%})"
+    )
     if divergences:
         print("\nDivergences:")
         for item in divergences:

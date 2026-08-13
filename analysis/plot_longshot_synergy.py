@@ -10,17 +10,17 @@ from pathlib import Path
 
 import numpy as np
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CSV_PATH = SCRIPT_DIR / "Longshot_synergy.csv"
-OUT_DIR = SCRIPT_DIR if SCRIPT_DIR.name == "analysis" else SCRIPT_DIR / "analysis"
+OUT_DIR = (
+    SCRIPT_DIR if SCRIPT_DIR.name == "analysis" else SCRIPT_DIR / "analysis"
+)
 SVG_PATH = OUT_DIR / "longshot_synergy_trend.svg"
 PDF_PATH = OUT_DIR / "longshot_synergy_trend.pdf"
 
 os.environ.setdefault("MPLCONFIGDIR", str(OUT_DIR / ".matplotlib-cache"))
 
 import matplotlib.pyplot as plt  # noqa: E402
-
 
 plt.rcParams.update(
     {
@@ -40,7 +40,9 @@ plt.rcParams.update(
 )
 
 
-def load_longshot_results(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_longshot_results(
+    path: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     required_columns = {
         "iterations",
         "gsm8k_acc",
@@ -79,7 +81,9 @@ def load_longshot_results(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarra
     )
 
 
-def padded_limits(values: np.ndarray, pad_fraction: float = 0.16, minimum_pad: float = 0.08) -> tuple[float, float]:
+def padded_limits(
+    values: np.ndarray, pad_fraction: float = 0.16, minimum_pad: float = 0.08
+) -> tuple[float, float]:
     y_min = float(np.min(values))
     y_max = float(np.max(values))
     y_pad = max((y_max - y_min) * pad_fraction, minimum_pad)
@@ -104,7 +108,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    iterations, performance, synergy, synergy_low, synergy_high = load_longshot_results(args.csv)
+    iterations, performance, synergy, synergy_low, synergy_high = (
+        load_longshot_results(args.csv)
+    )
 
     OUT_DIR.mkdir(exist_ok=True)
 

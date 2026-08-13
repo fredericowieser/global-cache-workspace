@@ -72,7 +72,11 @@ def data_loader(
     data_dir: str | Path | None = None,
     infinite: bool = True,
 ):
-    data_dir = Path(data_dir).expanduser() if data_dir is not None else default_data_dir()
+    data_dir = (
+        Path(data_dir).expanduser()
+        if data_dir is not None
+        else default_data_dir()
+    )
     shards = list_shards(data_dir, split)
     if not shards:
         raise FileNotFoundError(f"No {split} shards found in {data_dir}")
@@ -86,10 +90,18 @@ def data_loader(
             steps = max(0, (len(shard) - 1) // step_tokens)
             for step in range(steps):
                 base = step * step_tokens + rank_offset
-                buf = torch.from_numpy(shard[base : base + batch_size * sequence_len + 1].astype(np.int64))
+                buf = torch.from_numpy(
+                    shard[base : base + batch_size * sequence_len + 1].astype(
+                        np.int64
+                    )
+                )
                 x = buf[:-1].view(batch_size, sequence_len).to(device)
                 y = buf[1:].view(batch_size, sequence_len).to(device)
-                yield x, y, {"epoch": epoch, "shard": shard_file, "step_in_shard": step + 1}
+                yield x, y, {
+                    "epoch": epoch,
+                    "shard": shard_file,
+                    "step_in_shard": step + 1,
+                }
         epoch += 1
         if not infinite:
             return

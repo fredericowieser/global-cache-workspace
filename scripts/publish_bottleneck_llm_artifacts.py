@@ -13,7 +13,6 @@ from gcw.bottleneck_specs import BOTTLENECK_SPECS, bottleneck_spec
 from gcw.checkpoint import load_checkpoint
 from gcw.convert import convert_bottleneck, convert_hf
 
-
 PUBLIC_ROOT = Path("/mnt/jfs-01/shared/gcw")
 
 LEGACY_FINAL_MODELS: dict[str, dict[str, str]] = {
@@ -58,12 +57,21 @@ class ArtifactRecord:
     validation: str
 
 
-def legacy_artifacts(root: Path = PUBLIC_ROOT) -> list[tuple[str, str, Path, Path]]:
+def legacy_artifacts(
+    root: Path = PUBLIC_ROOT,
+) -> list[tuple[str, str, Path, Path]]:
     artifacts = []
     for backbone, variants in LEGACY_FINAL_MODELS.items():
         spec = bottleneck_spec(backbone)
         for variant, source in variants.items():
-            out = root / "checkpoints" / "bottleneck_llm" / spec.artifact_slug / variant / "final"
+            out = (
+                root
+                / "checkpoints"
+                / "bottleneck_llm"
+                / spec.artifact_slug
+                / variant
+                / "final"
+            )
             artifacts.append((backbone, variant, Path(source), out))
     return artifacts
 
@@ -77,28 +85,52 @@ def sft_artifacts(root: Path = PUBLIC_ROOT) -> list[tuple[str, Path, Path]]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Publish GCW-native Bottleneck LLM artifacts to shared storage.")
+    parser = argparse.ArgumentParser(
+        description="Publish GCW-native Bottleneck LLM artifacts to shared storage."
+    )
     parser.add_argument("--root", type=Path, default=PUBLIC_ROOT)
-    parser.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="auto")
+    parser.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--skip-results", action="store_true")
     args = parser.parse_args(argv)
 
-    records = publish(root=args.root, dtype=args.dtype, force=args.force, copy_results=not args.skip_results)
+    records = publish(
+        root=args.root,
+        dtype=args.dtype,
+        force=args.force,
+        copy_results=not args.skip_results,
+    )
     write_manifest(args.root, records)
     make_world_readable(args.root)
     print(f"Published {len(records)} artifacts under {args.root}")
 
 
-def publish(root: Path = PUBLIC_ROOT, dtype: str = "auto", force: bool = False, copy_results: bool = True) -> list[ArtifactRecord]:
+def publish(
+    root: Path = PUBLIC_ROOT,
+    dtype: str = "auto",
+    force: bool = False,
+    copy_results: bool = True,
+) -> list[ArtifactRecord]:
     records = []
     for backbone, source, out in sft_artifacts(root):
         spec = bottleneck_spec(backbone)
         _ensure_source(source)
         if force or not (out / "model.safetensors").exists():
             _reset_output(out)
-            convert_hf(str(source), out, family=spec.family, variant="tf", dtype=_hf_dtype(dtype))
-        records.append(_record("sft_backbone", backbone, "tf", source, spec.sft_path, out))
+            convert_hf(
+                str(source),
+                out,
+                family=spec.family,
+                variant="tf",
+                dtype=_hf_dtype(dtype),
+            )
+        records.append(
+            _record("sft_backbone", backbone, "tf", source, spec.sft_path, out)
+        )
 
     for backbone, variant, source, out in legacy_artifacts(root):
         spec = bottleneck_spec(backbone)
@@ -118,7 +150,11 @@ def publish(root: Path = PUBLIC_ROOT, dtype: str = "auto", force: bool = False, 
             )
         _copy_tokenizer_files(source, out)
         _set_checkpoint_source(out, str(out))
-        records.append(_record("legacy_final", backbone, variant, source, spec.sft_path, out))
+        records.append(
+            _record(
+                "legacy_final", backbone, variant, source, spec.sft_path, out
+            )
+        )
 
     if copy_results:
         copy_verified_results(root)
@@ -130,12 +166,20 @@ def write_manifest(root: Path, records: list[ArtifactRecord]) -> None:
     payload = {
         "root": str(root),
         "artifact_count": len(records),
-        "legacy_final_count": sum(record.kind == "legacy_final" for record in records),
-        "sft_backbone_count": sum(record.kind == "sft_backbone" for record in records),
+        "legacy_final_count": sum(
+            record.kind == "legacy_final" for record in records
+        ),
+        "sft_backbone_count": sum(
+            record.kind == "sft_backbone" for record in records
+        ),
         "artifacts": [asdict(record) for record in records],
     }
-    (root / "manifest.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    (root / "MANIFEST.md").write_text(_manifest_markdown(records), encoding="utf-8")
+    (root / "manifest.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
+    (root / "MANIFEST.md").write_text(
+        _manifest_markdown(records), encoding="utf-8"
+    )
 
 
 def copy_verified_results(root: Path) -> None:
@@ -173,7 +217,9 @@ def _record(
         variant=variant,
         display_name=spec.display_name,
         source_path=str(source),
-        tokenizer_source=str(out) if kind == "legacy_final" else tokenizer_source,
+        tokenizer_source=(
+            str(out) if kind == "legacy_final" else tokenizer_source
+        ),
         output_path=str(out),
         model_sha256=_sha256(out / "model.safetensors"),
         bytes=(out / "model.safetensors").stat().st_size,
@@ -206,7 +252,12 @@ def _ensure_source(path: Path) -> None:
 
 def _copy_tokenizer_files(source: Path, out: Path) -> None:
     source_dir = source if source.is_dir() else source.parent
-    for name in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "generation_config.json"):
+    for name in (
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "generation_config.json",
+    ):
         src = source_dir / name
         if src.exists():
             shutil.copy2(src, out / name)

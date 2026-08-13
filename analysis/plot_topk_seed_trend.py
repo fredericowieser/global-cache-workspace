@@ -10,18 +10,18 @@ from pathlib import Path
 
 import numpy as np
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parent if SCRIPT_DIR.name == "analysis" else SCRIPT_DIR
 DEFAULT_CSV_PATH = ROOT / "topk_seed_averages.csv"
-OUT_DIR = SCRIPT_DIR if SCRIPT_DIR.name == "analysis" else SCRIPT_DIR / "analysis"
+OUT_DIR = (
+    SCRIPT_DIR if SCRIPT_DIR.name == "analysis" else SCRIPT_DIR / "analysis"
+)
 SVG_PATH = OUT_DIR / "topk_seed_average_trend.svg"
 PDF_PATH = OUT_DIR / "topk_seed_average_trend.pdf"
 
 os.environ.setdefault("MPLCONFIGDIR", str(OUT_DIR / ".matplotlib-cache"))
 
 import matplotlib.pyplot as plt  # noqa: E402
-
 
 plt.rcParams.update(
     {
@@ -68,7 +68,9 @@ def load_seed_results(path: Path | None) -> tuple[np.ndarray, np.ndarray]:
 
     with path.open(newline="") as f:
         reader = csv.DictReader(f)
-        heads = np.array([int(name) for name in reader.fieldnames[1:]], dtype=int)
+        heads = np.array(
+            [int(name) for name in reader.fieldnames[1:]], dtype=int
+        )
         rows = []
         for row in reader:
             seed = (row.get("seed") or "").strip()
@@ -204,7 +206,9 @@ def main() -> None:
     ax.set_xlabel("Spotlight Size")
     ax.set_ylabel(ylabel)
     ax.set_xticks(head_percentages)
-    ax.set_xticklabels([f"{x:.0f}%" if x >= 10 else f"{x:.1f}%" for x in head_percentages])
+    ax.set_xticklabels(
+        [f"{x:.0f}%" if x >= 10 else f"{x:.1f}%" for x in head_percentages]
+    )
     y_min = float(np.min(mean - stderr))
     y_max = float(np.max(mean + stderr))
     y_pad = max((y_max - y_min) * 0.22, 0.08)

@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 ROOT = Path(__file__).resolve().parents[1]
 CSV_PATH = ROOT / "topk_seed_averages.csv"
 OUT_DIR = ROOT / "analysis"
@@ -33,7 +32,9 @@ def is_seed(value: str) -> bool:
 def load_seed_results(path: Path) -> tuple[np.ndarray, np.ndarray]:
     with path.open(newline="") as f:
         reader = csv.DictReader(f)
-        heads = np.array([int(name) for name in reader.fieldnames[1:]], dtype=int)
+        heads = np.array(
+            [int(name) for name in reader.fieldnames[1:]], dtype=int
+        )
         rows = []
         for row in reader:
             seed = (row.get("seed") or "").strip()
@@ -44,7 +45,9 @@ def load_seed_results(path: Path) -> tuple[np.ndarray, np.ndarray]:
     if not rows:
         raise ValueError(f"No numeric seed rows found in {path}")
     if heads[-1] != heads.max():
-        raise ValueError("Expected the largest topk_heads value to be the final CSV column")
+        raise ValueError(
+            "Expected the largest topk_heads value to be the final CSV column"
+        )
 
     return heads, np.array(rows, dtype=float)
 
@@ -74,16 +77,33 @@ def main() -> None:
     efficiency = relative_performance / relative_complexity
 
     mean = efficiency.mean(axis=0)
-    std = efficiency.std(axis=0, ddof=1) if efficiency.shape[0] > 1 else np.zeros_like(mean)
+    std = (
+        efficiency.std(axis=0, ddof=1)
+        if efficiency.shape[0] > 1
+        else np.zeros_like(mean)
+    )
 
     OUT_DIR.mkdir(exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(7.2, 4.5))
     if not args.hide_individual_seeds:
         for seed_efficiency in efficiency:
-            ax.plot(heads, seed_efficiency, color="#2ca02c", alpha=0.22, linewidth=1.4)
+            ax.plot(
+                heads,
+                seed_efficiency,
+                color="#2ca02c",
+                alpha=0.22,
+                linewidth=1.4,
+            )
 
-    ax.plot(heads, mean, color="#2ca02c", marker="o", linewidth=2.25, label="Mean efficiency")
+    ax.plot(
+        heads,
+        mean,
+        color="#2ca02c",
+        marker="o",
+        linewidth=2.25,
+        label="Mean efficiency",
+    )
     ax.fill_between(
         heads,
         mean - std,
@@ -93,7 +113,13 @@ def main() -> None:
         linewidth=0,
         label="Std. dev.",
     )
-    ax.axhline(1.0, color="#777777", linestyle=":", linewidth=1.4, label="128-head baseline")
+    ax.axhline(
+        1.0,
+        color="#777777",
+        linestyle=":",
+        linewidth=1.4,
+        label="128-head baseline",
+    )
 
     if not args.linear_y:
         ax.set_yscale("log")

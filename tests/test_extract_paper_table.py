@@ -4,9 +4,15 @@ from scripts.extract_paper_table import _extract_row, _target_for_row
 def test_extract_paper_table_uses_paper_column_metrics():
     payload = {
         "results": {
-            "gsm8k_openmath": {"exact_match,flexible": 0.2, "exact_match,boxed": 0.1},
+            "gsm8k_openmath": {
+                "exact_match,flexible": 0.2,
+                "exact_match,boxed": 0.1,
+            },
             "svamp": {"exact_match,flexible": 0.3},
-            "gsm8k_hard": {"exact_match,flexible": 0.4, "exact_match,boxed": 0.1},
+            "gsm8k_hard": {
+                "exact_match,flexible": 0.4,
+                "exact_match,boxed": 0.1,
+            },
             "theoremqa": {"exact_match,none": 0.5},
             "logiqa": {"acc,none": 0.6, "acc_norm,none": 0.7},
             "agieval_gaokao_mathqa": {"acc_norm,none": 0.8},

@@ -4,11 +4,12 @@ import subprocess
 import time
 from pathlib import Path
 
-
 SCRIPT = Path(__file__).parents[1] / "scripts" / "submit_array.sh"
 
 
-def _write_fixture(tmp_path: Path, uv_body: str = "exit 0") -> tuple[Path, dict[str, str]]:
+def _write_fixture(
+    tmp_path: Path, uv_body: str = "exit 0"
+) -> tuple[Path, dict[str, str]]:
     repo_root = tmp_path / "work"
     home = tmp_path / "home"
     bin_dir = home / ".local" / "bin"
@@ -16,8 +17,12 @@ def _write_fixture(tmp_path: Path, uv_body: str = "exit 0") -> tuple[Path, dict[
     (repo_root / "scripts").mkdir(parents=True)
     config = tmp_path / "config.yaml"
     data = tmp_path / "data.jsonl"
-    (repo_root / "scripts" / "check_cuda_env.py").write_text("# fake\n", encoding="utf-8")
-    config.write_text(f"output_dir: {tmp_path / 'output'}\nmax_steps: 1\n", encoding="utf-8")
+    (repo_root / "scripts" / "check_cuda_env.py").write_text(
+        "# fake\n", encoding="utf-8"
+    )
+    config.write_text(
+        f"output_dir: {tmp_path / 'output'}\nmax_steps: 1\n", encoding="utf-8"
+    )
     data.write_text("", encoding="utf-8")
     uv = bin_dir / "uv"
     uv.write_text(f"#!/usr/bin/env bash\n{uv_body}\n", encoding="utf-8")
@@ -38,7 +43,9 @@ def _write_fixture(tmp_path: Path, uv_body: str = "exit 0") -> tuple[Path, dict[
     return config, env
 
 
-def _run(args: list[str], env: dict[str, str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run(
+    args: list[str], env: dict[str, str], *, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(SCRIPT), *args],
         cwd=SCRIPT.parents[1],
@@ -56,7 +63,9 @@ def _state_dir(output: str) -> Path:
     return Path(match.group(1))
 
 
-def _wait_for_status(state_dir: Path, env: dict[str, str], expected: str) -> str:
+def _wait_for_status(
+    state_dir: Path, env: dict[str, str], expected: str
+) -> str:
     deadline = time.monotonic() + 5
     last = ""
     while time.monotonic() < deadline:
@@ -86,7 +95,9 @@ def _wait_for_text(path: Path, expected: str) -> str:
             if expected in last:
                 return last
         time.sleep(0.05)
-    raise AssertionError(f"Timed out waiting for {expected!r} in {path}:\n{last}")
+    raise AssertionError(
+        f"Timed out waiting for {expected!r} in {path}:\n{last}"
+    )
 
 
 def test_local_dry_run_partitions_gpus_and_caps_workers(tmp_path: Path) -> None:
@@ -116,19 +127,29 @@ def test_local_dry_run_partitions_gpus_and_caps_workers(tmp_path: Path) -> None:
 
 def test_local_worker_records_success_and_status(tmp_path: Path) -> None:
     config, env = _write_fixture(tmp_path)
-    result = _run(["--backend", "local", "--local-gpus", "GPU-test", str(config)], env)
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", str(config)], env
+    )
     state_dir = _state_dir(result.stdout)
 
     status = _wait_for_status(state_dir, env, "SUCCEEDED")
     assert "SUCCEEDED" in status
     assert "1 succeeded" in status
-    assert (state_dir / "completed_configs").read_text(encoding="utf-8").splitlines() == [str(config)]
+    assert (state_dir / "completed_configs").read_text(
+        encoding="utf-8"
+    ).splitlines() == [str(config)]
     assert (state_dir / "failed_configs.tsv").read_text(encoding="utf-8") == ""
-    assert (state_dir / "worker-0.exit").read_text(encoding="utf-8").strip() == "0"
-    assert (state_dir / "backend").read_text(encoding="utf-8").strip() == "local"
+    assert (state_dir / "worker-0.exit").read_text(
+        encoding="utf-8"
+    ).strip() == "0"
+    assert (state_dir / "backend").read_text(
+        encoding="utf-8"
+    ).strip() == "local"
 
 
-def test_local_worker_can_be_cancelled_as_a_process_group(tmp_path: Path) -> None:
+def test_local_worker_can_be_cancelled_as_a_process_group(
+    tmp_path: Path,
+) -> None:
     config, env = _write_fixture(tmp_path, uv_body="sleep 60")
     env.update({"LOCAL_STOP_WHEN_IDLE": "1", "LOCAL_IDLE_CHECK_INTERVAL": "1"})
     result = _run(["--backend", "local", "--local-gpus", "0", str(config)], env)
@@ -139,7 +160,14 @@ def test_local_worker_can_be_cancelled_as_a_process_group(tmp_path: Path) -> Non
         assert "0" in running
 
         blocked = _run(
-            ["--backend", "local", "--dry-run", "--local-gpus", "0", str(config)],
+            [
+                "--backend",
+                "local",
+                "--dry-run",
+                "--local-gpus",
+                "0",
+                str(config),
+            ],
             env,
             check=False,
         )
@@ -156,16 +184,24 @@ def test_local_worker_can_be_cancelled_as_a_process_group(tmp_path: Path) -> Non
         monitor_log = state_dir / "idle-stop-monitor.out"
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if monitor_log.exists() and "keeping the node running" in monitor_log.read_text(encoding="utf-8"):
+            if (
+                monitor_log.exists()
+                and "keeping the node running"
+                in monitor_log.read_text(encoding="utf-8")
+            ):
                 break
             time.sleep(0.05)
         else:
-            raise AssertionError("Idle monitor did not honor the cancellation inhibit marker")
+            raise AssertionError(
+                "Idle monitor did not honor the cancellation inhibit marker"
+            )
     finally:
         _run(["cancel", "--force", str(state_dir)], env, check=False)
 
 
-def test_idle_monitor_stops_nebius_only_after_gpu_is_idle(tmp_path: Path) -> None:
+def test_idle_monitor_stops_nebius_only_after_gpu_is_idle(
+    tmp_path: Path,
+) -> None:
     config, env = _write_fixture(tmp_path)
     bin_dir = Path(env["HOME"]) / ".local" / "bin"
     capture = tmp_path / "nebius-args"
@@ -189,8 +225,7 @@ def test_idle_monitor_stops_nebius_only_after_gpu_is_idle(tmp_path: Path) -> Non
     )
     nvidia_smi.chmod(0o755)
     nebius.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf "%s\\n" "$*" > "$NEBIUS_CAPTURE"\n',
+        "#!/usr/bin/env bash\n" 'printf "%s\\n" "$*" > "$NEBIUS_CAPTURE"\n',
         encoding="utf-8",
     )
     nebius.chmod(0o755)
@@ -233,11 +268,15 @@ def test_idle_monitor_stops_nebius_only_after_gpu_is_idle(tmp_path: Path) -> Non
     assert capture.read_text(encoding="utf-8").strip() == (
         "compute instance stop --id vm-test-123 --profile gpu-self-stop --async"
     )
-    alerts = _wait_for_text(discord_capture, "auto-stopping Nebius instance vm-test-123")
+    alerts = _wait_for_text(
+        discord_capture, "auto-stopping Nebius instance vm-test-123"
+    )
     assert "GCW local job finished" in alerts
     assert "test-array" in alerts
     assert (Path(env["LOCAL_STATE_ROOT"]) / "vm-stop-requested").exists()
-    monitor_log = (state_dir / "idle-stop-monitor.out").read_text(encoding="utf-8")
+    monitor_log = (state_dir / "idle-stop-monitor.out").read_text(
+        encoding="utf-8"
+    )
     assert "No local workers or GPU compute processes remain" in monitor_log
 
     blocked = _run(

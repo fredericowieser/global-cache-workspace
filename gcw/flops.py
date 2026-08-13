@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from gcw.config import CacheProcessorConfig, ModelConfig, linear_attention_following_cache_indices
-
+from gcw.config import (
+    CacheProcessorConfig,
+    ModelConfig,
+    linear_attention_following_cache_indices,
+)
 
 PAD_VOCAB_TO = 128
 
@@ -31,22 +34,42 @@ def _backbone_matmul_params(config: ModelConfig) -> int:
     return config.num_layers * per_layer + lm_head
 
 
-def _backbone_attention_flops_per_token(config: ModelConfig, seq_len: int) -> int:
+def _backbone_attention_flops_per_token(
+    config: ModelConfig, seq_len: int
+) -> int:
     if config.family == "gemma4":
         total = 0
         for i in range(config.num_layers):
-            window = min(seq_len, int(config.sliding_window or seq_len)) if config.layer_types[i] == "sliding_attention" else seq_len
-            total += 4 * config.num_heads * config.head_dim_for_layer(i) * window
+            window = (
+                min(seq_len, int(config.sliding_window or seq_len))
+                if config.layer_types[i] == "sliding_attention"
+                else seq_len
+            )
+            total += (
+                4 * config.num_heads * config.head_dim_for_layer(i) * window
+            )
         return total
-    return config.cache_num_layers * 4 * config.num_heads * int(config.head_dim) * seq_len
+    return (
+        config.cache_num_layers
+        * 4
+        * config.num_heads
+        * int(config.head_dim)
+        * seq_len
+    )
 
 
-def _qwen35_attention_matmul_params(config: ModelConfig, layer_type: str) -> int:
+def _qwen35_attention_matmul_params(
+    config: ModelConfig, layer_type: str
+) -> int:
     head_dim = int(config.head_dim)
     full_q_dim = config.num_heads * head_dim
     full_kv_dim = config.num_kv_heads * head_dim
-    linear_key_dim = int(config.linear_num_key_heads or config.num_kv_heads) * int(config.linear_key_head_dim or head_dim)
-    linear_value_dim = int(config.linear_num_value_heads or config.num_heads) * int(config.linear_value_head_dim or head_dim)
+    linear_key_dim = int(
+        config.linear_num_key_heads or config.num_kv_heads
+    ) * int(config.linear_key_head_dim or head_dim)
+    linear_value_dim = int(
+        config.linear_num_value_heads or config.num_heads
+    ) * int(config.linear_value_head_dim or head_dim)
     linear_conv_dim = 2 * linear_key_dim + linear_value_dim
     if layer_type == "full_attention":
         return (
@@ -57,7 +80,9 @@ def _qwen35_attention_matmul_params(config: ModelConfig, layer_type: str) -> int
     return (
         config.hidden_size * linear_conv_dim
         + config.hidden_size * linear_value_dim
-        + 2 * config.hidden_size * int(config.linear_num_value_heads or config.num_heads)
+        + 2
+        * config.hidden_size
+        * int(config.linear_num_value_heads or config.num_heads)
         + linear_conv_dim * config.linear_conv_kernel_dim
         + linear_value_dim * config.hidden_size
     )
@@ -77,7 +102,10 @@ def _qwen35_moe_backbone_matmul_params(config: ModelConfig) -> int:
     total = config.hidden_size * _padded_vocab(config.vocab_size)
     for layer_type in config.layer_types or []:
         total += _qwen35_attention_matmul_params(config, layer_type)
-        total += config.num_experts_per_tok * (2 * moe_hidden * config.hidden_size + config.hidden_size * moe_hidden)
+        total += config.num_experts_per_tok * (
+            2 * moe_hidden * config.hidden_size
+            + config.hidden_size * moe_hidden
+        )
         total += config.hidden_size * config.num_experts
         total += 3 * config.hidden_size * shared_hidden
         total += config.hidden_size
@@ -93,7 +121,10 @@ def _gemma4_attention_matmul_params(config: ModelConfig, layer_idx: int) -> int:
     first_shared = config.num_layers - config.num_kv_shared_layers
     if layer_idx < first_shared:
         total += config.hidden_size * kv_dim
-        if not (config.attention_k_eq_v and config.layer_types[layer_idx] == "full_attention"):
+        if not (
+            config.attention_k_eq_v
+            and config.layer_types[layer_idx] == "full_attention"
+        ):
             total += config.hidden_size * kv_dim
     return total
 
@@ -106,7 +137,9 @@ def _gemma4_backbone_matmul_params(config: ModelConfig) -> int:
     first_shared = config.num_layers - config.num_kv_shared_layers
     for i in range(config.num_layers):
         total += _gemma4_attention_matmul_params(config, i)
-        intermediate = config.intermediate_size * (2 if config.use_double_wide_mlp and i >= first_shared > 0 else 1)
+        intermediate = config.intermediate_size * (
+            2 if config.use_double_wide_mlp and i >= first_shared > 0 else 1
+        )
         total += 3 * config.hidden_size * intermediate
         if ple:
             total += config.hidden_size * ple + ple * config.hidden_size
@@ -114,7 +147,10 @@ def _gemma4_backbone_matmul_params(config: ModelConfig) -> int:
 
 
 def backbone_flops_per_token(config: ModelConfig, seq_len: int) -> float:
-    return float(2 * _backbone_matmul_params(config) + _backbone_attention_flops_per_token(config, seq_len))
+    return float(
+        2 * _backbone_matmul_params(config)
+        + _backbone_attention_flops_per_token(config, seq_len)
+    )
 
 
 def _processor_layer_matmul_params(config: CacheProcessorConfig) -> int:
@@ -130,11 +166,24 @@ def _processor_layer_matmul_params(config: CacheProcessorConfig) -> int:
     )
 
 
-def _processor_block_flops_per_call(input_dim: int, config: CacheProcessorConfig, selected: int) -> float:
+def _processor_block_flops_per_call(
+    input_dim: int, config: CacheProcessorConfig, selected: int
+) -> float:
     in_out = input_dim * config.hidden_size + config.hidden_size * input_dim
-    matmul = 2 * selected * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+    matmul = (
+        2
+        * selected
+        * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+    )
     head_dim = config.hidden_size // config.num_heads
-    attn = config.num_layers * 4 * config.num_heads * head_dim * selected * selected
+    attn = (
+        config.num_layers
+        * 4
+        * config.num_heads
+        * head_dim
+        * selected
+        * selected
+    )
     return float(matmul + attn)
 
 
@@ -144,33 +193,54 @@ def _selected_count(valid_tokens: int, process_every: int, topk: int) -> int:
     return recent + min(topk, earlier)
 
 
-def processor_forward_flops_per_sequence(config: ModelConfig, seq_len: int) -> float:
+def processor_forward_flops_per_sequence(
+    config: ModelConfig, seq_len: int
+) -> float:
     cp = config.cache_processor
     if config.variant == "tf" or cp is None:
         return 0.0
     cache_layers = config.cache_num_layers
     cache_heads = config.cache_num_heads
-    per_layer_dim = cp.stream_factor * config.num_kv_heads * int(config.head_dim)
+    per_layer_dim = (
+        cp.stream_factor * config.num_kv_heads * int(config.head_dim)
+    )
     total = 0.0
     for start in range(cp.process_every, seq_len, cp.process_every):
         selected = _selected_count(start, cp.process_every, cp.topk)
         if config.variant == "bt":
-            total += cache_layers * _processor_block_flops_per_call(per_layer_dim, cp, selected)
+            total += cache_layers * _processor_block_flops_per_call(
+                per_layer_dim, cp, selected
+            )
         elif config.variant == "bgt":
-            total += _processor_block_flops_per_call(cache_layers * per_layer_dim, cp, selected)
+            total += _processor_block_flops_per_call(
+                cache_layers * per_layer_dim, cp, selected
+            )
         elif config.variant == "icarus":
             selected_heads = min(cp.topk_heads, cache_heads)
             if cp.include_self_head_kv and selected_heads < cache_heads:
                 selected_heads += 1
-            total += _icarus_processor_block_flops_per_call(2 * int(config.head_dim), cp, selected, cache_heads, selected_heads)
+            total += _icarus_processor_block_flops_per_call(
+                2 * int(config.head_dim),
+                cp,
+                selected,
+                cache_heads,
+                selected_heads,
+            )
         elif config.variant == "longshot":
             linear_heads = _longshot_linear_state_heads(config)
             total_heads = cache_heads + linear_heads
-            selected_heads = min(cp.topk_heads, cache_heads) + min(_longshot_topk_linear_heads(cp), linear_heads)
+            selected_heads = min(cp.topk_heads, cache_heads) + min(
+                _longshot_topk_linear_heads(cp), linear_heads
+            )
             if cp.include_self_head_kv and selected_heads < total_heads:
                 selected_heads += 1
             total += cp.iterations * _longshot_processor_block_flops_per_call(
-                2 * int(config.head_dim), cp, selected, cache_heads, selected_heads, model_config=config
+                2 * int(config.head_dim),
+                cp,
+                selected,
+                cache_heads,
+                selected_heads,
+                model_config=config,
             )
     return total
 
@@ -184,9 +254,21 @@ def _icarus_processor_block_flops_per_call(
 ) -> float:
     output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
     in_out = input_dim * config.hidden_size + config.hidden_size * output_dim
-    matmul = 2 * selected * cache_heads * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+    matmul = (
+        2
+        * selected
+        * cache_heads
+        * (in_out + config.num_layers * _processor_layer_matmul_params(config))
+    )
     head_dim = config.hidden_size // config.num_heads
-    attn = config.num_layers * 4 * config.num_heads * head_dim * (cache_heads * selected) * (selected_heads * selected)
+    attn = (
+        config.num_layers
+        * 4
+        * config.num_heads
+        * head_dim
+        * (cache_heads * selected)
+        * (selected_heads * selected)
+    )
     return float(matmul + attn)
 
 
@@ -199,12 +281,24 @@ def _longshot_processor_block_flops_per_call(
     *,
     model_config: ModelConfig | None = None,
 ) -> float:
-    linear_heads = 0 if model_config is None else _longshot_linear_state_heads(model_config)
+    linear_heads = (
+        0
+        if model_config is None
+        else _longshot_linear_state_heads(model_config)
+    )
     total_heads = cache_heads + linear_heads
-    encoder_len = config.encoder_seq_len or config.process_every + max(config.topk, 0)
-    encoder_in = input_dim if config.encoder_method == "query_attention" else input_dim * encoder_len
+    encoder_len = config.encoder_seq_len or config.process_every + max(
+        config.topk, 0
+    )
+    encoder_in = (
+        input_dim
+        if config.encoder_method == "query_attention"
+        else input_dim * encoder_len
+    )
     output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
-    kv_in_out = encoder_in * config.hidden_size + config.hidden_size * output_dim
+    kv_in_out = (
+        encoder_in * config.hidden_size + config.hidden_size * output_dim
+    )
     encode_extra = 0
     if config.encoder_method == "query_attention":
         encode_extra = 4 * cache_heads * selected * input_dim
@@ -213,30 +307,57 @@ def _longshot_processor_block_flops_per_call(
     linear_in_out = 0
     if model_config is not None and linear_heads > 0:
         layer_pairs = linear_attention_following_cache_indices(model_config)
-        linear_key_dim = int(model_config.linear_key_head_dim or model_config.head_dim)
-        linear_value_dim = int(model_config.linear_value_head_dim or linear_key_dim)
-        linear_value_heads = int(model_config.linear_num_value_heads or model_config.num_heads)
+        linear_key_dim = int(
+            model_config.linear_key_head_dim or model_config.head_dim
+        )
+        linear_value_dim = int(
+            model_config.linear_value_head_dim or linear_key_dim
+        )
+        linear_value_heads = int(
+            model_config.linear_num_value_heads or model_config.num_heads
+        )
         linear_layer_count = linear_heads // linear_value_heads
         context_dim = config.hidden_size
         if config.linear_state_query_mode == "per_linear_state":
             query_count = linear_layer_count
             query_out = linear_value_heads * linear_key_dim
         elif config.linear_state_query_mode == "shared":
-            query_count = len({following_cache_idx for _, following_cache_idx in layer_pairs})
+            query_count = len(
+                {following_cache_idx for _, following_cache_idx in layer_pairs}
+            )
             query_out = linear_key_dim
         elif config.linear_state_query_mode == "global":
-            query_count = len({following_cache_idx for _, following_cache_idx in layer_pairs})
+            query_count = len(
+                {following_cache_idx for _, following_cache_idx in layer_pairs}
+            )
             query_out = linear_key_dim
         else:
-            raise ValueError(f"unsupported cache_processor.linear_state_query_mode: {config.linear_state_query_mode}")
+            raise ValueError(
+                f"unsupported cache_processor.linear_state_query_mode: {config.linear_state_query_mode}"
+            )
         feature_dim = linear_key_dim + linear_value_dim
-        linear_in_out = linear_heads * (feature_dim * config.hidden_size + config.hidden_size * feature_dim)
+        linear_in_out = linear_heads * (
+            feature_dim * config.hidden_size + config.hidden_size * feature_dim
+        )
         encode_extra += 2 * query_count * context_dim * query_out
         encode_extra += 2 * linear_heads * linear_key_dim * linear_value_dim
         encode_extra += 2 * linear_heads * linear_key_dim * linear_value_dim
-    matmul = 2 * (cache_heads * kv_in_out + linear_in_out + total_heads * config.num_layers * _processor_layer_matmul_params(config))
+    matmul = 2 * (
+        cache_heads * kv_in_out
+        + linear_in_out
+        + total_heads
+        * config.num_layers
+        * _processor_layer_matmul_params(config)
+    )
     head_dim = config.hidden_size // config.num_heads
-    attn = config.num_layers * 4 * config.num_heads * head_dim * total_heads * selected_heads
+    attn = (
+        config.num_layers
+        * 4
+        * config.num_heads
+        * head_dim
+        * total_heads
+        * selected_heads
+    )
     return float(matmul + encode_extra + attn)
 
 
@@ -244,20 +365,33 @@ def _longshot_linear_state_heads(config: ModelConfig) -> int:
     cp = config.cache_processor
     if cp is None or not cp.linear_state_cache:
         return 0
-    return len(linear_attention_following_cache_indices(config)) * int(config.linear_num_value_heads or config.num_heads)
+    return len(linear_attention_following_cache_indices(config)) * int(
+        config.linear_num_value_heads or config.num_heads
+    )
 
 
 def _longshot_topk_linear_heads(config: CacheProcessorConfig) -> int:
-    return config.topk_heads if config.topk_linear_heads is None else config.topk_linear_heads
+    return (
+        config.topk_heads
+        if config.topk_linear_heads is None
+        else config.topk_linear_heads
+    )
 
 
 def flops_per_token(config: ModelConfig, seq_len: int) -> float:
-    return backbone_flops_per_token(config, seq_len) + processor_forward_flops_per_sequence(config, seq_len) / seq_len
+    return (
+        backbone_flops_per_token(config, seq_len)
+        + processor_forward_flops_per_sequence(config, seq_len) / seq_len
+    )
 
 
-def training_flops_per_token(config: ModelConfig, seq_len: int | None = None) -> float:
+def training_flops_per_token(
+    config: ModelConfig, seq_len: int | None = None
+) -> float:
     return 3.0 * flops_per_token(config, seq_len or config.sequence_len)
 
 
-def total_training_flops(config: ModelConfig, tokens: int, seq_len: int | None = None) -> float:
+def total_training_flops(
+    config: ModelConfig, tokens: int, seq_len: int | None = None
+) -> float:
     return training_flops_per_token(config, seq_len) * tokens

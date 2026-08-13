@@ -20,6 +20,7 @@ Image-bearing questions (Picture != None, 53/800) are kept in the denominator
 to match how prior text-only work reports TheoremQA — a text model simply fails
 them. Pass ``process_docs`` filtering separately if you want them dropped.
 """
+
 from __future__ import annotations
 
 import ast
@@ -189,12 +190,17 @@ def _is_correct(pred: str, gold: str, answer_type: str) -> bool:
         if "float" in at:
             return _float_match(pred, gold)
         # default: try float then string
-        return _float_match(pred, gold) or pred.strip().lower() == gold.strip().lower()
+        return (
+            _float_match(pred, gold)
+            or pred.strip().lower() == gold.strip().lower()
+        )
     except Exception:
         return False
 
 
-def process_results(doc: Dict[str, Any], results: List[str]) -> Dict[str, float]:
+def process_results(
+    doc: Dict[str, Any], results: List[str]
+) -> Dict[str, float]:
     completion = results[0]
     pred = _extract_prediction(completion)
     gold = str(doc["Answer"])

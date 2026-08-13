@@ -9,9 +9,12 @@ from safetensors.torch import load_file
 
 from gcw.bottleneck_specs import BottleneckSpec, bottleneck_spec
 from gcw.checkpoint import save_checkpoint
-from gcw.config import CacheProcessorConfig, ModelConfig, gemma4_default_layer_types
+from gcw.config import (
+    CacheProcessorConfig,
+    ModelConfig,
+    gemma4_default_layer_types,
+)
 from gcw.models import build_model
-
 
 ALIASES = {
     "llama3.1-7b": "meta-llama/Meta-Llama-3.1-8B",
@@ -31,7 +34,9 @@ def convert_hf(
     try:
         from transformers import AutoConfig
     except ImportError as exc:
-        raise ImportError("Install the convert extra: uv sync --extra convert") from exc
+        raise ImportError(
+            "Install the convert extra: uv sync --extra convert"
+        ) from exc
 
     model_id = ALIASES.get(model_id.lower(), model_id)
     hf_cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=False)
@@ -57,7 +62,12 @@ def convert_hf(
     )
 
 
-def convert_ppt(checkpoint: str | Path, meta: str | Path, out: str | Path, dtype: str = "bfloat16") -> None:
+def convert_ppt(
+    checkpoint: str | Path,
+    meta: str | Path,
+    out: str | Path,
+    dtype: str = "bfloat16",
+) -> None:
     checkpoint = Path(checkpoint)
     meta = Path(meta)
     raw_meta = json.loads(meta.read_text())
@@ -96,7 +106,9 @@ def convert_bottleneck(
     legacy_generate: bool = False,
 ) -> None:
     if variant not in {"bt", "bgt"}:
-        raise ValueError("bottleneck conversion supports only bt and bgt variants")
+        raise ValueError(
+            "bottleneck conversion supports only bt and bgt variants"
+        )
     if sequence_len <= 0:
         raise ValueError("sequence_len must be positive")
     checkpoint = _model_file(checkpoint)
@@ -116,7 +128,11 @@ def convert_bottleneck(
     load_bottleneck_state(model, old_state, variant=variant)
     spec = _bottleneck_spec(backbone)
     source = source or spec.source
-    tokenizer_source = tokenizer_source or (str(checkpoint.parent) if (checkpoint.parent / "tokenizer.json").exists() else source)
+    tokenizer_source = tokenizer_source or (
+        str(checkpoint.parent)
+        if (checkpoint.parent / "tokenizer.json").exists()
+        else source
+    )
     save_checkpoint(
         out,
         model,
@@ -143,7 +159,9 @@ def _resolve_dtype(dtype: str):
     try:
         return getattr(torch, dtype)
     except AttributeError as exc:
-        raise ValueError(f"unsupported dtype {dtype!r}; use auto, bfloat16, float16, or float32") from exc
+        raise ValueError(
+            f"unsupported dtype {dtype!r}; use auto, bfloat16, float16, or float32"
+        ) from exc
 
 
 def _infer_model_dtype(model: torch.nn.Module) -> torch.dtype:
@@ -184,7 +202,9 @@ def _load_hf_model(model_id: str, *, torch_dtype, family: str):
         except ImportError:
             AutoModelForMultimodalLM = None
         if AutoModelForMultimodalLM is not None:
-            return AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+            return AutoModelForMultimodalLM.from_pretrained(
+                model_id, torch_dtype=torch_dtype, trust_remote_code=False
+            )
     if family == "gemma4":
         try:
             from transformers import AutoModelForMultimodalLM
@@ -192,17 +212,27 @@ def _load_hf_model(model_id: str, *, torch_dtype, family: str):
             AutoModelForMultimodalLM = None
         if AutoModelForMultimodalLM is not None:
             try:
-                return AutoModelForMultimodalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+                return AutoModelForMultimodalLM.from_pretrained(
+                    model_id, torch_dtype=torch_dtype, trust_remote_code=False
+                )
             except ValueError:
                 pass
-    return AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+    return AutoModelForCausalLM.from_pretrained(
+        model_id, torch_dtype=torch_dtype, trust_remote_code=False
+    )
 
 
 def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     hf_text_cfg = getattr(hf_cfg, "text_config", hf_cfg)
     layer_types = getattr(hf_text_cfg, "layer_types", None)
-    if family == "qwen3" and layer_types and any(t != "full_attention" for t in layer_types):
-        raise NotImplementedError("Qwen3 sliding attention is not implemented in gcw yet.")
+    if (
+        family == "qwen3"
+        and layer_types
+        and any(t != "full_attention" for t in layer_types)
+    ):
+        raise NotImplementedError(
+            "Qwen3 sliding attention is not implemented in gcw yet."
+        )
     if family == "qwen3_5":
         return _qwen35_config_from_hf_text(hf_text_cfg, variant)
     if family == "qwen3_5_moe":
@@ -214,7 +244,9 @@ def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     head_dim = int(getattr(hf_text_cfg, "head_dim", hidden // heads))
     rope_theta = getattr(hf_text_cfg, "rope_theta", None)
     if rope_theta is None:
-        rope_theta = getattr(hf_text_cfg, "rope_parameters", {}).get("rope_theta", 10000.0)
+        rope_theta = getattr(hf_text_cfg, "rope_parameters", {}).get(
+            "rope_theta", 10000.0
+        )
     return ModelConfig(
         variant=variant,
         family=family,
@@ -234,13 +266,19 @@ def config_from_hf(hf_cfg, family: str, variant: str = "tf") -> ModelConfig:
     )
 
 
-def _qwen35_shared_config_kwargs(hf_cfg, variant: str, family: str, intermediate_size: int) -> dict:
+def _qwen35_shared_config_kwargs(
+    hf_cfg, variant: str, family: str, intermediate_size: int
+) -> dict:
     heads = int(hf_cfg.num_attention_heads)
     hidden = int(hf_cfg.hidden_size)
     head_dim = int(getattr(hf_cfg, "head_dim", hidden // heads))
     rope = getattr(hf_cfg, "rope_parameters", {}) or {}
     layer_types = list(getattr(hf_cfg, "layer_types"))
-    processor_layer_indices = [i for i, layer_type in enumerate(layer_types) if layer_type == "full_attention"]
+    processor_layer_indices = [
+        i
+        for i, layer_type in enumerate(layer_types)
+        if layer_type == "full_attention"
+    ]
     return dict(
         variant=variant,
         family=family,
@@ -252,19 +290,41 @@ def _qwen35_shared_config_kwargs(hf_cfg, variant: str, family: str, intermediate
         num_heads=heads,
         num_kv_heads=int(getattr(hf_cfg, "num_key_value_heads", heads)),
         head_dim=head_dim,
-        rope_theta=float(rope.get("rope_theta", getattr(hf_cfg, "rope_theta", 10000.0))),
+        rope_theta=float(
+            rope.get("rope_theta", getattr(hf_cfg, "rope_theta", 10000.0))
+        ),
         norm_eps=float(getattr(hf_cfg, "rms_norm_eps", 1e-6)),
         tie_embeddings=bool(getattr(hf_cfg, "tie_word_embeddings", False)),
         qk_norm=True,
         rotary_style="llama",
         layer_types=layer_types,
         processor_layer_indices=processor_layer_indices,
-        partial_rotary_factor=float(getattr(hf_cfg, "partial_rotary_factor", rope.get("partial_rotary_factor", 1.0))),
-        linear_conv_kernel_dim=int(getattr(hf_cfg, "linear_conv_kernel_dim", 4)),
-        linear_key_head_dim=int(getattr(hf_cfg, "linear_key_head_dim", head_dim)),
-        linear_value_head_dim=int(getattr(hf_cfg, "linear_value_head_dim", head_dim)),
-        linear_num_key_heads=int(getattr(hf_cfg, "linear_num_key_heads", getattr(hf_cfg, "num_key_value_heads", heads))),
-        linear_num_value_heads=int(getattr(hf_cfg, "linear_num_value_heads", heads)),
+        partial_rotary_factor=float(
+            getattr(
+                hf_cfg,
+                "partial_rotary_factor",
+                rope.get("partial_rotary_factor", 1.0),
+            )
+        ),
+        linear_conv_kernel_dim=int(
+            getattr(hf_cfg, "linear_conv_kernel_dim", 4)
+        ),
+        linear_key_head_dim=int(
+            getattr(hf_cfg, "linear_key_head_dim", head_dim)
+        ),
+        linear_value_head_dim=int(
+            getattr(hf_cfg, "linear_value_head_dim", head_dim)
+        ),
+        linear_num_key_heads=int(
+            getattr(
+                hf_cfg,
+                "linear_num_key_heads",
+                getattr(hf_cfg, "num_key_value_heads", heads),
+            )
+        ),
+        linear_num_value_heads=int(
+            getattr(hf_cfg, "linear_num_value_heads", heads)
+        ),
         hidden_act=str(getattr(hf_cfg, "hidden_act", "silu")),
     )
 
@@ -286,24 +346,43 @@ def _qwen35_moe_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
             hf_cfg,
             variant,
             "qwen3_5_moe",
-            int(getattr(hf_cfg, "moe_intermediate_size", getattr(hf_cfg, "intermediate_size", 0))),
+            int(
+                getattr(
+                    hf_cfg,
+                    "moe_intermediate_size",
+                    getattr(hf_cfg, "intermediate_size", 0),
+                )
+            ),
         ),
         moe_intermediate_size=int(getattr(hf_cfg, "moe_intermediate_size")),
         num_experts=int(getattr(hf_cfg, "num_experts")),
         num_experts_per_tok=int(getattr(hf_cfg, "num_experts_per_tok")),
-        shared_expert_intermediate_size=int(getattr(hf_cfg, "shared_expert_intermediate_size")),
-        router_aux_loss_coef=float(getattr(hf_cfg, "router_aux_loss_coef", 0.0)),
-        output_router_logits=bool(getattr(hf_cfg, "output_router_logits", False)),
+        shared_expert_intermediate_size=int(
+            getattr(hf_cfg, "shared_expert_intermediate_size")
+        ),
+        router_aux_loss_coef=float(
+            getattr(hf_cfg, "router_aux_loss_coef", 0.0)
+        ),
+        output_router_logits=bool(
+            getattr(hf_cfg, "output_router_logits", False)
+        ),
     )
 
 
 def _gemma4_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
     if bool(getattr(hf_cfg, "enable_moe_block", False)):
-        raise NotImplementedError("Gemma4 MoE blocks are not implemented in gcw yet.")
+        raise NotImplementedError(
+            "Gemma4 MoE blocks are not implemented in gcw yet."
+        )
     if bool(getattr(hf_cfg, "attention_bias", False)):
-        raise NotImplementedError("Gemma4 attention_bias=True is not implemented in gcw yet.")
+        raise NotImplementedError(
+            "Gemma4 attention_bias=True is not implemented in gcw yet."
+        )
     num_layers = int(hf_cfg.num_hidden_layers)
-    layer_types = list(getattr(hf_cfg, "layer_types", None) or gemma4_default_layer_types(num_layers))
+    layer_types = list(
+        getattr(hf_cfg, "layer_types", None)
+        or gemma4_default_layer_types(num_layers)
+    )
     if layer_types[-1] != "full_attention":
         layer_types[-1] = "full_attention"
     heads = int(hf_cfg.num_attention_heads)
@@ -312,8 +391,15 @@ def _gemma4_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
     rope_parameters = getattr(hf_cfg, "rope_parameters", None)
     if rope_parameters is None:
         rope_parameters = {
-            "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
-            "full_attention": {"rope_type": "proportional", "partial_rotary_factor": 0.25, "rope_theta": 1000000.0},
+            "sliding_attention": {
+                "rope_type": "default",
+                "rope_theta": 10000.0,
+            },
+            "full_attention": {
+                "rope_type": "proportional",
+                "partial_rotary_factor": 0.25,
+                "rope_theta": 1000000.0,
+            },
         }
     cfg = ModelConfig(
         variant=variant,
@@ -326,7 +412,11 @@ def _gemma4_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
         num_heads=heads,
         num_kv_heads=int(getattr(hf_cfg, "num_key_value_heads", heads)),
         head_dim=head_dim,
-        rope_theta=float(rope_parameters.get("sliding_attention", {}).get("rope_theta", 10000.0)),
+        rope_theta=float(
+            rope_parameters.get("sliding_attention", {}).get(
+                "rope_theta", 10000.0
+            )
+        ),
         norm_eps=float(getattr(hf_cfg, "rms_norm_eps", 1e-6)),
         tie_embeddings=bool(getattr(hf_cfg, "tie_word_embeddings", True)),
         qk_norm=True,
@@ -341,11 +431,27 @@ def _gemma4_config_from_hf_text(hf_cfg, variant: str) -> ModelConfig:
         global_head_dim=int(getattr(hf_cfg, "global_head_dim", head_dim)),
         attention_k_eq_v=bool(getattr(hf_cfg, "attention_k_eq_v", False)),
         num_kv_shared_layers=int(getattr(hf_cfg, "num_kv_shared_layers", 0)),
-        hidden_size_per_layer_input=int(getattr(hf_cfg, "hidden_size_per_layer_input", 0) or 0),
-        vocab_size_per_layer_input=int(getattr(hf_cfg, "vocab_size_per_layer_input", getattr(hf_cfg, "vocab_size"))),
-        final_logit_softcapping=getattr(hf_cfg, "final_logit_softcapping", None),
+        hidden_size_per_layer_input=int(
+            getattr(hf_cfg, "hidden_size_per_layer_input", 0) or 0
+        ),
+        vocab_size_per_layer_input=int(
+            getattr(
+                hf_cfg,
+                "vocab_size_per_layer_input",
+                getattr(hf_cfg, "vocab_size"),
+            )
+        ),
+        final_logit_softcapping=getattr(
+            hf_cfg, "final_logit_softcapping", None
+        ),
         rope_parameters=rope_parameters,
-        hidden_act=str(getattr(hf_cfg, "hidden_activation", getattr(hf_cfg, "hidden_act", "gelu_pytorch_tanh"))),
+        hidden_act=str(
+            getattr(
+                hf_cfg,
+                "hidden_activation",
+                getattr(hf_cfg, "hidden_act", "gelu_pytorch_tanh"),
+            )
+        ),
         use_double_wide_mlp=bool(getattr(hf_cfg, "use_double_wide_mlp", False)),
     )
     cfg.processor_layer_indices = cfg.cache_layer_indices
@@ -362,9 +468,17 @@ def config_from_bottleneck(
     if variant not in {"bt", "bgt"}:
         raise ValueError("bottleneck configs support only bt and bgt variants")
     spec = _bottleneck_spec(backbone)
-    vocab_size = spec.legacy_vocab_size if legacy_vocab and spec.legacy_vocab_size is not None else spec.vocab_size
+    vocab_size = (
+        spec.legacy_vocab_size
+        if legacy_vocab and spec.legacy_vocab_size is not None
+        else spec.vocab_size
+    )
     hidden = spec.bt_hidden_size if variant == "bt" else spec.bgt_hidden_size
-    intermediate = spec.bt_intermediate_size if variant == "bt" else spec.bgt_intermediate_size
+    intermediate = (
+        spec.bt_intermediate_size
+        if variant == "bt"
+        else spec.bgt_intermediate_size
+    )
     return ModelConfig(
         variant=variant,
         family=spec.family,
@@ -436,7 +550,9 @@ def config_from_ppt_meta(meta: dict) -> ModelConfig:
     )
 
 
-def load_bottleneck_state(native, old_state: dict[str, torch.Tensor], variant: str) -> None:
+def load_bottleneck_state(
+    native, old_state: dict[str, torch.Tensor], variant: str
+) -> None:
     target = native.state_dict()
     mapped: dict[str, torch.Tensor] = {}
     unmapped: list[str] = []
@@ -470,12 +586,17 @@ def load_bottleneck_state(native, old_state: dict[str, torch.Tensor], variant: s
     native.load_state_dict(mapped, strict=True)
 
 
-def _pad_vocab_tensor(key: str, expected: torch.Tensor, tensor: torch.Tensor) -> torch.Tensor | None:
+def _pad_vocab_tensor(
+    key: str, expected: torch.Tensor, tensor: torch.Tensor
+) -> torch.Tensor | None:
     if key not in {"backbone.embed_tokens.weight", "backbone.lm_head.weight"}:
         return None
     if expected.ndim != tensor.ndim or expected.ndim != 2:
         return None
-    if expected.shape[0] < tensor.shape[0] or expected.shape[1:] != tensor.shape[1:]:
+    if (
+        expected.shape[0] < tensor.shape[0]
+        or expected.shape[1:] != tensor.shape[1:]
+    ):
         return None
     padded = expected.clone()
     padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
@@ -490,10 +611,17 @@ def _map_bottleneck_key(key: str, variant: str) -> str | None:
     if variant == "bt" and key.startswith("cache_processor.processor_blocks."):
         rest = key.removeprefix("cache_processor.processor_blocks.")
         layer, sub = rest.split(".", 1)
-        return "cache_processor.blocks." + layer + "." + _map_processor_subkey(sub, "transformer.")
+        return (
+            "cache_processor.blocks."
+            + layer
+            + "."
+            + _map_processor_subkey(sub, "transformer.")
+        )
     if variant == "bgt" and key.startswith("cache_processor.unified_block."):
         sub = key.removeprefix("cache_processor.unified_block.")
-        return "cache_processor.block." + _map_processor_subkey(sub, "transformer.0.")
+        return "cache_processor.block." + _map_processor_subkey(
+            sub, "transformer.0."
+        )
     return None
 
 
@@ -524,7 +652,9 @@ def _map_processor_subkey(sub: str, transformer_prefix: str) -> str:
     return inner
 
 
-def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llama") -> None:
+def load_hf_state(
+    native, hf_state: dict[str, torch.Tensor], family: str = "llama"
+) -> None:
     target = native.backbone if hasattr(native, "backbone") else native
     if family == "qwen3_5":
         return _load_qwen35_hf_state(target, hf_state)
@@ -557,8 +687,12 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
             f"{prefix}.mlp.down_proj.weight": f"{remote}.mlp.down_proj.weight",
         }
         if family == "qwen3":
-            names[f"{prefix}.self_attn.q_norm.weight"] = f"{remote}.self_attn.q_norm.weight"
-            names[f"{prefix}.self_attn.k_norm.weight"] = f"{remote}.self_attn.k_norm.weight"
+            names[f"{prefix}.self_attn.q_norm.weight"] = (
+                f"{remote}.self_attn.q_norm.weight"
+            )
+            names[f"{prefix}.self_attn.k_norm.weight"] = (
+                f"{remote}.self_attn.k_norm.weight"
+            )
         for local, key in names.items():
             if local in state and key in hf_state:
                 mapped[local] = hf_state[key]
@@ -566,12 +700,17 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
     for key, tensor in mapped.items():
         if merged[key].shape == tensor.shape:
             merged[key] = tensor
-        elif key in {"embed_tokens.weight", "lm_head.weight"} and merged[key].shape[1:] == tensor.shape[1:]:
+        elif (
+            key in {"embed_tokens.weight", "lm_head.weight"}
+            and merged[key].shape[1:] == tensor.shape[1:]
+        ):
             padded = merged[key].clone()
             padded[: tensor.shape[0]] = tensor
             merged[key] = padded
         else:
-            raise ValueError(f"shape mismatch for {key}: native {tuple(merged[key].shape)} vs HF {tuple(tensor.shape)}")
+            raise ValueError(
+                f"shape mismatch for {key}: native {tuple(merged[key].shape)} vs HF {tuple(tensor.shape)}"
+            )
     missing, unexpected = target.load_state_dict(merged, strict=False)
     missing = [m for m in missing if not m.startswith("rotary.")]
     if missing:
@@ -581,10 +720,16 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
 
 
 def _qwen35_remote_candidates(remote_key: str) -> list[str]:
-    return [f"model.language_model.{remote_key}", f"language_model.{remote_key}", remote_key]
+    return [
+        f"model.language_model.{remote_key}",
+        f"language_model.{remote_key}",
+        remote_key,
+    ]
 
 
-def _map_qwen35_shared_hf_state(target, hf_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def _map_qwen35_shared_hf_state(
+    target, hf_state: dict[str, torch.Tensor]
+) -> dict[str, torch.Tensor]:
     state = target.state_dict()
     mapped: dict[str, torch.Tensor] = {}
     direct_pairs = {
@@ -600,7 +745,11 @@ def _map_qwen35_shared_hf_state(target, hf_state: dict[str, torch.Tensor]) -> di
             "model.norm.weight",
             "norm.weight",
         ],
-        "lm_head.weight": ["model.language_model.lm_head.weight", "language_model.lm_head.weight", "lm_head.weight"],
+        "lm_head.weight": [
+            "model.language_model.lm_head.weight",
+            "language_model.lm_head.weight",
+            "lm_head.weight",
+        ],
     }
     for local, remotes in direct_pairs.items():
         if local in state:
@@ -640,13 +789,17 @@ def _map_qwen35_shared_hf_state(target, hf_state: dict[str, torch.Tensor]) -> di
                 }
             )
         for local, remote_key in pairs.items():
-            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _qwen35_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
     return mapped
 
 
-def _load_mapped_qwen35_state(target, mapped: dict[str, torch.Tensor], missing_message: str) -> None:
+def _load_mapped_qwen35_state(
+    target, mapped: dict[str, torch.Tensor], missing_message: str
+) -> None:
     state = target.state_dict()
     optional = {"lm_head.weight"}
     missing = sorted(set(state) - set(mapped) - optional)
@@ -658,12 +811,18 @@ def _load_mapped_qwen35_state(target, mapped: dict[str, torch.Tensor], missing_m
         if expected.shape == tensor.shape:
             loadable[key] = tensor.to(dtype=expected.dtype)
             continue
-        if key in {"embed_tokens.weight", "lm_head.weight"} and expected.ndim == tensor.ndim == 2 and expected.shape[1:] == tensor.shape[1:]:
+        if (
+            key in {"embed_tokens.weight", "lm_head.weight"}
+            and expected.ndim == tensor.ndim == 2
+            and expected.shape[1:] == tensor.shape[1:]
+        ):
             padded = expected.clone()
             padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
             loadable[key] = padded
             continue
-        raise ValueError(f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}")
+        raise ValueError(
+            f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}"
+        )
     target.load_state_dict(loadable, strict=True)
 
 
@@ -677,13 +836,19 @@ def _load_qwen35_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             f"{prefix}.mlp.up_proj.weight": f"{remote}.up_proj.weight",
             f"{prefix}.mlp.down_proj.weight": f"{remote}.down_proj.weight",
         }.items():
-            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _qwen35_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
-    _load_mapped_qwen35_state(target, mapped, "missing Qwen3.5 HF text weights for native keys")
+    _load_mapped_qwen35_state(
+        target, mapped, "missing Qwen3.5 HF text weights for native keys"
+    )
 
 
-def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
+def _load_qwen35_moe_hf_state(
+    target, hf_state: dict[str, torch.Tensor]
+) -> None:
     mapped = _map_qwen35_shared_hf_state(target, hf_state)
     for i in range(target.config.num_layers):
         prefix = f"layers.{i}"
@@ -697,34 +862,58 @@ def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None
             f"{prefix}.mlp.shared_expert.down_proj.weight": f"{remote}.shared_expert.down_proj.weight",
             f"{prefix}.mlp.shared_expert_gate.weight": f"{remote}.shared_expert_gate.weight",
         }.items():
-            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _qwen35_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
-    _load_mapped_qwen35_state(target, mapped, "missing Qwen3.5-MoE HF text weights for native keys")
+    _load_mapped_qwen35_state(
+        target, mapped, "missing Qwen3.5-MoE HF text weights for native keys"
+    )
 
 
 def _gemma4_remote_candidates(remote_key: str) -> list[str]:
-    return [f"model.language_model.{remote_key}", f"language_model.{remote_key}", remote_key]
+    return [
+        f"model.language_model.{remote_key}",
+        f"language_model.{remote_key}",
+        remote_key,
+    ]
 
 
 def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
     state = target.state_dict()
     mapped: dict[str, torch.Tensor] = {}
     direct_pairs = {
-        "embed_tokens.weight": ["model.embed_tokens.weight", "embed_tokens.weight"],
+        "embed_tokens.weight": [
+            "model.embed_tokens.weight",
+            "embed_tokens.weight",
+        ],
         "norm.weight": ["model.norm.weight", "norm.weight"],
         "lm_head.weight": ["lm_head.weight"],
-        "embed_tokens_per_layer.weight": ["model.embed_tokens_per_layer.weight", "embed_tokens_per_layer.weight"],
+        "embed_tokens_per_layer.weight": [
+            "model.embed_tokens_per_layer.weight",
+            "embed_tokens_per_layer.weight",
+        ],
         "per_layer_model_projection.weight": [
             "model.per_layer_model_projection.weight",
             "per_layer_model_projection.weight",
         ],
-        "per_layer_projection_norm.weight": ["model.per_layer_projection_norm.weight", "per_layer_projection_norm.weight"],
+        "per_layer_projection_norm.weight": [
+            "model.per_layer_projection_norm.weight",
+            "per_layer_projection_norm.weight",
+        ],
     }
     for local, remotes in direct_pairs.items():
         if local not in state:
             continue
-        key = _first_existing(hf_state, [candidate for remote in remotes for candidate in _gemma4_remote_candidates(remote)])
+        key = _first_existing(
+            hf_state,
+            [
+                candidate
+                for remote in remotes
+                for candidate in _gemma4_remote_candidates(remote)
+            ],
+        )
         if key is not None:
             mapped[local] = hf_state[key]
     for i, layer in enumerate(target.layers):
@@ -744,10 +933,16 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             f"{prefix}.mlp.down_proj.weight": f"{remote}.mlp.down_proj.weight",
         }
         if not layer.self_attn.is_kv_shared_layer:
-            pairs[f"{prefix}.self_attn.k_proj.weight"] = f"{remote}.self_attn.k_proj.weight"
-            pairs[f"{prefix}.self_attn.k_norm.weight"] = f"{remote}.self_attn.k_norm.weight"
+            pairs[f"{prefix}.self_attn.k_proj.weight"] = (
+                f"{remote}.self_attn.k_proj.weight"
+            )
+            pairs[f"{prefix}.self_attn.k_norm.weight"] = (
+                f"{remote}.self_attn.k_norm.weight"
+            )
             if f"{prefix}.self_attn.v_proj.weight" in state:
-                pairs[f"{prefix}.self_attn.v_proj.weight"] = f"{remote}.self_attn.v_proj.weight"
+                pairs[f"{prefix}.self_attn.v_proj.weight"] = (
+                    f"{remote}.self_attn.v_proj.weight"
+                )
         if target.config.hidden_size_per_layer_input:
             pairs.update(
                 {
@@ -759,13 +954,20 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
         for local, remote_key in pairs.items():
             if local not in state:
                 continue
-            key = _first_existing(hf_state, _gemma4_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _gemma4_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
-    optional = {"lm_head.weight", *{f"layers.{i}.layer_scalar" for i in range(len(target.layers))}}
+    optional = {
+        "lm_head.weight",
+        *{f"layers.{i}.layer_scalar" for i in range(len(target.layers))},
+    }
     missing = sorted(set(state) - set(mapped) - optional)
     if missing:
-        raise KeyError(f"missing Gemma4 HF text weights for native keys: {missing[:8]}")
+        raise KeyError(
+            f"missing Gemma4 HF text weights for native keys: {missing[:8]}"
+        )
     loadable = {}
     for key, tensor in {**state, **mapped}.items():
         expected = state[key]
@@ -773,7 +975,12 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             loadable[key] = tensor.to(dtype=expected.dtype)
             continue
         if (
-            key in {"embed_tokens.weight", "lm_head.weight", "embed_tokens_per_layer.weight"}
+            key
+            in {
+                "embed_tokens.weight",
+                "lm_head.weight",
+                "embed_tokens_per_layer.weight",
+            }
             and expected.ndim == tensor.ndim == 2
             and expected.shape[1:] == tensor.shape[1:]
             and expected.shape[0] >= tensor.shape[0]
@@ -782,11 +989,15 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
             loadable[key] = padded
             continue
-        raise ValueError(f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}")
+        raise ValueError(
+            f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}"
+        )
     target.load_state_dict(loadable, strict=True)
 
 
-def _first_existing(state: dict[str, torch.Tensor], keys: list[str]) -> str | None:
+def _first_existing(
+    state: dict[str, torch.Tensor], keys: list[str]
+) -> str | None:
     for key in keys:
         if key in state:
             return key
@@ -808,30 +1019,55 @@ def load_ppt_state(native, ppt_state: dict[str, torch.Tensor]) -> None:
         remote = f"transformer.h.{i}"
         mapped.update(
             {
-                f"{prefix}.input_layernorm.weight": ppt_state[f"{remote}.input_layernorm.weight"],
-                f"{prefix}.post_attention_layernorm.weight": ppt_state[f"{remote}.post_attention_layernorm.weight"],
-                f"{prefix}.self_attn.q_proj.weight": ppt_state[f"{remote}.attn.q_proj.weight"],
-                f"{prefix}.self_attn.k_proj.weight": ppt_state[f"{remote}.attn.k_proj.weight"],
-                f"{prefix}.self_attn.v_proj.weight": ppt_state[f"{remote}.attn.v_proj.weight"],
-                f"{prefix}.self_attn.o_proj.weight": ppt_state[f"{remote}.attn.o_proj.weight"],
-                f"{prefix}.mlp.gate_proj.weight": ppt_state[f"{remote}.mlp.gate_proj.weight"],
-                f"{prefix}.mlp.up_proj.weight": ppt_state[f"{remote}.mlp.up_proj.weight"],
-                f"{prefix}.mlp.down_proj.weight": ppt_state[f"{remote}.mlp.down_proj.weight"],
+                f"{prefix}.input_layernorm.weight": ppt_state[
+                    f"{remote}.input_layernorm.weight"
+                ],
+                f"{prefix}.post_attention_layernorm.weight": ppt_state[
+                    f"{remote}.post_attention_layernorm.weight"
+                ],
+                f"{prefix}.self_attn.q_proj.weight": ppt_state[
+                    f"{remote}.attn.q_proj.weight"
+                ],
+                f"{prefix}.self_attn.k_proj.weight": ppt_state[
+                    f"{remote}.attn.k_proj.weight"
+                ],
+                f"{prefix}.self_attn.v_proj.weight": ppt_state[
+                    f"{remote}.attn.v_proj.weight"
+                ],
+                f"{prefix}.self_attn.o_proj.weight": ppt_state[
+                    f"{remote}.attn.o_proj.weight"
+                ],
+                f"{prefix}.mlp.gate_proj.weight": ppt_state[
+                    f"{remote}.mlp.gate_proj.weight"
+                ],
+                f"{prefix}.mlp.up_proj.weight": ppt_state[
+                    f"{remote}.mlp.up_proj.weight"
+                ],
+                f"{prefix}.mlp.down_proj.weight": ppt_state[
+                    f"{remote}.mlp.down_proj.weight"
+                ],
             }
         )
     missing = sorted(set(state) - set(mapped))
     extra = sorted(set(mapped) - set(state))
     if missing or extra:
-        raise KeyError(f"PPT mapping mismatch missing={missing[:8]} extra={extra[:8]}")
+        raise KeyError(
+            f"PPT mapping mismatch missing={missing[:8]} extra={extra[:8]}"
+        )
     loadable = {}
     for key, tensor in mapped.items():
         tensor = tensor.to(dtype=state[key].dtype)
         if state[key].shape == tensor.shape:
             loadable[key] = tensor
-        elif key in {"embed_tokens.weight", "lm_head.weight"} and state[key].shape[1:] == tensor.shape[1:]:
+        elif (
+            key in {"embed_tokens.weight", "lm_head.weight"}
+            and state[key].shape[1:] == tensor.shape[1:]
+        ):
             padded = state[key].clone()
             padded[: tensor.shape[0]] = tensor
             loadable[key] = padded
         else:
-            raise ValueError(f"shape mismatch for {key}: native {tuple(state[key].shape)} vs PPT {tuple(tensor.shape)}")
+            raise ValueError(
+                f"shape mismatch for {key}: native {tuple(state[key].shape)} vs PPT {tuple(tensor.shape)}"
+            )
     target.load_state_dict(loadable, strict=True)

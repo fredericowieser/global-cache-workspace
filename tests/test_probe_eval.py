@@ -6,7 +6,11 @@ import sys
 def test_probe_eval_reports_partial_progress(tmp_path):
     partial = tmp_path / "partial.json"
     progress = tmp_path / "progress.json"
-    partial.write_text(json.dumps({"results": {"gsm8k_openmath": {"exact_match,flexible": 0.25}}}))
+    partial.write_text(
+        json.dumps(
+            {"results": {"gsm8k_openmath": {"exact_match,flexible": 0.25}}}
+        )
+    )
     progress.write_text(
         json.dumps(
             {

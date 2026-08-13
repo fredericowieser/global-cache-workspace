@@ -127,5 +127,7 @@ BOTTLENECK_SPECS: dict[str, BottleneckSpec] = {
 def bottleneck_spec(backbone: str) -> BottleneckSpec:
     key = backbone.lower()
     if key not in BOTTLENECK_SPECS:
-        raise ValueError(f"unsupported bottleneck backbone {backbone!r}; expected one of {sorted(BOTTLENECK_SPECS)}")
+        raise ValueError(
+            f"unsupported bottleneck backbone {backbone!r}; expected one of {sorted(BOTTLENECK_SPECS)}"
+        )
     return BOTTLENECK_SPECS[key]

@@ -3,7 +3,13 @@ import sys
 
 import torch
 
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, WandbConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    ModelConfig,
+    TrainConfig,
+    WandbConfig,
+)
 from gcw.checkpoint import load_checkpoint, save_checkpoint
 from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
@@ -81,7 +87,13 @@ def tiny_train_config(tmp_path):
         eval_every=1,
         eval_batches=1,
         eval_on_start=True,
-        wandb=WandbConfig(enabled=True, project="test-project", name="tiny", mode="offline", log_every=1),
+        wandb=WandbConfig(
+            enabled=True,
+            project="test-project",
+            name="tiny",
+            mode="offline",
+            log_every=1,
+        ),
     )
 
 
@@ -138,10 +150,16 @@ def test_train_logs_longshot_iteration_overlap_metrics(monkeypatch, tmp_path):
 
     _, metrics = fake.run.logs[0]
     assert "cache_processor/selected_head_overlap_after_iter_1" in metrics
-    assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
+    assert (
+        0.0
+        <= metrics["cache_processor/selected_head_overlap_after_iter_1"]
+        <= 1.0
+    )
 
 
-def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp_path):
+def test_train_logs_longshot_external_iteration_overlap_metrics(
+    monkeypatch, tmp_path
+):
     fake = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake)
     cfg = tiny_train_config(tmp_path)
@@ -178,7 +196,11 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp
 
     _, metrics = fake.run.logs[0]
     assert "cache_processor/selected_head_overlap_after_iter_1" in metrics
-    assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
+    assert (
+        0.0
+        <= metrics["cache_processor/selected_head_overlap_after_iter_1"]
+        <= 1.0
+    )
 
 
 def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
@@ -192,7 +214,9 @@ def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
 def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
     cfg = tiny_train_config(tmp_path)
 
-    model = _build_training_model(cfg, torch.device("cpu"), rank=1, use_fsdp=True)
+    model = _build_training_model(
+        cfg, torch.device("cpu"), rank=1, use_fsdp=True
+    )
 
     assert all(param.is_meta for param in model.parameters())
 
@@ -224,7 +248,9 @@ def test_validate_train_batch_rejects_batch_size_mismatch(tmp_path):
         raise AssertionError("expected batch size mismatch to fail")
 
 
-def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step(monkeypatch, tmp_path):
+def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step(
+    monkeypatch, tmp_path
+):
     cfg = tiny_train_config(tmp_path)
     cfg.wandb.enabled = False
     cfg.eval_every = 0
@@ -232,7 +258,9 @@ def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step
     cfg.save_every = 1
     calls = []
 
-    def fake_save(path, model, model_config, checkpoint_state, *, use_fsdp=False):
+    def fake_save(
+        path, model, model_config, checkpoint_state, *, use_fsdp=False
+    ):
         calls.append((path, checkpoint_state["step"], use_fsdp))
 
     monkeypatch.setattr("gcw.train._save_training_checkpoint", fake_save)
@@ -333,7 +361,10 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
     train(cfg)
 
     trained, _, _ = load_checkpoint(tmp_path / "run" / "checkpoint")
-    assert torch.allclose(trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123))
+    assert torch.allclose(
+        trained.backbone.embed_tokens.weight,
+        torch.full_like(trained.backbone.embed_tokens.weight, 0.123),
+    )
 
 
 def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
@@ -345,7 +376,9 @@ def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
         tokenizer="hf",
         tokenizer_source="/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model",
     )
-    cfg.backbone_checkpoint = "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf"
+    cfg.backbone_checkpoint = (
+        "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf"
+    )
 
     state = _checkpoint_metadata(cfg, {"step": 0, "world_size": 1})
 
@@ -359,10 +392,18 @@ def test_checkpoint_state_drops_runtime_loader_tensors():
     state = _checkpoint_state(
         {"world_size": 1},
         5,
-        {"kind": "sft", "row": 7, "attention_mask": torch.ones(1, 2, dtype=torch.bool)},
+        {
+            "kind": "sft",
+            "row": 7,
+            "attention_mask": torch.ones(1, 2, dtype=torch.bool),
+        },
     )
 
-    assert state == {"world_size": 1, "step": 5, "loader": {"kind": "sft", "row": 7}}
+    assert state == {
+        "world_size": 1,
+        "step": 5,
+        "loader": {"kind": "sft", "row": 7},
+    }
 
 
 def test_sft_batch_uses_next_token_targets():
@@ -388,7 +429,10 @@ def test_sft_batch_can_return_attention_mask():
 
     assert x.tolist() == [[1, 2, 0, 0], [1, 2, 3, 0]]
     assert y.tolist() == [[2, 0, -100, -100], [-100, 3, 0, -100]]
-    assert attention_mask.tolist() == [[True, True, True, False], [True, True, True, True]]
+    assert attention_mask.tolist() == [
+        [True, True, True, False],
+        [True, True, True, True],
+    ]
 
 
 def test_model_loss_forwards_attention_mask():
@@ -397,7 +441,9 @@ def test_model_loss_forwards_attention_mask():
             super().__init__()
             self.seen_mask = None
 
-        def forward(self, input_ids, targets, loss_reduction="mean", attention_mask=None):
+        def forward(
+            self, input_ids, targets, loss_reduction="mean", attention_mask=None
+        ):
             self.seen_mask = attention_mask
             return input_ids.float().sum() + targets.float().sum()
 

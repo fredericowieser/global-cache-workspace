@@ -10,7 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 BAD_PACKAGES = [
     "nvidia-cublas",
     "nvidia-cuda-cupti",
@@ -54,17 +53,27 @@ def installed_version(name: str) -> str | None:
 
 
 def main() -> int:
-    bad_installed = {name: installed_version(name) for name in BAD_PACKAGES if installed_version(name)}
+    bad_installed = {
+        name: installed_version(name)
+        for name in BAD_PACKAGES
+        if installed_version(name)
+    }
     if bad_installed:
         for name, version in sorted(bad_installed.items()):
-            print(f"Unexpected CUDA 13 package installed: {name}=={version}", file=sys.stderr)
+            print(
+                f"Unexpected CUDA 13 package installed: {name}=={version}",
+                file=sys.stderr,
+            )
         return 1
 
     root = site_packages()
     missing = [rel for rel in REQUIRED_LIBS if not (root / rel).exists()]
     if missing:
         for rel in missing:
-            print(f"Missing required PyTorch CUDA library: {root / rel}", file=sys.stderr)
+            print(
+                f"Missing required PyTorch CUDA library: {root / rel}",
+                file=sys.stderr,
+            )
         return 1
 
     try:
@@ -74,7 +83,10 @@ def main() -> int:
         return 1
 
     if torch.version.cuda != "12.8":
-        print(f"Expected torch CUDA runtime 12.8, got {torch.version.cuda}", file=sys.stderr)
+        print(
+            f"Expected torch CUDA runtime 12.8, got {torch.version.cuda}",
+            file=sys.stderr,
+        )
         return 1
 
     nccl_lib = root / "nvidia/nccl/lib/libnccl.so.2"
@@ -87,12 +99,20 @@ def main() -> int:
 
     nccl_package_version = installed_version("nvidia-nccl-cu12")
     if nccl_package_version is None:
-        print("Could not determine installed nvidia-nccl-cu12 version", file=sys.stderr)
+        print(
+            "Could not determine installed nvidia-nccl-cu12 version",
+            file=sys.stderr,
+        )
         return 1
     try:
-        major, minor, patch = (int(part) for part in nccl_package_version.split(".")[:3])
+        major, minor, patch = (
+            int(part) for part in nccl_package_version.split(".")[:3]
+        )
     except (TypeError, ValueError):
-        print(f"Could not parse nvidia-nccl-cu12 version {nccl_package_version!r}", file=sys.stderr)
+        print(
+            f"Could not parse nvidia-nccl-cu12 version {nccl_package_version!r}",
+            file=sys.stderr,
+        )
         return 1
     expected_nccl_code = major * 10000 + minor * 100 + patch
     if version.value != expected_nccl_code:
@@ -111,7 +131,10 @@ def main() -> int:
         stderr=subprocess.DEVNULL,
     ).stdout
     if "cuda13" in strings.lower():
-        print(f"NCCL library appears to be a CUDA 13 build: {nccl_lib}", file=sys.stderr)
+        print(
+            f"NCCL library appears to be a CUDA 13 build: {nccl_lib}",
+            file=sys.stderr,
+        )
         return 1
 
     return 0

@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 import yaml
 
-
 Variant = Literal["tf", "bt", "bgt", "icarus", "longshot"]
 Family = Literal["smollm", "llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"]
 RotaryStyle = Literal["llama", "ppt"]
@@ -14,16 +13,23 @@ MoeExpertsImplementation = Literal["grouped_mm"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
-CacheProcessorMode = Literal["standard", "workspace_broadcast", "head_mask_broadcast"]
+CacheProcessorMode = Literal[
+    "standard", "workspace_broadcast", "head_mask_broadcast"
+]
 CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
 CacheProcessorIterationMode = Literal["internal", "external"]
-CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention", "kv_norm"]
+CacheProcessorInternalIterationScore = Literal[
+    "attn_l2", "cache_head_attention", "kv_norm"
+]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 
 
 def gemma4_default_layer_types(num_layers: int) -> list[str]:
-    layer_types = ["sliding_attention" if bool((i + 1) % 6) else "full_attention" for i in range(num_layers)]
+    layer_types = [
+        "sliding_attention" if bool((i + 1) % 6) else "full_attention"
+        for i in range(num_layers)
+    ]
     if layer_types:
         layer_types[-1] = "full_attention"
     return layer_types
@@ -69,40 +75,78 @@ class CacheProcessorConfig:
 
     def __post_init__(self) -> None:
         if self.score not in {"attn_l2", "kv_norm"}:
-            raise ValueError("cache_processor.score must be 'attn_l2' or 'kv_norm'")
+            raise ValueError(
+                "cache_processor.score must be 'attn_l2' or 'kv_norm'"
+            )
         if self.topk_heads <= 0:
             raise ValueError("cache_processor.topk_heads must be positive")
         if self.topk_linear_heads is not None and self.topk_linear_heads < 0:
-            raise ValueError("cache_processor.topk_linear_heads must be non-negative when set")
+            raise ValueError(
+                "cache_processor.topk_linear_heads must be non-negative when set"
+            )
         if self.update_stream not in {"kv", "v"}:
-            raise ValueError("cache_processor.update_stream must be 'kv' or 'v'")
+            raise ValueError(
+                "cache_processor.update_stream must be 'kv' or 'v'"
+            )
         if self.out_proj_init not in {"normal", "zero"}:
-            raise ValueError("cache_processor.out_proj_init must be 'normal' or 'zero'")
+            raise ValueError(
+                "cache_processor.out_proj_init must be 'normal' or 'zero'"
+            )
         if self.gate_mode not in {"sigmoid", "direct"}:
-            raise ValueError("cache_processor.gate_mode must be 'sigmoid' or 'direct'")
-        if self.processor_mode not in {"standard", "workspace_broadcast", "head_mask_broadcast"}:
-            raise ValueError("cache_processor.processor_mode must be 'standard', 'workspace_broadcast', or 'head_mask_broadcast'")
+            raise ValueError(
+                "cache_processor.gate_mode must be 'sigmoid' or 'direct'"
+            )
+        if self.processor_mode not in {
+            "standard",
+            "workspace_broadcast",
+            "head_mask_broadcast",
+        }:
+            raise ValueError(
+                "cache_processor.processor_mode must be 'standard', 'workspace_broadcast', or 'head_mask_broadcast'"
+            )
         if not 0.0 < self.writer_head_fraction <= 1.0:
-            raise ValueError("cache_processor.writer_head_fraction must be in (0, 1]")
+            raise ValueError(
+                "cache_processor.writer_head_fraction must be in (0, 1]"
+            )
         if self.salience_temperature <= 0.0:
-            raise ValueError("cache_processor.salience_temperature must be positive")
+            raise ValueError(
+                "cache_processor.salience_temperature must be positive"
+            )
         if self.kv_score_init_k <= 0.0 or self.kv_score_init_v <= 0.0:
-            raise ValueError("cache_processor.kv_score_init_k and kv_score_init_v must be positive")
+            raise ValueError(
+                "cache_processor.kv_score_init_k and kv_score_init_v must be positive"
+            )
         if self.encoder_method not in {"linear", "query_attention"}:
-            raise ValueError("cache_processor.encoder_method must be 'linear' or 'query_attention'")
+            raise ValueError(
+                "cache_processor.encoder_method must be 'linear' or 'query_attention'"
+            )
         if self.encoder_seq_len is not None and self.encoder_seq_len <= 0:
-            raise ValueError("cache_processor.encoder_seq_len must be positive when set")
+            raise ValueError(
+                "cache_processor.encoder_seq_len must be positive when set"
+            )
         if self.encoder_query_source not in {"learned", "final_token"}:
-            raise ValueError("cache_processor.encoder_query_source must be 'learned' or 'final_token'")
+            raise ValueError(
+                "cache_processor.encoder_query_source must be 'learned' or 'final_token'"
+            )
         if self.iterations < 1:
             raise ValueError("cache_processor.iterations must be positive")
         if self.iteration_mode not in {"internal", "external"}:
-            raise ValueError("cache_processor.iteration_mode must be 'internal' or 'external'")
-        if self.internal_iteration_score not in {"attn_l2", "cache_head_attention", "kv_norm"}:
+            raise ValueError(
+                "cache_processor.iteration_mode must be 'internal' or 'external'"
+            )
+        if self.internal_iteration_score not in {
+            "attn_l2",
+            "cache_head_attention",
+            "kv_norm",
+        }:
             raise ValueError(
                 "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', or 'kv_norm'"
             )
-        if self.linear_state_query_mode not in {"per_linear_state", "shared", "global"}:
+        if self.linear_state_query_mode not in {
+            "per_linear_state",
+            "shared",
+            "global",
+        }:
             raise ValueError(
                 "cache_processor.linear_state_query_mode must be 'per_linear_state', 'shared', or 'global'"
             )
@@ -113,7 +157,9 @@ class CacheProcessorConfig:
             return 2
         if self.update_stream == "v":
             return 1
-        raise ValueError(f"unsupported cache_processor.update_stream: {self.update_stream}")
+        raise ValueError(
+            f"unsupported cache_processor.update_stream: {self.update_stream}"
+        )
 
 
 @dataclass
@@ -171,29 +217,51 @@ class ModelConfig:
             self.layer_types = list(self.layer_types)
             if len(self.layer_types) != self.num_layers:
                 raise ValueError("layer_types must have length num_layers")
-            allowed = {"full_attention", "linear_attention", "sliding_attention"} if self.family == "gemma4" else {
-                "full_attention",
-                "linear_attention",
-            }
+            allowed = (
+                {"full_attention", "linear_attention", "sliding_attention"}
+                if self.family == "gemma4"
+                else {
+                    "full_attention",
+                    "linear_attention",
+                }
+            )
             unknown = sorted(set(self.layer_types) - allowed)
             if unknown:
                 raise ValueError(f"unsupported layer_types: {unknown}")
-            if self.family == "gemma4" and self.layer_types[-1] != "full_attention":
+            if (
+                self.family == "gemma4"
+                and self.layer_types[-1] != "full_attention"
+            ):
                 self.layer_types[-1] = "full_attention"
         if self.processor_layer_indices is not None:
-            self.processor_layer_indices = [int(i) for i in self.processor_layer_indices]
-            if any(i < 0 or i >= self.num_layers for i in self.processor_layer_indices):
-                raise ValueError("processor_layer_indices entries must be valid layer indices")
+            self.processor_layer_indices = [
+                int(i) for i in self.processor_layer_indices
+            ]
+            if any(
+                i < 0 or i >= self.num_layers
+                for i in self.processor_layer_indices
+            ):
+                raise ValueError(
+                    "processor_layer_indices entries must be valid layer indices"
+                )
             if self.layer_types is not None:
                 cache_layers = set(self._default_cache_layer_indices())
-                non_cache = [i for i in self.processor_layer_indices if i not in cache_layers]
+                non_cache = [
+                    i
+                    for i in self.processor_layer_indices
+                    if i not in cache_layers
+                ]
                 if non_cache:
-                    raise ValueError("processor_layer_indices must reference cache-bearing layers")
+                    raise ValueError(
+                        "processor_layer_indices must reference cache-bearing layers"
+                    )
         if self.family in {"qwen3_5", "qwen3_5_moe"}:
             if self.layer_types is None:
                 raise ValueError(f"{self.family} requires layer_types")
             if self.linear_key_head_dim is None:
-                self.linear_key_head_dim = int(self.head_dim or self.hidden_size // self.num_heads)
+                self.linear_key_head_dim = int(
+                    self.head_dim or self.hidden_size // self.num_heads
+                )
             if self.linear_value_head_dim is None:
                 self.linear_value_head_dim = self.linear_key_head_dim
             if self.linear_num_key_heads is None:
@@ -202,11 +270,15 @@ class ModelConfig:
                 self.linear_num_value_heads = self.num_heads
         if self.family == "qwen3_5_moe":
             if self.moe_experts_implementation != "grouped_mm":
-                raise ValueError("qwen3_5_moe supports only moe_experts_implementation='grouped_mm'")
+                raise ValueError(
+                    "qwen3_5_moe supports only moe_experts_implementation='grouped_mm'"
+                )
             if self.moe_intermediate_size is None:
                 self.moe_intermediate_size = self.intermediate_size
             if self.shared_expert_intermediate_size is None:
-                self.shared_expert_intermediate_size = self.moe_intermediate_size
+                self.shared_expert_intermediate_size = (
+                    self.moe_intermediate_size
+                )
             if self.num_experts <= 0:
                 raise ValueError("qwen3_5_moe requires num_experts")
             if self.num_experts_per_tok <= 0:
@@ -214,19 +286,32 @@ class ModelConfig:
         if self.family == "gemma4":
             if self.layer_types is None:
                 raise ValueError("gemma4 requires layer_types")
-            if any(layer_type == "linear_attention" for layer_type in self.layer_types):
-                raise ValueError("gemma4 does not support linear_attention layers")
+            if any(
+                layer_type == "linear_attention"
+                for layer_type in self.layer_types
+            ):
+                raise ValueError(
+                    "gemma4 does not support linear_attention layers"
+                )
             if self.sliding_window is None:
                 self.sliding_window = 512
             if self.global_head_dim is None:
                 self.global_head_dim = self.head_dim
             if self.vocab_size_per_layer_input is None:
                 self.vocab_size_per_layer_input = self.vocab_size
-            if self.num_kv_shared_layers < 0 or self.num_kv_shared_layers > self.num_layers:
-                raise ValueError("num_kv_shared_layers must be in [0, num_layers]")
+            if (
+                self.num_kv_shared_layers < 0
+                or self.num_kv_shared_layers > self.num_layers
+            ):
+                raise ValueError(
+                    "num_kv_shared_layers must be in [0, num_layers]"
+                )
             if self.rope_parameters is None:
                 self.rope_parameters = {
-                    "sliding_attention": {"rope_type": "default", "rope_theta": 10000.0},
+                    "sliding_attention": {
+                        "rope_type": "default",
+                        "rope_theta": 10000.0,
+                    },
                     "full_attention": {
                         "rope_type": "proportional",
                         "partial_rotary_factor": 0.25,
@@ -241,19 +326,35 @@ class ModelConfig:
             raise ValueError("num_heads must be divisible by num_kv_heads")
         if not 0.0 < self.partial_rotary_factor <= 1.0:
             raise ValueError("partial_rotary_factor must be in (0, 1]")
-        if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:
+        if (
+            self.variant in {"bt", "bgt", "icarus", "longshot"}
+            and self.cache_processor is None
+        ):
             self.cache_processor = CacheProcessorConfig()
-        if self.cache_processor is not None and self.cache_processor.linear_state_cache:
+        if (
+            self.cache_processor is not None
+            and self.cache_processor.linear_state_cache
+        ):
             if self.variant != "longshot":
-                raise ValueError("cache_processor.linear_state_cache is supported only for variant='longshot'")
+                raise ValueError(
+                    "cache_processor.linear_state_cache is supported only for variant='longshot'"
+                )
             if self.family not in {"qwen3_5", "qwen3_5_moe"}:
-                raise ValueError("cache_processor.linear_state_cache requires family='qwen3_5' or 'qwen3_5_moe'")
+                raise ValueError(
+                    "cache_processor.linear_state_cache requires family='qwen3_5' or 'qwen3_5_moe'"
+                )
             if self.cache_processor.encoder_method != "query_attention":
-                raise ValueError("cache_processor.linear_state_cache requires encoder_method='query_attention'")
+                raise ValueError(
+                    "cache_processor.linear_state_cache requires encoder_method='query_attention'"
+                )
             if self.cache_processor.encoder_query_source != "final_token":
-                raise ValueError("cache_processor.linear_state_cache requires encoder_query_source='final_token'")
+                raise ValueError(
+                    "cache_processor.linear_state_cache requires encoder_query_source='final_token'"
+                )
             if self.cache_processor.update_stream != "kv":
-                raise ValueError("cache_processor.linear_state_cache requires update_stream='kv'")
+                raise ValueError(
+                    "cache_processor.linear_state_cache requires update_stream='kv'"
+                )
 
     @property
     def cache_layer_indices(self) -> list[int]:
@@ -268,9 +369,14 @@ class ModelConfig:
                 return [
                     i
                     for i, layer_type in enumerate(self.layer_types)
-                    if layer_type in {"full_attention", "sliding_attention"} and i < first_shared
+                    if layer_type in {"full_attention", "sliding_attention"}
+                    and i < first_shared
                 ]
-            return [i for i, layer_type in enumerate(self.layer_types) if layer_type == "full_attention"]
+            return [
+                i
+                for i, layer_type in enumerate(self.layer_types)
+                if layer_type == "full_attention"
+            ]
         return list(range(self.num_layers))
 
     @property
@@ -280,12 +386,17 @@ class ModelConfig:
     @property
     def cache_num_heads(self) -> int:
         if self.family == "gemma4":
-            return sum(self.kv_heads_for_layer(i) for i in self.cache_layer_indices)
+            return sum(
+                self.kv_heads_for_layer(i) for i in self.cache_layer_indices
+            )
         return self.cache_num_layers * self.num_kv_heads
 
     @property
     def stored_cache_shapes(self) -> list[tuple[int, int]]:
-        return [(self.kv_heads_for_layer(i), self.head_dim_for_layer(i)) for i in self.cache_layer_indices]
+        return [
+            (self.kv_heads_for_layer(i), self.head_dim_for_layer(i))
+            for i in self.cache_layer_indices
+        ]
 
     @property
     def stored_cache_shape(self) -> tuple[int, int]:
@@ -294,14 +405,18 @@ class ModelConfig:
             return self.num_kv_heads, int(self.head_dim)
         unique = set(shapes)
         if len(unique) > 1:
-            raise ValueError("stored cache layers do not have a uniform KV shape")
+            raise ValueError(
+                "stored cache layers do not have a uniform KV shape"
+            )
         return shapes[0]
 
     def ensure_uniform_stored_cache_shape(self, owner: str) -> None:
         if self.family != "gemma4":
             return
         if len(set(self.stored_cache_shapes)) > 1:
-            raise ValueError(f"{owner} requires uniform stored KV shapes for Gemma4 cache processing")
+            raise ValueError(
+                f"{owner} requires uniform stored KV shapes for Gemma4 cache processing"
+            )
 
     def kv_heads_for_layer(self, layer_idx: int) -> int:
         if (
@@ -314,7 +429,11 @@ class ModelConfig:
         return self.num_kv_heads
 
     def head_dim_for_layer(self, layer_idx: int) -> int:
-        if self.family == "gemma4" and self.layer_types is not None and self.layer_types[layer_idx] == "full_attention":
+        if (
+            self.family == "gemma4"
+            and self.layer_types is not None
+            and self.layer_types[layer_idx] == "full_attention"
+        ):
             return int(self.global_head_dim or self.head_dim)
         return int(self.head_dim)
 
@@ -323,7 +442,9 @@ class ModelConfig:
         return self.moe_experts_implementation
 
 
-def linear_attention_following_cache_indices(config: ModelConfig, *, require_layer_types: bool = False) -> list[tuple[int, int]]:
+def linear_attention_following_cache_indices(
+    config: ModelConfig, *, require_layer_types: bool = False
+) -> list[tuple[int, int]]:
     if config.layer_types is None:
         if require_layer_types:
             raise ValueError("Longshot linear_state_cache requires layer_types")
@@ -333,9 +454,18 @@ def linear_attention_following_cache_indices(config: ModelConfig, *, require_lay
     for layer_idx, layer_type in enumerate(config.layer_types):
         if layer_type != "linear_attention":
             continue
-        following = next((cache_idx for cache_idx, full_idx in enumerate(cache_layer_indices) if full_idx > layer_idx), None)
+        following = next(
+            (
+                cache_idx
+                for cache_idx, full_idx in enumerate(cache_layer_indices)
+                if full_idx > layer_idx
+            ),
+            None,
+        )
         if following is None:
-            raise ValueError(f"linear_attention layer {layer_idx} has no following full-attention cache layer")
+            raise ValueError(
+                f"linear_attention layer {layer_idx} has no following full-attention cache layer"
+            )
         pairs.append((layer_idx, following))
     return pairs
 
@@ -416,9 +546,30 @@ class EvalConfig:
 
 
 SMOLLM_CONFIGS: dict[str, ModelConfig] = {
-    "smollm-135m": ModelConfig(num_layers=30, hidden_size=576, num_heads=9, num_kv_heads=3, head_dim=64, intermediate_size=1536),
-    "smollm-360m": ModelConfig(num_layers=32, hidden_size=960, num_heads=15, num_kv_heads=5, head_dim=64, intermediate_size=2560),
-    "smollm-1.7b": ModelConfig(num_layers=24, hidden_size=2048, num_heads=32, num_kv_heads=32, head_dim=64, intermediate_size=8192),
+    "smollm-135m": ModelConfig(
+        num_layers=30,
+        hidden_size=576,
+        num_heads=9,
+        num_kv_heads=3,
+        head_dim=64,
+        intermediate_size=1536,
+    ),
+    "smollm-360m": ModelConfig(
+        num_layers=32,
+        hidden_size=960,
+        num_heads=15,
+        num_kv_heads=5,
+        head_dim=64,
+        intermediate_size=2560,
+    ),
+    "smollm-1.7b": ModelConfig(
+        num_layers=24,
+        hidden_size=2048,
+        num_heads=32,
+        num_kv_heads=32,
+        head_dim=64,
+        intermediate_size=8192,
+    ),
 }
 
 

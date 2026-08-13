@@ -8,22 +8,52 @@ from pathlib import Path
 
 from extract_paper_table import TASK_COLUMNS, _extract_row, _markdown
 
-
 PAPER7_TASKS = tuple(TASK_COLUMNS)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Probe GCW eval progress, results, and rough ETA.")
-    parser.add_argument("--json", default="results/llama32_1b_bgt_paper7_fast.json", help="Final eval JSON path")
-    parser.add_argument("--partial", default="results/paper7_fast_partial/partial.json", help="Partial eval JSON path")
-    parser.add_argument("--progress", default="results/paper7_fast_partial/progress.json", help="Progress sidecar JSON path")
-    parser.add_argument("--log", default=None, help="Optional eval log path for timestamp fallback")
-    parser.add_argument("--job-id", type=int, default=None, help="Optional Slurm allocation id for GPU status")
-    parser.add_argument("--skip-tasks", default="", help="Comma-separated tasks to omit from expected progress")
+    parser = argparse.ArgumentParser(
+        description="Probe GCW eval progress, results, and rough ETA."
+    )
+    parser.add_argument(
+        "--json",
+        default="results/llama32_1b_bgt_paper7_fast.json",
+        help="Final eval JSON path",
+    )
+    parser.add_argument(
+        "--partial",
+        default="results/paper7_fast_partial/partial.json",
+        help="Partial eval JSON path",
+    )
+    parser.add_argument(
+        "--progress",
+        default="results/paper7_fast_partial/progress.json",
+        help="Progress sidecar JSON path",
+    )
+    parser.add_argument(
+        "--log",
+        default=None,
+        help="Optional eval log path for timestamp fallback",
+    )
+    parser.add_argument(
+        "--job-id",
+        type=int,
+        default=None,
+        help="Optional Slurm allocation id for GPU status",
+    )
+    parser.add_argument(
+        "--skip-tasks",
+        default="",
+        help="Comma-separated tasks to omit from expected progress",
+    )
     parser.add_argument("--tasks", choices=["paper7"], default="paper7")
     args = parser.parse_args()
 
-    tasks = tuple(task for task in PAPER7_TASKS if task not in _skip_tasks(args.skip_tasks))
+    tasks = tuple(
+        task
+        for task in PAPER7_TASKS
+        if task not in _skip_tasks(args.skip_tasks)
+    )
     final_path = Path(args.json)
     partial_path = Path(args.partial)
     progress_path = Path(args.progress)
@@ -31,14 +61,20 @@ def main() -> None:
     payload = _read_json(result_path) or {}
     progress = _read_json(progress_path) or {}
 
-    status = "complete" if final_path.exists() else "running" if payload else "not-started"
+    status = (
+        "complete"
+        if final_path.exists()
+        else "running" if payload else "not-started"
+    )
     completed = sorted(payload.get("results", {}))
     total = len(tasks)
     eta = _eta(progress, completed, total, args.log)
 
     print(f"Status: {status}")
     print(f"Result: {result_path if payload else 'none'}")
-    print(f"Completed: {len(completed)}/{total} ({', '.join(completed) if completed else 'none'})")
+    print(
+        f"Completed: {len(completed)}/{total} ({', '.join(completed) if completed else 'none'})"
+    )
     if progress:
         print(f"Updated: {progress.get('updated_at', 'unknown')}")
     print(f"Elapsed: {_fmt_seconds(_elapsed(progress, args.log))}")
@@ -73,7 +109,9 @@ def _elapsed(progress: dict, log: str | None) -> float | None:
     return None
 
 
-def _eta(progress: dict, completed: list[str], total: int, log: str | None) -> float | None:
+def _eta(
+    progress: dict, completed: list[str], total: int, log: str | None
+) -> float | None:
     if progress.get("eta_sec") is not None:
         return float(progress["eta_sec"])
     elapsed = _elapsed(progress, log)
@@ -110,7 +148,11 @@ def _gpu_status(job_id: int) -> str:
             text=True,
             timeout=15,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+    ):
         return ""
     return out.strip()
 

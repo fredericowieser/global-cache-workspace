@@ -44,7 +44,12 @@ class BGT(nn.Module):
         )
 
     @torch.no_grad()
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, eos_token_id: int | None = None) -> torch.Tensor:
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int,
+        eos_token_id: int | None = None,
+    ) -> torch.Tensor:
         cp = self.config.cache_processor
         legacy = self.config.legacy_bottleneck_generate
         return self.backbone.generate(
@@ -86,4 +91,12 @@ class BGT(nn.Module):
         total = sum(p.numel() for p in self.parameters())
         if not non_embedding:
             return total
-        return total - self.backbone.embed_tokens.weight.numel() - (0 if self.backbone.lm_head is None else self.backbone.lm_head.weight.numel())
+        return (
+            total
+            - self.backbone.embed_tokens.weight.numel()
+            - (
+                0
+                if self.backbone.lm_head is None
+                else self.backbone.lm_head.weight.numel()
+            )
+        )

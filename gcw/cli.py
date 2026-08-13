@@ -8,7 +8,14 @@ from gcw.data.fineweb import prepare_fineweb
 from gcw.data.sft import prepare_openmath
 from pathlib import Path
 
-from gcw.eval import is_main_process, run_core, run_fineweb, run_math, run_paper7, run_ppt
+from gcw.eval import (
+    is_main_process,
+    run_core,
+    run_fineweb,
+    run_math,
+    run_paper7,
+    run_ppt,
+)
 from gcw.params import write_family_configs
 from gcw.train import train_from_config
 
@@ -63,23 +70,47 @@ def main(argv: list[str] | None = None) -> None:
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
     hf = convert_sub.add_parser("hf")
-    hf.add_argument("--family", choices=["llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"], required=True)
+    hf.add_argument(
+        "--family",
+        choices=["llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"],
+        required=True,
+    )
     hf.add_argument("--model", required=True)
-    hf.add_argument("--variant", choices=["tf", "bt", "bgt", "icarus", "longshot"], default="tf")
-    hf.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
+    hf.add_argument(
+        "--variant",
+        choices=["tf", "bt", "bgt", "icarus", "longshot"],
+        default="tf",
+    )
+    hf.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="bfloat16",
+    )
     hf.add_argument("--out", required=True)
     ppt = convert_sub.add_parser("ppt")
     ppt.add_argument("--checkpoint", required=True)
     ppt.add_argument("--meta", required=True)
-    ppt.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="bfloat16")
+    ppt.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="bfloat16",
+    )
     ppt.add_argument("--out", required=True)
     bottleneck = convert_sub.add_parser("bottleneck")
     bottleneck.add_argument("--checkpoint", required=True)
     bottleneck.add_argument("--variant", choices=["bt", "bgt"], required=True)
-    bottleneck.add_argument("--dtype", choices=["auto", "bfloat16", "float16", "float32"], default="auto")
+    bottleneck.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
     bottleneck.add_argument("--source", default=None)
     bottleneck.add_argument("--tokenizer-source", default=None)
-    bottleneck.add_argument("--backbone", choices=["llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b", "qwen3-0.6b"], default="llama-3.2-1b")
+    bottleneck.add_argument(
+        "--backbone",
+        choices=["llama-3.2-1b", "llama-3.2-3b", "llama-3.1-8b", "qwen3-0.6b"],
+        default="llama-3.2-1b",
+    )
     bottleneck.add_argument("--sequence-len", type=int, default=8192)
     bottleneck.add_argument("--legacy-generate", action="store_true")
     bottleneck.add_argument("--out", required=True)
@@ -91,12 +122,18 @@ def main(argv: list[str] | None = None) -> None:
     make.add_argument("--processor-fraction", type=float, default=0.05)
     make.add_argument("--out", default="configs/model/generated")
     make.add_argument("--target-non-embedding", type=int, default=None)
-    make.add_argument("--regime", choices=["added_on_top", "matched_total"], default="added_on_top")
+    make.add_argument(
+        "--regime",
+        choices=["added_on_top", "matched_total"],
+        default="added_on_top",
+    )
 
     args = parser.parse_args(argv)
     if args.cmd == "prepare":
         if args.kind == "fineweb":
-            prepare_fineweb(args.out, shard_tokens=args.shard_tokens, limit=args.limit)
+            prepare_fineweb(
+                args.out, shard_tokens=args.shard_tokens, limit=args.limit
+            )
         else:
             rows = prepare_openmath(args.source, args.out, limit=args.limit)
             print(f"Wrote {rows} rows to {args.out}")
@@ -104,10 +141,22 @@ def main(argv: list[str] | None = None) -> None:
         train_from_config(args.config)
     elif args.cmd == "eval":
         if args.suite == "fineweb":
-            results = run_fineweb(args.checkpoint, data_dir=args.data_dir, eval_tokens=args.eval_tokens, batch_size=args.batch_size)
+            results = run_fineweb(
+                args.checkpoint,
+                data_dir=args.data_dir,
+                eval_tokens=args.eval_tokens,
+                batch_size=args.batch_size,
+            )
         else:
-            runners = {"core": run_core, "math": run_math, "paper7": run_paper7, "ppt": run_ppt}
-            results = runners[args.suite](args.checkpoint, limit=args.limit, batch_size=args.batch_size)
+            runners = {
+                "core": run_core,
+                "math": run_math,
+                "paper7": run_paper7,
+                "ppt": run_ppt,
+            }
+            results = runners[args.suite](
+                args.checkpoint, limit=args.limit, batch_size=args.batch_size
+            )
         if not is_main_process():
             return
         text = json.dumps(results, indent=2, default=str)
