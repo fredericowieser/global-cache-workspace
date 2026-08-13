@@ -134,6 +134,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
         "dataset_path": data_manifest["dataset_path"],
         "tokenizer_source": args.model,
         "backbone_checkpoint": str(Path(args.backbone_checkpoint).resolve()),
+        "sequence_length_decision": "approved_4k_compute_tradeoff",
     }
     contract_path = output / "campaign.json"
     contract_path.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")

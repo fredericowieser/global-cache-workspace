@@ -21,6 +21,7 @@ class CampaignContract:
     dataset_path: str | None = None
     tokenizer_source: str | None = None
     backbone_checkpoint: str | None = None
+    sequence_length_decision: str | None = None
 
     @classmethod
     def load(cls, path: str | Path) -> "CampaignContract":
