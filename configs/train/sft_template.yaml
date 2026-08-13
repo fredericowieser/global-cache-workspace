@@ -1,0 +1,49 @@
+model:
+  variant: bgt
+  family: llama
+  sequence_len: 4096
+  vocab_size: 128256
+  hidden_size: 2048
+  intermediate_size: 8192
+  num_layers: 16
+  num_heads: 32
+  num_kv_heads: 8
+  head_dim: 64
+  rope_theta: 500000.0
+  norm_eps: 1.0e-5
+  tie_embeddings: true
+  qk_norm: false
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 32
+    hidden_size: 512
+    intermediate_size: 2048
+    num_layers: 1
+    num_heads: 8
+    num_kv_heads: 8
+
+data:
+  kind: sft
+  dataset: data/train-data/sft.jsonl
+  tokenizer: hf
+  tokenizer_source: data/runs/llama32-1b-tf-init
+  response_prefix: "\n"
+  sft_loss_scope: answer_only
+mode: sft
+distributed: none
+trainable: all
+backbone_checkpoint: data/runs/llama32-1b-tf-init
+output_dir: data/runs/llama32-1b-bgt-sft
+batch_size: 1
+sequence_len: 4096
+max_steps: 1000
+learning_rate: 3.0e-5
+warmup_steps: 50
+warmdown_ratio: 0.2
+grad_clip: 1.0
+bf16: true
+save_every: 100
+wandb:
+  enabled: false

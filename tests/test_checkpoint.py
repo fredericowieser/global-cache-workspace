@@ -3,8 +3,8 @@ import pytest
 
 from gcw.checkpoint import load_checkpoint, publish_final_checkpoint_manifest, save_checkpoint
 from gcw.config import ModelConfig
-from gcw.eval import GCWEvalLM
-from gcw.eval_support import tokenizer_for_checkpoint
+from gcw.evaluation.core import GCWEvalLM
+from gcw.evaluation.scoring import HFTokenizerAdapter, tokenizer_for_checkpoint
 from gcw.models import build_model
 
 
@@ -54,12 +54,42 @@ def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
     assert lm.apply_chat_template([{"role": "user", "content": "hi"}]) == "user:hi:True"
 
 
+def test_hf_eval_tokenizer_adapter_exposes_the_training_tokenizer_contract():
+    class FakeTokenizer:
+        name_or_path = "fake-tokenizer"
+        eos_token_id = 7
+        pad_token_id = 0
+        bos_token_id = 1
+        special_tokens_map = {"eos_token": "</s>"}
+        chat_template = "{{ messages }}"
+
+        def __len__(self):
+            return 32
+
+        def get_vocab(self):
+            return {"a": 0, "b": 1}
+
+        def encode(self, text, add_special_tokens=False):
+            return [1]
+
+        def decode(self, ids, skip_special_tokens=False):
+            return "decoded"
+
+        def apply_chat_template(self, *args, **kwargs):
+            return [1, 2]
+
+    adapter = HFTokenizerAdapter(FakeTokenizer(), "fake-tokenizer")
+
+    assert adapter.get_vocab_size() == 32
+    assert len(adapter.identity_sha256()) == 64
+    assert adapter.apply_chat_template([], tokenize=True, add_generation_prompt=True) == [1, 2]
+
+
 
 def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(tmp_path):
     from gcw.checkpoint import load_checkpoint, save_checkpoint
     from gcw.config import CacheProcessorConfig, ModelConfig
-    from gcw.models import build_model
-    from gcw.models.bgt import BGT
+    from gcw.models import LanguageModel, build_model
 
     config = ModelConfig(
         variant="bgt",
@@ -79,7 +109,7 @@ def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(tmp_path)
         ),
     )
     model = build_model(config)
-    assert isinstance(model, BGT)
+    assert isinstance(model, LanguageModel)
     model.backbone.to(dtype=torch.bfloat16)
     model.cache_processor.to(dtype=torch.float32)
     model.cache_processor.block.gate.data.fill_(-4.9896)
@@ -92,7 +122,7 @@ def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(tmp_path)
 
     loaded, _, _ = load_checkpoint(tmp_path / "mixed")
 
-    assert isinstance(loaded, BGT)
+    assert isinstance(loaded, LanguageModel)
     assert {p.dtype for p in loaded.backbone.parameters()} == {torch.bfloat16}
     assert {p.dtype for p in loaded.cache_processor.parameters()} == {torch.float32}
     assert loaded.cache_processor.block.gate.item() == pytest.approx(-4.9896)

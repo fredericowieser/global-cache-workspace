@@ -42,7 +42,6 @@ model:
     encoder_query_source: learned
     unrope_keys: false
     encoder_seq_len: null
-  legacy_bottleneck_generate: false
 metadata:
   backbone_non_embedding_params: 314635200
   processor_params: 15018817

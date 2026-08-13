@@ -2,7 +2,7 @@ from dataclasses import replace
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
-from gcw.models.transformer import estimate_non_embedding_params
+from gcw.models.backbones.transformer import estimate_non_embedding_params
 from gcw.params import (
     fit_matched_total_backbone,
     fit_processor_config,

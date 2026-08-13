@@ -1,9 +1,9 @@
 import torch
 
 from gcw.config import CacheProcessorConfig
-from gcw.models.cache_processor_ops import rotary_for_indices
-from gcw.models.icarus import ProcessorAttention
-from gcw.models.transformer import apply_rotary
+from gcw.models.cache_processors.ops import rotary_for_indices
+from gcw.models.cache_processors.icarus import ProcessorAttention
+from gcw.models.backbones.transformer import apply_rotary
 
 
 def test_processor_attention_self_head_kv_matches_dense_gqa_reference_with_positions():

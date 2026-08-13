@@ -3,8 +3,8 @@ from __future__ import annotations
 import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
-from gcw.models.longshot import GlobalCacheProcessor
-from gcw.models.windowed_cache import WindowedCache
+from gcw.models.cache_processors.longshot import GlobalCacheProcessor
+from gcw.models.cache_processors.windowed import WindowedCache
 
 
 def _processor() -> GlobalCacheProcessor:

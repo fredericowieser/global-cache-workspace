@@ -1,210 +1,94 @@
 # Global Cache Workspace
 
-GCW is a PyTorch workspace for training, converting, and evaluating transformer baselines and cache-processor models:
+GCW tests whether small learned processors can improve a causal language model by selecting, transforming, and rewriting its internal cache.
 
-- `TF`: a standard causal transformer.
-- `BT`: a bottlenecked transformer with one cache processor per backbone layer.
-- `BGT`: a bottlenecked global transformer with one shared cache processor across layers.
-- `Icarus`: a global cache-head processor that reads selected cache tokens and rewrites the latest selected cache position.
-- `Longshot`: an iterative global cache processor with configurable cache encoding and query sources.
+Supported backbones: SmolLM, Llama 3/3.1/3.2, Qwen3, Qwen3.5 dense and MoE, and Gemma4.
 
-The repo supports three workflows:
+Implemented model compositions:
 
-1. Scratch pretraining on FineWeb-Edu shards.
-2. SFT or continued SFT on OpenMathInstruct-style JSONL.
-3. Frozen or unfrozen BT/BGT/Icarus cache-processor finetuning from shared Llama/Qwen SFT backbones.
+- **TF**: causal-transformer baseline.
+- **BT**: one cache processor per backbone layer.
+- **BGT**: one processor across selected state from all layers.
+- **Icarus**: cache-head selection with frontier writeback.
+- **Longshot**: time compression, cross-head processing, persistent workspace, and recurrence.
+- **Flow**: deterministic, time-conditioned latent refinement inside BGT, Icarus, or Longshot.
 
-HF checkpoints are converted into native GCW `safetensors`; training and eval do not use HF model wrappers.
+GCW supports scratch FineWeb pretraining and supervised fine-tuning with answer-only or full-sequence cross-entropy. Training can update the backbone, cache processor, or both. Capability admission rejects incompatible compositions before model allocation or output writes.
 
-## Setup
+## Install
+
+GCW requires one Torch runtime extra.
 
 ```bash
-uv sync --extra cpu --extra convert --extra eval
-uv run --extra cpu --group dev ruff check gcw scripts tests
+uv sync --extra cpu --extra convert --extra eval --group dev
+```
+
+Use `--extra gpu` or `--extra rocm` instead of `--extra cpu` on the corresponding accelerator. Qwen3.5 optimized kernels also require `--extra qwen35`.
+
+## Verify the installation
+
+```bash
+uv run --extra cpu python examples/cpu_smoke.py
 uv run --extra cpu --group dev pytest -q
 ```
 
-On the LRC H100 cluster, use the GPU extra inside Slurm:
+The smoke program constructs TF and BGT, computes finite losses, admits Longshot, and demonstrates one fail-closed composition.
+
+## Train
+
+Run a CPU smoke config:
 
 ```bash
-uv sync --extra gpu --extra convert --extra eval
+uv run --extra cpu gcw train --config configs/train/smoke_tf.yaml
 ```
 
-GPU compute must run inside a Slurm allocation, for example with `srun --jobid=<job> --overlap ...`.
-
-### UV Extras
-
-Use extras according to the code path being run:
-
-| Use case | Extras |
-|---|---|
-| CPU development and tests | `--extra cpu` |
-| CUDA training | `--extra gpu` |
-| Evaluation with `lm-eval`/Transformers | `--extra eval` |
-| Checkpoint conversion | `--extra convert` |
-| Qwen3.5 linear-attention training or eval | `--extra qwen35` |
-
-Qwen3.5 configs require `--extra qwen35` in addition to the normal GPU/eval extras. This installs the optimized
-`causal-conv1d` and `flash-linear-attention` kernels; without it, Qwen3.5 falls back to slower, higher-memory PyTorch
-implementations and may OOM at otherwise valid batch sizes.
-
-`scripts/submit_array.sh` defaults to `UV_EXTRAS="--extra gpu --extra eval"`. Override the training and eval extras
-when submitting Qwen3.5 arrays:
+Run a GPU config inside a Slurm allocation:
 
 ```bash
-TRAIN_UV_EXTRAS="--extra gpu --extra eval --extra qwen35" \
-EVAL_UV_EXTRAS="--extra gpu --extra eval --extra qwen35" \
-scripts/submit_array.sh configs/experiments/qwen35_2b_*.yaml
+uv run --extra gpu gcw train --config /path/to/experiment.yaml
 ```
 
-## Data
+New local run records live under `data/training-runs/`. They contain resolved config, metrics, logs, environment, provenance, and W&B identity. Mutable checkpoints remain separate.
 
-Prepare FineWeb-Edu shards for scratch pretraining:
+## Evaluate
 
 ```bash
-gcw prepare fineweb --out /mnt/jfs-01/shared/gcw/data/fineweb_edu_dedup_cosmo2
+uv run --extra cpu --extra eval gcw eval all \
+  --checkpoint /path/to/checkpoint \
+  --limit 1 \
+  --out data/results/core-smoke.json
 ```
 
-Prepare OpenMathInstruct SFT JSONL from a legacy Arrow or JSONL source:
+Evaluation creates an independent record under `data/eval-runs/`. It does not mutate training state.
+
+## Documentation
+
+The [documentation index](docs/index.md) is the human knowledge layer.
+
+- [Installation](docs/getting-started/installation.md)
+- [GCW overview](docs/concepts/overview.md)
+- [Cache processing](docs/concepts/cache-processing.md)
+- [Model variants](docs/concepts/model-variants.md)
+- [Training configuration](docs/guides/configure-training.md)
+- [Checkpoint formats](docs/reference/checkpoint-formats.md)
+- [Run format](docs/reference/run-format.md)
+- [Internal architecture](docs/development/architecture.md)
+- [Active refactor plan](docs/development/refactor-plan.md)
+
+Build the documentation with warnings treated as errors:
 
 ```bash
-gcw prepare openmath \
-  --source /home/f50056118/bottleneck_llm/data/OpenMathInstruct-2 \
-  --out /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
+uv run --extra cpu --group docs python scripts/docs/generate_reference.py
+uv run --extra cpu --group docs sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
-Rows are normalized to `{"prompt": ..., "answer": ...}`. During SFT, prompt tokens are masked with `-100` and only answer tokens contribute to the loss.
+## Repository boundaries
 
-## Checkpoints
+- `src/gcw/`: reusable installed library.
+- `configs/`: human-authored experiment definitions.
+- `data/`: dataset registries, run records, mutable state, results, evidence, and generated analysis.
+- `scripts/`: thin data, analysis, cluster, and publication commands.
+- `examples/`: executable examples used by documentation and CI.
+- `tests/`: unit, integration, provenance, and compatibility contracts.
 
-Publish the shared GCW-native Bottleneck LLM artifacts:
-
-```bash
-uv run --extra cpu --extra convert python scripts/publish_bottleneck_llm_artifacts.py \
-  --root /mnt/jfs-01/shared/gcw
-```
-
-This writes:
-
-- `/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/...`
-- `/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/...`
-- `/mnt/jfs-01/shared/gcw/manifest.json`
-- `/mnt/jfs-01/shared/gcw/MANIFEST.md`
-
-See [docs/checkpoints.md](docs/checkpoints.md). Training checkpoints use a separate, resumable format described in
-[docs/training-resume.md](docs/training-resume.md).
-
-## Training
-
-Scratch SmolLM 360M pretraining:
-
-```bash
-sbatch --export=ALL,CONFIG=configs/train/smollm360m_tf_20b_wandb.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/smollm360m_matched_bt_20b.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/smollm360m_matched_bgt_20b.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/smollm360m_matched_icarus_20b.yaml scripts/slurm/train.sbatch
-```
-
-Bottleneck LLM reproduction configs live under `configs/train/bottleneck_llm/`.
-
-```bash
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_bgt_from_sft_frozen.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml scripts/slurm/train.sbatch
-```
-
-For the standard Llama 3.2 1B frozen-backbone Icarus run on the LRC cluster:
-
-```bash
-bash scripts/martin.sh
-```
-
-Run the same configs directly inside an existing Slurm allocation:
-
-```bash
-uv run --extra gpu gcw train --config configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml
-```
-
-Qwen3-0.6B on-policy self-distillation with privileged teacher reasoning has a bounded 128-prompt pilot:
-
-```bash
-uv run --extra gpu --extra convert gcw train --config configs/train/opsd/qwen3_06b_opsd_pilot128.yaml
-```
-
-This mode trains only BGT, excludes teacher reasoning and source solutions from KL positions, and processes cache at the prompt boundary and every 64 answer tokens. See [docs/opsd-distillation.md](docs/opsd-distillation.md).
-
-Icarus OpenMath configs are available for all shared SFT backbones:
-
-```bash
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_1b_icarus_from_sft_frozen_shared.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama32_3b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/llama31_8b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
-sbatch --export=ALL,CONFIG=configs/train/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen.yaml scripts/slurm/train.sbatch
-```
-
-Exact-resume templates live under `configs/train/resume/`. `max_steps` always means the total target step, not the
-number of additional steps after resuming.
-
-See [docs/training-modes.md](docs/training-modes.md), [docs/training-resume.md](docs/training-resume.md), and
-[docs/reproduce-bottleneck-llm.md](docs/reproduce-bottleneck-llm.md).
-
-## Evaluation
-
-Evaluate the verified Llama 3.2 1B BGT checkpoint from shared storage:
-
-```bash
-CHECKPOINT=/mnt/jfs-01/shared/gcw/checkpoints/bottleneck_llm/llama32_1b/bgt/final \
-SUITE=paper7 \
-GCW_EVAL_SKIP_TASKS=theoremqa \
-BATCH_SIZE=16 \
-OUT=results/llama32_1b_bgt_paper7.json \
-sbatch scripts/slurm/eval.sbatch
-```
-
-Flatten a paper-table result:
-
-```bash
-uv run --extra eval python scripts/extract_paper_table.py \
-  --json results/llama32_1b_bgt_paper7.json \
-  --out results/llama32_1b_bgt_paper7.md \
-  --csv results/llama32_1b_bgt_paper7.csv
-```
-
-## Optional latent-flow dynamics
-
-BGT, ICaRUS, and Longshot use the same opt-in latent-flow configuration. Keep the base `variant` unchanged and add:
-
-```yaml
-model:
-  variant: longshot  # or bgt / icarus
-  cache_processor:
-    # existing processor configuration
-  flow_processor:
-    num_steps: 2
-    time_conditioning: true
-    eta_max: 1.0
-    flow_gate_init: -4.0
-```
-
-The solver refines one gathered hidden workspace before decoding and cache writeback. `num_steps` reuses the same processor field, so it changes compute but not model width or field parameters. Flow-Longshot keeps selected heads fixed inside the solver. It may combine flow with `iteration_mode: external`, but rejects internal Longshot iterations greater than one.
-
-Run the accelerator smoke test with:
-
-```bash
-uv run --extra gpu python scripts/flow_smoke.py --device cuda --flow-steps 2
-```
-
-## Research analysis
-
-The imported cache-head and Longshot analyses share the same checkpoint tokenization and generation semantics as the
-main evaluation path:
-
-```bash
-bash scripts/run_bottleneck_synergy.sh
-bash scripts/run_bottleneck_head_loss_dump.sh
-bash scripts/run_longshot_gsm8k_iterations.sh
-```
-
-For sharded Longshot analysis, first submit `scripts/slurm/longshot_4gpu_allocation.sbatch`, then run
-`scripts/run_longshot_gsm8k_iterations_4gpu.sh`.
-
-The branch-integration history and recovery hashes are recorded in [docs/unified-dev.md](docs/unified-dev.md).
+Local metric files are canonical. W&B mirrors them. Historical evidence keeps its original paths and identity schemas.

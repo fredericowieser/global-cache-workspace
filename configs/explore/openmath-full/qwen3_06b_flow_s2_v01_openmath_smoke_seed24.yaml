@@ -33,7 +33,6 @@ model:
     encoder_query_source: final_token
     update_stream: v
     unrope_keys: true
-  legacy_bottleneck_generate: false
   workspace_flow_refinement:
     solver: midpoint
     solver_steps: 2
@@ -50,7 +49,7 @@ data:
 
 mode: sft
 distributed: none
-freeze_backbone: true
+trainable: cache_processor
 backbone_checkpoint: artifacts/checkpoints/base_backbones/qwen3_06b/tf-v1
 output_dir: artifacts/experiments/openmath-cache/smoke-flow-s2-v01-seed24
 batch_size: 4

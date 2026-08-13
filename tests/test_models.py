@@ -8,12 +8,12 @@ import torch.nn.functional as F
 
 from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig, gemma4_default_layer_types
 from gcw.models import build_model
-from gcw.models import gemma4 as gemma4_module
-from gcw.models.gemma4 import _gemma4_attention
-from gcw.models import icarus as icarus_module
-from gcw.models import longshot as longshot_module
-from gcw.models.cache_state import CacheState, StaticCacheState
-from gcw.models.cache_processor_ops import (
+from gcw.models.backbones import gemma4 as gemma4_module
+from gcw.models.backbones.gemma4 import _gemma4_attention
+from gcw.models.cache_processors import icarus as icarus_module
+from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors.state import CacheState, StaticCacheState
+from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
     gather_per_cache_head_scores,
     gather_per_cache_head_kv,
@@ -21,18 +21,83 @@ from gcw.models.cache_processor_ops import (
     select_heads_from_per_cache_head_scores,
     select_per_cache_head_kv_norm_indices_from_scores,
 )
-from gcw.models.cache_processor import CacheProcessor, _merge_kv, _split_kv
-from gcw.models.icarus import CacheProcessor as IcarusCacheProcessor
-from gcw.models.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
-from gcw.models.icarus import Icarus, _gather_cache_heads, _select_heads_from_merged
-from gcw.models.icarus import ProcessorAttention as IcarusProcessorAttention
-from gcw.models.longshot import GlobalCacheProcessor as LongshotGlobalCacheProcessor
-from gcw.models.longshot import CacheProcessor as LongshotCacheProcessor
-from gcw.models.longshot import ProcessorAttention as LongshotProcessorAttention
-from gcw.models.longshot import QueryAttentionTimeEncoder
-from gcw.models.longshot import Longshot
-from gcw.models.transformer import _matches_stop_sequence, apply_rotary
-from gcw.models.windowed_cache import WindowedCache
+from gcw.models.cache_processors.standard import CacheProcessor, _merge_kv, _split_kv
+from gcw.models.model import LanguageModel
+from gcw.models.cache_processors.icarus import CacheProcessor as IcarusCacheProcessor
+from gcw.models.cache_processors.icarus import GlobalCacheProcessor as IcarusGlobalCacheProcessor
+from gcw.models.cache_processors.icarus import _gather_cache_heads, _select_heads_from_merged
+from gcw.models.cache_processors.icarus import ProcessorAttention as IcarusProcessorAttention
+from gcw.models.cache_processors.longshot import GlobalCacheProcessor as LongshotGlobalCacheProcessor
+from gcw.models.cache_processors.longshot import CacheProcessor as LongshotCacheProcessor
+from gcw.models.cache_processors.longshot import ProcessorAttention as LongshotProcessorAttention
+from gcw.models.cache_processors.longshot import QueryAttentionTimeEncoder
+from gcw.models.backbones.transformer import _matches_stop_sequence, apply_rotary
+from gcw.models.cache_processors.windowed import WindowedCache
+
+
+def test_icarus_and_longshot_share_exact_tensor_operations_without_changing_symbols():
+    for name in (
+        "_scatter_latest",
+        "_scatter_latest_values",
+        "_split_merged",
+        "_split_merged_values",
+    ):
+        assert getattr(icarus_module, name) is getattr(longshot_module, name)
+
+
+def test_processed_models_share_one_explicit_composition_wrapper():
+    for variant in ("bt", "bgt", "icarus", "longshot"):
+        model = build_model(tiny_config(variant))
+        assert isinstance(model, LanguageModel)
+        keys = tuple(model.state_dict())
+        assert any(key.startswith("backbone.") for key in keys)
+        assert any(key.startswith("cache_processor.") for key in keys)
+
+
+def test_transformer_loss_reduction_none_returns_per_token_cross_entropy():
+    torch.manual_seed(123)
+    model = build_model(tiny_config("tf"))
+    model.init_weights()
+    input_ids = torch.randint(0, model.config.vocab_size, (2, 7))
+    targets = input_ids.roll(shifts=-1, dims=1)
+    targets[:, -1] = -1
+
+    per_token = model(input_ids, targets, loss_reduction="none")
+    logits = model(input_ids)
+    expected_targets = targets.reshape(-1).clone()
+    expected_targets[expected_targets < 0] = -100
+    expected = F.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]),
+        expected_targets,
+        ignore_index=-100,
+        reduction="none",
+    ).reshape_as(targets)
+
+    assert per_token.shape == targets.shape
+    torch.testing.assert_close(per_token, expected)
+
+
+def test_cache_window_loss_reduction_none_returns_per_token_cross_entropy():
+    torch.manual_seed(124)
+    model = build_model(tiny_config("bgt"))
+    model.init_weights()
+    input_ids = torch.randint(0, model.config.vocab_size, (2, 9))
+    targets = input_ids.roll(shifts=-1, dims=1)
+    targets[:, -1] = -1
+
+    per_token = model(input_ids, targets, loss_reduction="none")
+    logits = model(input_ids)
+    expected_targets = targets.reshape(-1).clone()
+    expected_targets[expected_targets < 0] = -100
+    expected = F.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]),
+        expected_targets,
+        ignore_index=-100,
+        reduction="none",
+    ).reshape_as(targets)
+
+    assert per_token.shape == targets.shape
+    torch.testing.assert_close(per_token, expected)
 
 
 def tiny_config(variant="tf", **processor_overrides):
@@ -830,7 +895,7 @@ def test_tiny_qwen35_moe_router_aux_loss_is_added_to_mean_training_loss():
 
 
 def test_qwen35_router_aux_mask_changes_real_load_balancing_loss():
-    from gcw.models.qwen3 import qwen35_moe_load_balancing_loss
+    from gcw.models.backbones.qwen3 import qwen35_moe_load_balancing_loss
 
     router_logits = (
         torch.tensor(
@@ -859,7 +924,7 @@ def test_qwen35_router_aux_mask_changes_real_load_balancing_loss():
 
 
 def test_qwen35_bottleneck_windowed_loss_adds_masked_router_aux(monkeypatch):
-    from gcw.models import qwen3 as qwen3_module
+    from gcw.models.backbones import qwen3 as qwen3_module
 
     config = tiny_qwen35_moe_config("bgt")
     config.router_aux_loss_coef = 0.1
@@ -888,7 +953,7 @@ def test_qwen35_bottleneck_windowed_loss_adds_masked_router_aux(monkeypatch):
 
 
 def test_tiny_qwen35_moe_router_aux_uses_explicit_attention_mask(monkeypatch):
-    from gcw.models import qwen3 as qwen3_module
+    from gcw.models.backbones import qwen3 as qwen3_module
 
     cfg = ModelConfig(
         variant="tf",
@@ -980,7 +1045,7 @@ def test_qwen35_moe_processors_use_full_attention_cache_heads_only():
 
 def test_tiny_icarus_uses_icarus_processor():
     model = build_model(tiny_config("icarus"))
-    assert isinstance(model, Icarus)
+    assert isinstance(model, LanguageModel)
     assert isinstance(model.cache_processor, IcarusGlobalCacheProcessor)
     x = torch.randn(2, 4, 6, 16)
     positions = torch.arange(6).view(1, 1, 6).expand(2, 4, -1)
@@ -1002,7 +1067,7 @@ def test_tiny_icarus_uses_icarus_processor():
 
 def test_tiny_longshot_uses_longshot_processor_and_configured_encoder():
     linear = build_model(tiny_config("longshot", encoder_seq_len=6))
-    assert isinstance(linear, Longshot)
+    assert isinstance(linear, LanguageModel)
     assert isinstance(linear.cache_processor, LongshotGlobalCacheProcessor)
     assert linear.cache_processor.block.encoder_method == "linear"
     x = torch.randn(2, 4, 6, 16)
@@ -1115,7 +1180,7 @@ def test_tiny_models_bf16_autocast_forward_backward():
         assert torch.isfinite(loss)
 
 
-def test_freeze_backbone_leaves_processor_trainable():
+def test_frozen_backbone_leaves_processor_trainable():
     for variant in ("bt", "icarus", "longshot"):
         model = build_model(tiny_config(variant))
         for p in model.backbone.parameters():
@@ -1169,28 +1234,6 @@ def test_generate_default_uses_windowed_prefill_cadence():
     assert calls == [(4, False), (8, False)]
 
 
-def test_generate_legacy_bottleneck_prefill_processes_full_cache_once():
-    model = build_model(tiny_config("tf")).eval()
-    model.init_weights()
-    calls = []
-
-    def processor(cache, **kwargs):
-        calls.append((cache.seq_len, bool(kwargs.get("select_all", False))))
-        return cache
-
-    x = torch.randint(0, 128, (1, 9))
-    model.generate(
-        x,
-        max_new_tokens=5,
-        processor=processor,
-        process_every=4,
-        process_prefill_windows=False,
-        process_after_prefill=True,
-        relative_generation_cadence=True,
-    )
-    assert calls == [(9, True), (13, False)]
-
-
 def test_generate_fast_matches_reference_generate():
     for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         torch.manual_seed(3)
@@ -1201,28 +1244,6 @@ def test_generate_fast_matches_reference_generate():
             reference = model.generate(x, max_new_tokens=6)
             fast = model.generate_fast(x, max_new_tokens=6)
         assert torch.equal(fast, reference)
-
-
-def test_generate_fast_legacy_bottleneck_cadence_matches_reference():
-    model = build_model(tiny_config("tf")).eval()
-    model.init_weights()
-    calls = []
-
-    def processor(cache, **kwargs):
-        calls.append((cache.seq_len, bool(kwargs.get("select_all", False))))
-        return cache
-
-    x = torch.randint(0, 128, (1, 9))
-    model.generate_fast(
-        x,
-        max_new_tokens=5,
-        processor=processor,
-        process_every=4,
-        process_prefill_windows=False,
-        process_after_prefill=True,
-        relative_generation_cadence=True,
-    )
-    assert calls == [(9, True), (13, False)]
 
 
 def test_stop_sequence_suffix_matching():

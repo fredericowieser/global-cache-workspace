@@ -16,7 +16,7 @@ data:
   kind: random
 mode: pretrain
 distributed: none
-freeze_backbone: false
+trainable: all
 output_dir: runs/smoke_tf
 batch_size: 2
 sequence_len: 16

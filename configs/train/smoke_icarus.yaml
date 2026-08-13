@@ -30,7 +30,7 @@ data:
   kind: random
 mode: pretrain
 distributed: none
-freeze_backbone: false
+trainable: all
 output_dir: runs/smoke_icarus
 batch_size: 2
 sequence_len: 16

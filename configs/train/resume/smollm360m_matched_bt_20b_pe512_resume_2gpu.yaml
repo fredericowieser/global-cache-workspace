@@ -33,12 +33,11 @@ data:
   max_length: 2048
 mode: pretrain
 distributed: ddp
-freeze_backbone: false
+trainable: all
 # Requires a complete version-2 training checkpoint; legacy model-only checkpoints are rejected.
 resume:
   checkpoint: runs/smollm360m_matched_bt_20b_pe512_1gpu/checkpoint
   topology: elastic_ddp
-loss: next_token_ce
 checkpoint_format: native_safetensors
 output_dir: runs/smollm360m_matched_bt_20b_pe512_1gpu
 batch_size: 4

@@ -4,7 +4,7 @@ import sys
 import pytest
 import torch
 
-import gcw.train as train_module
+import gcw.training.core as train_module
 from gcw.config import (
     CacheProcessorConfig,
     DataConfig,
@@ -19,17 +19,19 @@ from gcw.data.shards import ShardWriter
 from gcw.data.training import build_training_stream
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
-from gcw.train import (
+from gcw.training.core import (
     _build_training_model,
     _checkpoint_metadata,
     _checkpoint_state,
+    _apply_trainable_policy,
+    _load_initial_model,
     _model_loss,
     _transformer_layer_classes,
     _validate_train_batch,
     train,
 )
-from gcw.training_checkpoint import CheckpointCompatibilityError
-from gcw.training_checkpoint import save_training_checkpoint as real_save_training_checkpoint
+from gcw.training.checkpoint import CheckpointCompatibilityError
+from gcw.training.checkpoint import save_training_checkpoint as real_save_training_checkpoint
 
 
 class FakeRun:
@@ -97,6 +99,33 @@ def tiny_train_config(tmp_path):
     )
 
 
+def test_trainable_policy_selects_backbone_processor_or_both():
+    model = build_model(
+        ModelConfig(
+            variant="bgt",
+            vocab_size=32,
+            hidden_size=16,
+            intermediate_size=32,
+            num_layers=2,
+            num_heads=2,
+            num_kv_heads=1,
+            head_dim=8,
+            cache_processor=CacheProcessorConfig(hidden_size=8, intermediate_size=16, num_heads=1),
+        )
+    )
+
+    _apply_trainable_policy(model, "cache_processor")
+    assert not any(parameter.requires_grad for parameter in model.backbone.parameters())
+    assert all(parameter.requires_grad for parameter in model.cache_processor.parameters())
+
+    _apply_trainable_policy(model, "backbone")
+    assert all(parameter.requires_grad for parameter in model.backbone.parameters())
+    assert not any(parameter.requires_grad for parameter in model.cache_processor.parameters())
+
+    _apply_trainable_policy(model, "all")
+    assert all(parameter.requires_grad for parameter in model.parameters())
+
+
 def test_train_logs_wandb_train_and_validation_metrics(monkeypatch, tmp_path):
     fake = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake)
@@ -141,7 +170,7 @@ def test_train_writes_flow_pilot_gradient_and_runtime_audit(monkeypatch, tmp_pat
         ),
         flow_processor=FlowProcessorConfig(num_steps=2),
     )
-    cfg.freeze_backbone = True
+    cfg.trainable = "cache_processor"
     cfg.max_steps = 1
     cfg.eval_every = 0
     cfg.eval_on_start = False
@@ -256,7 +285,7 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp
 
 
 def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
-    monkeypatch.setitem(sys.modules, "gcw.models.qwen3", None)
+    monkeypatch.setitem(sys.modules, "gcw.models.backbones.qwen3", None)
 
     classes = _transformer_layer_classes("llama")
 
@@ -308,7 +337,7 @@ def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step
     def fake_save(path, model, optimizer, config, resume_state, fingerprint, rank):
         calls.append((path, resume_state.step, rank))
 
-    monkeypatch.setattr("gcw.train._save_training_state", fake_save)
+    monkeypatch.setattr("gcw.training.core._save_training_state", fake_save)
 
     train(cfg)
 
@@ -396,7 +425,7 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
             num_kv_heads=1,
         ),
     )
-    cfg.freeze_backbone = True
+    cfg.trainable = "cache_processor"
     cfg.backbone_checkpoint = str(checkpoint)
     cfg.wandb.enabled = False
     cfg.eval_every = 0
@@ -409,6 +438,33 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
     assert torch.allclose(trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123))
 
 
+def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
+    config = ModelConfig(
+        variant="bgt",
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        cache_processor=CacheProcessorConfig(hidden_size=8, intermediate_size=16, num_heads=1),
+    )
+    source = build_model(config)
+    source.init_weights()
+    with torch.no_grad():
+        source.cache_processor.block.gate.fill_(0.75)
+    checkpoint = tmp_path / "complete-model"
+    save_checkpoint(checkpoint, source, config)
+
+    target = build_model(config)
+    target.init_weights()
+    _load_initial_model(target, checkpoint)
+
+    for expected, actual in zip(source.parameters(), target.parameters(), strict=True):
+        assert torch.equal(expected, actual)
+
+
 def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
     cfg = tiny_train_config(tmp_path)
     cfg.mode = "sft"
@@ -416,7 +472,7 @@ def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
         kind="sft",
         dataset="/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl",
         tokenizer="hf",
-        tokenizer_source="/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model",
+        tokenizer_source="/models/llama-3.2-1b-tokenizer",
     )
     cfg.backbone_checkpoint = "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf"
 
@@ -426,6 +482,9 @@ def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
     assert state["tokenizer_source"] == cfg.data.tokenizer_source
     assert state["tokenizer"] == "hf"
     assert state["backbone_checkpoint"] == cfg.backbone_checkpoint
+    assert state["admission"]["schema"] == "gcw.admission.v1"
+    assert state["admission"]["model_assembly_receipt"]["receipt_sha256"]
+    assert state["admission"]["composition_receipt"]["receipt_sha256"]
 
 
 def test_checkpoint_state_drops_runtime_loader_tensors():
@@ -475,8 +534,6 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
         optimizer,
         resume_state,
         training_fingerprint,
-        *,
-        backbone_source_path=None,
     ):
         real_save_training_checkpoint(
             path,
@@ -485,7 +542,6 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
             optimizer,
             resume_state,
             training_fingerprint,
-            backbone_source_path=backbone_source_path,
         )
         if resume_state.step == 2 and str(path).endswith("checkpoint"):
             raise RuntimeError("simulated interruption")
@@ -545,6 +601,25 @@ def test_resume_rejects_changed_training_dynamics(tmp_path):
 
     with pytest.raises(CheckpointCompatibilityError, match="optimizer"):
         train(resumed)
+
+def test_sft_full_sequence_loss_includes_prompt_tokens():
+    _, answer_only = sft_batch(
+        [{"prompt": "AB", "answer": "CD"}],
+        TinyTokenizer(),
+        16,
+        loss_scope="answer_only",
+    )
+    _, full_sequence = sft_batch(
+        [{"prompt": "AB", "answer": "CD"}],
+        TinyTokenizer(),
+        16,
+        loss_scope="full_sequence",
+    )
+
+    assert answer_only[0, 0].item() == -100
+    assert full_sequence[0, 0].item() >= 0
+    assert torch.equal(answer_only[0, -3:], full_sequence[0, -3:])
+
 
 def test_sft_batch_can_return_attention_mask():
     x, y, attention_mask = sft_batch(

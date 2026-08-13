@@ -20,6 +20,7 @@ env/
 .matplotlib-cache/
 .coverage
 htmlcov/
+docs/_build/
 
 # Build and packaging outputs
 build/
@@ -34,6 +35,16 @@ outputs/
 slurm_out/
 results/
 wandb/
+data/training-runs/*
+!data/training-runs/.gitkeep
+data/eval-runs/*
+!data/eval-runs/.gitkeep
+data/runs/*
+!data/runs/.gitkeep
+data/results/*
+!data/results/.gitkeep
+data/analysis/*
+!data/analysis/.gitkeep
 
 # Large model and dataset artifacts
 *.ckpt

@@ -1,35 +1,14 @@
-core:
-  ppt:
-    - lambada_openai
-    - hellaswag
-    - piqa
-    - winogrande
-    - arc_easy
-    - arc_challenge
-    - mmlu
-  math:
-    - gsm8k_openmath
-    - hendrycks_math
-    - svamp
-    - theoremqa
-    - logiqa
-    - agieval_gaokao_mathqa
-    - gsm8k_hard
-forgetting:
+general:
+  - lambada_openai
+  - hellaswag
+  - piqa
+  - winogrande
   - arc_easy
   - arc_challenge
-  - boolq
-  - hellaswag
-  - lambada_openai
-  - openbookqa
-  - piqa
-  - social_iqa
-  - winogrande
   - mmlu
-  - mmlu_pro
-  - bbh_cot_fewshot
-  - humaneval
-  - mbpp
-  - ifeval
-  - truthfulqa_mc1
-  - truthfulqa_mc2
+math:
+  - gsm8k_openmath
+  - svamp
+  - gsm8k_hard
+  - logiqa
+  - agieval_gaokao_mathqa

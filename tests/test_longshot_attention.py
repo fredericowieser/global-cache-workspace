@@ -1,7 +1,7 @@
 import torch
 
 from gcw.config import CacheProcessorConfig
-from gcw.models.longshot import ProcessorAttention
+from gcw.models.cache_processors.longshot import ProcessorAttention
 
 
 def test_processor_attention_self_head_kv_matches_dense_gqa_reference():

@@ -36,8 +36,7 @@ data:
   max_length: 2048
 mode: pretrain
 distributed: ddp
-freeze_backbone: false
-loss: next_token_ce
+trainable: all
 checkpoint_format: native_safetensors
 output_dir: runs/smollm360m_matched_bt_20b_pe512_vonly_zeroout_direct_1gpu
 batch_size: 8

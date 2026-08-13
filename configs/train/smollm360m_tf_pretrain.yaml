@@ -20,8 +20,7 @@ data:
   max_length: 2048
 mode: pretrain
 distributed: ddp
-freeze_backbone: false
-loss: next_token_ce
+trainable: all
 checkpoint_format: native_safetensors
 output_dir: runs/smollm360m_tf_pretrain
 batch_size: 32

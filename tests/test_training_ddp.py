@@ -6,16 +6,16 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-import gcw.train as train_module
-import gcw.training_checkpoint as checkpoint_module
+import gcw.training.core as train_module
+import gcw.training.checkpoint as checkpoint_module
 from gcw.checkpoint import load_checkpoint
 from gcw.config import DataConfig, ModelConfig, ResumeConfig, TrainConfig
 from gcw.data.shards import ShardWriter
 from gcw.data.training import RandomCursor
 from gcw.models import build_model
-from gcw.train import train
-from gcw.training_checkpoint import ResumeState, TrainingCheckpointError
-from gcw.training_checkpoint import save_training_checkpoint as real_save_training_checkpoint
+from gcw.training.core import train
+from gcw.training.checkpoint import ResumeState, TrainingCheckpointError
+from gcw.training.checkpoint import save_training_checkpoint as real_save_training_checkpoint
 
 
 def test_two_process_ddp_resume_matches_uninterrupted_training(tmp_path):

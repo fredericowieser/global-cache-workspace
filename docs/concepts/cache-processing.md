@@ -1,0 +1,47 @@
+# Cache processing
+
+**Status:** Maintained
+
+## When processing occurs
+
+`process_every = P` divides a training sequence into windows. The model consumes the first window normally. Before each later window, it processes the cache left by prior windows. For length $T$, the number of calls is
+
+$$
+N_{calls}=\left\lceil\frac{T}{P}\right\rceil-1.
+$$
+
+This off-by-one matters: the processor cannot transform memory before any memory exists. Training and generation use the same absolute cache cadence.
+
+## Which positions survive
+
+The selection rule combines recency with salience:
+
+1. Always retain the newest `process_every` cached positions.
+2. From older positions, retain the highest-scoring `topk` entries.
+3. Sort the chosen indices back into chronological order.
+
+The result preserves a local recent window and a sparse long-range memory. A score can come from the norm of the layer's attention output (`attn_l2`) or from learned key/value norm mixtures (`kv_norm`). Selection is discrete, so gradients train the representations and scoring parameters around selected states, not the top-k indices themselves.
+
+`attn_l2` measures each layer's attention-output magnitude per token and averages those signals across depth. `kv_norm` computes RMS key and value magnitude, blends them through two learned logits, and takes the strongest layer/head response as token salience. The latter lets training decide whether key addressability or value content should dominate selection, although the subsequent top-k decision remains nondifferentiable.
+
+Head-selective processors apply a second ranking after token selection. Icarus ranks flattened `(layer, KV head)` streams by gathered KV norm. Workspace broadcast computes head salience over selected states, admits a configured writer fraction, derives token weights through a temperature-controlled softmax, and forms one writer-weighted stream. The processor's delta then reaches every selected destination head. `workspace_broadcast` changes values only; `head_mask_broadcast` can change keys and values.
+
+## Shared processor block
+
+The basic processor follows a residual bottleneck:
+
+$$
+H=\operatorname{ProcessorLayers}(W_{in}\operatorname{RMSNorm}(X)),
+\qquad
+Y=X+\gamma\odot W_{out}\operatorname{RMSNorm}(H).
+$$
+
+`ProcessorLayers` contains one or more small transformer blocks. The gate $\gamma$ either passes through a sigmoid or acts directly. Zero-initializing the output projection makes the module begin as an exact identity when the residual path and gate permit it. That initialization is useful when adding a processor to a capable pretrained model because the first optimization step does not destroy its cache.
+
+Processor self-attention is bidirectional across the selected cache positions. This does not leak future tokens: the model invokes the processor only on memory from windows it has already consumed, before predicting tokens in the next window.
+
+The meaning of the feature axis depends on the variant. BT mixes within one backbone layer. BGT concatenates all backbone layers. Icarus and Longshot treat every `(layer, KV head)` pair as a cache head.
+
+## What receives gradients
+
+No auxiliary cache loss exists. Later token cross-entropy backpropagates through the rewritten cache into the processor. With a frozen backbone, only processor parameters update, but gradients still traverse frozen operations to tell the processor how its rewrite affected predictions. With an unfrozen backbone, the optimizer updates both systems.

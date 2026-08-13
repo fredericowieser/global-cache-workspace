@@ -6,9 +6,9 @@ import pytest
 import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig, WorkspaceFlowRefinementConfig
-from gcw.models import build_model
-from gcw.models.longshot import GlobalCacheProcessor, Longshot
-from gcw.models.windowed_cache import WindowedCache
+from gcw.models import LanguageModel, build_model
+from gcw.models.cache_processors.longshot import GlobalCacheProcessor
+from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.params import processor_params
 
 
@@ -151,7 +151,7 @@ def test_workspace_flow_keeps_frozen_backbone_frozen_and_processor_trainable() -
             )
         )
     )
-    assert isinstance(model, Longshot)
+    assert isinstance(model, LanguageModel)
     model.init_weights()
     model.backbone.requires_grad_(False)
     processor = model.cache_processor

@@ -1,8 +1,8 @@
 import torch
 
-from gcw.models.cache_state import processor_call_count, select_l2_indices
-from gcw.models.cache_state import CacheState, StaticCacheState
-from gcw.models.windowed_cache import WindowedCache
+from gcw.models.cache_processors.state import processor_call_count, select_l2_indices
+from gcw.models.cache_processors.state import CacheState, StaticCacheState
+from gcw.models.cache_processors.windowed import WindowedCache
 
 
 def test_processor_call_count_matches_window_rule():
