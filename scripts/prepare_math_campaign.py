@@ -48,15 +48,41 @@ def _answer_tokens(tokenizer: Any, answer: str) -> list[int]:
     return tokenizer.encode(answer) + [tokenizer.eot_id]
 
 
-def _render_length(tokenizer: Any, prompt: str, answer: str, *, thinking: bool) -> tuple[int, int, int]:
-    prompt_ids = tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}],
-        tokenize=True,
-        add_generation_prompt=True,
-        enable_thinking=thinking,
-    )
-    answer_ids = _answer_tokens(tokenizer, answer)
-    return len(prompt_ids), len(answer_ids), len(prompt_ids) + len(answer_ids)
+def _render_lengths(tokenizer: Any, rows: list[tuple[str, str, bool]]) -> list[tuple[int, int, int]]:
+    encoder = getattr(tokenizer, "enc", None)
+    if encoder is None:
+        return [
+            (
+                len(
+                    tokenizer.apply_chat_template(
+                        [{"role": "user", "content": prompt}],
+                        tokenize=True,
+                        add_generation_prompt=True,
+                        enable_thinking=thinking,
+                    )
+                ),
+                len(_answer_tokens(tokenizer, answer)),
+                0,
+            )
+            for prompt, answer, thinking in rows
+        ]
+    output: list[tuple[int, int, int]] = []
+    for start in range(0, len(rows), 512):
+        batch = rows[start : start + 512]
+        messages = [[{"role": "user", "content": prompt}] for prompt, _, _ in batch]
+        prompt_ids = encoder.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=batch[0][2],
+            return_dict=True,
+        )["input_ids"]
+        answer_ids = encoder([answer for _, answer, _ in batch], add_special_tokens=False)["input_ids"]
+        output.extend(
+            (len(prompt), len(answer) + 1, len(prompt) + len(answer) + 1)
+            for prompt, answer in zip(prompt_ids, answer_ids, strict=True)
+        )
+    return output
 
 
 def _atomic_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> str:
@@ -152,17 +178,23 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         ),
     )
     for source, thinking, source_rows in sources:
+        candidates: list[tuple[str, str, str, str]] = []
+        candidate_hashes: set[str] = set()
         for prompt, answer, source_id in source_rows:
             prompt_hash = _prompt_hash(prompt)
             if prompt_hash in excluded:
                 rejection[f"{source}:benchmark_overlap"] += 1
                 continue
-            if prompt_hash in seen:
+            if prompt_hash in seen or prompt_hash in candidate_hashes:
                 rejection[f"{source}:duplicate"] += 1
                 continue
-            prompt_tokens, target_tokens, total_tokens = _render_length(
-                tokenizer, prompt, answer, thinking=thinking
-            )
+            candidate_hashes.add(prompt_hash)
+            candidates.append((prompt, answer, source_id, prompt_hash))
+        rendered = _render_lengths(tokenizer, [(prompt, answer, thinking) for prompt, answer, _, _ in candidates])
+        for (prompt, answer, source_id, prompt_hash), lengths in zip(candidates, rendered, strict=True):
+            prompt_tokens, target_tokens, total_tokens = lengths
+            if total_tokens == 0:
+                total_tokens = prompt_tokens + target_tokens
             for cap in caps:
                 audit[cap][f"{source}:seen_rows"] += 1
                 audit[cap][f"{source}:target_tokens"] += target_tokens
