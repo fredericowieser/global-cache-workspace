@@ -39,7 +39,7 @@ model:
   processor_generation_mode: post_prefill_relative
 data:
   kind: sft
-  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
+  dataset: /home/f50056118/gcw-data/openr1-bgt-mixture-v1-current-source/training_64730.jsonl
   tokenizer: hf
   tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/qwen3-0.6b/final_model
   sft_take_rows: 64730
