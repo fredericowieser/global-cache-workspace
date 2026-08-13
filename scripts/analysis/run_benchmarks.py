@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="lm_eval_flexible_exact",
     )
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--max-new-tokens", type=int, default=MAX_NEW_TOKENS)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
