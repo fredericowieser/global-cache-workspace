@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from gcw.config import TrainConfig
+from gcw.data.tokenizers import get_tokenizer
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,12 @@ class CampaignContract:
         dataset = Path(config.data.dataset or "").expanduser()
         if not dataset.is_file() or _sha256_file(dataset) != self.dataset_sha256:
             mismatches.append("dataset_sha256 does not match the campaign contract")
+        tokenizer = get_tokenizer(f"hf:{config.data.tokenizer_source}")
+        if tokenizer.identity_sha256() != self.tokenizer_identity_sha256:
+            mismatches.append("tokenizer_identity_sha256 does not match the campaign contract")
+        checkpoint = Path(config.backbone_checkpoint or "").expanduser() / "model.safetensors"
+        if not checkpoint.is_file() or _sha256_file(checkpoint) != self.backbone_sha256:
+            mismatches.append("backbone_sha256 does not match the campaign contract")
         if mismatches:
             raise ValueError("campaign contract mismatch: " + "; ".join(mismatches))
 

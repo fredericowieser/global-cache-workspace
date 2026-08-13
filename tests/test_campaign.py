@@ -9,10 +9,19 @@ from gcw.campaign import validate_campaign
 from gcw.config import DataConfig, TrainConfig
 
 
-def test_campaign_contract_accepts_only_matched_execution(tmp_path):
+def test_campaign_contract_accepts_only_matched_execution(tmp_path, monkeypatch):
+    class Tokenizer:
+        @staticmethod
+        def identity_sha256():
+            return "1" * 64
+
+    monkeypatch.setattr("gcw.campaign.get_tokenizer", lambda _: Tokenizer())
     dataset = tmp_path / "train.jsonl"
     dataset.write_text('{}\n')
     digest = hashlib.sha256(dataset.read_bytes()).hexdigest()
+    checkpoint = tmp_path / "model.safetensors"
+    checkpoint.write_bytes(b"weights")
+    checkpoint_digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     manifest = tmp_path / "campaign.json"
     manifest.write_text(
         json.dumps(
@@ -20,13 +29,13 @@ def test_campaign_contract_accepts_only_matched_execution(tmp_path):
                 "schema": "gcw.math_campaign.v1",
                 "dataset_sha256": digest,
                 "tokenizer_identity_sha256": "1" * 64,
-                "backbone_sha256": "2" * 64,
+                "backbone_sha256": checkpoint_digest,
                 "sequence_length": 4096,
                 "global_batch_rows": 64,
                 "max_steps": 10,
                 "dataset_path": str(dataset.resolve()),
                 "tokenizer_source": "Qwen/Qwen3-0.6B",
-                "backbone_checkpoint": "/models/qwen",
+                "backbone_checkpoint": str(tmp_path),
             }
         )
     )
@@ -39,7 +48,7 @@ def test_campaign_contract_accepts_only_matched_execution(tmp_path):
             campaign_manifest=str(manifest),
         ),
         mode="sft",
-        backbone_checkpoint="/models/qwen",
+        backbone_checkpoint=str(tmp_path),
         sequence_len=4096,
         global_batch_rows=64,
         max_steps=10,
