@@ -24,6 +24,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `qk_norm` | `bool` | `False` |
 | `rotary_style` | `Literal['llama', 'ppt']` | `'ppt'` |
 | `cache_processor` | `gcw.config.CacheProcessorConfig \| None` | `None` |
+| `lora` | `gcw.config.LoRAConfig \| None` | `None` |
 | `flow_processor` | `gcw.config.FlowProcessorConfig \| None` | `None` |
 | `diffusion_processor` | `gcw.config.DiffusionProcessorConfig \| None` | `None` |
 | `processor_generation_mode` | `Literal['windowed', 'post_prefill_relative']` | `'windowed'` |
@@ -133,16 +134,17 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `canonical_execution` | `bool` | `False` |
 | `expected_artifact_sha256` | `str \| None` | `None` |
 | `expected_source_ids_sha256` | `str \| None` | `None` |
+| `campaign_manifest` | `str \| None` | `None` |
 
 ## `TrainConfig`
 
 | Field | Type | Default |
 |---|---|---|
-| `model` | `gcw.config.ModelConfig` | `ModelConfig(variant='tf', family='smollm', sequence_len=2048, vocab_size=49152, hidden_size=960, intermediate_size=2560, num_layers=32, num_heads=15, num_kv_heads=5, head_dim=64, rope_theta=10000.0, norm_eps=1e-05, tie_embeddings=True, qk_norm=False, rotary_style='ppt', cache_processor=None, flow_processor=None, diffusion_processor=None, processor_generation_mode='windowed', workspace_flow_refinement=None, layer_types=None, processor_layer_indices=None, partial_rotary_factor=1.0, linear_conv_kernel_dim=4, linear_key_head_dim=None, linear_value_head_dim=None, linear_num_key_heads=None, linear_num_value_heads=None, moe_intermediate_size=None, num_experts=0, num_experts_per_tok=0, shared_expert_intermediate_size=None, hidden_act='silu', moe_experts_implementation='grouped_mm', router_aux_loss_coef=0.0, output_router_logits=False, sliding_window=None, num_global_key_value_heads=None, global_head_dim=None, attention_k_eq_v=False, num_kv_shared_layers=0, hidden_size_per_layer_input=0, vocab_size_per_layer_input=None, final_logit_softcapping=None, rope_parameters=None, use_double_wide_mlp=False)` |
-| `data` | `gcw.config.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None)` |
+| `model` | `gcw.config.ModelConfig` | `ModelConfig(variant='tf', family='smollm', sequence_len=2048, vocab_size=49152, hidden_size=960, intermediate_size=2560, num_layers=32, num_heads=15, num_kv_heads=5, head_dim=64, rope_theta=10000.0, norm_eps=1e-05, tie_embeddings=True, qk_norm=False, rotary_style='ppt', cache_processor=None, lora=None, flow_processor=None, diffusion_processor=None, processor_generation_mode='windowed', workspace_flow_refinement=None, layer_types=None, processor_layer_indices=None, partial_rotary_factor=1.0, linear_conv_kernel_dim=4, linear_key_head_dim=None, linear_value_head_dim=None, linear_num_key_heads=None, linear_num_value_heads=None, moe_intermediate_size=None, num_experts=0, num_experts_per_tok=0, shared_expert_intermediate_size=None, hidden_act='silu', moe_experts_implementation='grouped_mm', router_aux_loss_coef=0.0, output_router_logits=False, sliding_window=None, num_global_key_value_heads=None, global_head_dim=None, attention_k_eq_v=False, num_kv_shared_layers=0, hidden_size_per_layer_input=0, vocab_size_per_layer_input=None, final_logit_softcapping=None, rope_parameters=None, use_double_wide_mlp=False)` |
+| `data` | `gcw.config.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None, campaign_manifest=None)` |
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
-| `trainable` | `Literal['all', 'backbone', 'cache_processor']` | `'all'` |
+| `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor']` | `'all'` |
 | `backbone_checkpoint` | `str \| None` | `None` |
 | `init_checkpoint` | `str \| None` | `None` |
 | `resume` | `gcw.config.ResumeConfig \| None` | `None` |
@@ -152,6 +154,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `sequence_len` | `int` | `128` |
 | `max_steps` | `int` | `2` |
 | `total_batch_size` | `int` | `0` |
+| `global_batch_rows` | `int` | `0` |
 | `learning_rate` | `float` | `0.0003` |
 | `adam_beta1` | `float` | `0.9` |
 | `adam_beta2` | `float` | `0.95` |
