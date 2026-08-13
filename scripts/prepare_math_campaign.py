@@ -19,10 +19,12 @@ from gcw.data.tokenizers import get_tokenizer
 TRACE_RE = re.compile(r"^\s*<think>\s*(?P<reasoning>.*?)\s*</think>\s*(?P<answer>.+?)\s*$", re.DOTALL)
 DEFAULT_CAPS = (1024, 2048, 4096, 8192)
 BENCHMARK_DATASETS = (
-    ("openai/gsm8k", "main", "test"),
-    ("reasoning-machines/gsm-hard", "default", "train"),
-    ("ChilleD/SVAMP", "default", "test"),
-    ("EleutherAI/logiqa", "default", "test"),
+    ("openai/gsm8k", "main", "test", ("question",)),
+    ("reasoning-machines/gsm-hard", None, "train", ("input",)),
+    ("ChilleD/SVAMP", None, "test", ("Body", "Question")),
+    ("EleutherAI/logiqa", None, "test", ("context", "query")),
+    ("hails/agieval-gaokao-mathqa", None, "test", ("query",)),
+    ("cais/mmlu", "all", "test", ("question",)),
 )
 
 
@@ -111,14 +113,12 @@ def _load_excluded_hashes(paths: list[str]) -> set[str]:
 def _load_benchmark_hashes() -> tuple[set[str], dict[str, int]]:
     excluded: set[str] = set()
     counts: dict[str, int] = {}
-    for repo, config, split in BENCHMARK_DATASETS:
-        try:
-            dataset = load_dataset(repo, config, split=split)
-        except (FileNotFoundError, ValueError):
-            dataset = load_dataset(repo, split=split)
+    for repo, config, split, fields in BENCHMARK_DATASETS:
+        dataset = load_dataset(repo, config, split=split)
         count = 0
         for row in dataset:
-            prompt = row.get("question") or row.get("Body") or row.get("prompt") or row.get("problem")
+            parts = [str(row.get(field) or "").strip() for field in fields]
+            prompt = "\n".join(part for part in parts if part)
             if prompt:
                 excluded.add(_prompt_hash(prompt))
                 count += 1
