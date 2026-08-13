@@ -3,11 +3,12 @@ import pytest
 
 from gcw.checkpoint import (
     _model_config_from_checkpoint,
+    load_backbone_checkpoint,
     load_checkpoint,
     publish_final_checkpoint_manifest,
     save_checkpoint,
 )
-from gcw.config import ModelConfig
+from gcw.config import LoRAConfig, ModelConfig
 from gcw.evaluation.core import GCWEvalLM
 from gcw.evaluation.scoring import HFTokenizerAdapter, tokenizer_for_checkpoint
 from gcw.models import build_model
@@ -35,6 +36,29 @@ def test_checkpoint_roundtrip(tmp_path):
     assert state["step"] == 3
     assert loaded.embed_tokens.weight.dtype == torch.bfloat16
     assert loaded(x).shape == (1, 4, 64)
+
+
+def test_backbone_checkpoint_initializes_lora_model_without_overwriting_adapters(tmp_path):
+    base_config = ModelConfig(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+    )
+    base = build_model(base_config)
+    base.init_weights()
+    save_checkpoint(tmp_path / "base", base, base_config)
+    adapted_config = ModelConfig(**{**base_config.__dict__, "lora": LoRAConfig(rank=2)})
+    adapted = build_model(adapted_config)
+    adapted.init_weights()
+
+    load_backbone_checkpoint(adapted, tmp_path / "base")
+
+    assert torch.equal(adapted.layers[0].self_attn.q_proj.weight, base.layers[0].self_attn.q_proj.weight)
+    assert torch.count_nonzero(adapted.layers[0].self_attn.q_proj.lora_b) == 0
 
 
 def test_hf_family_eval_requires_tokenizer_source():

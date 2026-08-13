@@ -177,7 +177,15 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
         loadable[key] = tensor.to(device=expected.device, dtype=expected.dtype)
     if missing:
         raise KeyError(f"missing backbone checkpoint keys: {missing[:8]}")
-    target.load_state_dict(loadable, strict=True)
+    incompatible = target.load_state_dict(loadable, strict=False)
+    unexpected_missing = [
+        key for key in incompatible.missing_keys if not key.endswith((".lora_a", ".lora_b"))
+    ]
+    if unexpected_missing or incompatible.unexpected_keys:
+        raise RuntimeError(
+            "backbone checkpoint compatibility failure: "
+            f"missing={unexpected_missing[:8]} unexpected={incompatible.unexpected_keys[:8]}"
+        )
 
 
 def _infer_floating_dtype(state: dict[str, torch.Tensor]) -> torch.dtype | None:
