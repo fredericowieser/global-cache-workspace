@@ -627,6 +627,20 @@ def test_qwen35_longshot_linear_state_heads_are_opt_in_and_mapped_to_following_k
         global_query.cache_processor.block.linear_state_adapter.query_projs
     ) == ["global"]
 
+    gated = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+            linear_state_update_mode="gated_delta",
+        )
+    )
+    assert (
+        gated.cache_processor.block.linear_state_adapter.output_proj.out_features
+        == 10
+    )
+
     per_head = build_model(
         tiny_qwen35_config(
             "longshot",
@@ -703,7 +717,12 @@ def test_qwen35_longshot_linear_state_head_selection_is_split_from_kv_heads():
     assert torch.equal(selected, torch.tensor([[1]]))
 
 
-def test_qwen35_longshot_linear_state_processor_updates_recurrent_state_only():
+@pytest.mark.parametrize(
+    "linear_state_update_mode", ["outer_product", "gated_delta"]
+)
+def test_qwen35_longshot_linear_state_processor_updates_recurrent_state_only(
+    linear_state_update_mode,
+):
     torch.manual_seed(11)
     model = build_model(
         tiny_qwen35_config(
@@ -711,6 +730,7 @@ def test_qwen35_longshot_linear_state_processor_updates_recurrent_state_only():
             encoder_method="query_attention",
             encoder_query_source="final_token",
             linear_state_cache=True,
+            linear_state_update_mode=linear_state_update_mode,
             gate_mode="direct",
             gate_init=1.0,
         )
@@ -732,7 +752,12 @@ def test_qwen35_longshot_linear_state_processor_updates_recurrent_state_only():
         assert not torch.allclose(new_recurrent, old_recurrent)
 
 
-def test_qwen35_longshot_linear_state_delta_gate_can_be_disabled():
+@pytest.mark.parametrize(
+    "linear_state_update_mode", ["outer_product", "gated_delta"]
+)
+def test_qwen35_longshot_linear_state_delta_gate_can_be_disabled(
+    linear_state_update_mode,
+):
     changed_by_gate_setting = {}
     for gate_linear_state_delta in (False, True):
         torch.manual_seed(13)
@@ -742,11 +767,14 @@ def test_qwen35_longshot_linear_state_delta_gate_can_be_disabled():
                 encoder_method="query_attention",
                 encoder_query_source="final_token",
                 linear_state_cache=True,
+                linear_state_update_mode=linear_state_update_mode,
                 gate_mode="direct",
                 gate_init=0.0,
                 gate_linear_state_delta=gate_linear_state_delta,
             )
         ).eval()
+        if linear_state_update_mode == "gated_delta":
+            assert model.config.cache_processor.gate_linear_state_delta is False
         model.init_weights()
         x = torch.randint(0, 128, (2, 5))
         with torch.no_grad():
@@ -763,10 +791,84 @@ def test_qwen35_longshot_linear_state_delta_gate_can_be_disabled():
         )
 
     assert changed_by_gate_setting[False]
-    assert not changed_by_gate_setting[True]
+    if linear_state_update_mode == "outer_product":
+        assert not changed_by_gate_setting[True]
+    else:
+        assert changed_by_gate_setting[True]
 
 
-def test_qwen35_longshot_linear_state_adapter_receives_gradients():
+def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
+    monkeypatch,
+):
+    cfg = tiny_qwen35_config(
+        "longshot",
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+        linear_state_update_mode="gated_delta",
+        gate_mode="direct",
+        gate_init=1.0,
+    )
+    fake_layer = types.SimpleNamespace(
+        num_v_heads=2,
+        A_log=torch.tensor([0.0, 1.0]),
+        dt_bias=torch.tensor([0.5, -0.25]),
+    )
+    processor = LongshotGlobalCacheProcessor(
+        cfg, linear_attention_layers={0: fake_layer, 2: fake_layer}
+    )
+    spec = processor.linear_state_specs[0]
+    conv = torch.randn(1, 10, 2)
+    recurrent = torch.zeros(1, 2, 4, 4)
+    cache = CacheState(
+        keys=[],
+        values=[],
+        scores=torch.zeros(1, 0),
+        linear_states={spec.layer_idx: (conv, recurrent)},
+    )
+    update = torch.randn(1, spec.head_count, 10)
+    records = {}
+
+    def fake_gated_delta_rule(query, key, value, *, g, beta, initial_state):
+        records["query"] = query
+        records["key"] = key
+        records["value"] = value
+        records["g"] = g
+        records["beta"] = beta
+        records["initial_state"] = initial_state
+        final_state = initial_state + torch.einsum(
+            "bshk,bshv->bhkv", key.float(), value.float()
+        )
+        return value, final_state.to(initial_state.dtype)
+
+    monkeypatch.setattr(
+        longshot_module, "qwen35_gated_delta_rule", fake_gated_delta_rule
+    )
+
+    processor._scatter_linear_state_updates(cache, update, [spec])
+
+    assert records["query"].shape == (1, 1, 2, 4)
+    assert records["key"].shape == (1, 1, 2, 4)
+    assert records["value"].shape == (1, 1, 2, 4)
+    assert records["initial_state"] is recurrent
+    assert torch.equal(cache.linear_states[spec.layer_idx][0], conv)
+    assert not torch.allclose(cache.linear_states[spec.layer_idx][1], recurrent)
+
+    expected_beta = torch.sigmoid(update[..., 8]).unsqueeze(1)
+    expected_g = (
+        -fake_layer.A_log.float().exp()
+        * F.softplus(update[..., 9].float() + fake_layer.dt_bias)
+    ).unsqueeze(1)
+    assert torch.allclose(records["beta"], expected_beta)
+    assert torch.allclose(records["g"], expected_g)
+
+
+@pytest.mark.parametrize(
+    "linear_state_update_mode", ["outer_product", "gated_delta"]
+)
+def test_qwen35_longshot_linear_state_adapter_receives_gradients(
+    linear_state_update_mode,
+):
     torch.manual_seed(17)
     model = build_model(
         tiny_qwen35_config(
@@ -774,6 +876,7 @@ def test_qwen35_longshot_linear_state_adapter_receives_gradients():
             encoder_method="query_attention",
             encoder_query_source="final_token",
             linear_state_cache=True,
+            linear_state_update_mode=linear_state_update_mode,
         )
     )
     model.init_weights()
@@ -1675,6 +1778,7 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.internal_iteration_score == "attn_l2"
     assert cp.linear_state_cache is False
     assert cp.linear_state_query_mode == "global"
+    assert cp.linear_state_update_mode == "outer_product"
     assert cp.gate_linear_state_delta is True
     assert cp.stream_factor == 2
 
@@ -1694,6 +1798,19 @@ def test_cache_processor_topk_linear_heads_must_be_non_negative():
         CacheProcessorConfig(topk_linear_heads=-1)
 
 
+def test_cache_processor_linear_state_update_mode_must_be_known():
+    with pytest.raises(ValueError, match="linear_state_update_mode"):
+        CacheProcessorConfig(linear_state_update_mode="manual_delta")
+
+
+def test_gated_delta_linear_state_update_disables_cache_gate_blend():
+    cp = CacheProcessorConfig(
+        linear_state_update_mode="gated_delta",
+        gate_linear_state_delta=True,
+    )
+    assert cp.gate_linear_state_delta is False
+
+
 def test_cache_processor_iteration_mode_must_be_known():
     with pytest.raises(ValueError, match="iteration_mode"):
         CacheProcessorConfig(iteration_mode="outer")
@@ -1710,6 +1827,8 @@ def test_cache_processor_internal_iteration_score_accepts_kv_norm():
 
 
 def test_longshot_linear_state_cache_validates_supported_combinations():
+    with pytest.raises(ValueError, match="linear_state_cache=True"):
+        tiny_qwen35_config("longshot", linear_state_update_mode="gated_delta")
     with pytest.raises(ValueError, match="variant='longshot'"):
         ModelConfig(
             variant="bgt",

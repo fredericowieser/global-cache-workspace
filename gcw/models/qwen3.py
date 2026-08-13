@@ -84,6 +84,57 @@ def _has_hf_torch_gated_delta_rule() -> bool:
     )
 
 
+def qwen35_gated_delta_rule(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    initial_state: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    use_fla = query.device.type == "cuda" and _has_fla_gated_delta_rule()
+    if not use_fla and not _has_hf_torch_gated_delta_rule():
+        raise RuntimeError(
+            "CPU Qwen3.5 gated-delta execution requires Transformers' torch fallback."
+        )
+    needs_grad = torch.is_grad_enabled() and any(
+        t is not None and t.requires_grad
+        for t in (query, key, value, g, beta, initial_state)
+    )
+    if query.shape[1] == 1 and not needs_grad:
+        recurrent_impl = (
+            _fla_recurrent_gated_delta_rule
+            if use_fla
+            else _hf_torch_recurrent_gated_delta_rule
+        )
+        return recurrent_impl(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            initial_state=initial_state,
+            output_final_state=True,
+            use_qk_l2norm_in_kernel=True,
+        )
+    chunk_impl = (
+        _fla_chunk_gated_delta_rule
+        if use_fla
+        else _hf_torch_chunk_gated_delta_rule
+    )
+    return chunk_impl(
+        query,
+        key,
+        value,
+        g=g,
+        beta=beta,
+        initial_state=initial_state,
+        output_final_state=True,
+        use_qk_l2norm_in_kernel=True,
+    )
+
+
 def qwen3_config(**kwargs) -> ModelConfig:
     if kwargs.get("layer_types") or kwargs.get("sliding_window"):
         raise NotImplementedError(
@@ -396,45 +447,13 @@ class Qwen35GatedDeltaNet(nn.Module):
         beta: torch.Tensor,
         initial_state: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        use_fla = query.device.type == "cuda" and _has_fla_gated_delta_rule()
-        if not use_fla and not _has_hf_torch_gated_delta_rule():
-            raise RuntimeError(
-                "CPU Qwen3.5 gated-delta execution requires Transformers' torch fallback."
-            )
-        needs_grad = torch.is_grad_enabled() and any(
-            t is not None and t.requires_grad
-            for t in (query, key, value, g, beta, initial_state)
-        )
-        if query.shape[1] == 1 and not needs_grad:
-            recurrent_impl = (
-                _fla_recurrent_gated_delta_rule
-                if use_fla
-                else _hf_torch_recurrent_gated_delta_rule
-            )
-            return recurrent_impl(
-                query,
-                key,
-                value,
-                g=g,
-                beta=beta,
-                initial_state=initial_state,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=True,
-            )
-        chunk_impl = (
-            _fla_chunk_gated_delta_rule
-            if use_fla
-            else _hf_torch_chunk_gated_delta_rule
-        )
-        return chunk_impl(
+        return qwen35_gated_delta_rule(
             query,
             key,
             value,
             g=g,
             beta=beta,
             initial_state=initial_state,
-            output_final_state=True,
-            use_qk_l2norm_in_kernel=True,
         )
 
 

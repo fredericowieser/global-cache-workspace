@@ -213,9 +213,12 @@ def _longshot_linear_state_params(config: ModelConfig) -> int:
         )
     query = query_count * (context_dim * query_out + query_out)
     feature_dim = linear_key_dim + linear_value_dim
+    output_dim = feature_dim + (
+        2 if cp.linear_state_update_mode == "gated_delta" else 0
+    )
     query_context_norm = context_dim
     input_adapter = feature_dim + feature_dim * cp.hidden_size + cp.hidden_size
-    output_adapter = cp.hidden_size * feature_dim + feature_dim
+    output_adapter = cp.hidden_size * output_dim + output_dim
     return query + query_context_norm + input_adapter + output_adapter
 
 

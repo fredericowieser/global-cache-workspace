@@ -2,6 +2,9 @@ from dataclasses import replace
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
+from gcw.models.longshot import (
+    GlobalCacheProcessor as LongshotGlobalCacheProcessor,
+)
 from gcw.models.transformer import estimate_non_embedding_params
 from gcw.params import (
     fit_matched_total_backbone,
@@ -166,7 +169,9 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
         linear_num_value_heads=2,
         cache_processor=cp,
     )
-    model = build_model(cfg)
+    processor = LongshotGlobalCacheProcessor(
+        cfg, linear_attention_layers={0: object(), 2: object()}
+    )
     default_cfg = replace(
         cfg, cache_processor=replace(cp, linear_state_cache=False)
     )
@@ -177,10 +182,21 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
         cfg,
         cache_processor=replace(cp, linear_state_query_mode="per_linear_state"),
     )
+    gated_cfg = replace(
+        cfg,
+        cache_processor=replace(cp, linear_state_update_mode="gated_delta"),
+    )
+    gated_processor = LongshotGlobalCacheProcessor(
+        gated_cfg, linear_attention_layers={0: object(), 2: object()}
+    )
 
     assert processor_params(cfg) == sum(
-        p.numel() for p in model.cache_processor.parameters()
+        p.numel() for p in processor.parameters()
     )
+    assert processor_params(gated_cfg) == sum(
+        p.numel() for p in gated_processor.parameters()
+    )
+    assert processor_params(gated_cfg) > processor_params(cfg)
     assert processor_params(cfg) > processor_params(default_cfg)
     assert processor_params(cfg) < processor_params(shared_cfg)
     assert processor_params(shared_cfg) < processor_params(per_linear_state_cfg)

@@ -23,6 +23,7 @@ CacheProcessorInternalIterationScore = Literal[
     "attn_l2", "cache_head_attention", "kv_norm"
 ]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
+CacheLinearStateUpdateMode = Literal["outer_product", "gated_delta"]
 
 
 def gemma4_default_layer_types(num_layers: int) -> list[str]:
@@ -71,6 +72,7 @@ class CacheProcessorConfig:
     internal_iteration_score: CacheProcessorInternalIterationScore = "attn_l2"
     linear_state_cache: bool = False
     linear_state_query_mode: CacheLinearStateQueryMode = "global"
+    linear_state_update_mode: CacheLinearStateUpdateMode = "outer_product"
     gate_linear_state_delta: bool = True
 
     def __post_init__(self) -> None:
@@ -150,6 +152,15 @@ class CacheProcessorConfig:
             raise ValueError(
                 "cache_processor.linear_state_query_mode must be 'per_linear_state', 'shared', or 'global'"
             )
+        if self.linear_state_update_mode not in {
+            "outer_product",
+            "gated_delta",
+        }:
+            raise ValueError(
+                "cache_processor.linear_state_update_mode must be 'outer_product' or 'gated_delta'"
+            )
+        if self.linear_state_update_mode == "gated_delta":
+            self.gate_linear_state_delta = False
 
     @property
     def stream_factor(self) -> int:
@@ -331,6 +342,14 @@ class ModelConfig:
             and self.cache_processor is None
         ):
             self.cache_processor = CacheProcessorConfig()
+        if (
+            self.cache_processor is not None
+            and self.cache_processor.linear_state_update_mode == "gated_delta"
+            and not self.cache_processor.linear_state_cache
+        ):
+            raise ValueError(
+                "cache_processor.linear_state_update_mode='gated_delta' requires linear_state_cache=True"
+            )
         if (
             self.cache_processor is not None
             and self.cache_processor.linear_state_cache

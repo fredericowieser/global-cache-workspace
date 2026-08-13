@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 import warnings
 
@@ -26,6 +26,8 @@ from gcw.models.cache_processor_ops import (
     select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_state import CacheState, StaticCacheState
+from gcw.models.backbone import build_backbone
+from gcw.models.qwen3 import Qwen35GatedDeltaNet, qwen35_gated_delta_rule
 from gcw.models.transformer import RMSNorm, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
 
@@ -591,7 +593,10 @@ class CacheProcessor(nn.Module):
         auxiliary_delta = self.linear_state_adapter.output_proj(
             processed[:, x.shape[1] :]
         )
-        if self.config.gate_linear_state_delta:
+        if (
+            self.config.linear_state_update_mode == "outer_product"
+            and self.config.gate_linear_state_delta
+        ):
             auxiliary_delta = auxiliary_delta * gate
         residual = x[:, :, -1, -self.output_dim :]
         return residual + primary_delta, auxiliary_delta
@@ -740,6 +745,11 @@ class LinearStateAdapter(nn.Module):
         )
         self.context_dim = processor_config.hidden_size
         self.feature_dim = self.linear_key_dim + self.linear_value_dim
+        self.output_dim = self.feature_dim + (
+            2
+            if processor_config.linear_state_update_mode == "gated_delta"
+            else 0
+        )
         self.query_projs = nn.ModuleDict()
         for key in self._query_projection_keys(specs):
             out_dim = (
@@ -756,7 +766,7 @@ class LinearStateAdapter(nn.Module):
             self.feature_dim, processor_config.hidden_size
         )
         self.output_proj = nn.Linear(
-            processor_config.hidden_size, self.feature_dim
+            processor_config.hidden_size, self.output_dim
         )
         self.init_weights(processor_config)
 
@@ -821,6 +831,7 @@ class GlobalCacheProcessor(nn.Module):
         *,
         encoder_method: EncoderMethod | None = None,
         encoder_seq_len: int | None = None,
+        linear_attention_layers: dict[int, Qwen35GatedDeltaNet] | None = None,
     ):
         super().__init__()
         model_config.ensure_uniform_stored_cache_shape("Longshot")
@@ -848,7 +859,22 @@ class GlobalCacheProcessor(nn.Module):
             self.head_dim * model_config.partial_rotary_factor
         )
         self.num_kv_cache_heads = self.num_layers * self.num_kv_heads
+        self.linear_attention_layers = linear_attention_layers or {}
         self.linear_state_specs = self._build_linear_state_specs(model_config)
+        if (
+            self.config.linear_state_update_mode == "gated_delta"
+            and self.linear_state_specs
+        ):
+            missing = sorted(
+                spec.layer_idx
+                for spec in self.linear_state_specs
+                if spec.layer_idx not in self.linear_attention_layers
+            )
+            if missing:
+                raise ValueError(
+                    "gated_delta linear-state updates require matching Qwen3.5 "
+                    f"linear-attention modules for layers {missing}"
+                )
         self.num_linear_state_heads = sum(
             spec.head_count for spec in self.linear_state_specs
         )
@@ -1132,16 +1158,20 @@ class GlobalCacheProcessor(nn.Module):
             ):
                 continue
             conv_state, recurrent_state = states[spec.layer_idx]
+            if self.config.linear_state_update_mode == "gated_delta":
+                new_recurrent = self._gated_delta_linear_state_update(
+                    spec.layer_idx,
+                    update,
+                    recurrent_state,
+                )
+                states[spec.layer_idx] = (conv_state, new_recurrent)
+                continue
             delta_key, delta_value = torch.split(
                 update, [key_dim, value_dim], dim=-1
             )
             delta_key = F.normalize(delta_key.float(), p=2, dim=-1).to(
                 delta_value.dtype
             )
-            # TODO(qwen3.5-linear-state): Qwen3.5 uses the gated delta-rule state
-            # transition with decay/gating terms. This additive normalized-key
-            # outer-product is useful as a learned perturbation, but it is not the
-            # exact recurrent update used by the native Qwen3.5 linear layer.
             delta_state = torch.einsum(
                 "bhk,bhv->bhkv", delta_key.float(), delta_value.float()
             )
@@ -1152,10 +1182,71 @@ class GlobalCacheProcessor(nn.Module):
         cache.linear_states = states
         return cache
 
+    def _gated_delta_linear_state_update(
+        self,
+        layer_idx: int,
+        update: torch.Tensor,
+        recurrent_state: torch.Tensor,
+    ) -> torch.Tensor:
+        layer = self.linear_attention_layers.get(layer_idx)
+        if layer is None:
+            raise ValueError(
+                f"missing Qwen3.5 linear-attention module for layer {layer_idx}"
+            )
+        key_dim, value_dim = self.block.linear_state_update_dims()
+        synthetic_key, synthetic_value, beta_logit, decay_input = torch.split(
+            update, [key_dim, value_dim, 1, 1], dim=-1
+        )
+        batch, heads, _ = synthetic_key.shape
+        if heads != layer.num_v_heads:
+            raise ValueError(
+                f"linear state head count {heads} does not match layer {layer_idx} "
+                f"value heads {layer.num_v_heads}"
+            )
+        query = synthetic_key.reshape(batch, 1, heads, key_dim)
+        key = query
+        value = synthetic_value.reshape(batch, 1, heads, value_dim)
+        beta = torch.sigmoid(beta_logit.squeeze(-1)).unsqueeze(1)
+        g = (
+            -layer.A_log.float().exp()
+            * F.softplus(decay_input.squeeze(-1).float() + layer.dt_bias)
+        ).unsqueeze(1)
+        _, final_state = qwen35_gated_delta_rule(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            initial_state=recurrent_state,
+        )
+        return final_state.to(recurrent_state.dtype)
+
 
 class Longshot(BGT):
     processor_cls = GlobalCacheProcessor
     variant = "longshot"
+
+    def __init__(self, config: ModelConfig):
+        nn.Module.__init__(self)
+        self.config = replace(config, variant=self.variant)
+        self.backbone = build_backbone(config)
+        self.cache_processor = self.processor_cls(
+            self.config,
+            linear_attention_layers=_qwen35_linear_attention_layers(
+                self.backbone
+            ),
+        )
+
+
+def _qwen35_linear_attention_layers(
+    backbone: nn.Module,
+) -> dict[int, Qwen35GatedDeltaNet]:
+    layers: dict[int, Qwen35GatedDeltaNet] = {}
+    for layer in getattr(backbone, "layers", []):
+        linear_attn = getattr(layer, "linear_attn", None)
+        if isinstance(linear_attn, Qwen35GatedDeltaNet):
+            layers[int(layer.layer_idx)] = linear_attn
+    return layers
 
 
 def _zero_projection(module: nn.Module) -> None:
