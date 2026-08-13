@@ -66,15 +66,16 @@ class LanguageModel(nn.Module):
         eos_token_id: int | None = None,
     ) -> torch.Tensor:
         processor = self._processor_config()
+        relative = self.config.processor_generation_mode == "post_prefill_relative"
         return self.backbone.generate(
             input_ids,
             max_new_tokens,
             eos_token_id=eos_token_id,
             processor=self.cache_processor,
             process_every=processor.process_every,
-            process_prefill_windows=True,
-            process_after_prefill=False,
-            relative_generation_cadence=False,
+            process_prefill_windows=not relative,
+            process_after_prefill=relative,
+            relative_generation_cadence=relative,
         )
 
     @torch.no_grad()
@@ -87,15 +88,16 @@ class LanguageModel(nn.Module):
         pad_token_id: int | None = None,
     ) -> torch.Tensor:
         processor = self._processor_config()
+        relative = self.config.processor_generation_mode == "post_prefill_relative"
         return self.backbone.generate_fast(
             input_ids,
             max_new_tokens,
             eos_token_id=eos_token_id,
             processor=self.cache_processor,
             process_every=processor.process_every,
-            process_prefill_windows=True,
-            process_after_prefill=False,
-            relative_generation_cadence=False,
+            process_prefill_windows=not relative,
+            process_after_prefill=relative,
+            relative_generation_cadence=relative,
             stop_sequences=stop_sequences,
             pad_token_id=pad_token_id,
         )
@@ -121,7 +123,12 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
         return build_backbone(config)
 
     processor = build_cache_processor(config)
-    backbone_config = replace(config, flow_processor=None, diffusion_processor=None)
+    backbone_config = replace(
+        config,
+        flow_processor=None,
+        diffusion_processor=None,
+        processor_generation_mode="windowed",
+    )
     if config.variant == "longshot":
         backbone_config = replace(backbone_config, workspace_flow_refinement=None)
     backbone = build_backbone(backbone_config)

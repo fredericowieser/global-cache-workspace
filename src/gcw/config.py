@@ -25,6 +25,7 @@ CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "cache_processor"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
+ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
 
 _FLOAT32_MAX = 3.4028234663852886e38
 _FLOAT32_MIN_SUBNORMAL = 2.0**-149
@@ -220,6 +221,7 @@ class ModelConfig:
     cache_processor: CacheProcessorConfig | None = None
     flow_processor: FlowProcessorConfig | None = None
     diffusion_processor: DiffusionProcessorConfig | None = None
+    processor_generation_mode: ProcessorGenerationMode = "windowed"
     workspace_flow_refinement: WorkspaceFlowRefinementConfig | None = None
     layer_types: list[str] | None = None
     processor_layer_indices: list[int] | None = None
@@ -257,6 +259,10 @@ class ModelConfig:
             self.diffusion_processor = DiffusionProcessorConfig(**self.diffusion_processor)
         if self.flow_processor is not None and self.diffusion_processor is not None:
             raise ValueError("flow_processor and diffusion_processor are mutually exclusive")
+        if self.processor_generation_mode not in {"windowed", "post_prefill_relative"}:
+            raise ValueError("processor_generation_mode must be 'windowed' or 'post_prefill_relative'")
+        if self.variant == "tf" and self.processor_generation_mode != "windowed":
+            raise ValueError("processor_generation_mode requires a cache processor")
         if isinstance(self.workspace_flow_refinement, dict):
             self.workspace_flow_refinement = WorkspaceFlowRefinementConfig(**self.workspace_flow_refinement)
         if self.variant in {"bt", "bgt", "icarus", "longshot"} and self.cache_processor is None:

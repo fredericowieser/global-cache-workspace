@@ -31,6 +31,7 @@ def tiny_diffusion_config() -> ModelConfig:
             num_kv_heads=1,
         ),
         diffusion_processor=DiffusionProcessorConfig(num_steps=4, noise_scale=0.15),
+        processor_generation_mode="post_prefill_relative",
     )
 
 

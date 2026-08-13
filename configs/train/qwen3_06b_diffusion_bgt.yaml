@@ -35,6 +35,7 @@ model:
     refinement_gate_init: -4.0
     noise_scale: 0.15
     conditioning_scale: 1.0
+  processor_generation_mode: post_prefill_relative
 data:
   kind: sft
   dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
