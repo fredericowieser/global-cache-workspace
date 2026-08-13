@@ -24,7 +24,6 @@ BENCHMARK_DATASETS = (
     ("ChilleD/SVAMP", None, "test", ("Body", "Question")),
     ("EleutherAI/logiqa", None, "test", ("context", "query")),
     ("hails/agieval-gaokao-mathqa", None, "test", ("query",)),
-    ("cais/mmlu", "all", "test", ("question",)),
 )
 
 
