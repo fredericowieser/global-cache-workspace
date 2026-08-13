@@ -35,6 +35,7 @@ model:
     refinement_gate_init: -4.0
     noise_scale: 0.15
     conditioning_scale: 1.0
+    inference_mode: deterministic
   processor_generation_mode: post_prefill_relative
 data:
   kind: sft

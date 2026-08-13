@@ -79,6 +79,7 @@ def train(config: TrainConfig) -> None:
         smooth_loss = checkpoint.resume_state.smooth_loss
         cursor = checkpoint.loader_cursor(rank=rank)
 
+    initial_processor_state: dict[str, torch.Tensor] | None = None
     if use_fsdp:
         model = _build_training_model(config, device, rank=rank, use_fsdp=True)
     else:
@@ -90,6 +91,8 @@ def train(config: TrainConfig) -> None:
             _load_initial_model(model, config.init_checkpoint)
         elif config.backbone_checkpoint:
             load_backbone_checkpoint(model, config.backbone_checkpoint)
+        if checkpoint is None:
+            initial_processor_state = _processor_state(model)
     _apply_trainable_policy(model, config.trainable)
     if use_fsdp:
         _apply_activation_checkpointing(model, family=config.model.family)
@@ -250,6 +253,7 @@ def train(config: TrainConfig) -> None:
                 fingerprint,
                 rank,
                 use_fsdp=use_fsdp,
+                initial_processor_state=initial_processor_state,
             )
             last_checkpoint_step = step_num
             if retained_checkpoint_every is not None and step_num % retained_checkpoint_every == 0:
@@ -266,6 +270,7 @@ def train(config: TrainConfig) -> None:
                     fingerprint,
                     rank,
                     use_fsdp=use_fsdp,
+                    initial_processor_state=initial_processor_state,
                 )
 
     if last_checkpoint_step != config.max_steps:
@@ -282,6 +287,7 @@ def train(config: TrainConfig) -> None:
             fingerprint,
             rank,
             use_fsdp=use_fsdp,
+            initial_processor_state=initial_processor_state,
         )
     if tracker is not None:
         tracker.finish(summary={**run_meta, "completed_step": config.max_steps})
@@ -421,6 +427,16 @@ def _resume_state(
     )
 
 
+def _processor_state(model: torch.nn.Module) -> dict[str, torch.Tensor] | None:
+    processor = getattr(model, "cache_processor", None)
+    if not isinstance(processor, torch.nn.Module):
+        return None
+    return {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in processor.state_dict().items()
+    }
+
+
 def _save_training_state(
     path: Path,
     model: torch.nn.Module,
@@ -429,11 +445,17 @@ def _save_training_state(
     resume_state: ResumeState,
     fingerprint: dict[str, Any],
     rank: int,
+    initial_processor_state: dict[str, torch.Tensor] | None = None,
 ) -> None:
     if config.distributed == "fsdp":
         if rank == 0:
             save_checkpoint(path, model, config.model, {**resume_state.metadata, "step": resume_state.step})
         return
+    checkpoint_kwargs = (
+        {"initial_processor_state": initial_processor_state}
+        if initial_processor_state is not None
+        else {}
+    )
     save_training_checkpoint(
         path,
         model,
@@ -441,6 +463,7 @@ def _save_training_state(
         optimizer,
         resume_state,
         fingerprint,
+        **checkpoint_kwargs,
     )
 
 
@@ -458,13 +481,34 @@ def _save_step_checkpoint(
     rank: int,
     *,
     use_fsdp: bool,
+    initial_processor_state: dict[str, torch.Tensor] | None,
 ) -> None:
     if use_fsdp:
         state = _checkpoint_state(metadata, step, cursor_to_dict(stream.cursor))
         _save_training_checkpoint(path, model, config.model, state, use_fsdp=True)
         return
     resume_state = _resume_state(step, smooth_loss, stream, world_size, metadata)
-    _save_training_state(path, _unwrap(model), optimizer, config, resume_state, fingerprint, rank)
+    if initial_processor_state is None:
+        _save_training_state(
+            path,
+            _unwrap(model),
+            optimizer,
+            config,
+            resume_state,
+            fingerprint,
+            rank,
+        )
+    else:
+        _save_training_state(
+            path,
+            _unwrap(model),
+            optimizer,
+            config,
+            resume_state,
+            fingerprint,
+            rank,
+            initial_processor_state=initial_processor_state,
+        )
 
 
 def _json_safe_loader_state(value: Any) -> Any:

@@ -26,6 +26,7 @@ WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "cache_processor"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
+DiffusionInferenceMode = Literal["deterministic", "stochastic"]
 
 _FLOAT32_MAX = 3.4028234663852886e38
 _FLOAT32_MIN_SUBNORMAL = 2.0**-149
@@ -163,12 +164,15 @@ class DiffusionProcessorConfig:
     refinement_gate_init: float = -4.0
     noise_scale: float = 0.15
     conditioning_scale: float = 1.0
+    inference_mode: DiffusionInferenceMode = "deterministic"
 
     def __post_init__(self) -> None:
         if isinstance(self.num_steps, bool) or not isinstance(self.num_steps, int) or self.num_steps <= 0:
             raise ValueError("diffusion_processor.num_steps must be a positive integer")
         if not isinstance(self.time_conditioning, bool):
             raise ValueError("diffusion_processor.time_conditioning must be a boolean")
+        if self.inference_mode not in {"deterministic", "stochastic"}:
+            raise ValueError("diffusion_processor.inference_mode must be 'deterministic' or 'stochastic'")
         self.eta_max = _validated_float32("diffusion_processor.eta_max", self.eta_max, positive=True)
         self.refinement_gate_init = _validated_float32(
             "diffusion_processor.refinement_gate_init", self.refinement_gate_init

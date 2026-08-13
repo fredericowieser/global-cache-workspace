@@ -39,13 +39,14 @@ class TaskDirectedDiffusion(nn.Module):
                 f"diffusion expected hidden width {self.hidden_size}, got {bottleneck.shape[-1]}"
             )
         state = bottleneck
-        if self.training and self.config.noise_scale > 0.0:
+        noisy_inference = not self.training and self.config.inference_mode == "stochastic"
+        if (self.training or noisy_inference) and self.config.noise_scale > 0.0:
             sampled = torch.randn_like(state) if noise is None else noise
             if sampled.shape != state.shape:
                 raise ValueError("diffusion noise must match the bottleneck state shape")
             state = state + self.config.noise_scale * sampled
         elif noise is not None:
-            raise ValueError("explicit diffusion noise is valid only during noisy training")
+            raise ValueError("explicit diffusion noise requires noisy training or stochastic inference")
 
         initial = state
         step_size = self.scale(state.dtype) / self.config.num_steps

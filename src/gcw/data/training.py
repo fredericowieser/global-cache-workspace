@@ -282,6 +282,16 @@ def build_training_stream(
     )
 
 
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def cursor_to_dict(cursor: LoaderCursor) -> dict[str, Any]:
     return asdict(cursor)
 
@@ -306,7 +316,12 @@ def training_data_identity(config: TrainConfig) -> dict[str, Any]:
         if config.data.dataset is None:
             raise ValueError("SFT mode requires data.dataset JSONL path")
         path = Path(config.data.dataset).expanduser().resolve()
-        return {"kind": "sft", "path": str(path), "size": path.stat().st_size}
+        return {
+            "kind": "sft",
+            "path": str(path),
+            "size": path.stat().st_size,
+            "sha256": _file_sha256(path),
+        }
     data_dir = Path(config.data.data_dir).expanduser().resolve() if config.data.data_dir else default_data_dir().resolve()
     shards = [Path(path) for path in list_shards(data_dir, "train")]
     if not shards:

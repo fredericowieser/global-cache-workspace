@@ -7,6 +7,8 @@ Diffusion-BGT and Flow-BGT are separate mechanisms.
 - **Flow-BGT** deterministically integrates a time-conditioned latent vector field.
 - **Diffusion-BGT** injects independent noise into a bottleneck state during training, repeatedly refines that state with shared weights, and learns the endpoint through future-token cross-entropy.
 
+Inference is explicit: `deterministic` omits fresh noise for a stable endpoint; `stochastic` samples fresh noise and requires recorded seeds for scientific comparison. Training remains noisy whenever `noise_scale > 0`.
+
 ## Mechanism
 
 Let $X$ be a prefix, $K$ its ordinary KV cache, and $Z=B(K)$ the BGT bottleneck. Diffusion-BGT computes

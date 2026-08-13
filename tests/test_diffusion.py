@@ -51,6 +51,25 @@ def test_diffusion_is_stochastic_during_training_and_deterministic_for_eval():
     assert torch.equal(processor(state, field), processor(state, field))
 
 
+def test_diffusion_can_sample_at_inference_when_declared():
+    processor = TaskDirectedDiffusion(
+        4,
+        DiffusionProcessorConfig(
+            num_steps=2,
+            noise_scale=0.25,
+            inference_mode="stochastic",
+        ),
+    ).eval()
+    state = torch.zeros(1, 2, 4)
+
+    def field(value: torch.Tensor, _time: float) -> torch.Tensor:
+        return value
+
+    first = processor(state, field, noise=torch.zeros_like(state))
+    second = processor(state, field, noise=torch.ones_like(state))
+    assert not torch.equal(first, second)
+
+
 def test_diffusion_bgt_forward_backward_and_accounting():
     config = tiny_diffusion_config()
     model = build_model(config)
