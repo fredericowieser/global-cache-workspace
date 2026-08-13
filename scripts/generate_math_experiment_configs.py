@@ -115,6 +115,19 @@ def _arms(model: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def _learning_rates(args: argparse.Namespace) -> dict[str, float]:
+    path = getattr(args, "learning_rates", None)
+    if path is None:
+        return {}
+    payload = json.loads(Path(path).read_text())
+    if not isinstance(payload, dict) or not all(
+        isinstance(name, str) and isinstance(value, (int, float)) and value > 0
+        for name, value in payload.items()
+    ):
+        raise ValueError("learning-rate file must map arm names to positive numbers")
+    return {name: float(value) for name, value in payload.items()}
+
+
 def generate(args: argparse.Namespace) -> list[Path]:
     from transformers import AutoConfig
 
@@ -127,6 +140,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
     model_payload = _plain(model)
     rows = int(data_manifest["rows"])
     max_steps = getattr(args, "max_steps", None) or math.ceil(rows / args.global_batch_rows)
+    learning_rates = _learning_rates(args)
     contract = {
         "schema": "gcw.math_experiment.v1",
         "dataset_sha256": data_manifest["dataset_sha256"],
@@ -176,7 +190,7 @@ def generate(args: argparse.Namespace) -> list[Path]:
             "sequence_len": args.sequence_length,
             "max_steps": max_steps,
             "global_batch_rows": args.global_batch_rows,
-            "learning_rate": arm["lr"],
+            "learning_rate": learning_rates.get(name, arm["lr"]),
             "adam_beta2": 0.999,
             "warmup_steps": max(1, round(0.03 * max_steps)),
             "warmdown_ratio": 0.1,
@@ -184,7 +198,10 @@ def generate(args: argparse.Namespace) -> list[Path]:
             "grad_clip": 1.0,
             "bf16": True,
             "seed": args.seed,
-            "save_every": max(1, max_steps // 10),
+            "save_every": max_steps,
+            "eval_every": max(1, max_steps // 10),
+            "eval_batches": getattr(args, "eval_batches", 64),
+            "eval_on_start": True,
             "wandb": {
                 "enabled": not getattr(args, "disable_wandb", False),
                 "entity": WAND_ENTITY,
@@ -235,6 +252,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=24)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--disable-wandb", action="store_true")
+    parser.add_argument("--learning-rates")
+    parser.add_argument("--eval-batches", type=int, default=64)
     paths = generate(parser.parse_args())
     print("\n".join(str(path) for path in paths))
 

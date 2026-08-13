@@ -10,7 +10,7 @@ Every arm uses sequence length 4,096, global batch 64 rows, the same optimizer-s
 
 `scripts/prepare_math_experiment.py` builds the natural admissible union of OpenMathInstruct-2 and verified OpenR1-Math. It excludes exact normalized-prompt overlap with the generative math benchmarks, rejects duplicate prompts, and admits only rows whose complete rendered prompt and response fit the context cap. Multiple-choice and language-model benchmarks are not mathematically prompt-equivalent to the SFT rows; their revisions remain pinned in evaluation evidence rather than the exact-prompt filter. The manifest records retention at 1,024, 2,048, 4,096, and 8,192 tokens.
 
-`scripts/generate_math_experiment_configs.py` writes the fairness contract and named training arms. Training refuses a config whose dataset hash, path, tokenizer, backbone, sequence length, global row batch, or steps differ from that contract.
+`scripts/generate_math_experiment_configs.py` writes the fairness contract and named training arms. Training refuses a config whose dataset hash, path, tokenizer, backbone, sequence length, global row batch, or steps differ from that contract. Canonical runs validate at start and ten evenly spaced points using 64 held-out batches. They overwrite one exact-resume checkpoint only at completion; retained intermediate checkpoints require an explicit `GCW_RETAIN_CHECKPOINT_EVERY` override.
 
 ## Main arms
 
@@ -40,6 +40,6 @@ Processor-off results test the frozen-backbone invariant. Any material differenc
 2. Record the explicit 4K/8K trade-off and approve one cap before execution. **Approved: 4K.**
 3. Convert and hash the exact instruct checkpoint.
 4. Run one-step CUDA canaries for every arm.
-5. Screen learning rates on held-out SFT data.
+5. Screen bounded learning rates on the source-balanced held-out SFT split; select by final held-out answer-only loss, never benchmark test score.
 6. Train the canonical one-seed matrix.
 7. Replicate only the strongest mechanisms with three seeds.
