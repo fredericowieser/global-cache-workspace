@@ -3,7 +3,7 @@ from gcw.evaluation.core import (
     _normalize_until,
     _trim_until,
 )
-from gcw.evaluation.scoring import trim_generated_token_ids, truncate_context_continuation
+from gcw.evaluation.scoring import tokenizer_for_checkpoint, trim_generated_token_ids, truncate_context_continuation
 
 
 def test_trim_until_matches_existing_ordered_stop_semantics():
@@ -21,6 +21,21 @@ def test_normalize_until_accepts_string_list_and_none():
     assert _normalize_until(None) == ()
     assert _normalize_until("stop") == ("stop",)
     assert _normalize_until(["a", None, "b"]) == ("a", "b")
+
+
+def test_native_hf_families_require_original_tokenizer(monkeypatch):
+    calls = []
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(source, **kwargs):
+            calls.append((source, kwargs))
+            return type("Tokenizer", (), {"eos_token_id": 1, "pad_token_id": 1, "__len__": lambda self: 2})()
+
+    monkeypatch.setitem(__import__("sys").modules, "transformers", type("Transformers", (), {"AutoTokenizer": AutoTokenizer}))
+    for family in ("qwen3_5", "gemma4"):
+        tokenizer_for_checkpoint(type("Config", (), {"family": family, "vocab_size": 2})(), {"source": "model"})
+    assert len(calls) == 2
 
 
 def test_context_continuation_truncation_keeps_at_least_one_context_token():
