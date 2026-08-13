@@ -1,0 +1,69 @@
+model:
+  variant: bgt
+  family: qwen3
+  sequence_len: 1024
+  vocab_size: 151936
+  hidden_size: 1024
+  intermediate_size: 3072
+  num_layers: 28
+  num_heads: 16
+  num_kv_heads: 8
+  head_dim: 128
+  rope_theta: 1000000.0
+  norm_eps: 1.0e-6
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 32
+    score: attn_l2
+    hidden_size: 1344
+    intermediate_size: 5632
+    num_layers: 1
+    num_heads: 16
+    num_kv_heads: 16
+    norm_eps: 1.0e-6
+    rope_theta: 10000.0
+    gate_init: -5.0
+    update_stream: kv
+  diffusion_processor:
+    num_steps: 1
+    time_conditioning: true
+    eta_max: 1.0
+    refinement_gate_init: -4.0
+    noise_scale: 0.0
+    conditioning_scale: 1.0
+    inference_mode: deterministic
+  processor_generation_mode: post_prefill_relative
+data:
+  kind: sft
+  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
+  tokenizer: hf
+  tokenizer_source: /mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1
+  sft_take_rows: 64730
+  prompt_suffix: "Solve the problem internally. Return only the final answer in \\boxed{...} form."
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+mode: sft
+distributed: none
+trainable: cache_processor
+backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/base_backbones/qwen3_06b/tf-v1
+output_dir: data/training-runs/qwen3-06b-diffusion-bgt-t1-sigma0
+batch_size: 8
+sequence_len: 1024
+max_steps: 1000
+total_batch_size: 65536
+learning_rate: 1.0e-4
+adam_beta2: 0.999
+warmup_steps: 20
+warmdown_ratio: 0.1
+weight_decay: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 100
+wandb:
+  enabled: false
