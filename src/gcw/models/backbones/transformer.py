@@ -363,6 +363,57 @@ class TF(Backbone):
         return logits[..., : self.config.vocab_size].float()
 
     def loss_from_hidden(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
+        return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
+
+    def answer_only_loss_from_hidden(
+        self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str
+    ) -> torch.Tensor:
+        """Compute loss without projecting prompt or padding positions through the vocabulary head."""
+        chunk_size = 256 if x.is_cuda else 64
+        loss_sum = x.new_zeros((), dtype=torch.float32)
+        token_count = x.new_zeros((), dtype=torch.float32)
+        per_token: list[torch.Tensor] = []
+        any_valid = False
+        for start in range(0, x.shape[1], chunk_size):
+            end = start + chunk_size
+            hidden_chunk = x[:, start:end]
+            target_chunk = targets[:, start:end]
+            flat_targets = target_chunk.reshape(-1)
+            valid = flat_targets >= 0
+            valid_indices = torch.nonzero(valid, as_tuple=False).squeeze(1)
+            if valid_indices.numel() > 0:
+                any_valid = True
+                flat_hidden = hidden_chunk.reshape(-1, hidden_chunk.shape[-1])
+                selected_hidden = flat_hidden.index_select(0, valid_indices)
+                logits = self.logits_from_hidden(selected_hidden)
+                selected_targets = flat_targets.index_select(0, valid_indices)
+                selected_loss = F.cross_entropy(logits, selected_targets, reduction="none")
+                # Scatter before summing to retain the eager path's row-major, per-chunk reduction order.
+                chunk_loss = logits.new_zeros(flat_targets.shape).index_copy(0, valid_indices, selected_loss)
+            else:
+                chunk_loss = x.new_zeros(flat_targets.shape, dtype=torch.float32)
+            loss_sum = loss_sum + chunk_loss.sum()
+            token_count = token_count + valid.sum().to(torch.float32)
+            if loss_reduction == "none":
+                per_token.append(chunk_loss.reshape(target_chunk.shape))
+        if not any_valid:
+            # The eager loss touches both tensors even when every target is ignored. Preserve a
+            # differentiable zero so backward still materializes zero gradients for the head and x.
+            head = self.embed_tokens.weight if self.config.tie_embeddings else cast(Linear, self.lm_head).weight
+            connected_zero = (x.reshape(-1)[:1].float().sum() + head.reshape(-1)[:1].float().sum()) * 0.0
+            if loss_reduction == "none":
+                return torch.cat(per_token, dim=1) + connected_zero
+            return loss_sum + connected_zero
+        if loss_reduction == "none":
+            return torch.cat(per_token, dim=1)
+        if loss_reduction == "sum":
+            return loss_sum
+        return loss_sum / token_count.clamp_min(1.0)
+
+    def loss_from_hidden_reference(
+        self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str
+    ) -> torch.Tensor:
+        """Eager loss oracle which projects every position, including ignored positions."""
         chunk_size = 256 if x.is_cuda else 64
         loss_sum = x.new_zeros((), dtype=torch.float32)
         token_count = x.new_zeros((), dtype=torch.float32)
