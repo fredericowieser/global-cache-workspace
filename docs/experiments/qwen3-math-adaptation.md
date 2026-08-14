@@ -57,6 +57,33 @@ uv run --extra gpu --extra eval --extra convert python \
 
 The command above only prints the resolved plan. Add `--execute` after inspecting it.
 
+## Dual-GPU training and evaluation lanes
+
+The campaign can isolate training and evaluation on separate hosts. The training GPU owns optimizer state and publishes a minimal authenticated evaluation bundle only after an arm reaches its exact final step. The evaluation GPU verifies the bundle before loading it. Git synchronizes code at one pinned clean commit; bundle manifests synchronize checkpoint evidence.
+
+```bash
+# Training host: train one arm and atomically publish its evaluation bundle.
+uv run --extra gpu --extra eval python scripts/run_math_training_lane.py \
+  --arm bt \
+  --config /path/to/experiment/configs/bt.yaml \
+  --experiment-root /path/to/experiment \
+  --bundle-outbox /path/to/evaluation-outbox
+
+# Evaluation host: verify and evaluate the transferred bundle.
+uv run --extra gpu --extra eval python scripts/run_math_evaluation_lane.py \
+  --arm bt \
+  --checkpoint-bundle /path/to/inbox/bt \
+  --tokenizer-model /path/to/Qwen3-0.6B \
+  --experiment-root /path/to/experiment \
+  --evaluation-lineage lrc-h100-v1
+```
+
+Both commands are dry-run by default and require `--execute`. `scripts/math_evaluation_bundle.py` can create or verify bundles independently. A bundle contains only `config.json`, `model.safetensors`, and `train_state.json`; its manifest records source commit, final step, training-config digest, original checkpoint-manifest digest, file sizes, and file hashes. Transfer into a temporary directory, verify it, then rename atomically. Never transfer optimizer state to the evaluator or evaluate a partial directory.
+
+Before hardware cutover, run the untouched baseline and completed full-SFT checkpoint on both evaluator lineages. `scripts/compare_math_evaluation_lineages.py` enforces exact row identity and the declared aggregate, parsing, truncation, and paired-prediction parity bands. H100 evidence uses distinct paths, W&B IDs, artifacts, host metadata, and lineage tags. H200 evidence remains valid secondary evidence rather than being overwritten.
+
+Allow at most one training arm ahead of accepted evaluation. The training host may train arm *N+1* while arm *N* is evaluated, but it must not start arm *N+2* after an evaluation or transfer failure. An evaluation OOM restarts the entire affected cell at a declared lower batch. Training recovery must preserve global batch 64, row order, and optimizer semantics.
+
 ## Staging gates
 
 1. Publish the data retention and contamination manifest.

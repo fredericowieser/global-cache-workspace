@@ -349,6 +349,14 @@ def _flatten_numbers(value: Any, prefix: str = "") -> dict[str, float]:
     return output
 
 
+def _evaluation_base(args: argparse.Namespace, root: Path) -> Path:
+    return root / getattr(args, "evaluation_root", EVALUATION_ROOT)
+
+
+def _evaluation_lineage(args: argparse.Namespace) -> str:
+    return str(getattr(args, "evaluation_lineage", "nebius-h200-v1"))
+
+
 def _mirror_evaluation(
     result: Path,
     args: argparse.Namespace,
@@ -363,7 +371,8 @@ def _mirror_evaluation(
     import wandb
 
     cell_name = f"{protocol}-{thinking}" if thinking is not None else protocol
-    run_name = f"{args.experiment}-eval-{arm}-{processor}-{cell_name}"
+    lineage = _evaluation_lineage(args)
+    run_name = f"{args.experiment}-eval-{lineage}-{arm}-{processor}-{cell_name}"
     tags = ["qwen3-0.6b", "math", "single-seed", "evaluation", arm, processor, protocol]
     if thinking is not None:
         tags.append(thinking)
@@ -373,9 +382,9 @@ def _mirror_evaluation(
         name=run_name,
         group=args.experiment,
         job_type="evaluation",
-        id=_wandb_id(args.experiment, f"eval-v3-{arm}-{processor}-{cell_name}"),
+        id=_wandb_id(args.experiment, f"eval-v3-{lineage}-{arm}-{processor}-{cell_name}"),
         resume="allow",
-        tags=tags,
+        tags=[*tags, lineage],
         config={
             "experiment": args.experiment,
             "arm": arm,
@@ -384,6 +393,9 @@ def _mirror_evaluation(
             "thinking": thinking or "not_applicable",
             "tasks": list(tasks),
             "batch_size": args.eval_batch_size,
+            "evaluation_lineage": lineage,
+            "evaluator_host": os.uname().nodename,
+            "evaluator_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         },
     )
     if run is None:
@@ -450,7 +462,7 @@ def _evaluate_canonical_group(
     hf_target: bool,
     env: dict[str, str],
 ) -> None:
-    cell = root / EVALUATION_ROOT / arm / f"processor-{processor}" / "canonical-likelihood" / group
+    cell = _evaluation_base(args, root) / arm / f"processor-{processor}" / "canonical-likelihood" / group
     result = cell / "result.json"
     published = cell / "wandb-published.json"
     if arm == "instruct-baseline" and processor == "on" and group == "core" and not result.exists():
@@ -544,7 +556,7 @@ def _evaluate_numeric_mode(
     env: dict[str, str],
     deadline: datetime,
 ) -> bool:
-    cell = root / EVALUATION_ROOT / arm / f"processor-{processor}" / "numeric-generation" / thinking
+    cell = _evaluation_base(args, root) / arm / f"processor-{processor}" / "numeric-generation" / thinking
     task_results: list[Path] = []
     for task in NUMERIC_MATH_TASKS:
         if _deadline_reached(deadline):
@@ -674,8 +686,9 @@ def _preflight(args: argparse.Namespace, repository: Path, root: Path, env: dict
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     device_name = torch.cuda.get_device_name(0)
-    if "H200" not in device_name and not args.allow_other_gpu:
-        raise RuntimeError(f"expected one H200, found {device_name!r}")
+    expected_gpu = str(getattr(args, "expected_gpu", "H200"))
+    if expected_gpu not in device_name and not args.allow_other_gpu:
+        raise RuntimeError(f"expected one {expected_gpu}, found {device_name!r}")
     if torch.cuda.device_count() != 1:
         raise RuntimeError(f"expected exactly one visible GPU, found {torch.cuda.device_count()}")
     usage = shutil.disk_usage(root.parent)
@@ -687,15 +700,22 @@ def _preflight(args: argparse.Namespace, repository: Path, root: Path, env: dict
     subprocess.run([str(hf_cli), "auth", "whoami"], check=True, env=env)
     import wandb
 
+    lineage = _evaluation_lineage(args)
     run = wandb.init(
         entity=WANDB_ENTITY,
         project=WANDB_PROJECT,
-        name=f"{args.experiment}-preflight",
+        name=f"{args.experiment}-preflight-{lineage}",
         group=args.experiment,
         job_type="preflight",
-        id=_wandb_id(args.experiment, "preflight"),
+        id=_wandb_id(args.experiment, f"preflight-{lineage}"),
         resume="allow",
-        config={"source_commit": _source_commit(repository), "device": device_name},
+        tags=[lineage],
+        config={
+            "source_commit": _source_commit(repository),
+            "device": device_name,
+            "evaluation_lineage": lineage,
+            "host": os.uname().nodename,
+        },
     )
     if run is None:
         raise RuntimeError("W&B preflight returned no run")
@@ -811,8 +831,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--record-root")
     parser.add_argument("--experiment", default=EXPERIMENT)
     parser.add_argument("--eval-batch-size", type=int, default=64)
+    parser.add_argument("--evaluation-root", default=EVALUATION_ROOT)
+    parser.add_argument("--evaluation-lineage", default="nebius-h200-v1")
     parser.add_argument("--deadline-hours", type=float, default=72.0)
     parser.add_argument("--minimum-free-gib", type=int, default=200)
+    parser.add_argument("--expected-gpu", default="H200")
     parser.add_argument("--allow-other-gpu", action="store_true")
     parser.add_argument("--execute", action="store_true", help="Required to create artifacts or launch work")
     return parser
