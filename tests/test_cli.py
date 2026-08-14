@@ -93,3 +93,30 @@ def test_convert_hf_accepts_gemma4_family(monkeypatch):
             {"family": "gemma4", "variant": "tf", "dtype": "bfloat16"},
         )
     ]
+
+
+def test_eval_forwards_dtype_override(monkeypatch):
+    calls = []
+
+    def fake_run_ppt(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {}
+
+    monkeypatch.setattr(cli, "run_ppt", fake_run_ppt)
+    cli.main(
+        [
+            "eval",
+            "ppt",
+            "--checkpoint",
+            "checkpoint",
+            "--dtype",
+            "bfloat16",
+        ]
+    )
+
+    assert calls == [
+        (
+            ("checkpoint",),
+            {"limit": None, "batch_size": 8, "dtype": "bfloat16"},
+        )
+    ]

@@ -310,34 +310,50 @@ class GCWEvalLM(TemplateLM):
 
 
 def run_core(
-    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+    checkpoint: str | Path,
+    limit: int | None = None,
+    batch_size: int = 8,
+    dtype: str = "auto",
 ) -> dict:
     return run_task_groups(
-        checkpoint, [*PPT_RUNS, *MATH_RUNS], limit=limit, batch_size=batch_size
+        checkpoint,
+        [*PPT_RUNS, *MATH_RUNS],
+        limit=limit,
+        batch_size=batch_size,
+        dtype=dtype,
     )
 
 
 def run_ppt(
-    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+    checkpoint: str | Path,
+    limit: int | None = None,
+    batch_size: int = 8,
+    dtype: str = "auto",
 ) -> dict:
     return run_task_groups(
-        checkpoint, PPT_RUNS, limit=limit, batch_size=batch_size
+        checkpoint, PPT_RUNS, limit=limit, batch_size=batch_size, dtype=dtype
     )
 
 
 def run_math(
-    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+    checkpoint: str | Path,
+    limit: int | None = None,
+    batch_size: int = 8,
+    dtype: str = "auto",
 ) -> dict:
     return run_task_groups(
-        checkpoint, MATH_RUNS, limit=limit, batch_size=batch_size
+        checkpoint, MATH_RUNS, limit=limit, batch_size=batch_size, dtype=dtype
     )
 
 
 def run_paper7(
-    checkpoint: str | Path, limit: int | None = None, batch_size: int = 8
+    checkpoint: str | Path,
+    limit: int | None = None,
+    batch_size: int = 8,
+    dtype: str = "auto",
 ) -> dict:
     return run_task_groups(
-        checkpoint, PAPER7_RUNS, limit=limit, batch_size=batch_size
+        checkpoint, PAPER7_RUNS, limit=limit, batch_size=batch_size, dtype=dtype
     )
 
 
@@ -346,9 +362,10 @@ def run_fineweb(
     data_dir: str | Path | None = None,
     eval_tokens: int = 10 * 524288,
     batch_size: int = 16,
+    dtype: str = "auto",
 ) -> dict:
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, cfg, state = load_checkpoint(checkpoint, device=device)
+    model, cfg, state = load_checkpoint(checkpoint, device=device, dtype=dtype)
     if cfg.family != "smollm" or cfg.vocab_size != COSMO2_VOCAB_SIZE:
         raise ValueError(
             "FineWeb NLL/BPB eval currently expects a cosmo2 SmolLM checkpoint"
@@ -378,6 +395,7 @@ def run_task_groups(
     runs: list[tuple[list[str], int]],
     limit: int | None = None,
     batch_size: int = 8,
+    dtype: str = "auto",
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -397,7 +415,7 @@ def run_task_groups(
 
     dist_state, local_rank, world_size = _distributed_eval_state()
     device = _eval_device(local_rank)
-    model, cfg, state = load_checkpoint(checkpoint, device=device)
+    model, cfg, state = load_checkpoint(checkpoint, device=device, dtype=dtype)
     tokenizer = _tokenizer_for(cfg, state)
     lm = GCWEvalLM(model, tokenizer, batch_size=batch_size)
     apply_chat_template = bool(

@@ -1,6 +1,7 @@
 import json
 import sys
 
+import pytest
 import torch
 
 from gcw.config import (
@@ -15,12 +16,14 @@ from gcw.data.shards import ShardWriter
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
 from gcw.train import (
+    _build_optimizer,
     _build_training_model,
     _checkpoint_metadata,
     _checkpoint_state,
     _loader,
     _model_loss,
     _transformer_layer_classes,
+    _uses_bf16_autocast,
     _validate_train_batch,
     train,
 )
@@ -203,6 +206,55 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(
     )
 
 
+def test_train_precision_defaults_and_legacy_bf16_alias():
+    assert TrainConfig().precision == "fp32"
+    assert TrainConfig(bf16=True).precision == "bf16_mixed"
+    assert TrainConfig(precision="bf16").bf16 is True
+    cuda = torch.device("cuda")
+    assert _uses_bf16_autocast(TrainConfig(bf16=True), cuda) is True
+    assert _uses_bf16_autocast(TrainConfig(precision="bf16"), cuda) is False
+
+
+def test_train_precision_rejects_invalid_or_conflicting_values():
+    with pytest.raises(ValueError, match="unsupported training precision"):
+        TrainConfig(precision="float16")
+    with pytest.raises(ValueError, match="conflicts"):
+        TrainConfig(precision="fp32", bf16=True)
+
+
+def test_full_bf16_uses_bf16_model_gradients_and_optimizer_moments(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.precision = "bf16"
+    model = _build_training_model(
+        cfg, torch.device("cpu"), rank=0, use_fsdp=False
+    )
+    floating_tensors = [
+        *model.parameters(),
+        *(buffer for buffer in model.buffers() if buffer.is_floating_point()),
+    ]
+    assert floating_tensors
+    assert {tensor.dtype for tensor in floating_tensors} == {torch.bfloat16}
+
+    params = [param for param in model.parameters() if param.requires_grad]
+    optimizer = _build_optimizer(params, cfg)
+    x = torch.randint(0, cfg.model.vocab_size, (1, 4))
+    y = torch.roll(x, shifts=-1, dims=1)
+    loss = model(x, y)
+    assert loss.dtype == torch.float32
+    loss.backward()
+    assert {param.grad.dtype for param in params if param.grad is not None} == {
+        torch.bfloat16
+    }
+    optimizer.step()
+    moment_dtypes = {
+        value.dtype
+        for state in optimizer.state.values()
+        for key, value in state.items()
+        if key in {"exp_avg", "exp_avg_sq"}
+    }
+    assert moment_dtypes == {torch.bfloat16}
+
+
 def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
     monkeypatch.setitem(sys.modules, "gcw.models.qwen3", None)
 
@@ -213,12 +265,14 @@ def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
 
 def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
     cfg = tiny_train_config(tmp_path)
+    cfg.precision = "bf16"
 
     model = _build_training_model(
         cfg, torch.device("cpu"), rank=1, use_fsdp=True
     )
 
     assert all(param.is_meta for param in model.parameters())
+    assert {param.dtype for param in model.parameters()} == {torch.bfloat16}
 
 
 def test_loader_uses_configured_batch_size_for_random_data(tmp_path):

@@ -28,15 +28,19 @@ def save_checkpoint(
         json.dump(train_state or {}, f, indent=2)
 
 
-def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
+def load_checkpoint(
+    path: str | Path,
+    device: torch.device | str = "cpu",
+    dtype: torch.dtype | str | None = "auto",
+):
     path = Path(path)
     with open(path / "config.json", "r", encoding="utf-8") as f:
         cfg = ModelConfig(**json.load(f)["model"])
     weights = load_file(path / "model.safetensors", device=str(device))
     model = build_model(cfg)
-    dtype = _infer_floating_dtype(weights)
-    if dtype is not None:
-        model.to(dtype=dtype)
+    model_dtype = _resolve_dtype(dtype, weights)
+    if model_dtype is not None:
+        model.to(dtype=model_dtype)
     model.load_state_dict(weights, strict=True)
     model.to(device)
     state_path = path / "train_state.json"
@@ -80,6 +84,26 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     if missing:
         raise KeyError(f"missing backbone checkpoint keys: {missing[:8]}")
     target.load_state_dict(loadable, strict=True)
+
+
+def _resolve_dtype(
+    dtype: torch.dtype | str | None, state: dict[str, torch.Tensor]
+) -> torch.dtype | None:
+    if dtype is None or dtype == "auto":
+        return _infer_floating_dtype(state)
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    choices = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }
+    try:
+        return choices[dtype]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported dtype {dtype!r}; use auto, bfloat16, float16, or float32"
+        ) from exc
 
 
 def _infer_floating_dtype(state: dict[str, torch.Tensor]) -> torch.dtype | None:

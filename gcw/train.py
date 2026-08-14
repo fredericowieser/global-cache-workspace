@@ -32,6 +32,7 @@ def train_from_config(path: str | Path) -> None:
 def train(config: TrainConfig) -> None:
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
+    _validate_precision(config, device)
     _, rank, _, world_size = dist_info()
     use_fsdp = _fsdp_active(config)
     model = _build_training_model(config, device, rank=rank, use_fsdp=use_fsdp)
@@ -119,7 +120,7 @@ def train(config: TrainConfig) -> None:
                 with torch.autocast(
                     device_type=device.type,
                     dtype=torch.bfloat16,
-                    enabled=config.bf16 and device.type == "cuda",
+                    enabled=_uses_bf16_autocast(config, device),
                 ):
                     loss = _model_loss(
                         model,
@@ -248,6 +249,7 @@ def _checkpoint_metadata(
         **run_meta,
         "data_kind": config.data.kind,
         "tokenizer": config.data.tokenizer,
+        "precision": config.precision,
     }
     if config.data.dataset is not None:
         state["dataset"] = config.data.dataset
@@ -537,7 +539,7 @@ def _eval_loss(
         with torch.autocast(
             device_type=device.type,
             dtype=torch.bfloat16,
-            enabled=config.bf16 and device.type == "cuda",
+            enabled=_uses_bf16_autocast(config, device),
         ):
             loss = model(x, y, loss_reduction="sum")
         total_loss += loss.detach().float()
@@ -573,24 +575,43 @@ def _fsdp_active(config: TrainConfig) -> bool:
     return config.distributed == "fsdp" and torch.distributed.is_initialized()
 
 
+def _uses_bf16_autocast(config: TrainConfig, device: torch.device) -> bool:
+    return config.precision == "bf16_mixed" and device.type == "cuda"
+
+
+def _validate_precision(config: TrainConfig, device: torch.device) -> None:
+    if (
+        config.precision in {"bf16_mixed", "bf16"}
+        and device.type == "cuda"
+        and not torch.cuda.is_bf16_supported()
+    ):
+        raise RuntimeError(
+            f"precision={config.precision!r} requires a CUDA device with BF16 support"
+        )
+
+
 def _build_training_model(
     config: TrainConfig, device: torch.device, *, rank: int, use_fsdp: bool
 ) -> torch.nn.Module:
+    model_dtype = (
+        torch.bfloat16 if config.precision == "bf16" else torch.float32
+    )
     if use_fsdp:
         if rank == 0:
             model = build_model(config.model)
             model.init_weights()
             if config.backbone_checkpoint:
                 load_backbone_checkpoint(model, config.backbone_checkpoint)
-            return model
+            return model.to(dtype=model_dtype)
         with torch.device("meta"):
-            return build_model(config.model)
+            model = build_model(config.model)
+        return model.to(dtype=model_dtype)
 
     model = build_model(config.model).to(device)
     model.init_weights()
     if config.backbone_checkpoint:
         load_backbone_checkpoint(model, config.backbone_checkpoint)
-    return model
+    return model.to(dtype=model_dtype)
 
 
 def _wrap_fsdp(
@@ -606,15 +627,13 @@ def _wrap_fsdp(
     auto_wrap_policy = partial(
         transformer_auto_wrap_policy, transformer_layer_cls=layer_classes
     )
-    # TODO: Decide whether FSDP should preserve the older DDP precision contract:
-    # fp32 parameter/optimizer storage with bf16 autocast compute.
     mixed_precision = (
         MixedPrecision(
             param_dtype=torch.bfloat16,
             reduce_dtype=torch.bfloat16,
             buffer_dtype=torch.bfloat16,
         )
-        if config.bf16
+        if config.precision == "bf16_mixed"
         else None
     )
     kwargs: dict[str, Any] = {

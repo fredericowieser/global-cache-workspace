@@ -30,6 +30,26 @@ def test_checkpoint_roundtrip(tmp_path):
     assert loaded(x).shape == (1, 4, 64)
 
 
+def test_checkpoint_dtype_override_casts_fp32_weights_to_bf16(tmp_path):
+    cfg = ModelConfig(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+    )
+    model = build_model(cfg)
+    model.init_weights()
+    save_checkpoint(tmp_path, model, cfg)
+
+    loaded, _, _ = load_checkpoint(tmp_path, dtype="bfloat16")
+
+    assert {param.dtype for param in loaded.parameters()} == {torch.bfloat16}
+
+
 def test_hf_family_eval_requires_tokenizer_source():
     cfg = ModelConfig(
         family="llama",

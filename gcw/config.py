@@ -24,6 +24,7 @@ CacheProcessorInternalIterationScore = Literal[
 ]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 CacheLinearStateUpdateMode = Literal["outer_product", "gated_delta"]
+TrainingPrecision = Literal["fp32", "bf16_mixed", "bf16"]
 
 
 def gemma4_default_layer_types(num_layers: int) -> list[str]:
@@ -539,6 +540,7 @@ class TrainConfig:
     warmdown_ratio: float = 0.2
     final_lr_frac: float = 0.0
     grad_clip: float = 1.0
+    precision: TrainingPrecision | None = None
     bf16: bool = False
     seed: int = 24
     save_every: int = 0
@@ -555,6 +557,15 @@ class TrainConfig:
             self.data = DataConfig(**self.data)
         if isinstance(self.wandb, dict):
             self.wandb = WandbConfig(**self.wandb)
+        if self.precision is None:
+            self.precision = "bf16_mixed" if self.bf16 else "fp32"
+        elif self.precision not in {"fp32", "bf16_mixed", "bf16"}:
+            raise ValueError(
+                f"unsupported training precision {self.precision!r}"
+            )
+        elif self.bf16 and self.precision == "fp32":
+            raise ValueError("bf16=true conflicts with precision='fp32'")
+        self.bf16 = self.precision != "fp32"
 
 
 @dataclass

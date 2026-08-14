@@ -45,27 +45,52 @@ def main(argv: list[str] | None = None) -> None:
     core.add_argument("--limit", type=int, default=None)
     core.add_argument("--batch-size", type=int, default=8)
     core.add_argument("--out", default=None)
+    core.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
     math = eval_sub.add_parser("math")
     math.add_argument("--checkpoint", required=True)
     math.add_argument("--limit", type=int, default=None)
     math.add_argument("--batch-size", type=int, default=8)
     math.add_argument("--out", default=None)
+    math.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
     ppt = eval_sub.add_parser("ppt")
     ppt.add_argument("--checkpoint", required=True)
     ppt.add_argument("--limit", type=int, default=None)
     ppt.add_argument("--batch-size", type=int, default=8)
     ppt.add_argument("--out", default=None)
+    ppt.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
     paper7 = eval_sub.add_parser("paper7")
     paper7.add_argument("--checkpoint", required=True)
     paper7.add_argument("--limit", type=int, default=None)
     paper7.add_argument("--batch-size", type=int, default=8)
     paper7.add_argument("--out", default=None)
+    paper7.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
     fineweb = eval_sub.add_parser("fineweb")
     fineweb.add_argument("--checkpoint", required=True)
     fineweb.add_argument("--data-dir", default=None)
     fineweb.add_argument("--eval-tokens", type=int, default=10 * 524288)
     fineweb.add_argument("--batch-size", type=int, default=16)
     fineweb.add_argument("--out", default=None)
+    fineweb.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
 
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
@@ -146,6 +171,7 @@ def main(argv: list[str] | None = None) -> None:
                 data_dir=args.data_dir,
                 eval_tokens=args.eval_tokens,
                 batch_size=args.batch_size,
+                dtype=args.dtype,
             )
         else:
             runners = {
@@ -155,7 +181,10 @@ def main(argv: list[str] | None = None) -> None:
                 "ppt": run_ppt,
             }
             results = runners[args.suite](
-                args.checkpoint, limit=args.limit, batch_size=args.batch_size
+                args.checkpoint,
+                limit=args.limit,
+                batch_size=args.batch_size,
+                dtype=args.dtype,
             )
         if not is_main_process():
             return

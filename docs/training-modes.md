@@ -8,6 +8,26 @@ gcw train --config <config.yaml>
 
 The config controls the mode.
 
+## Precision
+
+Select the parameter and compute precision explicitly:
+
+```yaml
+precision: bf16
+```
+
+The supported modes are:
+
+- `fp32`: FP32 parameters and compute.
+- `bf16_mixed`: FP32 parameter and optimizer storage with BF16 CUDA autocast.
+- `bf16`: BF16 parameters, gradients, optimizer moments, and model compute. Numerically sensitive logits, losses, norms, scores, and reductions remain FP32.
+
+The legacy `bf16: true` setting remains supported and maps to `precision: bf16_mixed`. Full BF16 requires a CUDA device with BF16 support for GPU training. Checkpoints retain their parameter dtype; standalone evaluation uses that dtype by default, or it can be overridden explicitly:
+
+```bash
+gcw eval core --checkpoint <checkpoint> --dtype bfloat16
+```
+
 ## Scratch Pretraining
 
 Use no checkpoint:
