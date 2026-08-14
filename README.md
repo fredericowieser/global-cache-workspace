@@ -17,17 +17,42 @@ GCW supports scratch FineWeb pretraining and supervised fine-tuning with answer-
 
 ## Install
 
-GCW requires one Torch runtime extra.
+Install `uv`, then load its environment into the current shell. The installer writes to `~/.local/bin`; without the `source` command, the same shell can still report `uv: command not found`.
 
 ```bash
-uv sync --extra cpu --extra convert --extra eval --group dev
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+uv --version
 ```
 
-Use `--extra gpu` or `--extra rocm` instead of `--extra cpu` on the corresponding accelerator. Qwen3.5 optimized kernels also require `--extra qwen35`.
+GCW requires one Torch runtime extra. On an NVIDIA host:
+
+```bash
+uv sync --extra gpu --extra convert --extra eval --group dev
+```
+
+Use `--extra cpu` or `--extra rocm` instead of `--extra gpu` on the corresponding runtime. Qwen3.5 optimized kernels also require `--extra qwen35`.
+
+Authenticate Hugging Face before downloading gated model weights. Create a read token at [Hugging Face settings](https://huggingface.co/settings/tokens), then:
+
+```bash
+uv run hf auth login
+uv run hf auth whoami
+```
+
+Authenticate W&B before enabling remote tracking. The local metric stream remains canonical if W&B becomes unavailable.
+
+```bash
+uv run wandb login
+uv run wandb status
+```
+
+Do not place either token in a config file, shell script, run manifest, or Git. Both CLIs store credentials under the user account.
 
 ## Verify the installation
 
 ```bash
+uv run --extra gpu python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
 uv run --extra cpu python examples/cpu_smoke.py
 uv run --extra cpu --group dev pytest -q
 ```
