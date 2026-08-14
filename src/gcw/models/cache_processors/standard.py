@@ -185,11 +185,11 @@ class CacheProcessor(nn.Module):
 
 
 class PreparedPerLayerCacheProcessorExecution:
-    """A single-forward BT execution with lazily prepared parameter stacks.
+    """One explicitly owned BT execution with lazily prepared parameter stacks.
 
-    ``LanguageModel.forward`` owns this context. The first cache event creates
-    differentiable stacks and later events reuse them. ``__exit__`` drops the
-    references so no graph-derived tensor can leak into another forward.
+    The owner may cover a complete ordinary forward or one checkpoint segment
+    invocation. Closing it is final: backward replay must create a new owner.
+    This keeps graph-derived stacks local without weakening reuse protection.
     """
 
     def __init__(self, processor: PerLayerCacheProcessor):
@@ -210,10 +210,11 @@ class PreparedPerLayerCacheProcessorExecution:
             raise RuntimeError("prepared cache-processor execution cannot be reused across forwards")
         if self._prepared is None:
             self._prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
+        prepared = self._prepared
         return self._processor(
             cache,
             select_all=select_all,
-            _prepared=self._prepared,
+            _prepared=prepared,
             _prepared_backend=self._backend,
         )
 

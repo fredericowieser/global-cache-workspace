@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 import torch
 
+from gcw.checkpoint import load_checkpoint
 from gcw.config import (
     CacheProcessorConfig,
     DataConfig,
@@ -17,7 +18,7 @@ from gcw.config import (
 )
 from gcw.models import build_model
 from gcw.models.cache_processors.standard import CacheProcessor
-from gcw.training.checkpoint import CheckpointCompatibilityError
+from gcw.training.checkpoint import CheckpointCompatibilityError, save_training_checkpoint
 from gcw.training.core import (
     _apply_trainable_policy,
     _configure_native_activation_checkpointing,
@@ -34,6 +35,7 @@ def _model_config(
 ) -> ModelConfig:
     return ModelConfig(
         variant=variant,  # type: ignore[arg-type]
+        family="qwen3",
         sequence_len=16,
         vocab_size=32,
         hidden_size=16,
@@ -45,6 +47,9 @@ def _model_config(
         cache_processor=CacheProcessorConfig(
             process_every=4,
             topk=2,
+            topk_heads=2,
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
             hidden_size=8,
             intermediate_size=16,
             num_layers=2,
@@ -96,6 +101,101 @@ def test_standard_processor_checkpointing_forward_backward_parity(variant: str) 
         "processor_blocks": 2 if variant == "bt" else 1,
         "layer_boundaries": 4 if variant == "bt" else 2,
     }
+
+
+@pytest.mark.parametrize("variant", ["bt", "bgt", "longshot"])
+def test_segmented_window_checkpointing_forward_backward_parity(variant: str) -> None:
+    torch.manual_seed(17)
+    eager = build_model(_model_config(variant))
+    eager.init_weights()
+    checkpointed = copy.deepcopy(eager)
+    input_ids = torch.randint(0, 32, (2, 12))
+
+    eager_loss = eager(input_ids, input_ids)
+    checkpointed_loss = checkpointed(input_ids, input_ids, activation_checkpoint_windows=2)
+    eager_loss.backward()
+    checkpointed_loss.backward()
+
+    assert torch.equal(checkpointed_loss, eager_loss)
+    assert checkpointed.cache_processor.pop_call_count() == 2
+    for (name, expected), (actual_name, actual) in zip(
+        eager.named_parameters(),
+        checkpointed.named_parameters(),
+        strict=True,
+    ):
+        assert name == actual_name
+        assert expected.grad is not None, name
+        assert actual.grad is not None, name
+        torch.testing.assert_close(actual.grad, expected.grad, atol=2e-6, rtol=2e-5)
+
+
+def test_segmented_bt_uses_independent_closed_prepared_owners(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = build_model(_model_config("bt"))
+    model.init_weights()
+    owners: list[object] = []
+    prepare = model.cache_processor.prepare_forward_execution
+
+    def track_owner():
+        owner = prepare()
+        owners.append(owner)
+        return owner
+
+    monkeypatch.setattr(model.cache_processor, "prepare_forward_execution", track_owner)
+    input_ids = torch.randint(0, 32, (1, 12))
+    model(input_ids, input_ids, activation_checkpoint_windows=2).backward()
+
+    assert len(owners) == 4
+    assert all(getattr(owner, "_closed") for owner in owners)
+
+
+def test_segment_recomputation_does_not_duplicate_processor_metrics() -> None:
+    config = _model_config("longshot")
+    assert config.cache_processor is not None
+    config.cache_processor.iterations = 2
+    model = build_model(config)
+    model.init_weights()
+    input_ids = torch.randint(0, 32, (1, 12))
+
+    loss = model(input_ids, input_ids, activation_checkpoint_windows=2)
+    block = model.cache_processor.block
+    forward_counts = dict(block._selected_head_overlap_counts)
+    forward_calls = model.cache_processor.pop_call_count()
+    loss.backward()
+
+    assert forward_counts == {1: 2}
+    assert block._selected_head_overlap_counts == forward_counts
+    assert forward_calls == 2
+    assert model.cache_processor.pop_call_count() == 0
+
+
+def test_segmented_checkpointing_preserves_rng_and_composes_with_processor_checkpointing() -> None:
+    torch.manual_seed(29)
+    eager = build_model(_model_config("bgt", attention_dropout=0.25, diffusion=True))
+    eager.init_weights()
+    checkpointed = copy.deepcopy(eager)
+    _configure_native_activation_checkpointing(checkpointed, "standard_processor_layers")
+    input_ids = torch.randint(0, 32, (2, 12))
+    torch.manual_seed(101)
+    initial_rng = torch.random.get_rng_state()
+
+    eager_loss = eager(input_ids, input_ids)
+    eager_loss.backward()
+    eager_rng = torch.random.get_rng_state()
+
+    torch.random.set_rng_state(initial_rng)
+    checkpointed_loss = checkpointed(input_ids, input_ids, activation_checkpoint_windows=2)
+    checkpointed_loss.backward()
+
+    assert torch.equal(checkpointed_loss, eager_loss)
+    assert torch.equal(torch.random.get_rng_state(), eager_rng)
+    for (name, expected), (actual_name, actual) in zip(
+        eager.named_parameters(),
+        checkpointed.named_parameters(),
+        strict=True,
+    ):
+        assert name == actual_name
+        assert expected.grad is not None and actual.grad is not None
+        torch.testing.assert_close(actual.grad, expected.grad, atol=2e-6, rtol=2e-5)
 
 
 def test_checkpointing_preserves_diffusion_and_attention_rng() -> None:
@@ -168,6 +268,36 @@ def test_processor_layer_boundary_reduces_saved_activation_tensors() -> None:
     assert checkpointed_saved < eager_saved / 2
 
 
+def test_segmented_window_boundary_reduces_saved_tensors_and_preserves_state_dict() -> None:
+    torch.manual_seed(31)
+    eager = build_model(_model_config("bt"))
+    eager.init_weights()
+    checkpointed = copy.deepcopy(eager)
+    input_ids = torch.randint(0, 32, (2, 12))
+    before = {name: tensor.clone() for name, tensor in checkpointed.state_dict().items()}
+
+    def saved_numel(model: torch.nn.Module, windows: int) -> int:
+        saved: list[int] = []
+        with torch.autograd.graph.saved_tensors_hooks(
+            lambda tensor: (saved.append(tensor.numel()) or tensor),
+            lambda tensor: tensor,
+        ):
+            loss = model(input_ids, input_ids, activation_checkpoint_windows=windows)
+        loss.backward()
+        return sum(saved)
+
+    eager_saved = saved_numel(eager, 0)
+    checkpointed_saved = saved_numel(checkpointed, 2)
+
+    assert checkpointed_saved < eager_saved / 2
+    assert tuple(checkpointed.state_dict()) == tuple(before)
+    assert all(torch.equal(tensor, before[name]) for name, tensor in checkpointed.state_dict().items())
+    restored = build_model(_model_config("bt"))
+    incompatible = restored.load_state_dict(checkpointed.state_dict(), strict=True)
+    assert incompatible.missing_keys == []
+    assert incompatible.unexpected_keys == []
+
+
 def test_checkpointed_bt_repeated_adamw_steps_match_eager() -> None:
     torch.manual_seed(23)
     eager = build_model(_model_config("bt"))
@@ -233,6 +363,8 @@ def test_checkpoint_policy_is_runtime_provenance_and_resume_fingerprint(tmp_path
     assert train_state["activation_checkpointing"]["policy"] == "none"
     assert train_state["activation_checkpointing"]["implementation"] == "eager"
     assert manifest["training_fingerprint"]["activation_checkpointing"] == "none"
+    assert train_state["activation_checkpoint_windows"] == 0
+    assert manifest["training_fingerprint"]["activation_checkpoint_windows"] == 0
 
     resumed = replace(
         eager,
@@ -243,6 +375,75 @@ def test_checkpoint_policy_is_runtime_provenance_and_resume_fingerprint(tmp_path
         train(resumed)
 
 
+    resumed_windows = replace(
+        eager,
+        activation_checkpoint_windows=2,
+        resume=ResumeConfig(checkpoint=str(checkpoint)),
+    )
+    with pytest.raises(CheckpointCompatibilityError, match="activation_checkpoint_windows"):
+        train(resumed_windows)
+
+
+def test_training_and_eval_apply_segment_policy_and_record_provenance(tmp_path) -> None:
+    config = replace(
+        _train_config(tmp_path),
+        output_dir=str(tmp_path / "segmented"),
+        activation_checkpoint_windows=2,
+        eval_every=1,
+        eval_batches=1,
+    )
+
+    train(config)
+
+    checkpoint = tmp_path / "segmented" / "checkpoint"
+    train_state = json.loads((checkpoint / "train_state.json").read_text(encoding="utf-8"))
+    manifest = json.loads((checkpoint / "manifest.json").read_text(encoding="utf-8"))
+    assert train_state["activation_checkpoint_windows"] == 2
+    assert manifest["training_fingerprint"]["activation_checkpoint_windows"] == 2
+
+
+def test_segmented_training_exact_resume_matches_uninterrupted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    baseline = replace(
+        _train_config(tmp_path),
+        output_dir=str(tmp_path / "baseline"),
+        max_steps=3,
+        activation_checkpoint_windows=2,
+    )
+    train(baseline)
+
+    interrupted = replace(
+        baseline,
+        output_dir=str(tmp_path / "resumed"),
+        save_every=1,
+    )
+
+    def save_then_interrupt(*args, **kwargs):
+        save_training_checkpoint(*args, **kwargs)
+        resume_state = args[4]
+        if resume_state.step == 1:
+            raise RuntimeError("simulated interruption")
+
+    monkeypatch.setattr("gcw.training.core.save_training_checkpoint", save_then_interrupt)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        train(interrupted)
+
+    monkeypatch.setattr("gcw.training.core.save_training_checkpoint", save_training_checkpoint)
+    resumed = replace(
+        interrupted,
+        resume=ResumeConfig(checkpoint=str(tmp_path / "resumed" / "checkpoint")),
+    )
+    train(resumed)
+
+    baseline_model, _, baseline_state = load_checkpoint(tmp_path / "baseline" / "checkpoint")
+    resumed_model, _, resumed_state = load_checkpoint(tmp_path / "resumed" / "checkpoint")
+    assert baseline_state["step"] == resumed_state["step"] == 3
+    for expected, actual in zip(baseline_model.parameters(), resumed_model.parameters(), strict=True):
+        assert torch.equal(expected, actual)
+
+
 def test_training_fingerprint_changes_only_checkpoint_policy(tmp_path) -> None:
     eager = _train_config(tmp_path)
     checkpointed = replace(eager, activation_checkpointing="standard_processor_layers")
@@ -250,6 +451,11 @@ def test_training_fingerprint_changes_only_checkpoint_policy(tmp_path) -> None:
     checkpointed_fingerprint = _training_fingerprint(checkpointed, 1, 8, 8, 1)
 
     assert eager_fingerprint | {"activation_checkpointing": "standard_processor_layers"} == checkpointed_fingerprint
+
+
+    segmented = replace(eager, activation_checkpoint_windows=2)
+    segmented_fingerprint = _training_fingerprint(segmented, 1, 8, 8, 1)
+    assert eager_fingerprint | {"activation_checkpoint_windows": 2} == segmented_fingerprint
 
 
 def test_activation_checkpointing_is_explicit_opt_in() -> None:

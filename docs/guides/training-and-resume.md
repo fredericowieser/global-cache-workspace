@@ -63,7 +63,7 @@ On load, a broken destination may fall back to a valid `.previous`. A legacy mod
 
 ## Compatibility fingerprint
 
-Exact continuation requires equality for fields that change training dynamics: model configuration, loss, optimizer hyperparameters, schedules, BF16 mode, frozen parameters, data kind and identity, sequence length, total batch, gradient accumulation, and `max_steps`. Output paths, checkpoint/evaluation frequency, and display-only W&B metadata may change.
+Exact continuation requires equality for fields that change training dynamics: model configuration, loss, optimizer hyperparameters, schedules, BF16 mode, frozen parameters, activation-checkpointing policies (including `activation_checkpoint_windows`), data kind and identity, sequence length, total batch, gradient accumulation, and `max_steps`. Output paths, checkpoint/evaluation frequency, and display-only W&B metadata may change.
 
 The current data identity records paths, shard names, and sizes, not content hashes. A same-size in-place data mutation can therefore evade the fingerprint. Treat prepared datasets as immutable.
 

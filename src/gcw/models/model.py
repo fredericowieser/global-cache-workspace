@@ -47,10 +47,30 @@ class LanguageModel(nn.Module):
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        activation_checkpoint_windows: int = 0,
     ) -> torch.Tensor:
         processor = self._processor_config()
-        # Prepared tensors are local to this context and therefore to this
-        # forward's autograd graph. Generation deliberately keeps the eager path.
+        checkpoint_segments = (
+            activation_checkpoint_windows > 0
+            and targets is not None
+            and self.training
+            and torch.is_grad_enabled()
+        )
+        if checkpoint_segments:
+            # Each original segment and each backward replay owns an independent
+            # prepared execution. No graph-derived BT stack outlives its segment.
+            return self.backbone(
+                input_ids,
+                targets,
+                loss_reduction,
+                processor=self.cache_processor,
+                processor_execution_factory=self.cache_processor.prepare_forward_execution,
+                process_every=processor.process_every,
+                attention_mask=attention_mask,
+                activation_checkpoint_windows=activation_checkpoint_windows,
+            )
+        # The ordinary path prepares once for the complete forward. Generation
+        # deliberately remains eager.
         with self.cache_processor.prepare_forward_execution() as execution:
             return self.backbone(
                 input_ids,
@@ -59,6 +79,7 @@ class LanguageModel(nn.Module):
                 processor=execution,
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
+                activation_checkpoint_windows=activation_checkpoint_windows,
             )
 
     @torch.no_grad()

@@ -605,6 +605,7 @@ class TrainConfig:
     final_lr_frac: float = 0.0
     grad_clip: float = 1.0
     bf16: bool = False
+    activation_checkpoint_windows: int = 0
     seed: int = 24
     save_every: int = 0
     save_final: bool = True
@@ -642,6 +643,16 @@ class TrainConfig:
             raise ValueError("set only one of total_batch_size and global_batch_rows")
         if self.global_batch_rows < 0:
             raise ValueError("global_batch_rows must be non-negative")
+        if isinstance(self.activation_checkpoint_windows, bool) or not isinstance(self.activation_checkpoint_windows, int):
+            raise ValueError("activation_checkpoint_windows must be an integer")
+        if self.activation_checkpoint_windows < 0:
+            raise ValueError("activation_checkpoint_windows must be non-negative")
+        if self.activation_checkpoint_windows and self.model.variant == "tf":
+            raise ValueError("activation_checkpoint_windows requires a recurrent cache-processor variant")
+        if self.activation_checkpoint_windows and self.model.family != "qwen3":
+            raise ValueError("activation_checkpoint_windows currently supports only the qwen3 backbone family")
+        if self.activation_checkpoint_windows and self.distributed == "fsdp":
+            raise ValueError("activation_checkpoint_windows cannot be combined with FSDP layer checkpointing")
         if not math.isfinite(self.grad_clip) or self.grad_clip <= 0.0:
             raise ValueError("grad_clip must be finite and positive")
         from gcw.architecture import require_train_config

@@ -156,6 +156,7 @@ def train(config: TrainConfig) -> None:
         "model_runtime_backends": _model_runtime_backends(model, device),
         "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
         "activation_checkpointing": activation_checkpointing_runtime,
+        "activation_checkpoint_windows": config.activation_checkpoint_windows,
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     budget_message = (
@@ -199,7 +200,13 @@ def train(config: TrainConfig) -> None:
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
-                    loss = _model_loss(model, batch.x, batch.y, attention_mask=batch.attention_mask)
+                    loss = _model_loss(
+                        model,
+                        batch.x,
+                        batch.y,
+                        attention_mask=batch.attention_mask,
+                        activation_checkpoint_windows=config.activation_checkpoint_windows,
+                    )
                 loss_total += float(loss.detach().cpu())
                 (loss / grad_accum_steps).backward()
         if audit_output is not None and step + 1 == config.max_steps:
@@ -435,6 +442,7 @@ def _training_fingerprint(
         },
         "trainable": config.trainable,
         "activation_checkpointing": config.activation_checkpointing,
+        "activation_checkpoint_windows": config.activation_checkpoint_windows,
         "objective": (
             f"{config.data.sft_loss_scope}_ce" if config.mode == "sft" else "next_token_ce"
         ),
@@ -612,10 +620,14 @@ def _model_loss(
     *,
     loss_reduction: str = "mean",
     attention_mask: torch.Tensor | None = None,
+    activation_checkpoint_windows: int = 0,
 ) -> torch.Tensor:
-    if attention_mask is None:
-        return model(input_ids, targets, loss_reduction=loss_reduction)
-    return model(input_ids, targets, loss_reduction=loss_reduction, attention_mask=attention_mask)
+    kwargs: dict[str, Any] = {"loss_reduction": loss_reduction}
+    if attention_mask is not None:
+        kwargs["attention_mask"] = attention_mask
+    if activation_checkpoint_windows:
+        kwargs["activation_checkpoint_windows"] = activation_checkpoint_windows
+    return model(input_ids, targets, **kwargs)
 
 
 
@@ -704,7 +716,13 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
     for _ in range(max(1, config.eval_batches)):
         x, y, _ = next(loader)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
-            loss = model(x, y, loss_reduction="sum")
+            loss = _model_loss(
+                model,
+                x,
+                y,
+                loss_reduction="sum",
+                activation_checkpoint_windows=config.activation_checkpoint_windows,
+            )
         total_loss += loss.detach().float()
         total_tokens += (y >= 0).sum()
     if dist.is_available() and dist.is_initialized():

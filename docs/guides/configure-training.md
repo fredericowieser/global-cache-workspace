@@ -57,16 +57,26 @@ Only cache processor parameters receive gradients. Use `trainable: backbone` to 
 
 ### Native activation checkpointing
 
-Opt in when standard BT or BGT processor activations exceed device memory:
+Two independent policies reduce different activation classes. Standard BT and BGT processors can checkpoint each processor transformer layer:
 
 ```yaml
 trainable: cache_processor
 activation_checkpointing: standard_processor_layers
 ```
 
-The default, `none`, preserves eager execution. The checkpoint boundary covers each complete standard processor transformer layer, including BT's batched parameter-stack path. Backward recomputes that layer instead of retaining its attention projections, attention output, normalized residual, and gated-MLP intermediates. Input/output projections, cache selection and writeback, cache tensors, loss tensors, and frozen-backbone window activations remain eager.
+The default, `none`, preserves eager processor layers. The layer boundary includes BT's batched parameter-stack path. Backward recomputes attention and MLP intermediates while cache selection, writeback, backbone windows, and loss remain eager.
 
-Checkpointing increases processor-layer compute during backward. It uses PyTorch's non-reentrant implementation with RNG preservation, so Diffusion noise and attention dropout match eager execution. The policy is part of runtime provenance and the exact-resume fingerprint; changing it across resume is rejected.
+Qwen3 recurrent variants can instead, or additionally, checkpoint groups of backbone windows:
+
+```yaml
+activation_checkpoint_windows: 2  # zero disables; positive values are windows per segment
+```
+
+Each segment exports only hidden output and its tensor-only cache boundary. Backward replays the segment with RNG preservation. BT creates a new prepared-stack owner for every original segment invocation and every replay; closed owners remain unusable, and graph-derived stacks never cross segment or forward lifetimes. Replay suppresses processor call counts and Longshot overlap metrics.
+
+Segment checkpointing runs only in training with gradients enabled. Evaluation accepts the resolved policy but executes eagerly. It supports the regional `GCW_BT_PROCESSOR_BACKEND=compile` path and composes with `standard_processor_layers`. FSDP layer checkpointing and Qwen3.5 MoE router-loss execution reject this policy explicitly.
+
+Both policies increase backward compute. Both are runtime provenance and exact-resume fingerprint fields; changing either across resume is rejected.
 
 ## Joint Finetuning
 
