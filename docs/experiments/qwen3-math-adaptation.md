@@ -34,7 +34,7 @@ Evaluation protocol V3 has two lanes. HellaSwag, PIQA, WinoGrande, ARC Easy, ARC
 
 Completed V2 multiple-choice chat-generation results remain supplementary discontinued diagnostics. They never enter V3 aggregate tables. Valid canonical-likelihood and numeric-generation artifacts may be reused byte-for-byte when their hashes and protocol contracts pass validation; reuse manifests record the source path and digest. LAMBADA remains excluded because next-word completion has no meaningful thinking-on analogue.
 
-Processor-off results test the frozen-backbone invariant. Any material difference from the untouched instruct checkpoint indicates checkpoint or evaluation drift.
+Processor-off results test the frozen-backbone invariant. Any material difference from the untouched instruct checkpoint indicates checkpoint or evaluation drift. High-throughput generation through separate batch controls, padded native decoding, continuous batching, or optimized kernels is deferred to a separately versioned protocol; see [Deferred extension: high-throughput generation](../guides/evaluate.md#deferred-extension-high-throughput-generation).
 
 ## Full single-seed series
 

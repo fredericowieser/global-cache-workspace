@@ -65,3 +65,23 @@ uv run python -m scripts.analysis.run_benchmarks \
 `numeric_last_answer` and `lm_eval_flexible_exact` are different scientific protocols. The historical Qwen3 BGT cells used flexible exact match. Results must retain scorer, batch size, generation cap, tokenizer hash, checkpoint hash, prompt mode, and processor state.
 
 The maintained fast path uses length-sorted, left-padded Hugging Face generation for HF targets and preallocated static-cache generation for native GCW targets. The default batch size is 64. An authenticated Qwen3-0.6B GSM8K validation completed both 1,319-row modes in 35 minutes and scored 781 thinking-off / 899 thinking-on. The earlier exact-length run scored 782 / 888. Batch 128 was slower and drifted further on thinking-on, so 64 is the calibrated default. Treat these as close downstream-score parity, not token-level parity: batch shape changes floating-point execution and therefore greedy trajectories.
+
+## Deferred extension: high-throughput generation
+
+Small autoregressive models can leave most accelerator memory unused while remaining decode-bound. Memory occupancy is not the bottleneck: every generated token depends on the previous token, and small matrix operations underutilize an H200. The current Qwen3 campaign keeps its validated evaluator unchanged; throughput work belongs in a separately versioned protocol.
+
+Candidate improvements, in implementation order:
+
+1. Separate likelihood and generation batch controls. Keep memory-heavy MMLU likelihood cells conservative while calibrating task-specific numeric-generation batches.
+2. Add padded native generation with correct attention and cache masks. Native checkpoints currently group rows by exact prompt-token length, which fragments batches.
+3. Add continuous batching and paged KV-cache support, either natively or through a version-pinned vLLM/SGLang backend.
+4. Evaluate CUDA graphs, compiled decode steps, and optimized attention kernels after batching semantics are stable.
+
+Do not treat these as transparent operational changes. Batch shape and decoding kernels alter floating-point execution and can change greedy trajectories. A production implementation must:
+
+- assign a new protocol identity;
+- freeze requested and effective batch/grouping rules per task;
+- rerun the untouched baseline before comparing trained checkpoints;
+- verify processor-off parity and processor-on cache semantics;
+- record backend and kernel versions, peak memory, generated tokens, throughput, parse rate, and truncation rate;
+- restart every affected cell from row zero after an OOM or batch change.
