@@ -51,8 +51,8 @@ RESULT_SCHEMA = "gcw.chat_benchmark_matrix.v1"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
-    r"(?im)final\s+answer\s*(?:is|[:=])\s*(?:option[s]?\s*)?"
-    r"[\(\[]?([A-Z](?:\s*[,/&]\s*[A-Z])*)[\)\]]?\s*[.`]*\s*$"
+    r"(?i)final\s+answer\s*(?:is|[:=])\s*(?:option[s]?\s*)?"
+    r"[\(\[]?([A-Z](?:\s*[,/&]\s*[A-Z])*)"
 )
 _BOXED_CHOICES_RE = re.compile(r"\\boxed\{\s*([A-Z](?:\s*[,/&]\s*[A-Z])*)\s*\}", re.IGNORECASE)
 
@@ -75,17 +75,26 @@ class PreparedChatExample:
     prompt_ids: tuple[int, ...]
 
 
-def format_multiple_choice_prompt(stem: str, choices: Sequence[str]) -> str:
+def format_multiple_choice_prompt(
+    stem: str,
+    choices: Sequence[str],
+    *,
+    allow_multiple: bool = False,
+) -> str:
     if not 2 <= len(choices) <= len(_CHOICE_LABELS):
         raise ValueError("multiple-choice examples require between 2 and 26 choices")
     cleaned_stem = re.sub(r"(?:\n|^)\s*Answer:\s*$", "", stem.strip(), flags=re.IGNORECASE)
     rendered = "\n".join(f"{_CHOICE_LABELS[index]}. {choice.strip()}" for index, choice in enumerate(choices))
-    return (
-        f"{cleaned_stem}\n\nChoices:\n{rendered}\n\n"
+    instruction = (
         "Reason through the problem, then end with exactly `Final answer: X`, "
-        "where X is the correct choice letter. If more than one choice is correct, "
-        "return the letters separated by commas, for example `Final answer: A,D`."
+        "where X is the correct choice letter."
     )
+    if allow_multiple:
+        instruction += (
+            " If more than one choice is correct, return the letters separated by commas, "
+            "for example `Final answer: A,D`."
+        )
+    return f"{cleaned_stem}\n\nChoices:\n{rendered}\n\n{instruction}"
 
 
 def format_numeric_prompt(question: str) -> str:
@@ -248,7 +257,11 @@ def _load_task_examples(task_names: Sequence[str]) -> tuple[list[ChatExample], d
                         task=requested_name,
                         source_task=source_name,
                         source_index=source_index,
-                        prompt=format_multiple_choice_prompt(_task_stem(requested_name, task, doc), choices),
+                        prompt=format_multiple_choice_prompt(
+                            _task_stem(requested_name, task, doc),
+                            choices,
+                            allow_multiple=requested_name == "agieval_gaokao_mathqa",
+                        ),
                         target_kind="choice",
                         target=",".join(_CHOICE_LABELS[index] for index in gold),
                         choices=choices,

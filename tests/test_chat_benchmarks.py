@@ -48,6 +48,9 @@ def test_multiple_choice_prompt_is_explicit_and_requires_final_letter():
     assert "A. first" in prompt
     assert "B. second" in prompt
     assert "Final answer: X" in prompt
+    assert "more than one" not in prompt
+    multi_prompt = format_multiple_choice_prompt("Question?", ["first", "second"], allow_multiple=True)
+    assert "Final answer: A,D" in multi_prompt
     assert not prompt.startswith("Answer:")
 
 
@@ -57,6 +60,8 @@ def test_final_choice_extraction_requires_an_explicit_final_answer():
     assert extract_final_choice("I considered A and B", 4) is None
     assert extract_final_choice("Final answer: Z", 4) is None
     assert extract_final_choices("work\nFinal answer: A,D", 4) == (0, 3)
+    assert extract_final_choice("work\n**Final answer: D**", 4) == 3
+    assert extract_final_choice("work\nFinal answer: C. -3", 4) == 2
 
 
 def test_numeric_prompt_preserves_the_calibrated_question():
