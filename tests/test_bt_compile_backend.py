@@ -145,6 +145,7 @@ def test_compiled_backend_composes_with_segment_and_processor_checkpointing(
         inputs,
         targets,
         activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=12,
     )
     eager_loss.backward()
     checkpointed_loss.backward()

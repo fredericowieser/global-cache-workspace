@@ -114,13 +114,16 @@ Qwen3 recurrent variants can instead, or additionally, checkpoint groups of back
 
 ```yaml
 activation_checkpoint_windows: 2  # zero disables; positive values are windows per segment
+activation_checkpoint_min_padded_sequence_length: 2048  # padded width; zero keeps every training forward eligible
 ```
 
-Each segment exports only hidden output and its tensor-only cache boundary. Backward replays the segment with RNG preservation. BT creates a new prepared-stack owner for every original segment invocation and every replay; closed owners remain unusable, and graph-derived stacks never cross segment or forward lifetimes. Replay suppresses processor call counts and Longshot overlap metrics.
+The minimum-length threshold uses the physical microbatch's padded width (`input_ids.shape[1]`). Shorter microbatches run eager; rows at or above the threshold use segment checkpointing. The decision is local to each forward and deterministic. A threshold of zero preserves the original always-on behavior whenever `activation_checkpoint_windows` is positive.
+
+Each segment exports only hidden output and its tensor-only cache boundary. Backward replays the segment with RNG preservation. BT creates a new prepared-stack owner for every original segment invocation and every replay; closed owners remain unusable, and graph-derived stacks never cross segment or forward lifetimes. Replay suppresses processor call counts and Longshot overlap metrics. Per-step metrics report checkpointed and eager microbatch counts plus an active flag without adding distributed collectives.
 
 Segment checkpointing runs only in training with gradients enabled. Evaluation accepts the resolved policy but executes eagerly. It supports the regional `GCW_BT_PROCESSOR_BACKEND=compile` path and composes with `standard_processor_layers`. FSDP layer checkpointing and Qwen3.5 MoE router-loss execution reject this policy explicitly.
 
-Both policies increase backward compute. Both are runtime provenance and exact-resume fingerprint fields; changing either across resume is rejected.
+Both policies increase backward compute. The policies, segment size, and minimum padded sequence length are runtime provenance and exact-resume fingerprint fields; changing any across resume is rejected.
 
 ## Joint Finetuning
 
