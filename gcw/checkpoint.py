@@ -16,10 +16,23 @@ def save_checkpoint(
     model: torch.nn.Module | dict[str, torch.Tensor],
     model_config: ModelConfig,
     train_state: dict[str, Any] | None = None,
+    *,
+    cache_processor_only: bool = False,
 ) -> None:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     state = model if isinstance(model, dict) else model.state_dict()
+    if cache_processor_only:
+        state = {
+            key: tensor
+            for key, tensor in state.items()
+            if key.startswith("cache_processor.")
+        }
+        if not state:
+            raise ValueError(
+                "cannot save a cache-processor-only checkpoint because the "
+                "model has no cache_processor state"
+            )
     state = {k: v.detach().cpu() for k, v in state.items()}
     save_file(state, path / "model.safetensors")
     with open(path / "config.json", "w", encoding="utf-8") as f:
@@ -36,18 +49,37 @@ def load_checkpoint(
     path = Path(path)
     with open(path / "config.json", "r", encoding="utf-8") as f:
         cfg = ModelConfig(**json.load(f)["model"])
+    state_path = path / "train_state.json"
+    train_state = (
+        json.loads(state_path.read_text()) if state_path.exists() else {}
+    )
     weights = load_file(path / "model.safetensors", device=str(device))
     weights = _upgrade_qwen35_gated_delta_keys(weights)
     model = build_model(cfg)
     model_dtype = _resolve_dtype(dtype, weights)
     if model_dtype is not None:
         model.to(dtype=model_dtype)
-    model.load_state_dict(weights, strict=True)
+    model_keys = set(model.state_dict())
+    weight_keys = set(weights)
+    unexpected = weight_keys - model_keys
+    if unexpected:
+        raise KeyError(f"unexpected checkpoint keys: {sorted(unexpected)[:8]}")
+    missing = model_keys - weight_keys
+    if missing:
+        backbone_keys = {
+            key for key in model_keys if key.startswith("backbone.")
+        }
+        if not missing.issubset(backbone_keys):
+            raise KeyError(f"missing checkpoint keys: {sorted(missing)[:8]}")
+        backbone_checkpoint = train_state.get("backbone_checkpoint")
+        if not backbone_checkpoint:
+            raise KeyError(
+                "checkpoint contains only cache processor parameters but "
+                "train_state.json does not specify backbone_checkpoint"
+            )
+        load_backbone_checkpoint(model, backbone_checkpoint)
+    model.load_state_dict(weights, strict=not missing)
     model.to(device)
-    state_path = path / "train_state.json"
-    train_state = (
-        json.loads(state_path.read_text()) if state_path.exists() else {}
-    )
     return model, cfg, train_state
 
 

@@ -3,6 +3,7 @@ import sys
 
 import pytest
 import torch
+from safetensors.torch import load_file
 
 from gcw.config import (
     CacheProcessorConfig,
@@ -324,17 +325,33 @@ def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step
     calls = []
 
     def fake_save(
-        path, model, model_config, checkpoint_state, *, use_fsdp=False
+        path,
+        model,
+        model_config,
+        checkpoint_state,
+        *,
+        use_fsdp=False,
+        cache_processor_only=False,
     ):
-        calls.append((path, checkpoint_state["step"], use_fsdp))
+        calls.append(
+            (
+                path,
+                checkpoint_state["step"],
+                use_fsdp,
+                cache_processor_only,
+            )
+        )
 
     monkeypatch.setattr("gcw.train._save_training_checkpoint", fake_save)
 
     train(cfg)
 
-    assert [(path.name, step, use_fsdp) for path, step, use_fsdp in calls] == [
-        ("checkpoint", 1, False),
-        ("checkpoint", 2, False),
+    assert [
+        (path.name, step, use_fsdp, cache_processor_only)
+        for path, step, use_fsdp, cache_processor_only in calls
+    ] == [
+        ("checkpoint", 1, False, False),
+        ("checkpoint", 2, False, False),
     ]
 
 
@@ -425,7 +442,16 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
 
     train(cfg)
 
-    trained, _, _ = load_checkpoint(tmp_path / "run" / "checkpoint")
+    trained_checkpoint = tmp_path / "run" / "checkpoint"
+    weights = load_file(trained_checkpoint / "model.safetensors")
+    assert weights
+    assert all(key.startswith("cache_processor.") for key in weights)
+    trained, _, _ = load_checkpoint(trained_checkpoint)
+    trained_state = trained.state_dict()
+    assert all(
+        torch.equal(trained_state[key], tensor)
+        for key, tensor in weights.items()
+    )
     assert torch.allclose(
         trained.backbone.embed_tokens.weight,
         torch.full_like(trained.backbone.embed_tokens.weight, 0.123),

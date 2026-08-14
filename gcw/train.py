@@ -215,6 +215,7 @@ def train(config: TrainConfig) -> None:
                 config.model,
                 checkpoint_state,
                 use_fsdp=use_fsdp,
+                cache_processor_only=config.freeze_backbone,
             )
             last_checkpoint_step = step_num
             if (
@@ -227,6 +228,7 @@ def train(config: TrainConfig) -> None:
                     config.model,
                     checkpoint_state,
                     use_fsdp=use_fsdp,
+                    cache_processor_only=config.freeze_backbone,
                 )
     if last_checkpoint_step != config.max_steps:
         _save_training_checkpoint(
@@ -235,6 +237,7 @@ def train(config: TrainConfig) -> None:
             config.model,
             _checkpoint_state(checkpoint_meta, config.max_steps),
             use_fsdp=use_fsdp,
+            cache_processor_only=config.freeze_backbone,
         )
     if rank == 0:
         if wandb_run is not None:
@@ -250,6 +253,7 @@ def _checkpoint_metadata(
         "data_kind": config.data.kind,
         "tokenizer": config.data.tokenizer,
         "precision": config.precision,
+        "freeze_backbone": config.freeze_backbone,
     }
     if config.data.dataset is not None:
         state["dataset"] = config.data.dataset
@@ -729,6 +733,7 @@ def _save_training_checkpoint(
     checkpoint_state: dict[str, Any],
     *,
     use_fsdp: bool = False,
+    cache_processor_only: bool = False,
 ) -> None:
     if use_fsdp:
         from torch.distributed.fsdp import (
@@ -741,11 +746,25 @@ def _save_training_checkpoint(
         with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, cfg):
             state = model.state_dict()
         if dist_info()[1] == 0:
-            save_checkpoint(path, state, model_config, checkpoint_state)
+            save_checkpoint(
+                path,
+                state,
+                model_config,
+                checkpoint_state,
+                cache_processor_only=cache_processor_only,
+            )
         return
     if dist.is_available() and dist.is_initialized() and dist_info()[1] != 0:
         return
-    save_checkpoint(path, _unwrap(model), model_config, checkpoint_state)
+    unwrapped = _unwrap(model)
+    unwrapped = getattr(unwrapped, "_orig_mod", unwrapped)
+    save_checkpoint(
+        path,
+        unwrapped,
+        model_config,
+        checkpoint_state,
+        cache_processor_only=cache_processor_only,
+    )
 
 
 def _cache_processor_metrics(model) -> dict[str, float]:

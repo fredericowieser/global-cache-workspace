@@ -70,6 +70,11 @@ freeze_backbone: true
 
 Only cache processor parameters receive gradients. This is the closest GCW reproduction path for the legacy Bottleneck LLM finetunes.
 
+Checkpoints from frozen-backbone runs contain only `cache_processor.*` weights.
+When they are loaded, GCW reconstructs the frozen backbone from the
+`backbone_checkpoint` recorded in `train_state.json`, then applies the saved
+cache processor weights. Full checkpoints continue to load directly.
+
 ## Unfrozen Finetuning
 
 Use the same checkpoint but do not freeze:
