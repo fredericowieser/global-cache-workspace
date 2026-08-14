@@ -48,14 +48,25 @@ class LanguageModel(nn.Module):
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
+        activation_checkpoint_min_padded_sequence_length: int = 0,
     ) -> torch.Tensor:
         processor = self._processor_config()
+        if activation_checkpoint_windows < 0:
+            raise ValueError("activation_checkpoint_windows must be non-negative")
+        if activation_checkpoint_min_padded_sequence_length < 0:
+            raise ValueError("activation_checkpoint_min_padded_sequence_length must be non-negative")
+        sequence_length_eligible = (
+            activation_checkpoint_min_padded_sequence_length == 0
+            or input_ids.shape[1] >= activation_checkpoint_min_padded_sequence_length
+        )
         checkpoint_segments = (
             activation_checkpoint_windows > 0
+            and sequence_length_eligible
             and targets is not None
             and self.training
             and torch.is_grad_enabled()
         )
+        effective_checkpoint_windows = activation_checkpoint_windows if checkpoint_segments else 0
         if checkpoint_segments:
             # Each original segment and each backward replay owns an independent
             # prepared execution. No graph-derived BT stack outlives its segment.
@@ -67,7 +78,7 @@ class LanguageModel(nn.Module):
                 processor_execution_factory=self.cache_processor.prepare_forward_execution,
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
-                activation_checkpoint_windows=activation_checkpoint_windows,
+                activation_checkpoint_windows=effective_checkpoint_windows,
             )
         # The ordinary path prepares once for the complete forward. Generation
         # deliberately remains eager.
@@ -79,7 +90,7 @@ class LanguageModel(nn.Module):
                 processor=execution,
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
-                activation_checkpoint_windows=activation_checkpoint_windows,
+                activation_checkpoint_windows=effective_checkpoint_windows,
             )
 
     @torch.no_grad()

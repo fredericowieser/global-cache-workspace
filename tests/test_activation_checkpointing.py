@@ -23,6 +23,7 @@ from gcw.training.core import (
     _apply_trainable_policy,
     _configure_native_activation_checkpointing,
     _training_fingerprint,
+    _logical_pair_grouped_loss,
     train,
 )
 
@@ -129,7 +130,16 @@ def test_segmented_window_checkpointing_forward_backward_parity(variant: str) ->
         torch.testing.assert_close(actual.grad, expected.grad, atol=2e-6, rtol=2e-5)
 
 
-def test_segmented_bt_uses_independent_closed_prepared_owners(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("minimum_length", "expected_owners"),
+    [(0, 4), (12, 4), (13, 1)],
+    ids=["zero-preserves-always-on", "at-threshold", "below-threshold"],
+)
+def test_adaptive_segmented_bt_prepared_owner_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    minimum_length: int,
+    expected_owners: int,
+) -> None:
     model = build_model(_model_config("bt"))
     model.init_weights()
     owners: list[object] = []
@@ -142,10 +152,57 @@ def test_segmented_bt_uses_independent_closed_prepared_owners(monkeypatch: pytes
 
     monkeypatch.setattr(model.cache_processor, "prepare_forward_execution", track_owner)
     input_ids = torch.randint(0, 32, (1, 12))
-    model(input_ids, input_ids, activation_checkpoint_windows=2).backward()
+    model(
+        input_ids,
+        input_ids,
+        activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=minimum_length,
+    ).backward()
 
-    assert len(owners) == 4
+    assert len(owners) == expected_owners
     assert all(getattr(owner, "_closed") for owner in owners)
+
+
+def test_adaptive_segment_policy_composes_with_grouped_logical_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = build_model(_model_config("bgt"))
+    model.init_weights()
+    effective_windows: list[int] = []
+    forward = model.backbone.forward
+
+    def track_forward(*args, **kwargs):
+        effective_windows.append(kwargs["activation_checkpoint_windows"])
+        return forward(*args, **kwargs)
+
+    monkeypatch.setattr(model.backbone, "forward", track_forward)
+    input_ids = torch.randint(0, 32, (4, 12))
+
+    below = _logical_pair_grouped_loss(
+        model,
+        input_ids,
+        input_ids,
+        activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=13,
+    )
+    at = _logical_pair_grouped_loss(
+        model,
+        input_ids,
+        input_ids,
+        activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=12,
+    )
+    model.eval()
+    with torch.no_grad():
+        evaluated = model(
+            input_ids,
+            input_ids,
+            activation_checkpoint_windows=2,
+            activation_checkpoint_min_padded_sequence_length=12,
+        )
+
+    assert below.shape == at.shape == evaluated.shape == ()
+    assert effective_windows == [0, 2, 0]
 
 
 def test_segment_recomputation_does_not_duplicate_processor_metrics() -> None:
@@ -183,7 +240,12 @@ def test_segmented_checkpointing_preserves_rng_and_composes_with_processor_check
     eager_rng = torch.random.get_rng_state()
 
     torch.random.set_rng_state(initial_rng)
-    checkpointed_loss = checkpointed(input_ids, input_ids, activation_checkpoint_windows=2)
+    checkpointed_loss = checkpointed(
+        input_ids,
+        input_ids,
+        activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=12,
+    )
     checkpointed_loss.backward()
 
     assert torch.equal(checkpointed_loss, eager_loss)
@@ -276,18 +338,23 @@ def test_segmented_window_boundary_reduces_saved_tensors_and_preserves_state_dic
     input_ids = torch.randint(0, 32, (2, 12))
     before = {name: tensor.clone() for name, tensor in checkpointed.state_dict().items()}
 
-    def saved_numel(model: torch.nn.Module, windows: int) -> int:
+    def saved_numel(model: torch.nn.Module, minimum_length: int) -> int:
         saved: list[int] = []
         with torch.autograd.graph.saved_tensors_hooks(
             lambda tensor: (saved.append(tensor.numel()) or tensor),
             lambda tensor: tensor,
         ):
-            loss = model(input_ids, input_ids, activation_checkpoint_windows=windows)
+            loss = model(
+                input_ids,
+                input_ids,
+                activation_checkpoint_windows=2,
+                activation_checkpoint_min_padded_sequence_length=minimum_length,
+            )
         loss.backward()
         return sum(saved)
 
-    eager_saved = saved_numel(eager, 0)
-    checkpointed_saved = saved_numel(checkpointed, 2)
+    eager_saved = saved_numel(eager, 13)
+    checkpointed_saved = saved_numel(checkpointed, 12)
 
     assert checkpointed_saved < eager_saved / 2
     assert tuple(checkpointed.state_dict()) == tuple(before)
@@ -365,6 +432,8 @@ def test_checkpoint_policy_is_runtime_provenance_and_resume_fingerprint(tmp_path
     assert manifest["training_fingerprint"]["activation_checkpointing"] == "none"
     assert train_state["activation_checkpoint_windows"] == 0
     assert manifest["training_fingerprint"]["activation_checkpoint_windows"] == 0
+    assert train_state["activation_checkpoint_min_padded_sequence_length"] == 0
+    assert manifest["training_fingerprint"]["activation_checkpoint_min_padded_sequence_length"] == 0
 
     resumed = replace(
         eager,
@@ -383,12 +452,24 @@ def test_checkpoint_policy_is_runtime_provenance_and_resume_fingerprint(tmp_path
     with pytest.raises(CheckpointCompatibilityError, match="activation_checkpoint_windows"):
         train(resumed_windows)
 
+    resumed_threshold = replace(
+        eager,
+        activation_checkpoint_min_padded_sequence_length=9,
+        resume=ResumeConfig(checkpoint=str(checkpoint)),
+    )
+    with pytest.raises(
+        CheckpointCompatibilityError,
+        match="activation_checkpoint_min_padded_sequence_length",
+    ):
+        train(resumed_threshold)
+
 
 def test_training_and_eval_apply_segment_policy_and_record_provenance(tmp_path) -> None:
     config = replace(
         _train_config(tmp_path),
         output_dir=str(tmp_path / "segmented"),
         activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=8,
         eval_every=1,
         eval_batches=1,
     )
@@ -400,6 +481,49 @@ def test_training_and_eval_apply_segment_policy_and_record_provenance(tmp_path) 
     manifest = json.loads((checkpoint / "manifest.json").read_text(encoding="utf-8"))
     assert train_state["activation_checkpoint_windows"] == 2
     assert manifest["training_fingerprint"]["activation_checkpoint_windows"] == 2
+    assert train_state["activation_checkpoint_min_padded_sequence_length"] == 8
+    assert manifest["training_fingerprint"]["activation_checkpoint_min_padded_sequence_length"] == 8
+
+
+@pytest.mark.parametrize(("minimum_length", "active_count"), [(8, 1), (9, 0)])
+def test_adaptive_segment_policy_is_visible_in_per_step_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    minimum_length: int,
+    active_count: int,
+) -> None:
+    logged: list[dict[str, object]] = []
+
+    class Tracker:
+        def log_message(self, _message: str) -> None:
+            pass
+
+        def log(self, metrics: dict[str, object], *, step: int) -> None:
+            del step
+            logged.append(metrics)
+
+        def finish(self, *, summary: dict[str, object]) -> None:
+            del summary
+
+    config = replace(
+        _train_config(tmp_path),
+        output_dir=str(tmp_path / f"metrics-{minimum_length}"),
+        activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=minimum_length,
+        save_final=False,
+    )
+    monkeypatch.setattr(
+        "gcw.training.core.RunTracker.for_training",
+        lambda *_args, **_kwargs: Tracker(),
+    )
+
+    train(config)
+
+    assert len(logged) == 1
+    metrics = logged[0]
+    assert metrics["train/segmented_window_checkpointing_active"] is bool(active_count)
+    assert metrics["train/segmented_window_checkpointed_microbatches"] == active_count
+    assert metrics["train/segmented_window_eager_microbatches"] == 1 - active_count
 
 
 def test_segmented_training_exact_resume_matches_uninterrupted(
@@ -411,6 +535,7 @@ def test_segmented_training_exact_resume_matches_uninterrupted(
         output_dir=str(tmp_path / "baseline"),
         max_steps=3,
         activation_checkpoint_windows=2,
+        activation_checkpoint_min_padded_sequence_length=8,
     )
     train(baseline)
 
@@ -457,9 +582,21 @@ def test_training_fingerprint_changes_only_checkpoint_policy(tmp_path) -> None:
     segmented_fingerprint = _training_fingerprint(segmented, 1, 8, 8, 1)
     assert eager_fingerprint | {"activation_checkpoint_windows": 2} == segmented_fingerprint
 
+    adaptive = replace(eager, activation_checkpoint_min_padded_sequence_length=8)
+    adaptive_fingerprint = _training_fingerprint(adaptive, 1, 8, 8, 1)
+    assert (
+        eager_fingerprint | {"activation_checkpoint_min_padded_sequence_length": 8}
+        == adaptive_fingerprint
+    )
+
 
 def test_activation_checkpointing_is_explicit_opt_in() -> None:
     assert TrainConfig().activation_checkpointing == "none"
+    assert TrainConfig().activation_checkpoint_min_padded_sequence_length == 0
+    with pytest.raises(ValueError, match="must be an integer"):
+        TrainConfig(activation_checkpoint_min_padded_sequence_length=True)
+    with pytest.raises(ValueError, match="must be non-negative"):
+        TrainConfig(activation_checkpoint_min_padded_sequence_length=-1)
     with pytest.raises(ValueError, match="must be 'none'"):
         TrainConfig(activation_checkpointing="invalid")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="requires a BT or BGT"):

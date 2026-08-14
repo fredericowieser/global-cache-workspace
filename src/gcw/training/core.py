@@ -159,6 +159,9 @@ def train(config: TrainConfig) -> None:
         "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
+        "activation_checkpoint_min_padded_sequence_length": (
+            config.activation_checkpoint_min_padded_sequence_length
+        ),
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     budget_message = (
@@ -191,6 +194,7 @@ def train(config: TrainConfig) -> None:
         loss_total = 0.0
         batch_non_padding_tokens = 0
         batch_supervised_tokens = 0
+        segmented_window_checkpointed_microbatches = 0
         for micro_step in range(grad_accum_steps):
             batch = next(stream)
             if step == 0 and micro_step == 0:
@@ -199,6 +203,13 @@ def train(config: TrainConfig) -> None:
                 batch.x.numel() if batch.attention_mask is None else batch.attention_mask.sum().item()
             )
             batch_supervised_tokens += int((batch.y != -100).sum().item())
+            checkpoint_length_eligible = (
+                config.activation_checkpoint_min_padded_sequence_length == 0
+                or batch.x.shape[1] >= config.activation_checkpoint_min_padded_sequence_length
+            )
+            segmented_window_checkpointed_microbatches += int(
+                config.activation_checkpoint_windows > 0 and checkpoint_length_eligible
+            )
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
@@ -209,6 +220,9 @@ def train(config: TrainConfig) -> None:
                             batch.y,
                             attention_mask=batch.attention_mask,
                             activation_checkpoint_windows=config.activation_checkpoint_windows,
+                            activation_checkpoint_min_padded_sequence_length=(
+                                config.activation_checkpoint_min_padded_sequence_length
+                            ),
                         )
                     else:
                         loss = _model_loss(
@@ -217,6 +231,9 @@ def train(config: TrainConfig) -> None:
                             batch.y,
                             attention_mask=batch.attention_mask,
                             activation_checkpoint_windows=config.activation_checkpoint_windows,
+                            activation_checkpoint_min_padded_sequence_length=(
+                                config.activation_checkpoint_min_padded_sequence_length
+                            ),
                         )
                 loss_total += float(loss.detach().cpu())
                 (loss / grad_accum_steps).backward()
@@ -269,6 +286,15 @@ def train(config: TrainConfig) -> None:
             "train/rows_per_step": micro_rows * grad_accum_steps,
             "train/logical_pairs_per_step": (
                 config.global_batch_rows // 2 if config.logical_pair_grouping else None
+            ),
+            "train/segmented_window_checkpointing_active": (
+                segmented_window_checkpointed_microbatches > 0
+            ),
+            "train/segmented_window_checkpointed_microbatches": (
+                segmented_window_checkpointed_microbatches
+            ),
+            "train/segmented_window_eager_microbatches": (
+                grad_accum_steps - segmented_window_checkpointed_microbatches
             ),
             "timing/step_seconds": step_seconds,
             "timing/tokens_per_second": tokens_per_step / max(step_seconds, 1e-12),
@@ -467,6 +493,9 @@ def _training_fingerprint(
         "trainable": config.trainable,
         "activation_checkpointing": config.activation_checkpointing,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
+        "activation_checkpoint_min_padded_sequence_length": (
+            config.activation_checkpoint_min_padded_sequence_length
+        ),
         "objective": (
             "adjacent_pair_token_mean_answer_only_ce"
             if config.logical_pair_grouping
@@ -651,12 +680,16 @@ def _model_loss(
     loss_reduction: str = "mean",
     attention_mask: torch.Tensor | None = None,
     activation_checkpoint_windows: int = 0,
+    activation_checkpoint_min_padded_sequence_length: int = 0,
 ) -> torch.Tensor:
     kwargs: dict[str, Any] = {"loss_reduction": loss_reduction}
     if attention_mask is not None:
         kwargs["attention_mask"] = attention_mask
     if activation_checkpoint_windows:
         kwargs["activation_checkpoint_windows"] = activation_checkpoint_windows
+        kwargs["activation_checkpoint_min_padded_sequence_length"] = (
+            activation_checkpoint_min_padded_sequence_length
+        )
     return model(input_ids, targets, **kwargs)
 
 
@@ -667,6 +700,7 @@ def _row_loss_sums_and_counts(
     *,
     attention_mask: torch.Tensor | None = None,
     activation_checkpoint_windows: int = 0,
+    activation_checkpoint_min_padded_sequence_length: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return one answer-token CE sum and supervised-token count per row."""
     row_sums = _model_loss(
@@ -676,6 +710,7 @@ def _row_loss_sums_and_counts(
         loss_reduction="row_sum",
         attention_mask=attention_mask,
         activation_checkpoint_windows=activation_checkpoint_windows,
+        activation_checkpoint_min_padded_sequence_length=activation_checkpoint_min_padded_sequence_length,
     )
     if row_sums.shape != (targets.shape[0],):
         raise RuntimeError(f"row_sum loss returned shape {tuple(row_sums.shape)} for batch {targets.shape[0]}")
@@ -689,6 +724,7 @@ def _logical_pair_grouped_loss(
     *,
     attention_mask: torch.Tensor | None = None,
     activation_checkpoint_windows: int = 0,
+    activation_checkpoint_min_padded_sequence_length: int = 0,
 ) -> torch.Tensor:
     """Average adjacent two-row token-mean losses within one physical group."""
     if targets.shape[0] < 2 or targets.shape[0] % 2:
@@ -699,6 +735,7 @@ def _logical_pair_grouped_loss(
         targets,
         attention_mask=attention_mask,
         activation_checkpoint_windows=activation_checkpoint_windows,
+        activation_checkpoint_min_padded_sequence_length=activation_checkpoint_min_padded_sequence_length,
     )
     pair_sums = row_sums.reshape(-1, 2).sum(dim=1)
     pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
@@ -800,6 +837,9 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
                     y,
                     attention_mask=grouped_attention_mask,
                     activation_checkpoint_windows=config.activation_checkpoint_windows,
+                    activation_checkpoint_min_padded_sequence_length=(
+                        config.activation_checkpoint_min_padded_sequence_length
+                    ),
                 )
                 pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
                 loss = (row_sums.reshape(-1, 2).sum(dim=1) / pair_counts.clamp_min(1.0)).sum()
@@ -812,6 +852,9 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
                     loss_reduction="sum",
                     attention_mask=grouped_attention_mask,
                     activation_checkpoint_windows=config.activation_checkpoint_windows,
+                    activation_checkpoint_min_padded_sequence_length=(
+                        config.activation_checkpoint_min_padded_sequence_length
+                    ),
                 )
                 weight = (y >= 0).sum()
         total_loss += loss.detach().float()

@@ -607,6 +607,7 @@ class TrainConfig:
     grad_clip: float = 1.0
     bf16: bool = False
     activation_checkpoint_windows: int = 0
+    activation_checkpoint_min_padded_sequence_length: int = 0
     seed: int = 24
     save_every: int = 0
     save_final: bool = True
@@ -648,6 +649,13 @@ class TrainConfig:
             raise ValueError("activation_checkpoint_windows must be an integer")
         if self.activation_checkpoint_windows < 0:
             raise ValueError("activation_checkpoint_windows must be non-negative")
+        if (
+            isinstance(self.activation_checkpoint_min_padded_sequence_length, bool)
+            or not isinstance(self.activation_checkpoint_min_padded_sequence_length, int)
+        ):
+            raise ValueError("activation_checkpoint_min_padded_sequence_length must be an integer")
+        if self.activation_checkpoint_min_padded_sequence_length < 0:
+            raise ValueError("activation_checkpoint_min_padded_sequence_length must be non-negative")
         if self.activation_checkpoint_windows and self.model.variant == "tf":
             raise ValueError("activation_checkpoint_windows requires a recurrent cache-processor variant")
         if self.activation_checkpoint_windows and self.model.family != "qwen3":

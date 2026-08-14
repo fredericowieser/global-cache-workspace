@@ -169,6 +169,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `grad_clip` | `float` | `1.0` |
 | `bf16` | `bool` | `False` |
 | `activation_checkpoint_windows` | `int` | `0` |
+| `activation_checkpoint_min_padded_sequence_length` | `int` | `0` |
 | `seed` | `int` | `24` |
 | `save_every` | `int` | `0` |
 | `save_final` | `bool` | `True` |
