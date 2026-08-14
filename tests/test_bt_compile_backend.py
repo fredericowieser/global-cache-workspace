@@ -10,7 +10,7 @@ from gcw.models import build_model
 from gcw.models.cache_processors import backend as backend_module
 from gcw.models.cache_processors.backend import bt_processor_backend_metadata
 from gcw.models.model import LanguageModel
-from gcw.training.core import _training_fingerprint
+from gcw.training.core import _configure_native_activation_checkpointing, _training_fingerprint
 
 
 def _config() -> ModelConfig:
@@ -125,6 +125,37 @@ def test_compiled_dispatch_preserves_outputs_gradients_train_eval_and_repeated_g
     compiled.eval()
     with torch.no_grad():
         torch.testing.assert_close(compiled(inputs), eager(inputs))
+
+
+def test_compiled_backend_composes_with_segment_and_processor_checkpointing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch.manual_seed(43)
+    eager = _model()
+    checkpointed = copy.deepcopy(eager)
+    monkeypatch.setenv("GCW_BT_PROCESSOR_BACKEND", "compile")
+    compile_calls, region_calls = _install_fake_compiler(monkeypatch)
+    checkpointed.cache_processor.execution_backend = "compile"
+    _configure_native_activation_checkpointing(checkpointed, "standard_processor_layers")
+    inputs = torch.randint(0, eager.config.vocab_size, (2, 12))
+    targets = torch.randint(0, eager.config.vocab_size, (2, 12))
+
+    eager_loss = eager(inputs, targets)
+    checkpointed_loss = checkpointed(
+        inputs,
+        targets,
+        activation_checkpoint_windows=2,
+    )
+    eager_loss.backward()
+    checkpointed_loss.backward()
+
+    torch.testing.assert_close(checkpointed_loss, eager_loss)
+    for expected, actual in zip(eager.parameters(), checkpointed.parameters(), strict=True):
+        assert expected.grad is not None and actual.grad is not None
+        torch.testing.assert_close(actual.grad, expected.grad, atol=2e-5, rtol=2e-4)
+    assert compile_calls == [{"backend": "inductor", "dynamic": False, "fullgraph": True}]
+    assert len(region_calls) == 4
+    assert checkpointed.cache_processor.pop_call_count() == 2
 
 
 def test_compiled_backend_is_fail_closed_and_unavailable_compile_is_rejected(

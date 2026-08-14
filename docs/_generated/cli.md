@@ -29,7 +29,7 @@ usage: gcw convert hf [-h] --family {llama,qwen3,qwen3_5,qwen3_5_moe,gemma4}
 ## `gcw eval`
 
 ```text
-usage: gcw eval [-h] {all,math,general,tasks,fineweb} ...
+usage: gcw eval [-h] {all,math,general,tasks,chat,fineweb} ...
 ```
 
 ## `gcw eval all`
@@ -50,6 +50,28 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--out` | flag |
+
+## `gcw eval chat`
+
+```text
+usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
+                     [--tokenizer-path TOKENIZER_PATH] [--processor {on,off}]
+                     --tasks TASKS [TASKS ...] --mode
+                     {thinking_off,thinking_on} [--batch-size BATCH_SIZE]
+                     [--max-new-tokens MAX_NEW_TOKENS] [--out OUT]
+```
+
+| Argument | Contract |
+|---|---|
+| `--checkpoint` | flag |
+| `--hf-model` | flag |
+| `--tokenizer-path` | flag |
+| `--processor` | choices: `on`, `off`; default: `on` |
+| `--tasks` | required |
+| `--mode` | required; choices: `thinking_off`, `thinking_on` |
+| `--batch-size` | default: `8`; type: `int` |
+| `--max-new-tokens` | default: `2048`; type: `int` |
 | `--out` | flag |
 
 ## `gcw eval fineweb`

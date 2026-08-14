@@ -663,9 +663,15 @@ def _attention(x: torch.Tensor, layers, positions: torch.Tensor) -> torch.Tensor
 def zero_projection(module: nn.Module, *, per_head_type: type[nn.Module]) -> None:
     if not isinstance(module, (nn.Linear, per_head_type)):
         raise TypeError(f"unsupported projection type: {type(module).__name__}")
-    nn.init.zeros_(module.weight)
-    if module.bias is not None:
-        nn.init.zeros_(module.bias)
+    weight = getattr(module, "weight", None)
+    bias = getattr(module, "bias", None)
+    if not isinstance(weight, torch.Tensor):
+        raise TypeError(f"projection {type(module).__name__} has no tensor weight")
+    nn.init.zeros_(weight)
+    if bias is not None:
+        if not isinstance(bias, torch.Tensor):
+            raise TypeError(f"projection {type(module).__name__} has a non-tensor bias")
+        nn.init.zeros_(bias)
 
 
 def scatter_latest(cache, indices: torch.Tensor, keys: torch.Tensor, values: torch.Tensor):

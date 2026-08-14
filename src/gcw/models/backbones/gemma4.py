@@ -599,7 +599,7 @@ class Gemma4TF(TF):
         return out, cache
 
     @torch.no_grad()
-    def generate_fast(
+    def generate_fast(  # type: ignore[override]
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,

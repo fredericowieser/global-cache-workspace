@@ -146,6 +146,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
 | `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor']` | `'all'` |
+| `activation_checkpointing` | `Literal['none', 'standard_processor_layers']` | `'none'` |
 | `backbone_checkpoint` | `str \| None` | `None` |
 | `init_checkpoint` | `str \| None` | `None` |
 | `resume` | `gcw.config.ResumeConfig \| None` | `None` |
@@ -166,6 +167,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `final_lr_frac` | `float` | `0.0` |
 | `grad_clip` | `float` | `1.0` |
 | `bf16` | `bool` | `False` |
+| `activation_checkpoint_windows` | `int` | `0` |
 | `seed` | `int` | `24` |
 | `save_every` | `int` | `0` |
 | `save_final` | `bool` | `True` |

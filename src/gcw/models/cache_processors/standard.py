@@ -13,7 +13,7 @@ from gcw.models.cache_processors.backend import (
     resolve_bt_processor_backend,
     run_prepared_bt_processor_region,
 )
-from gcw.models.cache_processors.base import CacheProcessorBase, cache_processor_recomputation_id
+from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
     PreparedBatchedCacheProcessorParameters,
@@ -185,19 +185,17 @@ class CacheProcessor(nn.Module):
 
 
 class PreparedPerLayerCacheProcessorExecution:
-    """A single-forward BT execution with lazily prepared parameter stacks.
+    """One explicitly owned BT execution with lazily prepared parameter stacks.
 
-    ``LanguageModel.forward`` owns this context. The first cache event creates
-    differentiable stacks and later events reuse them. ``__exit__`` drops the
-    references so no graph-derived tensor can leak into another forward.
+    The owner may cover a complete ordinary forward or one checkpoint segment
+    invocation. Closing it is final: backward replay must create a new owner.
+    This keeps graph-derived stacks local without weakening reuse protection.
     """
 
     def __init__(self, processor: PerLayerCacheProcessor):
         self._processor = processor
         self._backend = processor.execution_backend
         self._prepared: PreparedBatchedCacheProcessorParameters | None = None
-        self._recomputation_id: object | None = None
-        self._recomputed_prepared: PreparedBatchedCacheProcessorParameters | None = None
         self._closed = False
 
     def __enter__(self) -> PreparedPerLayerCacheProcessorExecution:
@@ -205,23 +203,14 @@ class PreparedPerLayerCacheProcessorExecution:
 
     def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
         self._prepared = None
-        self._recomputed_prepared = None
-        self._recomputation_id = None
         self._closed = True
 
     def __call__(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
         if self._closed:
             raise RuntimeError("prepared cache-processor execution cannot be reused across forwards")
-        recomputation_id = cache_processor_recomputation_id()
-        if recomputation_id is None:
-            if self._prepared is None:
-                self._prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
-            prepared = self._prepared
-        else:
-            if recomputation_id is not self._recomputation_id:
-                self._recomputation_id = recomputation_id
-                self._recomputed_prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
-            prepared = self._recomputed_prepared
+        if self._prepared is None:
+            self._prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
+        prepared = self._prepared
         return self._processor(
             cache,
             select_all=select_all,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import os
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import replace
 from typing import Any, Callable, cast
 
@@ -19,6 +19,7 @@ from gcw.models.cache_processors.base import cache_processor_recomputation, cach
 
 CacheLike = CacheState | WindowedCache
 ProcessorFn = Callable[..., CacheLike | StaticCacheState]
+ProcessorExecutionFactory = Callable[[], AbstractContextManager[ProcessorFn]]
 LinearStateLayout = tuple[tuple[int, bool], ...]
 
 try:
@@ -364,19 +365,21 @@ class TF(Backbone):
         process_every: int = 64,
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
+        processor_execution_factory: ProcessorExecutionFactory | None = None,
     ) -> torch.Tensor:
         if processor is None:
             return self.forward_full(input_ids, targets, loss_reduction, attention_mask=attention_mask)
         if targets is not None:
-            return self.forward_windowed_loss(
-                input_ids,
-                targets,
-                processor=processor,
-                process_every=process_every,
-                loss_reduction=loss_reduction,
-                attention_mask=attention_mask,
-                activation_checkpoint_windows=activation_checkpoint_windows,
-            )
+            kwargs: dict[str, Any] = {
+                "processor": processor,
+                "process_every": process_every,
+                "loss_reduction": loss_reduction,
+                "attention_mask": attention_mask,
+            }
+            if activation_checkpoint_windows:
+                kwargs["activation_checkpoint_windows"] = activation_checkpoint_windows
+                kwargs["processor_execution_factory"] = processor_execution_factory
+            return self.forward_windowed_loss(input_ids, targets, **kwargs)
         logits, _ = self.forward_windowed(input_ids, processor=processor, process_every=process_every)
         return logits
 
@@ -494,6 +497,7 @@ class TF(Backbone):
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
+        processor_execution_factory: ProcessorExecutionFactory | None = None,
     ) -> torch.Tensor:
         del attention_mask
         if activation_checkpoint_windows < 0:
@@ -506,11 +510,13 @@ class TF(Backbone):
         for segment_start in range(0, input_ids.shape[1], segment_span):
             segment_end = min(segment_start + segment_span, input_ids.shape[1])
             if checkpoint_active:
+                if processor_execution_factory is None:
+                    raise RuntimeError("checkpointed window segments require a processor execution factory")
                 hidden, cache = self._checkpointed_window_segment(
                     input_ids[:, segment_start:segment_end],
                     segment_start,
                     cache,
-                    processor=processor,
+                    processor_execution_factory=processor_execution_factory,
                     process_every=process_every,
                 )
                 hidden_chunks.append(hidden)
@@ -535,7 +541,7 @@ class TF(Backbone):
         segment_start: int,
         cache: CacheLike,
         *,
-        processor: ProcessorFn,
+        processor_execution_factory: ProcessorExecutionFactory,
         process_every: int,
     ) -> tuple[torch.Tensor, WindowedCache]:
         boundary_cache = cache if isinstance(cache, WindowedCache) else None
@@ -548,18 +554,22 @@ class TF(Backbone):
             else:
                 current = _unflatten_windowed_cache(flat_cache, input_layout)
             segment_hidden: list[torch.Tensor] = []
-            for relative_start in range(0, ids.shape[1], process_every):
-                start = segment_start + relative_start
-                if start > 0:
-                    current = cast(CacheLike, processor(current))
-                hidden, current = self.forward_chunk(
-                    ids[:, relative_start : relative_start + process_every],
-                    start,
-                    current,
-                    logits=False,
-                    cache_format="windowed",
-                )
-                segment_hidden.append(hidden)
+            # The context ends after this invocation. Checkpoint backward invokes
+            # run_segment again and receives a new owner rather than reusing a
+            # closed forward owner or retaining derived stacks across graphs.
+            with processor_execution_factory() as segment_processor:
+                for relative_start in range(0, ids.shape[1], process_every):
+                    start = segment_start + relative_start
+                    if start > 0:
+                        current = cast(CacheLike, segment_processor(current))
+                    hidden, current = self.forward_chunk(
+                        ids[:, relative_start : relative_start + process_every],
+                        start,
+                        current,
+                        logits=False,
+                        cache_format="windowed",
+                    )
+                    segment_hidden.append(hidden)
             if not isinstance(current, WindowedCache):
                 raise TypeError("checkpointed window segment requires WindowedCache output")
             flat_output, layout = _flatten_windowed_cache(current)
@@ -691,7 +701,7 @@ class TF(Backbone):
         return out, cache
 
     @torch.no_grad()
-    def generate(
+    def generate(  # type: ignore[override]
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
@@ -732,7 +742,7 @@ class TF(Backbone):
         return out
 
     @torch.no_grad()
-    def generate_fast(
+    def generate_fast(  # type: ignore[override]
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
