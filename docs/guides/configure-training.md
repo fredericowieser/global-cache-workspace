@@ -63,6 +63,28 @@ trainable: cache_processor
 
 Only cache processor parameters receive gradients. Use `trainable: backbone` to freeze the cache processor instead.
 
+### Qwen3 frozen-backbone regional compilation
+
+Qwen3 cache-processor runs remain eager unless the training config opts into the 64-token backbone region:
+
+```yaml
+model:
+  family: qwen3
+  variant: bt
+  cache_processor:
+    process_every: 64
+trainable: cache_processor
+backbone_chunk_backend: compile
+```
+
+The first window establishes frozen cache state eagerly. Each later full window compiles the tensor cache boundary from chunk embeddings and stacked past K/V through every Qwen3 layer and final norm. PyTorch cannot construct `CausalBias` inside a full Dynamo graph, so the eager caller builds one lower-right causal bias and passes it into the region. This keeps the bias object out of graph construction while preserving Flash SDPA for CUDA BF16. The Python window loop, cache-processor scheduling, `WindowedCache` construction, score concatenation, vocabulary head, first window, and short final chunk remain eager. Past length is dynamic, so repeated 64-token calls reuse one regional compiler dispatch as retained history grows. Keeping the no-gradient first window outside the region also avoids a separate autograd specialization.
+
+The opt-in fails closed. It requires exact `family: qwen3`, a windowed processor with `process_every: 64`, `trainable: cache_processor`, at least 128 training tokens, non-FSDP execution, callable `torch.compile`, and Dynamo error suppression disabled. A graph break or compiler/runtime failure raises; it never silently retries an eligible 64-token call eagerly. `GCW_COMPILE` must be disabled because wrapping the outer language-model loop defeats the regional boundary.
+
+BT processor compilation is independent: `GCW_BT_PROCESSOR_BACKEND=compile` may compile the prepared BT processor region alongside `backbone_chunk_backend: compile`. `activation_checkpointing: standard_processor_layers` may also be enabled; it checkpoints processor layers only. Gradients cross each frozen compiled backbone chunk into cache-processor outputs from earlier windows.
+
+The compiled callable registers no parameters or buffers, so state-dict keys remain unchanged. Run metadata records the selected backend, region, dynamic-shape policy, compile options, Torch version, and fingerprint. Exact resume rejects a changed backend fingerprint.
+
 ### Native activation checkpointing
 
 Two independent policies reduce different activation classes. Standard BT and BGT processors can checkpoint each processor transformer layer:

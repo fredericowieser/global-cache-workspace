@@ -13,6 +13,7 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import ModelConfig
 from gcw.models.backbones.base import Backbone
+from gcw.models.backbones.backend import Qwen3BackboneChunkBackend, run_qwen3_backbone_chunk_region
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.models.cache_processors.base import cache_processor_recomputation, cache_processor_recomputation_id
@@ -189,6 +190,34 @@ class CausalSelfAttention(nn.Module):
         attn_out = self.o_proj(y)
         return attn_out, k, v, attn_out.float().norm(dim=-1)
 
+    def forward_tensor_past(
+        self,
+        x: torch.Tensor,
+        cos_sin: tuple[torch.Tensor, torch.Tensor],
+        past_keys: torch.Tensor,
+        past_values: torch.Tensor,
+        attention_bias: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Attention path with tensor cache inputs and an externally built causal bias."""
+        batch, steps, _ = x.shape
+        q = self.q_proj(x).view(batch, steps, self.num_heads, self.head_dim)
+        k = self.k_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
+        v = self.v_proj(x).view(batch, steps, self.num_kv_heads, self.head_dim)
+        if self.q_norm is not None and self.k_norm is not None:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+        rotary = (cos_sin[0].to(q.dtype), cos_sin[1].to(q.dtype))
+        q = apply_rotary(q, *rotary, style=self.rotary_style)
+        k = apply_rotary(k, *rotary, style=self.rotary_style)
+        q, k = q.to(v.dtype), k.to(v.dtype)
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        k = torch.cat([past_keys, k], dim=2)
+        v = torch.cat([past_values, v], dim=2)
+        y = flash_sdpa(q, k, v, attn_mask=attention_bias, enable_gqa=self.num_kv_heads != self.num_heads)
+        y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
+        attn_out = self.o_proj(y)
+        return attn_out, k, v, attn_out.float().norm(dim=-1)
+
     def forward_static(
         self,
         x: torch.Tensor,
@@ -326,6 +355,21 @@ class Block(nn.Module):
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x, scores
 
+    def forward_tensor_past(
+        self,
+        x: torch.Tensor,
+        cos_sin: tuple[torch.Tensor, torch.Tensor],
+        past_keys: torch.Tensor,
+        past_values: torch.Tensor,
+        attention_bias: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        attn_out, keys, values, scores = self.self_attn.forward_tensor_past(
+            self.input_layernorm(x), cos_sin, past_keys, past_values, attention_bias
+        )
+        x = x + attn_out
+        x = x + self.mlp(self.post_attention_layernorm(x))
+        return x, keys, values, scores
+
 
 class TF(Backbone):
     def __init__(self, config: ModelConfig, pad_vocab_size_to: int = 128):
@@ -340,6 +384,7 @@ class TF(Backbone):
             raise ValueError("transformer requires a resolved model head_dim")
         self.rotary = RotaryCache(config.sequence_len, config.head_dim, config.rope_theta)
         self.lm_head = None if config.tie_embeddings else Linear(config.hidden_size, vocab, bias=False)
+        self.backbone_chunk_backend: Qwen3BackboneChunkBackend = "eager"
 
     @torch.no_grad()
     def init_weights(self, std: float = 0.02) -> None:
@@ -663,6 +708,17 @@ class TF(Backbone):
         if cache is not None and cache.scores.shape[0] != inputs_embeds.shape[0]:
             raise ValueError("inputs_embeds and cache batch sizes must match")
 
+        has_past = cache is not None and cache.scores.numel() > 0
+        if (
+            self.backbone_chunk_backend == "compile"
+            and self.config.family == "qwen3"
+            and inputs_embeds.shape[1] == 64
+            and has_past
+        ):
+            return self._forward_compiled_embedding_chunk(
+                inputs_embeds, start_pos, cache, logits=logits, cache_format=cache_format
+            )
+
         x = inputs_embeds
         cos_sin = self.rotary.get_range(
             start_pos,
@@ -690,6 +746,47 @@ class TF(Backbone):
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
             return out, WindowedCache.from_lists(keys, values, new_scores)
         return out, CacheState(keys, values, new_scores)
+
+    def _forward_compiled_embedding_chunk(
+        self,
+        inputs_embeds: torch.Tensor,
+        start_pos: int,
+        cache: CacheLike | None,
+        *,
+        logits: bool,
+        cache_format: str,
+    ) -> tuple[torch.Tensor, CacheLike]:
+        cos, sin = self.rotary.get_range(
+            start_pos,
+            inputs_embeds.shape[1],
+            inputs_embeds.device,
+            _autocast_dtype(inputs_embeds.device) or inputs_embeds.dtype,
+        )
+        if cache is None or cache.scores.numel() == 0:
+            raise RuntimeError("compiled Qwen3 backbone chunks require non-empty past cache tensors")
+        if isinstance(cache, WindowedCache):
+            past_keys, past_values = cache.keys, cache.values
+        else:
+            past_keys = torch.stack(cache.keys)
+            past_values = torch.stack(cache.values)
+        attention_bias, is_causal = _causal_chunk_bias(inputs_embeds.shape[1], past_keys.shape[3], inputs_embeds.device)
+        if attention_bias is None or is_causal:
+            raise RuntimeError("compiled Qwen3 backbone chunks require a lower-right causal attention bias")
+        hidden, keys, values, chunk_scores = run_qwen3_backbone_chunk_region(
+            self,
+            self.backbone_chunk_backend,
+            inputs_embeds,
+            cos,
+            sin,
+            past_keys,
+            past_values,
+            attention_bias,
+        )
+        new_scores = torch.cat([cache.scores, chunk_scores], dim=1)
+        out = self.logits_from_hidden(hidden) if logits else hidden
+        if cache_format == "windowed" or isinstance(cache, WindowedCache):
+            return out, WindowedCache(keys, values, new_scores)
+        return out, CacheState(list(keys.unbind(0)), list(values.unbind(0)), new_scores)
 
     def forward_chunk_static(
         self,
