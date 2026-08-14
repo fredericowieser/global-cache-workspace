@@ -46,4 +46,10 @@ The meaning of the feature axis depends on the variant. BT mixes within one back
 
 No auxiliary cache loss exists. Later token cross-entropy backpropagates through the rewritten cache into the processor. With a frozen backbone, only processor parameters update, but gradients still traverse frozen operations to tell the processor how its rewrite affected predictions. With an unfrozen backbone, the optimizer updates both systems.
 
+## Future work: prompt-boundary processing
+
+Current SFT is windowed, not prompt-boundary-only. The processor runs every `process_every` tokens across the concatenated prompt and answer. Answer-only masking changes which tokens contribute cross-entropy; it does not change processor cadence or add an invocation at the exact prompt boundary.
+
+A separate experiment should test one exact processor invocation after prompt prefill, before the first answer prediction. A second ablation may continue at a cadence relative to that boundary. Both require explicit per-row prompt lengths, ragged-batch handling, matching training and generation semantics, and separate provenance. They change the model's causal intervention schedule and therefore cannot replace or be aggregated with windowed results.
+
 Flow and diffusion are distinct. Flow deterministically integrates a latent field. [Task-directed cache diffusion](task-directed-diffusion.md) injects training noise and refines a bottleneck state toward a functionally useful cache endpoint. Neither mechanism reconstructs the original cache.
