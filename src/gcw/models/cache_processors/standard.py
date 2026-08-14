@@ -4,6 +4,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from gcw.config import CacheProcessorConfig, DiffusionProcessorConfig, FlowProcessorConfig, ModelConfig
 from gcw.models.cache_processors.backend import (
@@ -103,6 +104,9 @@ class CacheProcessor(nn.Module):
     ):
         super().__init__()
         self.config = config
+        # This is a training execution policy, not model state. Keeping it as a
+        # plain attribute preserves parameter names and serialized state_dict keys.
+        self.activation_checkpointing = False
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
         self.in_proj = nn.Linear(input_dim, config.hidden_size)
         self.layers = nn.ModuleList(ProcessorLayer(config) for _ in range(config.num_layers))
@@ -151,7 +155,18 @@ class CacheProcessor(nn.Module):
 
     def _run_layers(self, state: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         for layer in self.layers:
-            state = layer(state, positions)
+            if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+                # Save only the layer input and recompute attention/MLP activations
+                # during backward. One extra layer forward lowers peak memory.
+                state = checkpoint(
+                    layer,
+                    state,
+                    positions,
+                    use_reentrant=False,
+                    preserve_rng_state=True,
+                )
+            else:
+                state = layer(state, positions)
         return state
 
     def scaled_update(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:

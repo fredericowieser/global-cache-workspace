@@ -108,8 +108,11 @@ def train(config: TrainConfig) -> None:
         if checkpoint is None:
             initial_processor_state = _processor_state(model)
     _apply_trainable_policy(model, config.trainable)
+    activation_checkpointing_runtime = _configure_native_activation_checkpointing(
+        model, config.activation_checkpointing
+    )
     if use_fsdp:
-        _apply_activation_checkpointing(model, family=config.model.family)
+        _apply_fsdp_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
         if config.model.variant == "bt" and _whole_model_compile_requested():
@@ -152,6 +155,7 @@ def train(config: TrainConfig) -> None:
         "resume_current_world_size": world_size,
         "model_runtime_backends": _model_runtime_backends(model, device),
         "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
+        "activation_checkpointing": activation_checkpointing_runtime,
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     budget_message = (
@@ -430,6 +434,7 @@ def _training_fingerprint(
             "init_checkpoint": config.init_checkpoint,
         },
         "trainable": config.trainable,
+        "activation_checkpointing": config.activation_checkpointing,
         "objective": (
             f"{config.data.sft_loss_scope}_ce" if config.mode == "sft" else "next_token_ce"
         ),
@@ -848,6 +853,33 @@ def _fsdp_param_init_fn(device: torch.device):
     return init_fn
 
 
+def _configure_native_activation_checkpointing(
+    model: torch.nn.Module,
+    policy: str,
+) -> dict[str, Any]:
+    """Apply checkpointing without wrapping modules or changing state-dict names."""
+    from gcw.models.cache_processors.standard import CacheProcessor
+
+    processors = [module for module in model.modules() if isinstance(module, CacheProcessor)]
+    enabled = policy == "standard_processor_layers"
+    if enabled and not processors:
+        raise ValueError(
+            "activation_checkpointing='standard_processor_layers' found no standard processor layers"
+        )
+    for processor in processors:
+        processor.activation_checkpointing = enabled
+    layer_boundaries = sum(len(processor.layers) for processor in processors)
+    return {
+        "policy": policy,
+        "implementation": "torch.utils.checkpoint.checkpoint" if enabled else "eager",
+        "boundary": "standard_processor_layer" if enabled else None,
+        "use_reentrant": False if enabled else None,
+        "preserve_rng_state": True if enabled else None,
+        "processor_blocks": len(processors),
+        "layer_boundaries": layer_boundaries if enabled else 0,
+    }
+
+
 def _transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
     classes: set[type[torch.nn.Module]] = {Block}
     if family == "gemma4":
@@ -862,7 +894,7 @@ def _transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
     return classes
 
 
-def _apply_activation_checkpointing(model: torch.nn.Module, *, family: str) -> None:
+def _apply_fsdp_activation_checkpointing(model: torch.nn.Module, *, family: str) -> None:
     enabled = os.environ.get("GCW_FSDP_ACTIVATION_CHECKPOINTING", "1").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return

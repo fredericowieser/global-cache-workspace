@@ -24,6 +24,7 @@ CacheProcessorInternalIterationScore = Literal["attn_l2", "cache_head_attention"
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
+ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
 DiffusionInferenceMode = Literal["deterministic", "stochastic"]
@@ -583,6 +584,7 @@ class TrainConfig:
     mode: Literal["pretrain", "sft"] = "pretrain"
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     trainable: TrainableComponents = "all"
+    activation_checkpointing: ActivationCheckpointingPolicy = "none"
     backbone_checkpoint: str | None = None
     init_checkpoint: str | None = None
     resume: ResumeConfig | None = None
@@ -623,6 +625,17 @@ class TrainConfig:
             self.resume = ResumeConfig(**self.resume)
         if self.trainable not in {"all", "backbone", "lora", "cache_processor"}:
             raise ValueError("trainable must be 'all', 'backbone', 'lora', or 'cache_processor'")
+        if self.activation_checkpointing not in {"none", "standard_processor_layers"}:
+            raise ValueError(
+                "activation_checkpointing must be 'none' or 'standard_processor_layers'"
+            )
+        if (
+            self.activation_checkpointing == "standard_processor_layers"
+            and self.model.variant not in {"bt", "bgt"}
+        ):
+            raise ValueError(
+                "activation_checkpointing='standard_processor_layers' requires a BT or BGT cache processor"
+            )
         if self.trainable == "lora" and self.model.lora is None:
             raise ValueError("trainable='lora' requires model.lora")
         if self.total_batch_size and self.global_batch_rows:

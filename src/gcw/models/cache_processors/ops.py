@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from gcw.models.cache_processors.state import CacheState, StaticCacheState, select_l2_indices
 from gcw.models.backbones.transformer import apply_rotary, flash_sdpa
@@ -416,6 +417,7 @@ class PreparedBatchedCacheProcessorParameters:
     out_proj: PreparedLinearParameters
     gate: torch.Tensor
     gate_mode: str
+    activation_checkpointing: bool
 
 
 def prepare_batched_cache_processor_parameters(blocks) -> PreparedBatchedCacheProcessorParameters:
@@ -426,6 +428,9 @@ def prepare_batched_cache_processor_parameters(blocks) -> PreparedBatchedCachePr
     layer_count = len(block_list[0].layers)
     if any(len(block.layers) != layer_count for block in block_list):
         raise ValueError("batched cache processors must have the same number of layers")
+    checkpointing = {bool(block.activation_checkpointing) for block in block_list}
+    if len(checkpointing) != 1:
+        raise ValueError("batched cache processors must use one activation-checkpointing policy")
 
     prepared_layers = []
     for layer_idx in range(layer_count):
@@ -461,6 +466,7 @@ def prepare_batched_cache_processor_parameters(blocks) -> PreparedBatchedCachePr
         out_proj=_prepare_linear(block_list, "out_proj"),
         gate=torch.stack([block.gate for block in block_list], dim=0).view(len(block_list), 1, 1, 1),
         gate_mode=block_list[0].config.gate_mode,
+        activation_checkpointing=checkpointing.pop(),
     )
 
 
@@ -472,14 +478,34 @@ def run_prepared_batched_cache_processors(
     """Run BT using stacks prepared for this language-model forward."""
     h = _prepared_linear(_prepared_rms_norm(x, prepared.in_norm), prepared.in_proj)
     for layer in prepared.layers:
-        h = h + _prepared_attention(_prepared_rms_norm(h, layer.input_norm), layer.attention, positions)
-        m = _prepared_rms_norm(h, layer.post_norm)
-        h = h + _prepared_linear(
-            F.silu(_prepared_linear(m, layer.gate_proj)) * _prepared_linear(m, layer.up_proj),
-            layer.down_proj,
-        )
+        if prepared.activation_checkpointing and layer.attention.training and torch.is_grad_enabled():
+            # The complete transformer layer is the smallest boundary that drops
+            # attention and MLP intermediates while retaining BT's stacked kernels.
+            h = checkpoint(
+                _run_prepared_processor_layer,
+                h,
+                positions,
+                layer,
+                use_reentrant=False,
+                preserve_rng_state=True,
+            )
+        else:
+            h = _run_prepared_processor_layer(h, positions, layer)
     delta = _prepared_linear(_prepared_rms_norm(h, prepared.out_norm), prepared.out_proj)
     return x + delta * _prepared_gate_scale(prepared, delta.dtype)
+
+
+def _run_prepared_processor_layer(
+    h: torch.Tensor,
+    positions: torch.Tensor,
+    layer: PreparedProcessorLayerParameters,
+) -> torch.Tensor:
+    h = h + _prepared_attention(_prepared_rms_norm(h, layer.input_norm), layer.attention, positions)
+    m = _prepared_rms_norm(h, layer.post_norm)
+    return h + _prepared_linear(
+        F.silu(_prepared_linear(m, layer.gate_proj)) * _prepared_linear(m, layer.up_proj),
+        layer.down_proj,
+    )
 
 
 def _prepare_linear(modules, name: str) -> PreparedLinearParameters:

@@ -55,6 +55,19 @@ trainable: cache_processor
 
 Only cache processor parameters receive gradients. Use `trainable: backbone` to freeze the cache processor instead.
 
+### Native activation checkpointing
+
+Opt in when standard BT or BGT processor activations exceed device memory:
+
+```yaml
+trainable: cache_processor
+activation_checkpointing: standard_processor_layers
+```
+
+The default, `none`, preserves eager execution. The checkpoint boundary covers each complete standard processor transformer layer, including BT's batched parameter-stack path. Backward recomputes that layer instead of retaining its attention projections, attention output, normalized residual, and gated-MLP intermediates. Input/output projections, cache selection and writeback, cache tensors, loss tensors, and frozen-backbone window activations remain eager.
+
+Checkpointing increases processor-layer compute during backward. It uses PyTorch's non-reentrant implementation with RNG preservation, so Diffusion noise and attention dropout match eager execution. The policy is part of runtime provenance and the exact-resume fingerprint; changing it across resume is rejected.
+
 ## Joint Finetuning
 
 Use the same checkpoint and train both components:
