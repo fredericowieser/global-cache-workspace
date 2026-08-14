@@ -25,6 +25,7 @@ CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
 ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
+LossBackend = Literal["reference", "target_only", "liger"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
 DiffusionInferenceMode = Literal["deterministic", "stochastic"]
@@ -585,6 +586,7 @@ class TrainConfig:
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     trainable: TrainableComponents = "all"
     activation_checkpointing: ActivationCheckpointingPolicy = "none"
+    loss_backend: LossBackend = "reference"
     backbone_checkpoint: str | None = None
     init_checkpoint: str | None = None
     resume: ResumeConfig | None = None
@@ -623,6 +625,8 @@ class TrainConfig:
             self.wandb = WandbConfig(**self.wandb)
         if isinstance(self.resume, dict):
             self.resume = ResumeConfig(**self.resume)
+        if self.loss_backend not in {"reference", "target_only", "liger"}:
+            raise ValueError("loss_backend must be 'reference', 'target_only', or 'liger'")
         if self.trainable not in {"all", "backbone", "lora", "cache_processor"}:
             raise ValueError("trainable must be 'all', 'backbone', 'lora', or 'cache_processor'")
         if self.activation_checkpointing not in {"none", "standard_processor_layers"}:
