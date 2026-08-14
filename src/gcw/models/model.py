@@ -5,7 +5,7 @@ from dataclasses import replace
 import torch
 import torch.nn as nn
 
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, LossBackend, ModelConfig
 from gcw.models.backbones import Backbone, build_backbone
 from gcw.models.cache_processors.base import CacheProcessorBase
 
@@ -47,6 +47,7 @@ class LanguageModel(nn.Module):
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         processor = self._processor_config()
         # Prepared tensors are local to this context and therefore to this
@@ -59,6 +60,7 @@ class LanguageModel(nn.Module):
                 processor=execution,
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
+                loss_backend=loss_backend,
             )
 
     @torch.no_grad()

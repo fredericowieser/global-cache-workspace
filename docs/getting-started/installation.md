@@ -33,3 +33,5 @@ uv sync --extra gpu --extra convert --extra eval
 ```
 
 Qwen3.5 optimized kernels require `--extra qwen35`. GCW can use slower fallbacks without that extra, but memory use can increase enough to invalidate a batch-size assumption.
+
+The GPU extra alone installs the optional fused loss backend at the audited `liger-kernel==0.8.1` version. Set `loss_backend: liger` only on CUDA. CPU and ROCm extras do not install Liger.

@@ -23,6 +23,7 @@ from gcw.evaluation.scoring import (
     trim_generated_token_ids,
     truncate_context_continuation,
 )
+from gcw.models.losses import checkpoint_loss_backend
 
 
 _encode_generate_prompt = encode_generate_prompt
@@ -309,7 +310,10 @@ def run_fineweb(
         raise ValueError("FineWeb NLL/BPB eval currently expects a cosmo2 SmolLM checkpoint")
     steps = max(1, eval_tokens // (batch_size * cfg.sequence_len))
     batches = data_loader(batch_size, cfg.sequence_len, split="val", device=device, data_dir=data_dir, infinite=True)
-    nll, bpb = evaluate_nll_bpb(model, batches, steps, get_token_bytes(device))
+    loss_backend = checkpoint_loss_backend(state, torch.device(device))
+    nll, bpb = evaluate_nll_bpb(
+        model, batches, steps, get_token_bytes(device), loss_backend=loss_backend
+    )
     return {
         "model_step": state.get("step"),
         "val_nll": nll,

@@ -30,6 +30,7 @@ from gcw.models.cache_processors.ops import (
     split_layer_values,
 )
 from gcw.models.cache_processors.state import CacheState
+from gcw.models.losses import loss_backend_metadata, require_loss_backend
 from gcw.provenance import (
     canonical_json_bytes,
     canonical_json_sha256,
@@ -362,7 +363,13 @@ def benchmark_optimizer_step(
                 dtype=torch.bfloat16,
                 enabled=config.bf16 and device.type == "cuda",
             ):
-                loss = _model_loss(model, x, y, attention_mask=attention_mask)
+                loss = _model_loss(
+                    model,
+                    x,
+                    y,
+                    loss_backend=config.loss_backend,
+                    attention_mask=attention_mask,
+                )
             (loss / accumulation).backward()
         _clip_grad_norm(model, params, config.grad_clip)
         schedule_step = benchmark_step % config.max_steps
@@ -425,6 +432,7 @@ def run_benchmarks(
         raise ValueError("warmup must be non-negative and steps must be positive")
     if config.distributed != "none":
         raise ValueError("benchmark harness requires distributed='none'")
+    require_loss_backend(config.loss_backend, device)
     repository = find_repository_root(Path(__file__))
     source = repository_source_identity(repository, executed_files=(Path(__file__),), require_git=True)
     results: list[dict[str, Any]] = []
@@ -442,6 +450,7 @@ def run_benchmarks(
         "config_sha256": canonical_json_sha256(resolved_config),
         "config": resolved_config,
         "processor_variant": config.model.variant,
+        "loss_backend": loss_backend_metadata(config.loss_backend),
         "environment": device_identity(device),
         "suite": suite,
         "results": results,

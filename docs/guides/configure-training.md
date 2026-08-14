@@ -42,6 +42,20 @@ Use `global_batch_rows` when experiments must consume the same examples per opti
 
 Set `trainable: lora` with `model.lora` for low-rank backbone adaptation. GCW freezes base weights and trains only `lora_a` and `lora_b` on explicitly named projections. Zero-initialized output factors preserve the starting backbone exactly.
 
+## Loss backend
+
+`loss_backend` selects the language-model head and cross-entropy implementation:
+
+```yaml
+loss_backend: reference  # reference | target_only | liger
+```
+
+`reference` is the default. It projects every sequence position in chunks and is the experiment oracle. H200 BGT measurement found `target_only` at 0.978x the original throughput, so the optimization is not a safe default. Benchmark configs may opt into `target_only` to project supervised positions only, or `liger` to use fused linear cross-entropy.
+
+`liger` requires CUDA and the `gpu` extra's exact `liger-kernel==0.8.1` pin. Missing packages, another version, and CPU/ROCm execution fail before model allocation. Liger handles `mean` and `sum`; per-token `none` evaluation uses an explicit `target_only` fallback recorded in provenance. All backends retain FP32 loss accumulation, ignored-target behavior, real-vocabulary truncation, tied/untied head gradients, and identical state-dict keys.
+
+The selected backend and implementation metadata enter local run records, W&B config, checkpoint state, and the exact-resume fingerprint. Resume rejects a backend change.
+
 ## Frozen-Backbone Cache Processor Training
 
 Use a native GCW backbone checkpoint and select processor-only gradients:

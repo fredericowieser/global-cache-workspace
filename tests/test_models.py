@@ -2613,6 +2613,7 @@ def _reference_windowed_loss(
     process_every: int,
     loss_reduction: str = "mean",
     attention_mask: torch.Tensor | None = None,
+    loss_backend: str = "reference",
 ) -> torch.Tensor:
     cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
     loss_sum = input_ids.new_zeros((), dtype=torch.float32)

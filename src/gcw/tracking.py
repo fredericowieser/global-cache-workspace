@@ -117,6 +117,7 @@ def _start_wandb(config: TrainConfig, metadata: Mapping[str, Any], record: RunRe
             "lora_params",
             "total_training_tokens",
             "total_training_flops",
+            "loss_backend",
         ):
             if key in metadata:
                 run.summary[key] = metadata[key]

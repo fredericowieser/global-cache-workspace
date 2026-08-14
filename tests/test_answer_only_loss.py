@@ -62,7 +62,7 @@ def _assert_loss_and_gradient_parity(
     rtol: float,
 ) -> None:
     optimized_hidden = hidden.detach().clone().requires_grad_(True)
-    optimized = model.loss_from_hidden(optimized_hidden, targets, reduction)
+    optimized = model.loss_from_hidden(optimized_hidden, targets, reduction, "target_only")
     _backward(optimized)
     assert optimized_hidden.grad is not None
     optimized_hidden_grad = optimized_hidden.grad.detach().clone()
@@ -118,12 +118,12 @@ def test_answer_only_loss_projects_only_valid_positions(monkeypatch: pytest.Monk
         return eager_logits(selected)
 
     monkeypatch.setattr(model, "logits_from_hidden", record_logits)
-    model.loss_from_hidden(hidden, targets, "mean")
+    model.loss_from_hidden(hidden, targets, "mean", "target_only")
     assert projected_shapes == [torch.Size((3, model.config.hidden_size))]
 
     projected_shapes.clear()
     targets.fill_(-1)
-    loss = model.loss_from_hidden(hidden.requires_grad_(True), targets, "none")
+    loss = model.loss_from_hidden(hidden.requires_grad_(True), targets, "none", "target_only")
     assert projected_shapes == []
     assert loss.shape == targets.shape
     assert torch.count_nonzero(loss) == 0

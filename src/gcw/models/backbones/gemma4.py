@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gcw.config import ModelConfig
+from gcw.config import LossBackend, ModelConfig
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.backbones.transformer import Linear, TF, _autocast_dtype, flash_sdpa
 from gcw.models.backbones.transformer import _causal_chunk_bias, _matches_stop_sequence
@@ -108,11 +108,7 @@ class Gemma4RotaryCache(nn.Module):
             rope_angles = int(proportion * head_dim // 2)
             if rope_angles > 0:
                 inv_rotated = 1.0 / (
-                    base
-                    ** (
-                        torch.arange(0, 2 * rope_angles, 2, dtype=torch.float32, device=device)
-                        / float(head_dim)
-                    )
+                    base ** (torch.arange(0, 2 * rope_angles, 2, dtype=torch.float32, device=device) / float(head_dim))
                 )
             else:
                 inv_rotated = torch.empty(0, dtype=torch.float32, device=device)
@@ -233,7 +229,12 @@ class Gemma4Attention(nn.Module):
         y = _gemma4_attention(q, k, v, mask, is_causal, self.num_key_value_groups, self.scaling, try_flash)
         y = y.reshape(batch, steps, self.num_heads * self.head_dim)
         out = self.o_proj(y)
-        return out, None if self.is_kv_shared_layer else k, None if self.is_kv_shared_layer else v, out.float().norm(dim=-1)
+        return (
+            out,
+            None if self.is_kv_shared_layer else k,
+            None if self.is_kv_shared_layer else v,
+            out.float().norm(dim=-1),
+        )
 
     def forward_static(
         self,
@@ -402,7 +403,9 @@ class Gemma4TF(TF):
             embed_scale=config.hidden_size**0.5,
         )
         cache_index_by_layer = {layer: idx for idx, layer in enumerate(config.cache_layer_indices)}
-        self.layers = nn.ModuleList(self.block_cls(config, i, cache_index_by_layer.get(i)) for i in range(config.num_layers))
+        self.layers = nn.ModuleList(
+            self.block_cls(config, i, cache_index_by_layer.get(i)) for i in range(config.num_layers)
+        )
         self.norm = Gemma4RMSNorm(config.hidden_size, config.norm_eps)  # type: ignore[assignment]
         self.rotary = Gemma4RotaryCache(config)  # type: ignore[assignment]
         self.hidden_size_per_layer_input = int(config.hidden_size_per_layer_input)
@@ -483,10 +486,13 @@ class Gemma4TF(TF):
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
-        position_embeddings = self._position_embeddings(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
+        position_embeddings = self._position_embeddings(
+            0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype
+        )
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
@@ -494,7 +500,7 @@ class Gemma4TF(TF):
             x, _, _, _ = layer(x, per_layer_input, position_embeddings[layer.layer_type], None, shared_kv_states, 0)
         x = self.norm(x)
         if targets is not None:
-            return self.loss_from_hidden(x, targets, loss_reduction)
+            return self.loss_from_hidden(x, targets, loss_reduction, loss_backend)
         return self.logits_from_hidden(x)
 
     def forward_chunk(
@@ -672,5 +678,8 @@ class Gemma4TF(TF):
         return out
 
     def _uniform_cache_shape(self) -> bool:
-        shapes = [(self.config.kv_heads_for_layer(i), self.config.head_dim_for_layer(i)) for i in self.config.cache_layer_indices]
+        shapes = [
+            (self.config.kv_heads_for_layer(i), self.config.head_dim_for_layer(i))
+            for i in self.config.cache_layer_indices
+        ]
         return len(set(shapes)) <= 1
