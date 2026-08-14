@@ -623,7 +623,7 @@ def _wrap_fsdp(
     )
     from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-    layer_classes = _transformer_layer_classes(config.model.family)
+    layer_classes = _fsdp_wrap_classes(config.model.family)
     auto_wrap_policy = partial(
         transformer_auto_wrap_policy, transformer_layer_cls=layer_classes
     )
@@ -645,7 +645,13 @@ def _wrap_fsdp(
     }
     if device.type == "cuda":
         kwargs["device_id"] = device
-    return FSDP(model, **kwargs)
+    wrapped = FSDP(model, **kwargs)
+    refresh_dynamics = getattr(
+        _unwrap(wrapped), "refresh_linear_state_dynamics", None
+    )
+    if refresh_dynamics is not None:
+        refresh_dynamics()
+    return wrapped
 
 
 def _fsdp_param_init_fn(device: torch.device):
@@ -662,7 +668,9 @@ def _fsdp_param_init_fn(device: torch.device):
     return init_fn
 
 
-def _transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
+def _transformer_layer_classes(
+    family: str,
+) -> set[type[torch.nn.Module]]:
     classes: set[type[torch.nn.Module]] = {Block}
     if family == "gemma4":
         from gcw.models.gemma4 import Gemma4Block
@@ -673,6 +681,17 @@ def _transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
 
         classes.add(Qwen35Block)
         classes.add(Qwen35MoeBlock)
+    return classes
+
+
+def _fsdp_wrap_classes(
+    family: str,
+) -> set[type[torch.nn.Module]]:
+    classes = _transformer_layer_classes(family)
+    if family in {"qwen3_5", "qwen3_5_moe"}:
+        from gcw.models.qwen3 import Qwen35GatedDeltaDynamics
+
+        classes.add(Qwen35GatedDeltaDynamics)
     return classes
 
 

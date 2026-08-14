@@ -291,6 +291,30 @@ def test_qwen35_hf_mapping_loads_language_model_prefix():
     )
 
 
+def test_qwen35_legacy_gated_delta_keys_load_as_backbone(tmp_path):
+    from safetensors.torch import save_file
+
+    cfg = _tiny_qwen35_config()
+    source = build_model(cfg)
+    source.init_weights()
+    legacy_state = {}
+    for key, tensor in source.state_dict().items():
+        legacy_key = key.replace(
+            ".linear_attn.dynamics.", ".linear_attn."
+        )
+        legacy_state[legacy_key] = tensor.detach().clone()
+    checkpoint = tmp_path / "legacy-qwen35"
+    checkpoint.mkdir()
+    save_file(legacy_state, checkpoint / "model.safetensors")
+
+    target = build_model(cfg)
+    target.init_weights()
+    load_backbone_checkpoint(target, checkpoint)
+
+    for key, expected in source.state_dict().items():
+        assert torch.equal(target.state_dict()[key], expected)
+
+
 def test_tiny_qwen35_moe_logits_match_transformers():
     pytest.importorskip("transformers.models.qwen3_5_moe.modeling_qwen3_5_moe")
     from transformers import Qwen3_5MoeForCausalLM, Qwen3_5MoeTextConfig
@@ -931,7 +955,10 @@ def _prefixed_state_like(
         elif key == "lm_head.weight":
             remote = f"{prefix}lm_head.weight"
         else:
-            remote = f"{prefix}model.{key}"
+            remote_key = key.replace(
+                ".linear_attn.dynamics.", ".linear_attn."
+            )
+            remote = f"{prefix}model.{remote_key}"
         if value.is_floating_point():
             out[remote] = torch.randn_like(value)
         else:

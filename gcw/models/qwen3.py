@@ -292,6 +292,31 @@ class Qwen35Attention(nn.Module):
         return attn_out, attn_out.float().norm(dim=-1)
 
 
+class Qwen35GatedDeltaDynamics(nn.Module):
+    def __init__(self, num_heads: int):
+        super().__init__()
+        self.num_heads = num_heads
+        self.dt_bias = nn.Parameter(torch.ones(num_heads))
+        self.A_log = nn.Parameter(torch.empty(num_heads))
+
+    @torch.no_grad()
+    def init_weights(self) -> None:
+        nn.init.ones_(self.dt_bias)
+        self.A_log.copy_(
+            torch.empty_like(self.A_log).uniform_(1e-4, 16).log_()
+        )
+
+    def forward(self, decay_input: torch.Tensor) -> torch.Tensor:
+        if decay_input.shape[-1] != self.num_heads:
+            raise ValueError(
+                f"gated-delta decay input has {decay_input.shape[-1]} heads; "
+                f"expected {self.num_heads}"
+            )
+        return -self.A_log.float().exp() * F.softplus(
+            decay_input.float() + self.dt_bias
+        )
+
+
 class Qwen35GatedDeltaNet(nn.Module):
     def __init__(self, config: ModelConfig, layer_idx: int):
         super().__init__()
@@ -326,8 +351,7 @@ class Qwen35GatedDeltaNet(nn.Module):
             padding=self.conv_kernel_size - 1,
             bias=False,
         )
-        self.dt_bias = nn.Parameter(torch.ones(self.num_v_heads))
-        self.A_log = nn.Parameter(torch.empty(self.num_v_heads))
+        self.dynamics = Qwen35GatedDeltaDynamics(self.num_v_heads)
         self.norm = Qwen35RMSNormGated(self.head_v_dim, config.norm_eps)
         self.out_proj = Linear(self.value_dim, self.hidden_size, bias=False)
         self.in_proj_qkv = Linear(self.hidden_size, self.conv_dim, bias=False)
@@ -352,8 +376,15 @@ class Qwen35GatedDeltaNet(nn.Module):
 
     @torch.no_grad()
     def init_state_weights(self) -> None:
-        nn.init.ones_(self.dt_bias)
-        self.A_log.copy_(torch.empty_like(self.A_log).uniform_(1e-4, 16).log_())
+        self.dynamics.init_weights()
+
+    @property
+    def dt_bias(self) -> nn.Parameter:
+        return self.dynamics.dt_bias
+
+    @property
+    def A_log(self) -> nn.Parameter:
+        return self.dynamics.A_log
 
     def forward(
         self,
@@ -379,7 +410,7 @@ class Qwen35GatedDeltaNet(nn.Module):
         query = query.reshape(batch, seq_len, self.num_k_heads, self.head_k_dim)
         key = key.reshape(batch, seq_len, self.num_k_heads, self.head_k_dim)
         value = value.reshape(batch, seq_len, self.num_v_heads, self.head_v_dim)
-        g = -self.A_log.float().exp() * F.softplus(a.float() + self.dt_bias)
+        g = self.dynamics(a)
         if self.num_v_heads // self.num_k_heads > 1:
             repeats = self.num_v_heads // self.num_k_heads
             query = query.repeat_interleave(repeats, dim=2)

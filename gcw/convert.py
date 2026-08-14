@@ -778,8 +778,8 @@ def _map_qwen35_shared_hf_state(
             pairs.update(
                 {
                     f"{prefix}.linear_attn.conv1d.weight": f"{remote}.linear_attn.conv1d.weight",
-                    f"{prefix}.linear_attn.dt_bias": f"{remote}.linear_attn.dt_bias",
-                    f"{prefix}.linear_attn.A_log": f"{remote}.linear_attn.A_log",
+                    f"{prefix}.linear_attn.dynamics.dt_bias": f"{remote}.linear_attn.dt_bias",
+                    f"{prefix}.linear_attn.dynamics.A_log": f"{remote}.linear_attn.A_log",
                     f"{prefix}.linear_attn.norm.weight": f"{remote}.linear_attn.norm.weight",
                     f"{prefix}.linear_attn.out_proj.weight": f"{remote}.linear_attn.out_proj.weight",
                     f"{prefix}.linear_attn.in_proj_qkv.weight": f"{remote}.linear_attn.in_proj_qkv.weight",

@@ -37,6 +37,7 @@ def load_checkpoint(
     with open(path / "config.json", "r", encoding="utf-8") as f:
         cfg = ModelConfig(**json.load(f)["model"])
     weights = load_file(path / "model.safetensors", device=str(device))
+    weights = _upgrade_qwen35_gated_delta_keys(weights)
     model = build_model(cfg)
     model_dtype = _resolve_dtype(dtype, weights)
     if model_dtype is not None:
@@ -53,6 +54,7 @@ def load_checkpoint(
 def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     path = Path(path)
     weights = load_file(path / "model.safetensors", device="cpu")
+    weights = _upgrade_qwen35_gated_delta_keys(weights)
     target = model.backbone if hasattr(model, "backbone") else model
     target_state = target.state_dict()
     loadable = {}
@@ -84,6 +86,26 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     if missing:
         raise KeyError(f"missing backbone checkpoint keys: {missing[:8]}")
     target.load_state_dict(loadable, strict=True)
+
+
+def _upgrade_qwen35_gated_delta_keys(
+    state: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    upgraded = dict(state)
+    suffixes = {
+        ".linear_attn.A_log": ".linear_attn.dynamics.A_log",
+        ".linear_attn.dt_bias": ".linear_attn.dynamics.dt_bias",
+    }
+    for key in list(state):
+        for legacy_suffix, current_suffix in suffixes.items():
+            if not key.endswith(legacy_suffix):
+                continue
+            current_key = key[: -len(legacy_suffix)] + current_suffix
+            if current_key not in upgraded:
+                upgraded[current_key] = upgraded[key]
+            del upgraded[key]
+            break
+    return upgraded
 
 
 def _resolve_dtype(

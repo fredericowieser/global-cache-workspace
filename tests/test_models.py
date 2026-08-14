@@ -42,6 +42,7 @@ from gcw.models.longshot import CacheProcessor as LongshotCacheProcessor
 from gcw.models.longshot import ProcessorAttention as LongshotProcessorAttention
 from gcw.models.longshot import QueryAttentionTimeEncoder
 from gcw.models.longshot import Longshot
+from gcw.models.qwen3 import Qwen35GatedDeltaDynamics
 from gcw.models.transformer import _matches_stop_sequence, apply_rotary
 from gcw.models.windowed_cache import WindowedCache
 
@@ -797,6 +798,24 @@ def test_qwen35_longshot_linear_state_delta_gate_can_be_disabled(
         assert changed_by_gate_setting[True]
 
 
+def test_qwen35_longshot_shares_backbone_gated_delta_dynamics():
+    model = build_model(
+        tiny_qwen35_config(
+            "longshot",
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            linear_state_cache=True,
+            linear_state_update_mode="gated_delta",
+        )
+    )
+
+    for layer_idx, dynamics in (
+        model.cache_processor.linear_state_dynamics.items()
+    ):
+        layer = model.backbone.layers[layer_idx]
+        assert dynamics is layer.linear_attn.dynamics
+
+
 def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
     monkeypatch,
 ):
@@ -809,13 +828,12 @@ def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
         gate_mode="direct",
         gate_init=1.0,
     )
-    fake_layer = types.SimpleNamespace(
-        num_v_heads=2,
-        A_log=torch.tensor([0.0, 1.0]),
-        dt_bias=torch.tensor([0.5, -0.25]),
-    )
+    dynamics = Qwen35GatedDeltaDynamics(2)
+    with torch.no_grad():
+        dynamics.A_log.copy_(torch.tensor([0.0, 1.0]))
+        dynamics.dt_bias.copy_(torch.tensor([0.5, -0.25]))
     processor = LongshotGlobalCacheProcessor(
-        cfg, linear_attention_layers={0: fake_layer, 2: fake_layer}
+        cfg, linear_state_dynamics={0: dynamics, 2: dynamics}
     )
     spec = processor.linear_state_specs[0]
     conv = torch.randn(1, 10, 2)
@@ -836,8 +854,12 @@ def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
         records["g"] = g
         records["beta"] = beta
         records["initial_state"] = initial_state
-        final_state = initial_state + torch.einsum(
-            "bshk,bshv->bhkv", key.float(), value.float()
+        final_state = (
+            initial_state
+            + torch.einsum(
+                "bshk,bshv->bhkv", key.float(), value.float()
+            )
+            + g.mean().to(initial_state.dtype)
         )
         return value, final_state.to(initial_state.dtype)
 
@@ -854,10 +876,14 @@ def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
     assert torch.equal(cache.linear_states[spec.layer_idx][0], conv)
     assert not torch.allclose(cache.linear_states[spec.layer_idx][1], recurrent)
 
+    cache.linear_states[spec.layer_idx][1].sum().backward()
+    assert dynamics.A_log.grad is not None
+    assert dynamics.dt_bias.grad is not None
+
     expected_beta = torch.sigmoid(update[..., 8]).unsqueeze(1)
     expected_g = (
-        -fake_layer.A_log.float().exp()
-        * F.softplus(update[..., 9].float() + fake_layer.dt_bias)
+        -dynamics.A_log.float().exp()
+        * F.softplus(update[..., 9].float() + dynamics.dt_bias)
     ).unsqueeze(1)
     assert torch.allclose(records["beta"], expected_beta)
     assert torch.allclose(records["g"], expected_g)

@@ -21,6 +21,7 @@ from gcw.train import (
     _checkpoint_metadata,
     _checkpoint_state,
     _loader,
+    _fsdp_wrap_classes,
     _model_loss,
     _transformer_layer_classes,
     _uses_bf16_autocast,
@@ -261,6 +262,16 @@ def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
     classes = _transformer_layer_classes("llama")
 
     assert classes
+
+
+def test_qwen35_fsdp_wraps_gated_delta_dynamics_separately():
+    from gcw.models.qwen3 import Qwen35GatedDeltaDynamics
+
+    default_classes = _transformer_layer_classes("qwen3_5")
+    fsdp_classes = _fsdp_wrap_classes("qwen3_5")
+
+    assert Qwen35GatedDeltaDynamics not in default_classes
+    assert Qwen35GatedDeltaDynamics in fsdp_classes
 
 
 def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):

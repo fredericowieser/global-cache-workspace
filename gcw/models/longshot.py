@@ -27,7 +27,11 @@ from gcw.models.cache_processor_ops import (
 )
 from gcw.models.cache_state import CacheState, StaticCacheState
 from gcw.models.backbone import build_backbone
-from gcw.models.qwen3 import Qwen35GatedDeltaNet, qwen35_gated_delta_rule
+from gcw.models.qwen3 import (
+    Qwen35GatedDeltaDynamics,
+    Qwen35GatedDeltaNet,
+    qwen35_gated_delta_rule,
+)
 from gcw.models.transformer import RMSNorm, flash_sdpa
 from gcw.models.windowed_cache import WindowedCache
 
@@ -831,7 +835,7 @@ class GlobalCacheProcessor(nn.Module):
         *,
         encoder_method: EncoderMethod | None = None,
         encoder_seq_len: int | None = None,
-        linear_attention_layers: dict[int, Qwen35GatedDeltaNet] | None = None,
+        linear_state_dynamics: dict[int, Qwen35GatedDeltaDynamics] | None = None,
     ):
         super().__init__()
         model_config.ensure_uniform_stored_cache_shape("Longshot")
@@ -859,7 +863,7 @@ class GlobalCacheProcessor(nn.Module):
             self.head_dim * model_config.partial_rotary_factor
         )
         self.num_kv_cache_heads = self.num_layers * self.num_kv_heads
-        self.linear_attention_layers = linear_attention_layers or {}
+        self.linear_state_dynamics = linear_state_dynamics or {}
         self.linear_state_specs = self._build_linear_state_specs(model_config)
         if (
             self.config.linear_state_update_mode == "gated_delta"
@@ -868,7 +872,7 @@ class GlobalCacheProcessor(nn.Module):
             missing = sorted(
                 spec.layer_idx
                 for spec in self.linear_state_specs
-                if spec.layer_idx not in self.linear_attention_layers
+                if spec.layer_idx not in self.linear_state_dynamics
             )
             if missing:
                 raise ValueError(
@@ -1188,29 +1192,26 @@ class GlobalCacheProcessor(nn.Module):
         update: torch.Tensor,
         recurrent_state: torch.Tensor,
     ) -> torch.Tensor:
-        layer = self.linear_attention_layers.get(layer_idx)
-        if layer is None:
+        dynamics = self.linear_state_dynamics.get(layer_idx)
+        if dynamics is None:
             raise ValueError(
-                f"missing Qwen3.5 linear-attention module for layer {layer_idx}"
+                f"missing Qwen3.5 gated-delta dynamics for layer {layer_idx}"
             )
         key_dim, value_dim = self.block.linear_state_update_dims()
         synthetic_key, synthetic_value, beta_logit, decay_input = torch.split(
             update, [key_dim, value_dim, 1, 1], dim=-1
         )
         batch, heads, _ = synthetic_key.shape
-        if heads != layer.num_v_heads:
+        if heads != dynamics.num_heads:
             raise ValueError(
                 f"linear state head count {heads} does not match layer {layer_idx} "
-                f"value heads {layer.num_v_heads}"
+                f"value heads {dynamics.num_heads}"
             )
         query = synthetic_key.reshape(batch, 1, heads, key_dim)
         key = query
         value = synthetic_value.reshape(batch, 1, heads, value_dim)
         beta = torch.sigmoid(beta_logit.squeeze(-1)).unsqueeze(1)
-        g = (
-            -layer.A_log.float().exp()
-            * F.softplus(decay_input.squeeze(-1).float() + layer.dt_bias)
-        ).unsqueeze(1)
+        g = dynamics(decay_input.squeeze(-1)).unsqueeze(1)
         _, final_state = qwen35_gated_delta_rule(
             query,
             key,
@@ -1232,21 +1233,26 @@ class Longshot(BGT):
         self.backbone = build_backbone(config)
         self.cache_processor = self.processor_cls(
             self.config,
-            linear_attention_layers=_qwen35_linear_attention_layers(
+            linear_state_dynamics=_qwen35_linear_state_dynamics(
                 self.backbone
             ),
         )
 
+    def refresh_linear_state_dynamics(self) -> None:
+        self.cache_processor.linear_state_dynamics = (
+            _qwen35_linear_state_dynamics(self.backbone)
+        )
 
-def _qwen35_linear_attention_layers(
+
+def _qwen35_linear_state_dynamics(
     backbone: nn.Module,
-) -> dict[int, Qwen35GatedDeltaNet]:
-    layers: dict[int, Qwen35GatedDeltaNet] = {}
+) -> dict[int, Qwen35GatedDeltaDynamics]:
+    dynamics_by_layer: dict[int, Qwen35GatedDeltaDynamics] = {}
     for layer in getattr(backbone, "layers", []):
         linear_attn = getattr(layer, "linear_attn", None)
         if isinstance(linear_attn, Qwen35GatedDeltaNet):
-            layers[int(layer.layer_idx)] = linear_attn
-    return layers
+            dynamics_by_layer[int(linear_attn.layer_idx)] = linear_attn.dynamics
+    return dynamics_by_layer
 
 
 def _zero_projection(module: nn.Module) -> None:
