@@ -585,6 +585,7 @@ class TrainConfig:
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     trainable: TrainableComponents = "all"
     activation_checkpointing: ActivationCheckpointingPolicy = "none"
+    longshot_gradient_checkpointing_seq_len_threshold: int | None = None
     backbone_checkpoint: str | None = None
     init_checkpoint: str | None = None
     resume: ResumeConfig | None = None
@@ -636,6 +637,22 @@ class TrainConfig:
             raise ValueError(
                 "activation_checkpointing='standard_processor_layers' requires a BT or BGT cache processor"
             )
+        threshold = self.longshot_gradient_checkpointing_seq_len_threshold
+        if threshold is not None:
+            if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:
+                raise ValueError(
+                    "longshot_gradient_checkpointing_seq_len_threshold must be a positive integer or null"
+                )
+            processor = self.model.cache_processor
+            if self.model.variant != "longshot" or processor is None:
+                raise ValueError(
+                    "longshot_gradient_checkpointing_seq_len_threshold requires a Longshot cache processor"
+                )
+            if not processor.gradient_checkpointing:
+                raise ValueError(
+                    "longshot_gradient_checkpointing_seq_len_threshold requires "
+                    "model.cache_processor.gradient_checkpointing=true"
+                )
         if self.trainable == "lora" and self.model.lora is None:
             raise ValueError("trainable='lora' requires model.lora")
         if self.total_batch_size and self.global_batch_rows:

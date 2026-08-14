@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 import warnings
 from dataclasses import dataclass
 from typing import cast
@@ -42,6 +45,26 @@ CacheLike = CacheState | StaticCacheState | WindowedCache
 
 EncoderMethod = CacheEncoderMethod
 EncoderQuerySource = CacheEncoderQuerySource
+
+_GRADIENT_CHECKPOINTING_OVERRIDE: ContextVar[bool | None] = ContextVar(
+    "gcw_longshot_gradient_checkpointing_override",
+    default=None,
+)
+
+
+@contextmanager
+def longshot_gradient_checkpointing_override(enabled: bool) -> Iterator[None]:
+    """Override Longshot processor-layer checkpointing for one forward context."""
+    token = _GRADIENT_CHECKPOINTING_OVERRIDE.set(enabled)
+    try:
+        yield
+    finally:
+        _GRADIENT_CHECKPOINTING_OVERRIDE.reset(token)
+
+
+def _gradient_checkpointing_enabled(configured: bool) -> bool:
+    override = _GRADIENT_CHECKPOINTING_OVERRIDE.get()
+    return configured if override is None else override
 
 
 @dataclass(frozen=True)
@@ -515,7 +538,7 @@ class CacheProcessor(nn.Module):
         *,
         return_attn_scores: bool,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        if self.config.gradient_checkpointing and self.training and torch.is_grad_enabled():
+        if _gradient_checkpointing_enabled(self.config.gradient_checkpointing) and self.training and torch.is_grad_enabled():
             return checkpoint(layer, h, selected_heads, return_attn_scores, use_reentrant=False)
         return layer(h, selected_heads, return_attn_scores=return_attn_scores)
 

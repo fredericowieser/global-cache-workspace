@@ -146,6 +146,8 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
 | `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor']` | `'all'` |
+| `activation_checkpointing` | `Literal['none', 'standard_processor_layers']` | `'none'` |
+| `longshot_gradient_checkpointing_seq_len_threshold` | `int \| None` | `None` |
 | `backbone_checkpoint` | `str \| None` | `None` |
 | `init_checkpoint` | `str \| None` | `None` |
 | `resume` | `gcw.config.ResumeConfig \| None` | `None` |

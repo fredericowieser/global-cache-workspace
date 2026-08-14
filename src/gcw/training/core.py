@@ -32,6 +32,7 @@ from gcw.models import build_model
 from gcw.models.backbones.transformer import Block
 from gcw.models.lora import LoRALinear
 from gcw.models.cache_processors.backend import bt_processor_backend_metadata
+from gcw.models.cache_processors.longshot import longshot_gradient_checkpointing_override
 from gcw.params import processor_params, total_non_embedding_params
 from gcw.tracking import RunTracker
 from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
@@ -156,6 +157,7 @@ def train(config: TrainConfig) -> None:
         "model_runtime_backends": _model_runtime_backends(model, device),
         "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
         "activation_checkpointing": activation_checkpointing_runtime,
+        "longshot_gradient_checkpointing": _longshot_gradient_checkpointing_runtime(config),
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     budget_message = (
@@ -188,6 +190,8 @@ def train(config: TrainConfig) -> None:
         loss_total = 0.0
         batch_non_padding_tokens = 0
         batch_supervised_tokens = 0
+        adaptive_checkpointing_decisions: list[bool] = []
+        adaptive_padded_sequence_lengths: list[int] = []
         for micro_step in range(grad_accum_steps):
             batch = next(stream)
             if step == 0 and micro_step == 0:
@@ -196,10 +200,20 @@ def train(config: TrainConfig) -> None:
                 batch.x.numel() if batch.attention_mask is None else batch.attention_mask.sum().item()
             )
             batch_supervised_tokens += int((batch.y != -100).sum().item())
+            longshot_checkpointing = _longshot_gradient_checkpointing_decision(config, batch.x)
+            if longshot_checkpointing is not None:
+                adaptive_checkpointing_decisions.append(longshot_checkpointing)
+                adaptive_padded_sequence_lengths.append(batch.x.shape[1])
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
-                    loss = _model_loss(model, batch.x, batch.y, attention_mask=batch.attention_mask)
+                    loss = _model_loss(
+                        model,
+                        batch.x,
+                        batch.y,
+                        attention_mask=batch.attention_mask,
+                        longshot_gradient_checkpointing=longshot_checkpointing,
+                    )
                 loss_total += float(loss.detach().cpu())
                 (loss / grad_accum_steps).backward()
         if audit_output is not None and step + 1 == config.max_steps:
@@ -249,6 +263,12 @@ def train(config: TrainConfig) -> None:
             train_metrics["system/vram_allocated_mib"] = torch.cuda.max_memory_allocated(device) / 1024 / 1024
             train_metrics["system/vram_reserved_mib"] = torch.cuda.max_memory_reserved(device) / 1024 / 1024
         train_metrics.update(_cache_processor_metrics(model))
+        train_metrics.update(
+            _longshot_gradient_checkpointing_step_metrics(
+                adaptive_checkpointing_decisions,
+                adaptive_padded_sequence_lengths,
+            )
+        )
         if config.eval_every and step_num % config.eval_every == 0:
             train_metrics.update(_eval_loss(model, config, device))
         if rank == 0:
@@ -435,6 +455,15 @@ def _training_fingerprint(
         },
         "trainable": config.trainable,
         "activation_checkpointing": config.activation_checkpointing,
+        **(
+            {
+                "longshot_gradient_checkpointing_seq_len_threshold": (
+                    config.longshot_gradient_checkpointing_seq_len_threshold
+                )
+            }
+            if config.longshot_gradient_checkpointing_seq_len_threshold is not None
+            else {}
+        ),
         "objective": (
             f"{config.data.sft_loss_scope}_ce" if config.mode == "sft" else "next_token_ce"
         ),
@@ -612,10 +641,17 @@ def _model_loss(
     *,
     loss_reduction: str = "mean",
     attention_mask: torch.Tensor | None = None,
+    longshot_gradient_checkpointing: bool | None = None,
 ) -> torch.Tensor:
-    if attention_mask is None:
-        return model(input_ids, targets, loss_reduction=loss_reduction)
-    return model(input_ids, targets, loss_reduction=loss_reduction, attention_mask=attention_mask)
+    checkpointing_context = (
+        nullcontext()
+        if longshot_gradient_checkpointing is None
+        else longshot_gradient_checkpointing_override(longshot_gradient_checkpointing)
+    )
+    with checkpointing_context:
+        if attention_mask is None:
+            return model(input_ids, targets, loss_reduction=loss_reduction)
+        return model(input_ids, targets, loss_reduction=loss_reduction, attention_mask=attention_mask)
 
 
 
@@ -704,7 +740,13 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
     for _ in range(max(1, config.eval_batches)):
         x, y, _ = next(loader)
         with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
-            loss = model(x, y, loss_reduction="sum")
+            loss = _model_loss(
+                model,
+                x,
+                y,
+                loss_reduction="sum",
+                longshot_gradient_checkpointing=_longshot_gradient_checkpointing_decision(config, x),
+            )
         total_loss += loss.detach().float()
         total_tokens += (y >= 0).sum()
     if dist.is_available() and dist.is_initialized():
@@ -851,6 +893,64 @@ def _fsdp_param_init_fn(device: torch.device):
             module.to_empty(device=device, recurse=False)
 
     return init_fn
+
+
+def _longshot_gradient_checkpointing_decision(
+    config: TrainConfig,
+    input_ids: torch.Tensor,
+) -> bool | None:
+    threshold = config.longshot_gradient_checkpointing_seq_len_threshold
+    if threshold is None:
+        return None
+    return input_ids.shape[1] >= threshold
+
+
+def _longshot_gradient_checkpointing_runtime(config: TrainConfig) -> dict[str, Any] | None:
+    if config.model.variant != "longshot":
+        return None
+    processor = config.model.cache_processor
+    if processor is None:
+        raise RuntimeError("Longshot runtime metadata requires a cache processor")
+    threshold = config.longshot_gradient_checkpointing_seq_len_threshold
+    adaptive = threshold is not None
+    return {
+        "policy": "padded_sequence_length_threshold" if adaptive else "model_config",
+        "model_config_gradient_checkpointing": processor.gradient_checkpointing,
+        "padded_sequence_length_threshold": threshold,
+        "checkpoint_when": (
+            "padded_input_sequence_length >= threshold" if adaptive else "model.cache_processor.gradient_checkpointing"
+        ),
+        "short_microbatches": "eager" if adaptive else None,
+        "long_microbatches": "checkpointed" if adaptive else None,
+        "implementation": (
+            "torch.utils.checkpoint.checkpoint"
+            if adaptive or processor.gradient_checkpointing
+            else "eager"
+        ),
+        "boundary": "longshot_processor_layer",
+        "use_reentrant": False,
+        "preserve_rng_state": True,
+        "scope": "physical_train_and_eval_forward",
+        "requires_training_and_grad": True,
+        "sequence_length_source": "input_ids.shape[1] after batch padding",
+    }
+
+
+def _longshot_gradient_checkpointing_step_metrics(
+    decisions: list[bool],
+    padded_sequence_lengths: list[int],
+) -> dict[str, float]:
+    if not decisions:
+        return {}
+    checkpointed = sum(decisions)
+    total = len(decisions)
+    return {
+        "cache_processor/longshot_checkpointed_microbatches": float(checkpointed),
+        "cache_processor/longshot_eager_microbatches": float(total - checkpointed),
+        "cache_processor/longshot_checkpointed_microbatch_fraction": checkpointed / total,
+        "cache_processor/longshot_padded_sequence_length_min": float(min(padded_sequence_lengths)),
+        "cache_processor/longshot_padded_sequence_length_max": float(max(padded_sequence_lengths)),
+    }
 
 
 def _configure_native_activation_checkpointing(

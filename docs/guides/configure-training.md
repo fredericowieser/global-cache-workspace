@@ -68,6 +68,18 @@ The default, `none`, preserves eager execution. The checkpoint boundary covers e
 
 Checkpointing increases processor-layer compute during backward. It uses PyTorch's non-reentrant implementation with RNG preservation, so Diffusion noise and attention dropout match eager execution. The policy is part of runtime provenance and the exact-resume fingerprint; changing it across resume is rejected.
 
+Longshot keeps its model-level switch as the fixed default. Set an adaptive training threshold only when `model.cache_processor.gradient_checkpointing` remains `true`:
+
+```yaml
+model:
+  variant: longshot
+  cache_processor:
+    gradient_checkpointing: true
+longshot_gradient_checkpointing_seq_len_threshold: 2048
+```
+
+The adaptive policy runs Longshot processor layers eagerly when the physical microbatch's padded `input_ids.shape[1]` is below the threshold. It checkpoints them at or above the threshold. The override covers one forward, including internal and external recurrence; evaluation remains eager because it disables gradients. The policy does not mutate model state or affect other processors. Runtime metadata records the threshold and boundary. Per-step metrics report checkpointed and eager microbatch counts, checkpointed fraction, and minimum/maximum padded lengths. The threshold is part of the exact-resume fingerprint.
+
 ## Joint Finetuning
 
 Use the same checkpoint and train both components:
