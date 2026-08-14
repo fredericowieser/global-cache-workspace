@@ -25,3 +25,15 @@ BT uses eager execution by default. H200 canaries may opt into `GCW_BT_PROCESSOR
 The compiled backend is fail-closed. An unavailable compiler, disabled Dynamo errors, graph break, or backend/runtime failure raises instead of falling back to eager. `GCW_COMPILE` remains the whole-model switch for other architectures and is rejected for BT training; do not combine it with the BT regional backend. Run metadata records the effective backend, compile options, Torch version, region name, and fingerprint.
 
 The compiled callable owns no model parameters or buffers. Prepared parameter stacks remain execution-local and are released with their context. Checkpoints therefore retain the eager model's state-dict keys and schema. Generation and direct processor calls remain eager. Regional compilation composes with segmented window checkpointing because replay prepares a fresh stack before entering the compiled pure-tensor region.
+
+## BGT regional compilation
+
+BGT, Flow-BGT, and noiseless Diffusion-BGT use eager execution by default. Set `GCW_CACHE_PROCESSOR_BACKEND=compile` to compile only the gathered tensor transform with Inductor, `fullgraph=True`, and static shape specialization. The selector, gather, split, scatter, cache recurrence, and backbone stay eager. Selected lengths 64 and 96 and different batch sizes specialize inside cached compiled callables; no prepared or graph-derived parameter tensors are retained.
+
+The backend fails closed. Compiler creation, graph breaks, and runtime failures raise without eager fallback. Do not combine it with whole-model `GCW_COMPILE`. `GCW_CACHE_PROCESSOR_BACKEND=compile` rejects BT because BT owns `GCW_BT_PROCESSOR_BACKEND`, and rejects Icarus and Longshot because neither has a proven pure regional boundary. This is explicit architecture dispatch, not a generic backend registry.
+
+Diffusion-BGT compilation currently requires `noise_scale: 0`. Fullgraph noise equivalence has not been established, so noisy training or stochastic inference is rejected before model construction and before RNG consumption. The eager Diffusion path remains unchanged; the backend never moves, suppresses, or substitutes its random draw.
+
+The regional callable receives the existing `CacheProcessor` module and gathered tensors. Parameters and state-dict keys remain on that module; compiled callables live outside the module tree. Package and checkpoint schemas therefore remain unchanged. Run metadata records architecture, effective backend, regions, compile options, Torch version, noise policy, and a stable fingerprint. Exact resume includes that fingerprint.
+
+Regional BGT compilation composes with `standard_processor_layers` and segmented window activation checkpointing. Processor-layer backward recomputation re-enters the same compiled tensor boundary. Segment replay preserves RNG and calls the eager selector/gather/writeback around that boundary. Changing either checkpointing policy or the regional backend changes the exact-resume fingerprint.

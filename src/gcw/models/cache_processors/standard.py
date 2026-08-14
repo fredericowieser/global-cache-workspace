@@ -9,8 +9,12 @@ from torch.utils.checkpoint import checkpoint
 from gcw.config import CacheProcessorConfig, DiffusionProcessorConfig, FlowProcessorConfig, ModelConfig
 from gcw.models.cache_processors.backend import (
     BTProcessorBackend,
+    CacheProcessorBackend,
     bt_processor_backend_metadata,
+    cache_processor_backend_metadata,
     resolve_bt_processor_backend,
+    resolve_cache_processor_backend,
+    run_bgt_processor_region,
     run_prepared_bt_processor_region,
 )
 from gcw.models.cache_processors.base import CacheProcessorBase
@@ -274,6 +278,7 @@ class PerLayerCacheProcessor(CacheProcessorBase):
 class GlobalCacheProcessor(CacheProcessorBase):
     def __init__(self, model_config: ModelConfig):
         super().__init__()
+        self._model_config = model_config
         model_config.ensure_uniform_stored_cache_shape("BGT")
         if model_config.cache_processor is None:
             raise ValueError("BGT requires cache_processor config")
@@ -301,6 +306,10 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if self.config.score == "kv_norm":
             init = torch.tensor([self.config.kv_score_init_k, self.config.kv_score_init_v], dtype=torch.float32)
             self.salience_logits = nn.Parameter(init.clamp_min(1e-8).log())
+        self.execution_backend: CacheProcessorBackend = resolve_cache_processor_backend(model_config)
+
+    def execution_backend_metadata(self) -> dict[str, object]:
+        return cache_processor_backend_metadata(self._model_config, self.execution_backend)
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
         indices = self._select_indices(cache, select_all)
@@ -310,11 +319,21 @@ class GlobalCacheProcessor(CacheProcessorBase):
             return self._forward_head_mask_broadcast(cache, indices)
         if self.config.update_stream == "v":
             values = gather_cache_values(cache, indices)
-            updated = self.block(merge_global_values(values), indices)
+            updated = run_bgt_processor_region(
+                self.execution_backend,
+                self.block,
+                merge_global_values(values),
+                indices,
+            )
             new_values = split_global_values(updated, self.num_layers, self.num_kv_heads, self.head_dim)
             return scatter_cache_values(cache, indices, new_values)
         keys, values = gather_cache_layers(cache, indices)
-        updated = self.block(merge_global_kv(keys, values), indices)
+        updated = run_bgt_processor_region(
+            self.execution_backend,
+            self.block,
+            merge_global_kv(keys, values),
+            indices,
+        )
         new_keys, new_values = split_global_kv(updated, self.num_layers, self.num_kv_heads, self.head_dim)
         return scatter_cache_layers(cache, indices, new_keys, new_values)
 
@@ -333,7 +352,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
             self.config.writer_head_fraction,
             self.config.salience_temperature,
         )
-        delta = self.block.scaled_update(merge_global_values(writer_values), indices)
+        delta = run_bgt_processor_region(
+            self.execution_backend,
+            self.block,
+            merge_global_values(writer_values),
+            indices,
+            scaled_update=True,
+        )
         broadcast = split_global_values(delta, self.num_layers, self.num_kv_heads, self.head_dim)
         return scatter_cache_values(cache, indices, original_values + broadcast)
 
@@ -345,7 +370,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
             self.config.writer_head_fraction,
             self.config.salience_temperature,
         )
-        delta = self.block.scaled_update(merge_global_kv(writer_keys, writer_values), indices)
+        delta = run_bgt_processor_region(
+            self.execution_backend,
+            self.block,
+            merge_global_kv(writer_keys, writer_values),
+            indices,
+            scaled_update=True,
+        )
         key_delta, value_delta = split_global_kv(delta, self.num_layers, self.num_kv_heads, self.head_dim)
         return scatter_cache_layers(cache, indices, original_keys + key_delta, original_values + value_delta)
 

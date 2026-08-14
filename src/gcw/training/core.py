@@ -35,7 +35,11 @@ from gcw.models.backbones.backend import (
 )
 from gcw.models.backbones.transformer import Block
 from gcw.models.lora import LoRALinear
-from gcw.models.cache_processors.backend import bt_processor_backend_metadata
+from gcw.models.cache_processors.backend import (
+    bt_processor_backend_metadata,
+    cache_processor_backend_metadata,
+    resolve_cache_processor_backend,
+)
 from gcw.models.cache_processors.longshot import longshot_gradient_checkpointing_override
 from gcw.models.losses import loss_backend_metadata, require_loss_backend
 from gcw.params import processor_params, total_non_embedding_params
@@ -125,14 +129,22 @@ def train(config: TrainConfig) -> None:
         _apply_fsdp_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
+        regional_backend = resolve_cache_processor_backend(config.model)
         if _whole_model_compile_requested() and (
-            config.model.variant == "bt" or config.backbone_chunk_backend == "compile"
+            config.model.variant == "bt"
+            or config.backbone_chunk_backend == "compile"
+            or regional_backend == "compile"
         ):
             raise RuntimeError(
                 "GCW_COMPILE cannot wrap a regionally compiled language model; disable it and use "
-                "backbone_chunk_backend=compile and/or GCW_BT_PROCESSOR_BACKEND=compile"
+                "backbone_chunk_backend=compile, GCW_BT_PROCESSOR_BACKEND=compile, and/or "
+                "GCW_CACHE_PROCESSOR_BACKEND=compile"
             )
-        if config.model.variant != "bt" and config.backbone_chunk_backend == "eager":
+        if (
+            config.model.variant != "bt"
+            and config.backbone_chunk_backend == "eager"
+            and regional_backend == "eager"
+        ):
             model = maybe_compile(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
             model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
@@ -170,6 +182,9 @@ def train(config: TrainConfig) -> None:
         "model_runtime_backends": _model_runtime_backends(model, device),
         "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
         "qwen3_backbone_chunk_backend": qwen3_backbone_chunk_backend_metadata(config.backbone_chunk_backend),
+        "cache_processor_backend": (
+            cache_processor_backend_metadata(config.model) if config.model.variant == "bgt" else None
+        ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
         "activation_checkpoint_min_padded_sequence_length": (
@@ -526,6 +541,11 @@ def _training_fingerprint(
         "qwen3_backbone_chunk_backend_fingerprint": qwen3_backbone_chunk_backend_metadata(
             config.backbone_chunk_backend
         )["fingerprint_sha256"],
+        "cache_processor_backend_fingerprint": (
+            cache_processor_backend_metadata(config.model)["fingerprint_sha256"]
+            if config.model.variant == "bgt"
+            else None
+        ),
         "initialization": {
             "backbone_checkpoint": config.backbone_checkpoint,
             "init_checkpoint": config.init_checkpoint,
