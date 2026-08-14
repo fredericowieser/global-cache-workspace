@@ -24,7 +24,7 @@ from gcw.runtime import (
     maybe_compile,
     print0,
 )
-from gcw.config import TrainConfig, load_train_config, to_dict
+from gcw.config import LossBackend, TrainConfig, load_train_config, to_dict
 from gcw.data.shards import data_loader
 from gcw.data.training import TrainingBatchStream, build_training_stream, cursor_to_dict, training_data_identity
 from gcw.flops import total_training_flops, training_flops_per_token
@@ -36,6 +36,7 @@ from gcw.models.backbones.backend import (
 from gcw.models.backbones.transformer import Block
 from gcw.models.lora import LoRALinear
 from gcw.models.cache_processors.backend import bt_processor_backend_metadata
+from gcw.models.losses import loss_backend_metadata, require_loss_backend
 from gcw.params import processor_params, total_non_embedding_params
 from gcw.tracking import RunTracker
 from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
@@ -51,6 +52,7 @@ def train(config: TrainConfig) -> None:
     resolve_experiment(config, model_receipt).require()
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
+    require_loss_backend(config.loss_backend, device)
     _, rank, _, world_size = dist_info()
     micro_tokens = config.batch_size * config.sequence_len * world_size
     micro_rows = config.batch_size * world_size
@@ -64,7 +66,9 @@ def train(config: TrainConfig) -> None:
     else:
         tokens_per_step = config.total_batch_size or micro_tokens
         if tokens_per_step % micro_tokens != 0:
-            raise ValueError(f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}")
+            raise ValueError(
+                f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}"
+            )
         grad_accum_steps = tokens_per_step // micro_tokens
     fingerprint = _training_fingerprint(config, world_size, micro_tokens, tokens_per_step, grad_accum_steps)
     audit_output = os.environ.get("GCW_TRAIN_AUDIT_OUT")
@@ -167,6 +171,7 @@ def train(config: TrainConfig) -> None:
         "qwen3_backbone_chunk_backend": qwen3_backbone_chunk_backend_metadata(config.backbone_chunk_backend),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
+        "loss_backend": loss_backend_metadata(config.loss_backend),
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     budget_message = (
@@ -209,12 +214,17 @@ def train(config: TrainConfig) -> None:
             batch_supervised_tokens += int((batch.y != -100).sum().item())
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
-                with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
+                with torch.autocast(
+                    device_type=device.type,
+                    dtype=torch.bfloat16,
+                    enabled=config.bf16 and device.type == "cuda",
+                ):
                     if config.logical_pair_grouping:
                         loss = _logical_pair_grouped_loss(
                             model,
                             batch.x,
                             batch.y,
+                            loss_backend=config.loss_backend,
                             attention_mask=batch.attention_mask,
                             activation_checkpoint_windows=config.activation_checkpoint_windows,
                         )
@@ -223,6 +233,7 @@ def train(config: TrainConfig) -> None:
                             model,
                             batch.x,
                             batch.y,
+                            loss_backend=config.loss_backend,
                             attention_mask=batch.attention_mask,
                             activation_checkpoint_windows=config.activation_checkpoint_windows,
                         )
@@ -368,12 +379,14 @@ def train(config: TrainConfig) -> None:
         tracker.finish(summary={**run_meta, "completed_step": config.max_steps})
     cleanup_distributed()
 
+
 def _checkpoint_metadata(config: TrainConfig, run_meta: dict[str, Any]) -> dict[str, Any]:
     state = {
         **run_meta,
         "data_kind": config.data.kind,
         "tokenizer": config.data.tokenizer,
         "dtype": "bfloat16" if config.bf16 else "float32",
+        "loss_backend": loss_backend_metadata(config.loss_backend),
     }
     if config.data.dataset is not None:
         state["dataset"] = config.data.dataset
@@ -478,6 +491,7 @@ def _training_fingerprint(
         "trainable": config.trainable,
         "activation_checkpointing": config.activation_checkpointing,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
+        "loss_backend": config.loss_backend,
         "objective": (
             "adjacent_pair_token_mean_answer_only_ce"
             if config.logical_pair_grouping
@@ -535,10 +549,7 @@ def _processor_state(model: torch.nn.Module) -> dict[str, torch.Tensor] | None:
     processor = getattr(model, "cache_processor", None)
     if not isinstance(processor, torch.nn.Module):
         return None
-    return {
-        name: tensor.detach().cpu().clone()
-        for name, tensor in processor.state_dict().items()
-    }
+    return {name: tensor.detach().cpu().clone() for name, tensor in processor.state_dict().items()}
 
 
 def _save_training_state(
@@ -556,9 +567,7 @@ def _save_training_state(
             save_checkpoint(path, model, config.model, {**resume_state.metadata, "step": resume_state.step})
         return
     checkpoint_kwargs = (
-        {"initial_processor_state": initial_processor_state}
-        if initial_processor_state is not None
-        else {}
+        {"initial_processor_state": initial_processor_state} if initial_processor_state is not None else {}
     )
     save_training_checkpoint(
         path,
@@ -660,10 +669,14 @@ def _model_loss(
     targets: torch.Tensor,
     *,
     loss_reduction: str = "mean",
+    loss_backend: LossBackend = "reference",
     attention_mask: torch.Tensor | None = None,
     activation_checkpoint_windows: int = 0,
 ) -> torch.Tensor:
-    kwargs: dict[str, Any] = {"loss_reduction": loss_reduction}
+    kwargs: dict[str, Any] = {
+        "loss_reduction": loss_reduction,
+        "loss_backend": loss_backend,
+    }
     if attention_mask is not None:
         kwargs["attention_mask"] = attention_mask
     if activation_checkpoint_windows:
@@ -676,6 +689,7 @@ def _row_loss_sums_and_counts(
     input_ids: torch.Tensor,
     targets: torch.Tensor,
     *,
+    loss_backend: LossBackend = "reference",
     attention_mask: torch.Tensor | None = None,
     activation_checkpoint_windows: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -685,6 +699,7 @@ def _row_loss_sums_and_counts(
         input_ids,
         targets,
         loss_reduction="row_sum",
+        loss_backend=loss_backend,
         attention_mask=attention_mask,
         activation_checkpoint_windows=activation_checkpoint_windows,
     )
@@ -698,6 +713,7 @@ def _logical_pair_grouped_loss(
     input_ids: torch.Tensor,
     targets: torch.Tensor,
     *,
+    loss_backend: LossBackend = "reference",
     attention_mask: torch.Tensor | None = None,
     activation_checkpoint_windows: int = 0,
 ) -> torch.Tensor:
@@ -708,14 +724,13 @@ def _logical_pair_grouped_loss(
         model,
         input_ids,
         targets,
+        loss_backend=loss_backend,
         attention_mask=attention_mask,
         activation_checkpoint_windows=activation_checkpoint_windows,
     )
     pair_sums = row_sums.reshape(-1, 2).sum(dim=1)
     pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
     return (pair_sums / pair_counts.clamp_min(1.0)).mean()
-
-
 
 
 def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> torch.optim.AdamW:
@@ -802,13 +817,18 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
     total_tokens = torch.zeros((), device=device)
     for _ in range(max(1, config.eval_batches)):
         x, y, attention_mask = next(loader)
-        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
+        with torch.autocast(
+            device_type=device.type,
+            dtype=torch.bfloat16,
+            enabled=config.bf16 and device.type == "cuda",
+        ):
             grouped_attention_mask = attention_mask if isinstance(attention_mask, torch.Tensor) else None
             if config.logical_pair_grouping:
                 row_sums, row_counts = _row_loss_sums_and_counts(
                     model,
                     x,
                     y,
+                    loss_backend=config.loss_backend,
                     attention_mask=grouped_attention_mask,
                     activation_checkpoint_windows=config.activation_checkpoint_windows,
                 )
@@ -821,6 +841,7 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
                     x,
                     y,
                     loss_reduction="sum",
+                    loss_backend=config.loss_backend,
                     attention_mask=grouped_attention_mask,
                     activation_checkpoint_windows=config.activation_checkpoint_windows,
                 )
@@ -987,9 +1008,7 @@ def _configure_native_activation_checkpointing(
     processors = [module for module in model.modules() if isinstance(module, CacheProcessor)]
     enabled = policy == "standard_processor_layers"
     if enabled and not processors:
-        raise ValueError(
-            "activation_checkpointing='standard_processor_layers' found no standard processor layers"
-        )
+        raise ValueError("activation_checkpointing='standard_processor_layers' found no standard processor layers")
     for processor in processors:
         processor.activation_checkpointing = enabled
     layer_boundaries = sum(len(processor.layers) for processor in processors)
@@ -1032,7 +1051,9 @@ def _apply_fsdp_activation_checkpointing(model: torch.nn.Module, *, family: str)
         return
     layer_classes = _transformer_layer_classes(family)
     wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
-    apply_activation_checkpointing(model, checkpoint_wrapper_fn=wrapper, check_fn=lambda module: type(module) in layer_classes)
+    apply_activation_checkpointing(
+        model, checkpoint_wrapper_fn=wrapper, check_fn=lambda module: type(module) in layer_classes
+    )
 
 
 def _save_training_checkpoint(
@@ -1066,7 +1087,6 @@ def _cache_processor_metrics(model) -> dict[str, float]:
     if pop_metrics is None:
         return {}
     return pop_metrics()
-
 
 
 def _compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:

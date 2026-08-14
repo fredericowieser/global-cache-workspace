@@ -8,6 +8,7 @@ import math
 import torch
 import torch.distributed as dist
 
+from gcw.config import LossBackend
 from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, IntTokenizer, get_tokenizer
 
 
@@ -183,7 +184,14 @@ def _parse_numeric_expression(text: str) -> Fraction | None:
 
 
 @torch.no_grad()
-def evaluate_nll_bpb(model, batches, steps: int, token_bytes: torch.Tensor) -> tuple[float, float]:
+def evaluate_nll_bpb(
+    model,
+    batches,
+    steps: int,
+    token_bytes: torch.Tensor,
+    *,
+    loss_backend: LossBackend = "reference",
+) -> tuple[float, float]:
     device = model.get_device()
     total_nats = torch.tensor(0.0, device=device)
     total_bytes = torch.tensor(0, dtype=torch.long, device=device)
@@ -192,7 +200,7 @@ def evaluate_nll_bpb(model, batches, steps: int, token_bytes: torch.Tensor) -> t
     model.eval()
     for _ in range(steps):
         x, y = next(it)[:2]
-        loss = model(x, y, loss_reduction="none").view(-1)
+        loss = model(x, y, loss_reduction="none", loss_backend=loss_backend).view(-1)
         y = y.view(-1)
         valid = y >= 0
         safe = torch.where(valid, y, torch.zeros_like(y))

@@ -11,12 +11,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from gcw.config import ModelConfig
+from gcw.config import LossBackend, ModelConfig
 from gcw.models.backbones.base import Backbone
 from gcw.models.backbones.backend import Qwen3BackboneChunkBackend, run_qwen3_backbone_chunk_region
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.models.cache_processors.base import cache_processor_recomputation, cache_processor_recomputation_id
+from gcw.models.losses import liger_fused_linear_cross_entropy, require_loss_backend
 
 CacheLike = CacheState | WindowedCache
 ProcessorFn = Callable[..., CacheLike | StaticCacheState]
@@ -136,7 +137,9 @@ class RotaryCache(nn.Module):
         sin = self.sin.index_select(1, positions).to(dtype)
         return cos, sin
 
-    def get_range(self, start: int, seq_len: int, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    def get_range(
+        self, start: int, seq_len: int, device: torch.device, dtype: torch.dtype
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         self.maybe_grow(start + seq_len, device)
         end = start + seq_len
         return self.cos[:, start:end].to(dtype), self.sin[:, start:end].to(dtype)
@@ -240,7 +243,9 @@ class CausalSelfAttention(nn.Module):
         cache.write_layer(self.layer_idx, start_pos, k, v)
         keys, values = cache.layer_view(self.layer_idx, end_pos)
         mask, is_causal = _causal_chunk_bias(steps, start_pos, x.device)
-        y = flash_sdpa(q, keys, values, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads)
+        y = flash_sdpa(
+            q, keys, values, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads
+        )
         y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
         attn_out = self.o_proj(y)
         return attn_out, attn_out.float().norm(dim=-1)
@@ -411,15 +416,23 @@ class TF(Backbone):
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
         processor_execution_factory: ProcessorExecutionFactory | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         if processor is None:
-            return self.forward_full(input_ids, targets, loss_reduction, attention_mask=attention_mask)
+            return self.forward_full(
+                input_ids,
+                targets,
+                loss_reduction,
+                attention_mask=attention_mask,
+                loss_backend=loss_backend,
+            )
         if targets is not None:
             kwargs: dict[str, Any] = {
                 "processor": processor,
                 "process_every": process_every,
                 "loss_reduction": loss_reduction,
                 "attention_mask": attention_mask,
+                "loss_backend": loss_backend,
             }
             if activation_checkpoint_windows:
                 kwargs["activation_checkpoint_windows"] = activation_checkpoint_windows
@@ -434,6 +447,7 @@ class TF(Backbone):
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
         cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
@@ -441,7 +455,7 @@ class TF(Backbone):
             x, _, _, _ = cast(Block, layer)(x, cos_sin, None)
         x = self.norm(x)
         if targets is not None:
-            return self.loss_from_hidden(x, targets, loss_reduction)
+            return self.loss_from_hidden(x, targets, loss_reduction, loss_backend)
         return self.logits_from_hidden(x)
 
     def logits_from_hidden(self, x: torch.Tensor) -> torch.Tensor:
@@ -453,12 +467,43 @@ class TF(Backbone):
             logits = self.lm_head(x)
         return logits[..., : self.config.vocab_size].float()
 
-    def loss_from_hidden(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
-        return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
-
-    def answer_only_loss_from_hidden(
-        self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str
+    def loss_from_hidden(
+        self,
+        x: torch.Tensor,
+        targets: torch.Tensor,
+        loss_reduction: str,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
+        if loss_reduction not in {"mean", "sum", "none", "row_sum"}:
+            raise ValueError("loss_reduction must be 'mean', 'sum', 'none', or 'row_sum'")
+        if loss_backend == "reference":
+            return self.loss_from_hidden_reference(x, targets, loss_reduction)
+        if loss_backend == "target_only":
+            return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
+        if loss_reduction in {"none", "row_sum"}:
+            require_loss_backend(loss_backend, x.device)
+            # Liger 0.8.1 has no unreduced FLCE. Preserve structured reductions via the
+            # explicitly documented target-only implementation rather than changing shape.
+            return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
+        return liger_fused_linear_cross_entropy(
+            self.output_weight(),
+            x,
+            targets,
+            reduction=loss_reduction,
+            softcap=self.config.final_logit_softcapping,
+        )
+
+    def output_weight(self) -> torch.Tensor:
+        """Return the real-vocabulary projection weight without registering new model state."""
+        if self.config.tie_embeddings:
+            weight = self.embed_tokens.weight
+        else:
+            if self.lm_head is None:
+                raise RuntimeError("untied transformer has no language-model head")
+            weight = self.lm_head.weight
+        return weight[: self.config.vocab_size]
+
+    def answer_only_loss_from_hidden(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
         """Compute loss without projecting prompt or padding positions through the vocabulary head."""
         chunk_size = 256 if x.is_cuda else 64
         loss_sum = x.new_zeros((), dtype=torch.float32)
@@ -508,9 +553,7 @@ class TF(Backbone):
             return loss_sum
         return loss_sum / token_count.clamp_min(1.0)
 
-    def loss_from_hidden_reference(
-        self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str
-    ) -> torch.Tensor:
+    def loss_from_hidden_reference(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
         """Eager loss oracle which projects every position, including ignored positions."""
         chunk_size = 256 if x.is_cuda else 64
         loss_sum = x.new_zeros((), dtype=torch.float32)
@@ -555,6 +598,7 @@ class TF(Backbone):
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
         processor_execution_factory: ProcessorExecutionFactory | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         del attention_mask
         if activation_checkpoint_windows < 0:
@@ -590,7 +634,9 @@ class TF(Backbone):
                     cache_format="windowed",
                 )
                 hidden_chunks.append(hidden)
-        return self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction)
+        return self.loss_from_hidden(
+            torch.cat(hidden_chunks, dim=1), targets, loss_reduction, loss_backend
+        )
 
     def _checkpointed_window_segment(
         self,
@@ -846,7 +892,9 @@ class TF(Backbone):
                 else:
                     should_process = pos > 0 and pos % process_every == 0
                 if should_process:
-                    cache = cast(CacheLike, processor(cache, select_all=relative_generation_cadence and generated_idx == 0))
+                    cache = cast(
+                        CacheLike, processor(cache, select_all=relative_generation_cadence and generated_idx == 0)
+                    )
             logits, cache = self.forward_chunk(next_id, pos, cache)
         return out
 
@@ -912,7 +960,10 @@ class TF(Backbone):
                 else:
                     should_process = pos > 0 and pos % process_every == 0
                 if should_process:
-                    cache = cast(StaticCacheState, processor(cache, select_all=relative_generation_cadence and generated_idx == 0))
+                    cache = cast(
+                        StaticCacheState,
+                        processor(cache, select_all=relative_generation_cadence and generated_idx == 0),
+                    )
             logits, cache = self.forward_chunk_static(next_id, pos, cache)
         return out
 
@@ -947,7 +998,9 @@ def _estimate_qwen35_attention_params(config: ModelConfig, layer_type: str) -> i
     head_dim = int(config.head_dim or config.hidden_size // config.num_heads)
     full_q_dim = config.num_heads * head_dim
     full_kv_dim = config.num_kv_heads * head_dim
-    linear_key_dim = int(config.linear_num_key_heads or config.num_kv_heads) * int(config.linear_key_head_dim or head_dim)
+    linear_key_dim = int(config.linear_num_key_heads or config.num_kv_heads) * int(
+        config.linear_key_head_dim or head_dim
+    )
     linear_value_heads = int(config.linear_num_value_heads or config.num_heads)
     linear_value_dim = linear_value_heads * int(config.linear_value_head_dim or head_dim)
     linear_conv_dim = 2 * linear_key_dim + linear_value_dim

@@ -57,7 +57,7 @@ gcw = "gcw.cli:main"
 [project.optional-dependencies]
 cpu = ["torch>=2.7"]
 # causal-conv1d 1.6.2.post1 publishes CUDA 12 wheels through Torch 2.10.
-gpu = ["torch>=2.10,<2.11"]
+gpu = ["torch>=2.10,<2.11", "liger-kernel==0.8.1"]
 rocm = ["torch>=2.7", "pytorch-triton-rocm"]
 eval = ["lm-eval>=0.4", "transformers>=5,<6", "pillow>=10.0", "accelerate>=1.0"]
 convert = ["transformers>=5,<6"]

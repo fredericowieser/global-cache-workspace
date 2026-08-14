@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gcw.config import ModelConfig
+from gcw.config import LossBackend, ModelConfig
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.backbones.transformer import (
     CacheLike,
@@ -74,7 +74,9 @@ else:
     _hf_qwen35_moe_torch_chunk_gated_delta_rule = _imported_hf_qwen35_moe_torch_chunk_gated_delta_rule
     _hf_qwen35_moe_torch_recurrent_gated_delta_rule = _imported_hf_qwen35_moe_torch_recurrent_gated_delta_rule
 
-_hf_torch_chunk_gated_delta_rule = _hf_qwen35_torch_chunk_gated_delta_rule or _hf_qwen35_moe_torch_chunk_gated_delta_rule
+_hf_torch_chunk_gated_delta_rule = (
+    _hf_qwen35_torch_chunk_gated_delta_rule or _hf_qwen35_moe_torch_chunk_gated_delta_rule
+)
 _hf_torch_recurrent_gated_delta_rule = (
     _hf_qwen35_torch_recurrent_gated_delta_rule or _hf_qwen35_moe_torch_recurrent_gated_delta_rule
 )
@@ -217,7 +219,9 @@ class Qwen35Attention(nn.Module):
         cache.write_layer(self.cache_idx, start_pos, k, v)
         keys, values = cache.layer_view(self.cache_idx, end_pos)
         mask, is_causal = _causal_chunk_bias(steps, start_pos, x.device)
-        y = flash_sdpa(q, keys, values, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads)
+        y = flash_sdpa(
+            q, keys, values, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads
+        )
         y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
         y = y * torch.sigmoid(gate.to(y.dtype))
         attn_out = self.o_proj(y)
@@ -229,8 +233,7 @@ class Qwen35GatedDeltaNet(nn.Module):
         super().__init__()
         if not _has_fla_gated_delta_rule() and not _has_hf_torch_gated_delta_rule():
             raise ImportError(
-                "Qwen3.5 linear attention requires FLA kernels or Transformers' "
-                "Qwen3.5 torch fallback functions."
+                "Qwen3.5 linear attention requires FLA kernels or Transformers' Qwen3.5 torch fallback functions."
             )
         self.layer_idx = layer_idx
         self.activation = config.hidden_act
@@ -484,7 +487,9 @@ class _Qwen35MoeExperts(nn.Module):
         self.down_proj = nn.Parameter(torch.empty(self.num_experts, self.hidden_dim, self.intermediate_dim))
         self.act_fn = _HF_ACT2FN[config.hidden_act]
 
-    def forward(self, hidden_states: torch.Tensor, top_k_index: torch.Tensor, top_k_weights: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, top_k_index: torch.Tensor, top_k_weights: torch.Tensor
+    ) -> torch.Tensor:
         raise RuntimeError("Qwen35MoeExperts must be run through Transformers' ExpertsInterface backend.")
 
 
@@ -548,8 +553,12 @@ def qwen35_moe_load_balancing_loss(
             .reshape(-1, num_experts)
             .to(compute_device)
         )
-        tokens_per_expert = (expert_mask.float() * expert_attention_mask).sum(dim=0) / expert_attention_mask.sum(dim=0).clamp_min(1)
-        router_prob_per_expert = (routing_weights * router_attention_mask).sum(dim=0) / router_attention_mask.sum(dim=0).clamp_min(1)
+        tokens_per_expert = (expert_mask.float() * expert_attention_mask).sum(dim=0) / expert_attention_mask.sum(
+            dim=0
+        ).clamp_min(1)
+        router_prob_per_expert = (routing_weights * router_attention_mask).sum(dim=0) / router_attention_mask.sum(
+            dim=0
+        ).clamp_min(1)
     return torch.sum(tokens_per_expert * router_prob_per_expert.unsqueeze(0)) * num_experts
 
 
@@ -627,7 +636,9 @@ class Qwen35TF(TF):
         self.padded_vocab_size = vocab
         self.embed_tokens = nn.Embedding(vocab, config.hidden_size)
         cache_index_by_layer = {layer: idx for idx, layer in enumerate(config.cache_layer_indices)}
-        self.layers = nn.ModuleList(self.block_cls(config, i, cache_index_by_layer.get(i)) for i in range(config.num_layers))
+        self.layers = nn.ModuleList(
+            self.block_cls(config, i, cache_index_by_layer.get(i)) for i in range(config.num_layers)
+        )
         self.norm = Qwen35RMSNorm(config.hidden_size, config.norm_eps)  # type: ignore[assignment]
         rotary_dim = int(config.head_dim_for_layer(0) * config.partial_rotary_factor)
         self.rotary = RotaryCache(config.sequence_len, rotary_dim, config.rope_theta)
@@ -662,6 +673,7 @@ class Qwen35TF(TF):
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
         cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
@@ -670,7 +682,7 @@ class Qwen35TF(TF):
             x, _, _, _, _ = layer(x, cos_sin, None, None)
         x = self.norm(x)
         if targets is not None:
-            return self.loss_from_hidden(x, targets, loss_reduction)
+            return self.loss_from_hidden(x, targets, loss_reduction, loss_backend)
         return self.logits_from_hidden(x)
 
     def forward_chunk(
@@ -753,6 +765,7 @@ class Qwen35MoeTF(Qwen35TF):
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
         cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
@@ -762,7 +775,7 @@ class Qwen35MoeTF(Qwen35TF):
             router_logits.append(layer_router_logits)
         x = self.norm(x)
         if targets is not None:
-            loss = self.loss_from_hidden(x, targets, loss_reduction)
+            loss = self.loss_from_hidden(x, targets, loss_reduction, loss_backend)
             if loss_reduction == "mean" and self.config.router_aux_loss_coef:
                 aux_loss = qwen35_moe_load_balancing_loss(
                     tuple(router_logits),
@@ -785,6 +798,7 @@ class Qwen35MoeTF(Qwen35TF):
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
         processor_execution_factory: ProcessorExecutionFactory | None = None,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         del processor_execution_factory
         if activation_checkpoint_windows:
@@ -806,11 +820,10 @@ class Qwen35MoeTF(Qwen35TF):
             hidden_chunks.append(hidden)
             for layer_chunks, layer_logits in zip(router_chunks, chunk_router_logits, strict=True):
                 layer_chunks.append(layer_logits.view(input_ids.shape[0], end - start, -1))
-        loss = self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction)
+        loss = self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction, loss_backend)
         if loss_reduction == "mean" and self.config.router_aux_loss_coef:
             router_logits = tuple(
-                torch.cat(layer_chunks, dim=1).reshape(-1, self.config.num_experts)
-                for layer_chunks in router_chunks
+                torch.cat(layer_chunks, dim=1).reshape(-1, self.config.num_experts) for layer_chunks in router_chunks
             )
             aux_loss = qwen35_moe_load_balancing_loss(
                 router_logits,

@@ -39,9 +39,7 @@ checkpoint already at the target exits successfully. A checkpoint beyond the tar
 - the next unconsumed global data position; and
 - Python, NumPy, Torch CPU, and Torch CUDA RNG state for every rank.
 
-The model, data identity, loss, frozen-parameter policy, optimizer, schedule, precision, sequence length, global
-microbatch, and total batch size must match. Output directories, save/evaluation frequency, and W&B display metadata may
-change.
+The model, data identity, loss objective, loss backend, frozen-parameter policy, optimizer, schedule, precision, sequence length, global microbatch, and total batch size must match. Output directories, save/evaluation frequency, and W&B display metadata may change.
 
 ## Elastic FineWeb DDP resume
 

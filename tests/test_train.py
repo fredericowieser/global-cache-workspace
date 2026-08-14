@@ -701,9 +701,11 @@ def test_model_loss_forwards_attention_mask():
         def __init__(self):
             super().__init__()
             self.seen_mask = None
+            self.seen_loss_backend = None
 
-        def forward(self, input_ids, targets, loss_reduction="mean", attention_mask=None):
+        def forward(self, input_ids, targets, loss_reduction="mean", attention_mask=None, loss_backend="reference"):
             self.seen_mask = attention_mask
+            self.seen_loss_backend = loss_backend
             return input_ids.float().sum() + targets.float().sum()
 
     model = MaskedLossModel()
@@ -714,3 +716,4 @@ def test_model_loss_forwards_attention_mask():
     _model_loss(model, x, y, attention_mask=attention_mask)
 
     assert model.seen_mask is attention_mask
+    assert model.seen_loss_backend == "reference"

@@ -156,7 +156,10 @@ def eager_windowed_loss(
     process_every: int,
     loss_reduction: str = "mean",
     attention_mask: torch.Tensor | None = None,
+    loss_backend: str = "reference",
 ) -> torch.Tensor:
+    if loss_backend != "reference":
+        raise ValueError("eager parity reference requires loss_backend='reference'")
     if attention_mask is not None and not bool(attention_mask.all()):
         raise ValueError("eager parity reference only supports non-padding fixtures")
     cache = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))

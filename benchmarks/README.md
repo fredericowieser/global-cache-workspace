@@ -2,6 +2,8 @@
 
 `benchmarks.harness` measures maintained BT/BGT cache-processor operations and a complete optimizer step. The optimizer path loads a normal `TrainConfig`, initializes its configured checkpoint, and follows its trainable policy, AdamW schedule, gradient clipping, gradient accumulation, compile policy, and BF16 setting. It loads one real training batch through the configured stream and reuses it so data-loader and network time stay outside the measurement.
 
+The harness honors `loss_backend`. Keep `reference` for baseline evidence; set `target_only` or `liger` in the benchmark's training config for an explicit backend comparison. The output binds backend provenance.
+
 ```bash
 uv run --extra gpu python -m benchmarks.harness \
   --train-config configs/train/smoke_bgt.yaml \

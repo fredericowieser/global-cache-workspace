@@ -5,7 +5,7 @@ from dataclasses import replace
 import torch
 import torch.nn as nn
 
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, LossBackend, ModelConfig
 from gcw.models.backbones import Backbone, build_backbone
 from gcw.models.cache_processors.base import CacheProcessorBase
 
@@ -48,6 +48,7 @@ class LanguageModel(nn.Module):
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
+        loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         processor = self._processor_config()
         checkpoint_segments = (
@@ -68,6 +69,7 @@ class LanguageModel(nn.Module):
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
                 activation_checkpoint_windows=activation_checkpoint_windows,
+                loss_backend=loss_backend,
             )
         # The ordinary path prepares once for the complete forward. Generation
         # deliberately remains eager.
@@ -80,6 +82,7 @@ class LanguageModel(nn.Module):
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
                 activation_checkpoint_windows=activation_checkpoint_windows,
+                loss_backend=loss_backend,
             )
 
     @torch.no_grad()
