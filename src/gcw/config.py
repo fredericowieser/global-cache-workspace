@@ -25,6 +25,7 @@ CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
 ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
+BackboneChunkBackend = Literal["eager", "compile"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
 DiffusionInferenceMode = Literal["deterministic", "stochastic"]
@@ -585,6 +586,7 @@ class TrainConfig:
     distributed: Literal["none", "ddp", "fsdp"] = "none"
     trainable: TrainableComponents = "all"
     activation_checkpointing: ActivationCheckpointingPolicy = "none"
+    backbone_chunk_backend: BackboneChunkBackend = "eager"
     backbone_checkpoint: str | None = None
     init_checkpoint: str | None = None
     resume: ResumeConfig | None = None
@@ -636,6 +638,21 @@ class TrainConfig:
             raise ValueError(
                 "activation_checkpointing='standard_processor_layers' requires a BT or BGT cache processor"
             )
+        if self.backbone_chunk_backend not in {"eager", "compile"}:
+            raise ValueError("backbone_chunk_backend must be 'eager' or 'compile'")
+        if self.backbone_chunk_backend == "compile":
+            if self.model.family != "qwen3":
+                raise ValueError("backbone_chunk_backend=compile requires model.family='qwen3'")
+            if self.model.variant == "tf" or self.model.cache_processor is None:
+                raise ValueError("backbone_chunk_backend=compile requires a windowed cache processor")
+            if self.trainable != "cache_processor":
+                raise ValueError("backbone_chunk_backend=compile requires trainable='cache_processor'")
+            if self.model.cache_processor.process_every != 64:
+                raise ValueError("backbone_chunk_backend=compile requires cache_processor.process_every=64")
+            if self.sequence_len < 128:
+                raise ValueError("backbone_chunk_backend=compile requires sequence_len >= 128")
+            if self.distributed == "fsdp":
+                raise ValueError("backbone_chunk_backend=compile is not supported with FSDP")
         if self.trainable == "lora" and self.model.lora is None:
             raise ValueError("trainable='lora' requires model.lora")
         if self.total_batch_size and self.global_batch_rows:
