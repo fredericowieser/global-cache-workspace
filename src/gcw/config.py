@@ -595,6 +595,7 @@ class TrainConfig:
     max_steps: int = 2
     total_batch_size: int = 0
     global_batch_rows: int = 0
+    logical_pair_grouping: bool = False
     learning_rate: float = 3e-4
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
@@ -642,6 +643,22 @@ class TrainConfig:
             raise ValueError("set only one of total_batch_size and global_batch_rows")
         if self.global_batch_rows < 0:
             raise ValueError("global_batch_rows must be non-negative")
+        if not isinstance(self.logical_pair_grouping, bool):
+            raise ValueError("logical_pair_grouping must be a boolean")
+        if self.logical_pair_grouping:
+            if self.mode != "sft" or self.data.kind != "sft":
+                raise ValueError("logical_pair_grouping requires SFT data")
+            if self.data.sft_loss_scope != "answer_only":
+                raise ValueError("logical_pair_grouping requires answer-only SFT loss")
+            if isinstance(self.batch_size, bool) or self.batch_size < 2 or self.batch_size % 2:
+                raise ValueError("logical_pair_grouping requires an even physical batch_size of at least 2")
+            if self.global_batch_rows <= 0 or self.global_batch_rows % 2:
+                raise ValueError("logical_pair_grouping requires a positive even global_batch_rows")
+            if self.model.router_aux_loss_coef:
+                raise ValueError("logical_pair_grouping does not support router auxiliary loss")
+            diffusion = self.model.diffusion_processor
+            if diffusion is not None and diffusion.noise_scale > 0.0:
+                raise ValueError("logical_pair_grouping rejects noisy Diffusion because RNG assignment changes with batching")
         if not math.isfinite(self.grad_clip) or self.grad_clip <= 0.0:
             raise ValueError("grad_clip must be finite and positive")
         from gcw.architecture import require_train_config
