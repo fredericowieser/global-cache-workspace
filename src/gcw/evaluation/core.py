@@ -39,7 +39,6 @@ except ImportError:
     HAS_LM_EVAL = False
 
 GENERAL_TASKS = [
-    "lambada_openai",
     "hellaswag",
     "piqa",
     "winogrande",
@@ -55,7 +54,7 @@ MATH_TASKS = [
     "agieval_gaokao_mathqa",
 ]
 GENERAL_RUNS = [
-    (["lambada_openai", "hellaswag", "piqa"], 0),
+    (["hellaswag", "piqa"], 0),
     (["winogrande"], 5),
     (["arc_easy", "arc_challenge"], 25),
     (["mmlu"], 5),
@@ -360,9 +359,7 @@ def run_task_groups(
     if prompt_mode not in {"auto", "plain", "thinking_off", "thinking_on"}:
         raise ValueError(f"unknown prompt mode: {prompt_mode}")
     lm.prompt_mode = prompt_mode
-    apply_chat_template = bool(
-        getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None)
-    )
+    apply_chat_template = _should_apply_chat_template(tokenizer, prompt_mode)
     task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
     merged = _load_partial_results(runs) or _empty_eval_results()
     _write_progress(_new_progress(runs), merged)
@@ -414,7 +411,19 @@ def run_task_groups(
                 merged[key].update(out[key])
         _write_partial_results(merged)
         _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress), merged)
+    merged["gcw_protocol"] = {
+        "name": "lm_eval_loglikelihood_v1",
+        "prompt_mode": prompt_mode,
+        "apply_chat_template": apply_chat_template,
+        "thinking_dimension": False if prompt_mode == "plain" else prompt_mode.startswith("thinking_"),
+    }
     return merged
+
+
+def _should_apply_chat_template(tokenizer: Any, prompt_mode: str) -> bool:
+    if prompt_mode == "plain":
+        return False
+    return bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
 
 
 def _filter_skipped_tasks(runs: list[tuple[list[str], int]]) -> list[tuple[list[str], int]]:

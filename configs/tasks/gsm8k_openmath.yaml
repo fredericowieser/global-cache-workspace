@@ -1,6 +1,8 @@
 task: gsm8k_openmath
 dataset_path: openai/gsm8k
 dataset_name: main
+dataset_kwargs:
+  revision: 740312add88f781978c0658806c59bc2815b9866
 output_type: generate_until
 training_split: train
 fewshot_split: train
@@ -17,7 +19,7 @@ generation_kwargs:
     - "\nQuestion:"
   do_sample: false
   temperature: 0.0
-  max_gen_toks: 512
+  max_gen_toks: 2048
 repeats: 1
 # Multiple extraction strategies for the same generation — we only generate
 # once, then score the same output under each filter. Lets us see how the

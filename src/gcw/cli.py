@@ -50,6 +50,17 @@ def build_parser() -> argparse.ArgumentParser:
         if suite == "tasks":
             command.add_argument("--tasks", nargs="+", required=True)
         command.add_argument("--out", default=None)
+    chat = eval_sub.add_parser("chat")
+    target = chat.add_mutually_exclusive_group(required=True)
+    target.add_argument("--checkpoint")
+    target.add_argument("--hf-model")
+    chat.add_argument("--tokenizer-path")
+    chat.add_argument("--processor", choices=["on", "off"], default="on")
+    chat.add_argument("--tasks", nargs="+", required=True)
+    chat.add_argument("--mode", choices=["thinking_off", "thinking_on"], required=True)
+    chat.add_argument("--batch-size", type=int, default=8)
+    chat.add_argument("--max-new-tokens", type=int, default=2048)
+    chat.add_argument("--out", default=None)
     fineweb = eval_sub.add_parser("fineweb")
     fineweb.add_argument("--checkpoint", required=True)
     fineweb.add_argument("--data-dir", default=None)
@@ -100,6 +111,19 @@ def dispatch(args: argparse.Namespace) -> None:
                 eval_tokens=args.eval_tokens,
                 batch_size=args.batch_size,
             )
+        elif args.suite == "chat":
+            from gcw.evaluation.chat_benchmarks import run_chat_benchmarks
+
+            results = run_chat_benchmarks(
+                tasks=args.tasks,
+                mode=args.mode,
+                batch_size=args.batch_size,
+                max_new_tokens=args.max_new_tokens,
+                checkpoint=args.checkpoint,
+                hf_model=args.hf_model,
+                tokenizer_path=args.tokenizer_path,
+                processor_enabled=args.processor == "on",
+            )
         else:
             from gcw.evaluation.core import run_tasks
 
@@ -131,7 +155,10 @@ def dispatch(args: argparse.Namespace) -> None:
             state_path=None,
         )
         record.append_log(f"completed evaluation suite {args.suite}")
-        record.finish(summary=json.loads(text))
+        summary = json.loads(text)
+        if args.suite == "chat":
+            summary = {key: value for key, value in summary.items() if key != "rows"}
+        record.finish(summary=summary)
     elif args.cmd == "convert":
         if args.source == "hf":
             convert_hf(

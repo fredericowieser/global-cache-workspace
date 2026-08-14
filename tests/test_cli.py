@@ -1,6 +1,25 @@
 from gcw import cli
 
 
+def test_chat_eval_parser_requires_explicit_mode_tasks_and_target():
+    args = cli.build_parser().parse_args(
+        [
+            "eval",
+            "chat",
+            "--hf-model",
+            "model",
+            "--tasks",
+            "mmlu",
+            "gsm8k_openmath",
+            "--mode",
+            "thinking_on",
+        ]
+    )
+    assert args.suite == "chat"
+    assert args.tasks == ["mmlu", "gsm8k_openmath"]
+    assert args.mode == "thinking_on"
+    assert args.max_new_tokens == 2048
+
 
 def test_convert_hf_forwards_processor_variants(monkeypatch):
     calls = []

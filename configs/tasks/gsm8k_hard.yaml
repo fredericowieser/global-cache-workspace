@@ -21,7 +21,7 @@ generation_kwargs:
     - "\nQuestion:"
   do_sample: false
   temperature: 0.0
-  max_gen_toks: 512
+  max_gen_toks: 2048
 repeats: 1
 filter_list:
   - name: "boxed"

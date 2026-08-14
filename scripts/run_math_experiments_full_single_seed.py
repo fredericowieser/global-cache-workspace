@@ -26,7 +26,6 @@ from scripts.generate_math_experiment_configs import generate
 
 EXPERIMENT = "qwen3-06b-instruct-math-full-single-seed-v1"
 GENERAL_TASKS = (
-    "lambada_openai",
     "hellaswag",
     "piqa",
     "winogrande",
@@ -41,6 +40,7 @@ MATH_TASKS = (
     "logiqa",
     "agieval_gaokao_mathqa",
 )
+CHAT_TASKS = (*GENERAL_TASKS, *MATH_TASKS)
 TRAIN_ORDER = (
     "full-sft",
     "bt",
@@ -164,14 +164,25 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
         "training_order": list(TRAIN_ORDER),
         "evaluation_order": ["instruct-baseline", *TRAIN_ORDER],
         "tasks": {"general": list(GENERAL_TASKS), "math": list(MATH_TASKS)},
-        "evaluation_cells": {
-            "non_processor": ["thinking_off", "thinking_on"],
-            "processor": [
-                "processor_off__thinking_off",
-                "processor_off__thinking_on",
-                "processor_on__thinking_off",
-                "processor_on__thinking_on",
-            ],
+        "evaluation_protocols": {
+            "standard_general": {
+                "tasks": list(GENERAL_TASKS),
+                "prompt": "plain_no_chat_template",
+                "thinking_dimension": False,
+                "coverage": "full",
+            },
+            "chat_generation": {
+                "tasks": list(CHAT_TASKS),
+                "prompt": "official_chat_template",
+                "thinking_modes": ["thinking_off", "thinking_on"],
+                "max_new_tokens": 2048,
+                "general_coverage": "authenticated_deterministic_subset",
+                "math_coverage": "full",
+            },
+        },
+        "evaluation_processor_states": {
+            "non_processor": ["on"],
+            "processor": ["off", "on"],
         },
     }
 
@@ -304,12 +315,14 @@ def _deadline_reached(deadline: datetime) -> bool:
     return datetime.now(timezone.utc) >= deadline
 
 
+def _processor_states(arm: str) -> tuple[str, ...]:
+    return ("off", "on") if arm in PROCESSOR_ARMS else ("on",)
+
+
 def _evaluation_cells(arm: str) -> tuple[tuple[str, str], ...]:
-    if arm not in PROCESSOR_ARMS:
-        return (("on", "thinking_off"), ("on", "thinking_on"))
     return tuple(
         (processor, thinking)
-        for processor in ("off", "on")
+        for processor in _processor_states(arm)
         for thinking in ("thinking_off", "thinking_on")
     )
 
@@ -327,24 +340,40 @@ def _flatten_numbers(value: Any, prefix: str = "") -> dict[str, float]:
     return output
 
 
-def _mirror_evaluation(result: Path, args: argparse.Namespace, arm: str, processor: str, thinking: str) -> None:
+def _mirror_evaluation(
+    result: Path,
+    args: argparse.Namespace,
+    arm: str,
+    processor: str,
+    protocol: str,
+    *,
+    thinking: str | None,
+    tasks: tuple[str, ...],
+    artifact_files: tuple[Path, ...] = (),
+) -> None:
     import wandb
 
+    cell_name = f"{protocol}-{thinking}" if thinking is not None else protocol
+    run_name = f"{args.experiment}-eval-{arm}-{processor}-{cell_name}"
+    tags = ["qwen3-0.6b", "math", "single-seed", "evaluation", arm, processor, protocol]
+    if thinking is not None:
+        tags.append(thinking)
     run = wandb.init(
         entity=WANDB_ENTITY,
         project=WANDB_PROJECT,
-        name=f"{args.experiment}-eval-{arm}-{processor}-{thinking}",
+        name=run_name,
         group=args.experiment,
         job_type="evaluation",
-        id=_wandb_id(args.experiment, f"eval-{arm}-{processor}-{thinking}"),
+        id=_wandb_id(args.experiment, f"eval-v2-{arm}-{processor}-{cell_name}"),
         resume="allow",
-        tags=["qwen3-0.6b", "math", "single-seed", "evaluation", arm, processor, thinking],
+        tags=tags,
         config={
             "experiment": args.experiment,
             "arm": arm,
             "processor": processor,
-            "thinking": thinking,
-            "tasks": [*GENERAL_TASKS, *MATH_TASKS],
+            "protocol": protocol,
+            "thinking": thinking or "not_applicable",
+            "tasks": list(tasks),
             "batch_size": args.eval_batch_size,
         },
     )
@@ -352,12 +381,153 @@ def _mirror_evaluation(result: Path, args: argparse.Namespace, arm: str, process
         raise RuntimeError("wandb.init returned no evaluation run")
     payload = json.loads(result.read_text())
     run.log(_flatten_numbers(payload), step=0)
-    artifact = wandb.Artifact(
-        f"{args.experiment}-eval-{arm}-{processor}-{thinking}", type="benchmark-results"
-    )
+    artifact = wandb.Artifact(run_name, type="benchmark-results")
     artifact.add_file(str(result), name="result.json")
+    for path in artifact_files:
+        artifact.add_file(str(path), name=f"tasks/{path.parent.name}/result.json")
     run.log_artifact(artifact)
     run.finish()
+
+
+def _target_args(target: Path, *, hf_target: bool) -> list[str]:
+    return ["--hf-model", str(target)] if hf_target else ["--checkpoint", str(target)]
+
+
+def _evaluate_standard_general(
+    args: argparse.Namespace,
+    root: Path,
+    arm: str,
+    processor: str,
+    target: Path,
+    *,
+    hf_target: bool,
+    env: dict[str, str],
+) -> None:
+    cell = root / "evaluations-v2" / arm / f"processor-{processor}" / "standard-general"
+    result = cell / "result.json"
+    published = cell / "wandb-published.json"
+    if not result.is_file():
+        cell.mkdir(parents=True, exist_ok=True)
+        cell_env = dict(env)
+        cell_env["GCW_EVAL_PARTIAL_DIR"] = str(cell / "partial")
+        command = [
+            sys.executable,
+            "-m",
+            "gcw.cli",
+            "eval",
+            "general",
+            "--batch-size",
+            str(args.eval_batch_size),
+            "--prompt-mode",
+            "plain",
+            "--processor",
+            processor,
+            "--out",
+            str(result),
+            *_target_args(target, hf_target=hf_target),
+        ]
+        _run(command, cell / "eval.log", cell_env)
+    if not published.is_file():
+        _mirror_evaluation(
+            result,
+            args,
+            arm,
+            processor,
+            "standard-general-v1",
+            thinking=None,
+            tasks=GENERAL_TASKS,
+        )
+        published.write_text(json.dumps({"result_sha256": _sha256(result), "published": True}, indent=2) + "\n")
+
+
+def _chat_summary(task_results: list[Path], *, arm: str, processor: str, thinking: str) -> dict[str, Any]:
+    tasks: dict[str, Any] = {}
+    for path in task_results:
+        payload = json.loads(path.read_text())
+        task = path.parent.name
+        tasks[task] = {
+            "result_sha256": _sha256(path),
+            "dataset": payload["datasets"][task],
+            "metrics": payload["tasks"][task],
+            "elapsed_seconds": payload["elapsed_seconds"],
+            "peak_memory_bytes": payload["peak_memory_bytes"],
+            "payload_sha256": payload["payload_sha256"],
+        }
+    return {
+        "schema": "gcw.chat_benchmark_composite.v1",
+        "arm": arm,
+        "processor": processor,
+        "thinking": thinking,
+        "protocol": "official_chat_template_answer_generation_v1",
+        "max_new_tokens": 2048,
+        "tasks": tasks,
+    }
+
+
+def _evaluate_chat_mode(
+    args: argparse.Namespace,
+    root: Path,
+    arm: str,
+    processor: str,
+    thinking: str,
+    target: Path,
+    *,
+    hf_target: bool,
+    env: dict[str, str],
+    deadline: datetime,
+) -> bool:
+    cell = root / "evaluations-v2" / arm / f"processor-{processor}" / "chat-generation" / thinking
+    task_results: list[Path] = []
+    for task in CHAT_TASKS:
+        if _deadline_reached(deadline):
+            return False
+        task_cell = cell / "tasks" / task
+        task_result = task_cell / "result.json"
+        task_results.append(task_result)
+        if task_result.is_file():
+            continue
+        task_cell.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable,
+            "-m",
+            "gcw.cli",
+            "eval",
+            "chat",
+            "--tasks",
+            task,
+            "--mode",
+            thinking,
+            "--batch-size",
+            str(args.eval_batch_size),
+            "--max-new-tokens",
+            "2048",
+            "--processor",
+            processor,
+            "--tokenizer-path",
+            str(Path(args.model).expanduser().resolve()),
+            "--out",
+            str(task_result),
+            *_target_args(target, hf_target=hf_target),
+        ]
+        _run(command, task_cell / "eval.log", env)
+    result = cell / "result.json"
+    published = cell / "wandb-published.json"
+    if not result.is_file():
+        result.parent.mkdir(parents=True, exist_ok=True)
+        result.write_text(json.dumps(_chat_summary(task_results, arm=arm, processor=processor, thinking=thinking), indent=2, sort_keys=True) + "\n")
+    if not published.is_file():
+        _mirror_evaluation(
+            result,
+            args,
+            arm,
+            processor,
+            "chat-generation-v1",
+            thinking=thinking,
+            tasks=CHAT_TASKS,
+            artifact_files=tuple(task_results),
+        )
+        published.write_text(json.dumps({"result_sha256": _sha256(result), "published": True}, indent=2) + "\n")
+    return True
 
 
 def _evaluate(
@@ -370,38 +540,23 @@ def _evaluate(
     env: dict[str, str],
     deadline: datetime,
 ) -> bool:
-    for processor, thinking in _evaluation_cells(arm):
+    for processor in _processor_states(arm):
         if _deadline_reached(deadline):
             return False
-        cell = root / "evaluations" / arm / f"processor-{processor}" / thinking
-        result = cell / "result.json"
-        published = cell / "wandb-published.json"
-        if not result.is_file():
-            cell.mkdir(parents=True, exist_ok=True)
-            cell_env = dict(env)
-            cell_env["GCW_EVAL_PARTIAL_DIR"] = str(cell / "partial")
-            command = [
-                sys.executable,
-                "-m",
-                "gcw.cli",
-                "eval",
-                "all",
-                "--batch-size",
-                str(args.eval_batch_size),
-                "--prompt-mode",
-                thinking,
-                "--processor",
+        _evaluate_standard_general(args, root, arm, processor, target, hf_target=hf_target, env=env)
+        for thinking in ("thinking_off", "thinking_on"):
+            if not _evaluate_chat_mode(
+                args,
+                root,
+                arm,
                 processor,
-                "--out",
-                str(result),
-            ]
-            command.extend(["--hf-model", str(target)] if hf_target else ["--checkpoint", str(target)])
-            _run(command, cell / "eval.log", cell_env)
-        if not published.is_file():
-            _mirror_evaluation(result, args, arm, processor, thinking)
-            published.write_text(
-                json.dumps({"result_sha256": _sha256(result), "published": True}, indent=2) + "\n"
-            )
+                thinking,
+                target,
+                hf_target=hf_target,
+                env=env,
+                deadline=deadline,
+            ):
+                return False
     return True
 
 

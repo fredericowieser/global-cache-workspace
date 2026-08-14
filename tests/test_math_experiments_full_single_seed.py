@@ -55,3 +55,8 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path):
         ("on", "thinking_off"),
         ("on", "thinking_on"),
     )
+    assert series._processor_states("bgt") == ("off", "on")
+    assert series._processor_states("full-sft") == ("on",)
+    assert "lambada_openai" not in plan["tasks"]["general"]
+    assert plan["evaluation_protocols"]["standard_general"]["thinking_dimension"] is False
+    assert plan["evaluation_protocols"]["chat_generation"]["max_new_tokens"] == 2048

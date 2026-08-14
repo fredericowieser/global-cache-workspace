@@ -30,7 +30,7 @@ All runs mirror to `huawei-noahs-ark/global-cache-workspace`. Local run artifact
 
 ## Evaluation
 
-Every processor checkpoint runs processor off/on × thinking off/on across the maintained general and math suites. Full-backbone and LoRA checkpoints run both thinking modes. Reports retain processor invocation count, elapsed time, peak VRAM, trainable parameters, generated tokens, throughput, and FLOPs.
+Evaluation has two lanes. Full standard general benchmarks use no chat template and option log-likelihood once per model/processor state. Separate chat-generation cells run thinking off/on: labeled-choice extraction for general multiple-choice tasks and numeric-last-answer scoring for math tasks, always with a 2,048-token generation cap. Large general tasks use authenticated deterministic subsets for the secondary thinking comparison; standard general scores remain full-dataset. LAMBADA is excluded because next-word completion has no meaningful thinking-on analogue. Reports retain processor invocation count, elapsed time, peak VRAM, parse and truncation rates, trainable parameters, generated tokens, throughput, and FLOPs.
 
 Processor-off results test the frozen-backbone invariant. Any material difference from the untouched instruct checkpoint indicates checkpoint or evaluation drift.
 
@@ -42,7 +42,7 @@ The series uses Warmup–Stable–Decay (WSD): linear warmup for 3% of optimizer
 
 The 697,744-row split leaves a 16-row remainder at global batch 64. The series uses standard drop-last epoch semantics: 697,728 rows and 10,902 optimizer steps. Every arm sees the same retained rows once, in the same order. The script defaults to a read-only JSON plan and requires `--execute` before it creates artifacts or launches work. It checkpoints exact-resume state, stops launching new cells at the declared deadline, and resumes completed training and evaluation cells on the next invocation.
 
-Every non-processor target runs thinking off/on. Every processor target runs processor off/on × thinking off/on over the complete general and math suites. Training metrics and FLOP estimates remain in local run records and mirror to W&B. Evaluation results remain in local evaluation records and publish scalar metrics plus authenticated result artifacts to W&B.
+Every non-processor target gets one full standard-general cell plus thinking off/on chat-generation cells. Every processor target gets those three cells with processor off and on. Training metrics and FLOP estimates remain in local run records and mirror to W&B. Evaluation results remain in local evaluation records and publish scalar metrics plus authenticated result artifacts to W&B.
 
 ```bash
 uv run --extra gpu --extra eval --extra convert python \

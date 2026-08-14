@@ -21,6 +21,31 @@
 
 Evaluation constructs independent state. It does not mutate a training checkpoint. Experiment pages define stricter task sets, controls, and evidence gates.
 
+## Standard scores versus thinking comparisons
+
+Keep two protocols separate:
+
+- Standard general scores use full LM Evaluation Harness datasets, no chat template, and option log-likelihood. They are leaderboard-comparable and have no thinking dimension.
+- Thinking comparisons use the official tokenizer chat template and generated final answers. Multiple-choice prompts expose labeled choices and require `Final answer: X`; numeric tasks use numeric-last-answer scoring. Both thinking modes receive the same 2,048-token cap.
+
+```bash
+uv run --extra gpu --extra eval gcw eval general \
+  --checkpoint /path/to/checkpoint \
+  --prompt-mode plain \
+  --processor on \
+  --out data/eval-runs/standard-general.json
+
+uv run --extra gpu --extra eval gcw eval chat \
+  --checkpoint /path/to/checkpoint \
+  --tokenizer-path /path/to/qwen-tokenizer \
+  --tasks mmlu gsm8k_openmath \
+  --mode thinking_on \
+  --max-new-tokens 2048 \
+  --out data/eval-runs/chat-thinking-on.json
+```
+
+The maintained Qwen3 experiment evaluates full standard general tasks. Chat-generation uses deterministic authenticated subsets for large general tasks and full numeric math datasets. Generated results record parse failures, truncations, response tokens, processor state, selected-row hashes, and per-task accuracy. LAMBADA is excluded because next-word completion has no meaningful thinking-on/chat analogue.
+
 ## Qwen3 GSM8K reproduction matrix
 
 Use `scripts/analysis/run_benchmarks.py` when exact generated rows and protocol identity matter. It supports HF directories and native GCW checkpoints, processor bypass, separate tokenizer ownership, and both maintained scorers.
