@@ -9,14 +9,17 @@ from gcw.config import CacheProcessorConfig, DiffusionProcessorConfig, FlowProce
 from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
+    PreparedBatchedCacheProcessorParameters,
     gather_cache_layers,
     gather_cache_values,
     merge_global_kv,
     merge_global_values,
     merge_layer_kv,
     merge_layer_values,
+    prepare_batched_cache_processor_parameters,
     rotary_for_indices,
     run_batched_cache_processors,
+    run_prepared_batched_cache_processors,
     scatter_cache_layers,
     scatter_cache_values,
     select_kv_norm_indices,
@@ -161,6 +164,34 @@ class CacheProcessor(nn.Module):
         raise ValueError(f"unsupported cache processor gate_mode: {self.config.gate_mode}")
 
 
+class PreparedPerLayerCacheProcessorExecution:
+    """A single-forward BT execution with lazily prepared parameter stacks.
+
+    ``LanguageModel.forward`` owns this context. The first cache event creates
+    differentiable stacks and later events reuse them. ``__exit__`` drops the
+    references so no graph-derived tensor can leak into another forward.
+    """
+
+    def __init__(self, processor: PerLayerCacheProcessor):
+        self._processor = processor
+        self._prepared: PreparedBatchedCacheProcessorParameters | None = None
+        self._closed = False
+
+    def __enter__(self) -> PreparedPerLayerCacheProcessorExecution:
+        return self
+
+    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        self._prepared = None
+        self._closed = True
+
+    def __call__(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
+        if self._closed:
+            raise RuntimeError("prepared cache-processor execution cannot be reused across forwards")
+        if self._prepared is None:
+            self._prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
+        return self._processor(cache, select_all=select_all, _prepared=self._prepared)
+
+
 class PerLayerCacheProcessor(CacheProcessorBase):
     def __init__(self, model_config: ModelConfig):
         super().__init__()
@@ -176,15 +207,34 @@ class PerLayerCacheProcessor(CacheProcessorBase):
         layer_dim = self.config.stream_factor * num_kv_heads * head_dim
         self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.cache_num_layers))
 
-    def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
+    def prepare_forward_execution(self) -> PreparedPerLayerCacheProcessorExecution:
+        return PreparedPerLayerCacheProcessorExecution(self)
+
+    def forward(
+        self,
+        cache: CacheLike,
+        *,
+        select_all: bool = False,
+        _prepared: PreparedBatchedCacheProcessorParameters | None = None,
+    ) -> CacheLike:
         indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
         if self.config.update_stream == "v":
             values = gather_cache_values(cache, indices)
-            updated = run_batched_cache_processors(self.blocks, merge_layer_values(values), indices)
+            merged = merge_layer_values(values)
+            updated = (
+                run_batched_cache_processors(self.blocks, merged, indices)
+                if _prepared is None
+                else run_prepared_batched_cache_processors(_prepared, merged, indices)
+            )
             new_values = split_layer_values(updated, values.shape[2], values.shape[4])
             return scatter_cache_values(cache, indices, new_values)
         keys, values = gather_cache_layers(cache, indices)
-        updated = run_batched_cache_processors(self.blocks, merge_layer_kv(keys, values), indices)
+        merged = merge_layer_kv(keys, values)
+        updated = (
+            run_batched_cache_processors(self.blocks, merged, indices)
+            if _prepared is None
+            else run_prepared_batched_cache_processors(_prepared, merged, indices)
+        )
         new_keys, new_values = split_layer_kv(updated, keys.shape[2], keys.shape[4])
         return scatter_cache_layers(cache, indices, new_keys, new_values)
 

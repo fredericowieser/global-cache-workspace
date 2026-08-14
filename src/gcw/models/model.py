@@ -49,14 +49,17 @@ class LanguageModel(nn.Module):
         attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         processor = self._processor_config()
-        return self.backbone(
-            input_ids,
-            targets,
-            loss_reduction,
-            processor=self.cache_processor,
-            process_every=processor.process_every,
-            attention_mask=attention_mask,
-        )
+        # Prepared tensors are local to this context and therefore to this
+        # forward's autograd graph. Generation deliberately keeps the eager path.
+        with self.cache_processor.prepare_forward_execution() as execution:
+            return self.backbone(
+                input_ids,
+                targets,
+                loss_reduction,
+                processor=execution,
+                process_every=processor.process_every,
+                attention_mask=attention_mask,
+            )
 
     @torch.no_grad()
     def generate(

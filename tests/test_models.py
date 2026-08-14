@@ -1,4 +1,5 @@
 import types
+from contextlib import nullcontext
 from dataclasses import replace
 
 import pytest
@@ -2596,6 +2597,9 @@ def _reference_token_gate(processor, selected_scores: torch.Tensor) -> torch.Ten
 def _patch_reference_processor(model) -> None:
     if model.config.variant == "bt":
         model.cache_processor.forward = types.MethodType(_reference_per_layer_processor, model.cache_processor)
+        model.cache_processor.prepare_forward_execution = types.MethodType(
+            lambda self: nullcontext(self), model.cache_processor
+        )
     else:
         model.cache_processor.forward = types.MethodType(_reference_global_processor, model.cache_processor)
 

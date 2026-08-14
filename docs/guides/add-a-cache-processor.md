@@ -11,3 +11,9 @@
 7. Add matched controls before claiming that the mechanism improves a model.
 
 Do not add a generic processor registry. Constructor dispatch remains explicit because each processor has different state and scheduling semantics.
+
+## Forward-local preparation
+
+`LanguageModel.forward` asks a processor for a forward execution context. The default context calls the processor eagerly. BT overrides it because its layer-parallel kernel needs stacked views of every per-layer weight, norm, bias, and gate. BT builds those differentiable stacks lazily at the first cache event, reuses them for later events in the same forward, then releases them when the forward returns.
+
+Prepared tensors are execution data, not model state. Keep source parameters in their existing modules, never register prepared stacks as parameters or buffers, and never cache them on the processor. A prepared tensor belongs to one autograd graph; carrying it into another forward can produce stale values or a second-backward error. Direct processor calls and generation use the eager implementation as the reference fallback. BGT, Icarus, and Longshot retain their existing paths because they do not perform BT's repeated per-layer stacking.
