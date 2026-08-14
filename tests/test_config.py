@@ -59,6 +59,12 @@ def test_wandb_must_resume_requires_run_id():
         WandbConfig(enabled=True, resume="must")
 
 
+@pytest.mark.parametrize("tags", [[""], ["x" * 65], [1], "not-a-list"])
+def test_wandb_tags_match_service_constraints(tags):
+    with pytest.raises(ValueError, match="between 1 and 64 characters"):
+        WandbConfig(enabled=True, tags=tags)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     ("path", "topology"),
     [

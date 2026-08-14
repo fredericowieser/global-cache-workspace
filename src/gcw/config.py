@@ -577,6 +577,10 @@ class WandbConfig:
             raise ValueError("wandb.resume must be 'allow', 'must', 'never', 'auto', or null")
         if self.resume == "must" and not self.id:
             raise ValueError("wandb.id is required when wandb.resume='must'")
+        if not isinstance(self.tags, list) or any(
+            not isinstance(tag, str) or not 1 <= len(tag) <= 64 for tag in self.tags
+        ):
+            raise ValueError("wandb.tags must contain only strings between 1 and 64 characters")
 
 
 @dataclass
