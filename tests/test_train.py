@@ -30,6 +30,7 @@ from gcw.training.core import (
     _model_loss,
     _transformer_layer_classes,
     _validate_train_batch,
+    _wsd_lr,
     train,
 )
 from gcw.training.checkpoint import CheckpointCompatibilityError
@@ -121,6 +122,16 @@ def test_lora_trainable_policy_freezes_base_weights():
     adapter_ids = {id(parameter) for module in adapters for parameter in (module.lora_a, module.lora_b)}
     assert adapters
     assert all(parameter.requires_grad == (id(parameter) in adapter_ids) for parameter in model.parameters())
+
+
+def test_wsd_reaches_peak_then_exact_final_rate():
+    scales = [_wsd_lr(step, 100, 3, 0.10, 0.0) for step in range(100)]
+
+    assert scales[:3] == pytest.approx([1 / 3, 2 / 3, 1.0])
+    assert scales[89] == 1.0
+    assert scales[90] == 1.0
+    assert scales[-1] == 0.0
+    assert scales[90:] == sorted(scales[90:], reverse=True)
 
 
 def test_trainable_policy_selects_backbone_processor_or_both():

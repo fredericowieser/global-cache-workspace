@@ -622,10 +622,12 @@ def _wsd_lr(step: int, max_steps: int, warmup_steps: int, warmdown_ratio: float,
     if step < warmup_steps:
         return (step + 1) / max(1, warmup_steps)
     warmdown = round(warmdown_ratio * max_steps)
-    if warmdown <= 0 or step <= max_steps - warmdown:
+    if warmdown <= 0 or step < max_steps - warmdown:
         return 1.0
-    progress = (max_steps - step) / warmdown
-    return progress + (1.0 - progress) * final_lr_frac
+    if warmdown == 1:
+        return final_lr_frac
+    progress = (max_steps - 1 - step) / (warmdown - 1)
+    return final_lr_frac + progress * (1.0 - final_lr_frac)
 
 
 def _weight_decay(step: int, max_steps: int, base_weight_decay: float) -> float:
