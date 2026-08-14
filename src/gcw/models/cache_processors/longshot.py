@@ -39,6 +39,10 @@ from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow, sinusoidal_time_embedding
 from gcw.models.backbones.transformer import RMSNorm, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.models.cache_processors.longshot_scores import (
+    chunked_fp32_l2_norm,
+    chunked_fp32_squared_l2,
+)
 
 CacheLike = CacheState | StaticCacheState | WindowedCache
 
@@ -758,7 +762,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
             )
-            scores = merged_all.float().pow(2).sum(dim=-1)
+            scores = chunked_fp32_squared_l2(merged_all)
             indices = select_per_cache_head_kv_norm_indices_from_scores(
                 scores,
                 self.config.process_every,
@@ -787,7 +791,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
             )
-            head_scores = merged.float().flatten(start_dim=2).norm(dim=-1)
+            head_scores = chunked_fp32_l2_norm(merged)
         if select_all:
             selected_heads = torch.arange(
                 self.num_kv_cache_heads,
@@ -912,7 +916,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
             )
-            scores = merged.float().pow(2).sum(dim=-1)
+            scores = chunked_fp32_squared_l2(merged)
             indices = select_per_cache_head_kv_norm_indices_from_scores(
                 scores, self.config.process_every, self.config.topk
             )
@@ -938,7 +942,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
             )
-            kv_head_scores = merged.float().flatten(start_dim=2).norm(dim=-1)
+            kv_head_scores = chunked_fp32_l2_norm(merged)
         latest = latest_shared_indices(indices)
         kv_hidden = self.block.encode_input(merged) if self.block.has_linear_state_adapter() and cache.linear_states else None
         linear_inputs = self._linear_state_inputs(cache, kv_hidden)
