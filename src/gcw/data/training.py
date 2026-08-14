@@ -220,6 +220,7 @@ class SFTBatchStream:
         enable_thinking: bool = False,
         loss_scope: Literal["answer_only", "full_sequence"] = "answer_only",
         cursor: SFTCursor | None = None,
+        drop_last: bool = False,
     ) -> None:
         if not rows:
             raise ValueError("SFT rows must not be empty")
@@ -238,6 +239,7 @@ class SFTBatchStream:
         self.chat_template = chat_template
         self.enable_thinking = enable_thinking
         self.loss_scope = loss_scope
+        self.drop_last = drop_last
         self._cursor = cursor or SFTCursor()
         if self._cursor.row >= len(rows):
             raise ValueError(f"SFT cursor row {self._cursor.row} exceeds dataset length {len(rows)}")
@@ -247,8 +249,14 @@ class SFTBatchStream:
         return self._cursor
 
     def __next__(self) -> TrainingBatch:
+        global_rows = self.batch_size * self.world_size
+        if self.drop_last and len(self.rows) - self._cursor.row < global_rows:
+            self._cursor = SFTCursor(epoch=self._cursor.epoch + 1, row=0)
         rank_start = self._cursor.row + self.rank * self.batch_size
-        batch_rows = [self.rows[(rank_start + offset) % len(self.rows)] for offset in range(self.batch_size)]
+        if self.drop_last:
+            batch_rows = [self.rows[rank_start + offset] for offset in range(self.batch_size)]
+        else:
+            batch_rows = [self.rows[(rank_start + offset) % len(self.rows)] for offset in range(self.batch_size)]
         x, y, attention_mask = sft_batch(
             batch_rows,
             self.tokenizer,
@@ -261,12 +269,14 @@ class SFTBatchStream:
             loss_scope=self.loss_scope,
             return_attention_mask=True,
         )
-        global_rows = self.batch_size * self.world_size
         absolute_next = self._cursor.row + global_rows
-        self._cursor = SFTCursor(
-            epoch=self._cursor.epoch + absolute_next // len(self.rows),
-            row=absolute_next % len(self.rows),
-        )
+        if self.drop_last and absolute_next == len(self.rows):
+            self._cursor = SFTCursor(epoch=self._cursor.epoch + 1, row=0)
+        else:
+            self._cursor = SFTCursor(
+                epoch=self._cursor.epoch + absolute_next // len(self.rows),
+                row=absolute_next % len(self.rows),
+            )
         return TrainingBatch(x=x, y=y, attention_mask=attention_mask)
 
 
@@ -324,6 +334,7 @@ def build_training_stream(
             enable_thinking=config.data.sft_enable_thinking,
             loss_scope=config.data.sft_loss_scope,
             cursor=sft_cursor,
+            drop_last=config.logical_pair_grouping,
         )
     if cursor is not None and not isinstance(cursor, FineWebCursor):
         raise TypeError(f"expected FineWebCursor, got {type(cursor).__name__}")

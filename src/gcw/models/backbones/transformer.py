@@ -417,6 +417,7 @@ class TF(Backbone):
         """Compute loss without projecting prompt or padding positions through the vocabulary head."""
         chunk_size = 256 if x.is_cuda else 64
         loss_sum = x.new_zeros((), dtype=torch.float32)
+        row_loss_sums = x.new_zeros((x.shape[0],), dtype=torch.float32)
         token_count = x.new_zeros((), dtype=torch.float32)
         per_token: list[torch.Tensor] = []
         any_valid = False
@@ -440,6 +441,8 @@ class TF(Backbone):
                 chunk_loss = x.new_zeros(flat_targets.shape, dtype=torch.float32)
             loss_sum = loss_sum + chunk_loss.sum()
             token_count = token_count + valid.sum().to(torch.float32)
+            if loss_reduction == "row_sum":
+                row_loss_sums = row_loss_sums + chunk_loss.reshape(target_chunk.shape).sum(dim=1)
             if loss_reduction == "none":
                 per_token.append(chunk_loss.reshape(target_chunk.shape))
         if not any_valid:
@@ -449,9 +452,13 @@ class TF(Backbone):
             connected_zero = (x.reshape(-1)[:1].float().sum() + head.reshape(-1)[:1].float().sum()) * 0.0
             if loss_reduction == "none":
                 return torch.cat(per_token, dim=1) + connected_zero
+            if loss_reduction == "row_sum":
+                return row_loss_sums + connected_zero
             return loss_sum + connected_zero
         if loss_reduction == "none":
             return torch.cat(per_token, dim=1)
+        if loss_reduction == "row_sum":
+            return row_loss_sums
         if loss_reduction == "sum":
             return loss_sum
         return loss_sum / token_count.clamp_min(1.0)
@@ -462,6 +469,7 @@ class TF(Backbone):
         """Eager loss oracle which projects every position, including ignored positions."""
         chunk_size = 256 if x.is_cuda else 64
         loss_sum = x.new_zeros((), dtype=torch.float32)
+        row_loss_sums = x.new_zeros((x.shape[0],), dtype=torch.float32)
         token_count = x.new_zeros((), dtype=torch.float32)
         per_token: list[torch.Tensor] = []
         for start in range(0, x.shape[1], chunk_size):
@@ -479,10 +487,14 @@ class TF(Backbone):
             )
             loss_sum = loss_sum + chunk_loss.sum()
             token_count = token_count + valid.sum().to(torch.float32)
+            if loss_reduction == "row_sum":
+                row_loss_sums = row_loss_sums + chunk_loss.reshape(target_chunk.shape).sum(dim=1)
             if loss_reduction == "none":
                 per_token.append(chunk_loss.reshape(target_chunk.shape))
         if loss_reduction == "none":
             return torch.cat(per_token, dim=1)
+        if loss_reduction == "row_sum":
+            return row_loss_sums
         if loss_reduction == "sum":
             return loss_sum
         return loss_sum / token_count.clamp_min(1.0)

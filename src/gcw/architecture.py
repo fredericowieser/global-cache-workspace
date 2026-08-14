@@ -780,6 +780,8 @@ def _data_protocol(config: TrainConfig) -> str:
 
 
 def _objective_protocol(config: TrainConfig) -> str:
+    if config.logical_pair_grouping:
+        return "gcw.sft.answer_only_ce.adjacent_pair_token_mean.v1"
     if config.mode == "sft":
         return f"gcw.sft.{config.data.sft_loss_scope}_ce.v1"
     return "gcw.pretrain.next_token_ce.v1"
@@ -819,6 +821,8 @@ def _experiment_capabilities(config: TrainConfig) -> set[str]:
         capabilities.add("exact_resume")
     if config.data.canonical_execution:
         capabilities.add("canonical_evidence")
+    if config.logical_pair_grouping:
+        capabilities.add("logical_pair_grouping")
     return capabilities
 
 
