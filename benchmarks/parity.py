@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import torch
@@ -138,7 +139,11 @@ def patch_eager_reference(model: torch.nn.Module) -> None:
     def forward(self, cache: CacheState, *, select_all: bool = False) -> CacheState:
         return eager_processor_forward(self, cache, select_all=select_all)
 
+    def prepare_forward_execution(self):
+        return nullcontext(self)
+
     processor.forward = types.MethodType(forward, processor)
+    processor.prepare_forward_execution = types.MethodType(prepare_forward_execution, processor)
     model.backbone.forward_windowed_loss = types.MethodType(eager_windowed_loss, model.backbone)
 
 
