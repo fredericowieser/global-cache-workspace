@@ -99,7 +99,7 @@ warmup_steps: 0
 warmdown_ratio: 0.0
 weight_decay: 0.0
 grad_clip: 1.0
-bf16: true
+precision: bf16_mixed
 seed: 24
 save_every: 1000
 wandb:

@@ -31,7 +31,7 @@ learning_rate: 0.003
 weight_decay: 0.1
 warmup_steps: 1907
 grad_clip: 1.0
-bf16: true
+precision: bf16_mixed
 seed: 24
 save_every: 1000
 eval_every: 250

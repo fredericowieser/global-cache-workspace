@@ -33,5 +33,5 @@ sequence_len: 16
 max_steps: 2
 learning_rate: 0.001
 warmup_steps: 1
-bf16: false
+precision: bf16_mixed
 save_every: 0
