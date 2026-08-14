@@ -257,6 +257,39 @@ def test_qwen_compile_composes_with_bt_compile_and_activation_checkpointing(
     assert any(parameter.grad is not None for parameter in model.cache_processor.parameters())
 
 
+def test_qwen_compile_preserves_segmented_checkpoint_early_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch.manual_seed(47)
+    eager = _model()
+    segmented = copy.deepcopy(eager)
+    _apply_trainable_policy(eager, "cache_processor")
+    _install_fake_compiler(monkeypatch)
+    _freeze_and_compile(segmented)
+    inputs = torch.randint(0, eager.config.vocab_size, (2, 192))
+    targets = torch.randint(0, eager.config.vocab_size, (2, 192))
+
+    eager_loss = eager(inputs, targets)
+    segmented_loss = segmented(inputs, targets, activation_checkpoint_windows=2)
+    eager_loss.backward()
+    segmented_loss.backward()
+
+    torch.testing.assert_close(segmented_loss, eager_loss, atol=2e-6, rtol=2e-5)
+    eager_gradients = dict(eager.cache_processor.named_parameters())
+    segmented_gradients = dict(segmented.cache_processor.named_parameters())
+    assert eager_gradients.keys() == segmented_gradients.keys()
+    for name, eager_parameter in eager_gradients.items():
+        segmented_parameter = segmented_gradients[name]
+        assert eager_parameter.grad is not None
+        assert segmented_parameter.grad is not None
+        torch.testing.assert_close(
+            segmented_parameter.grad,
+            eager_parameter.grad,
+            atol=2e-5,
+            rtol=2e-4,
+        )
+
+
 def test_config_is_explicit_and_rejects_unsupported_combinations() -> None:
     assert TrainConfig().backbone_chunk_backend == "eager"
     accepted = TrainConfig(

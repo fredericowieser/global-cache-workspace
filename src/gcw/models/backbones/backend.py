@@ -107,9 +107,20 @@ def run_qwen3_backbone_chunk_region(
     try:
         return runner(inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
     except Exception as error:
+        if _is_non_reentrant_checkpoint_early_stop(error):
+            raise
         raise RuntimeError(
             "compiled Qwen3 backbone chunk failed; eager fallback is disabled when backbone_chunk_backend=compile"
         ) from error
+
+
+def _is_non_reentrant_checkpoint_early_stop(error: Exception) -> bool:
+    """Preserve checkpoint's private control flow without weakening fail-closed execution."""
+    error_type = type(error)
+    return (
+        error_type.__module__ == "torch.utils.checkpoint"
+        and error_type.__name__ == "_StopRecomputationError"
+    )
 
 
 def _qwen3_backbone_chunk_tensor_region(
