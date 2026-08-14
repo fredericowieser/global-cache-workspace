@@ -31,7 +31,11 @@ from gcw.flops import total_training_flops, training_flops_per_token
 from gcw.models import build_model
 from gcw.models.backbones.transformer import Block
 from gcw.models.lora import LoRALinear
-from gcw.models.cache_processors.backend import bt_processor_backend_metadata
+from gcw.models.cache_processors.backend import (
+    bt_processor_backend_metadata,
+    cache_processor_backend_metadata,
+    resolve_cache_processor_backend,
+)
 from gcw.params import processor_params, total_non_embedding_params
 from gcw.tracking import RunTracker
 from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
@@ -115,10 +119,16 @@ def train(config: TrainConfig) -> None:
         _apply_fsdp_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
+        regional_backend = resolve_cache_processor_backend(config.model)
         if config.model.variant == "bt" and _whole_model_compile_requested():
             raise RuntimeError(
                 "GCW_COMPILE cannot compile a BT language model; use "
                 "GCW_BT_PROCESSOR_BACKEND=compile for the prepared processor region"
+            )
+        if regional_backend == "compile" and _whole_model_compile_requested():
+            raise RuntimeError(
+                "GCW_COMPILE cannot be combined with GCW_CACHE_PROCESSOR_BACKEND=compile; "
+                "the latter owns the BGT processor region"
             )
         if config.model.variant != "bt":
             model = maybe_compile(model)
@@ -155,6 +165,9 @@ def train(config: TrainConfig) -> None:
         "resume_current_world_size": world_size,
         "model_runtime_backends": _model_runtime_backends(model, device),
         "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
+        "cache_processor_backend": (
+            cache_processor_backend_metadata(config.model) if config.model.variant == "bgt" else None
+        ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
     }
@@ -435,6 +448,11 @@ def _training_fingerprint(
         "distributed": config.distributed,
         "bt_processor_backend_fingerprint": (
             bt_processor_backend_metadata()["fingerprint_sha256"] if config.model.variant == "bt" else None
+        ),
+        "cache_processor_backend_fingerprint": (
+            cache_processor_backend_metadata(config.model)["fingerprint_sha256"]
+            if config.model.variant == "bgt"
+            else None
         ),
         "initialization": {
             "backbone_checkpoint": config.backbone_checkpoint,

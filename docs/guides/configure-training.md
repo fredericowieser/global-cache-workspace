@@ -74,9 +74,9 @@ activation_checkpoint_windows: 2  # zero disables; positive values are windows p
 
 Each segment exports only hidden output and its tensor-only cache boundary. Backward replays the segment with RNG preservation. BT creates a new prepared-stack owner for every original segment invocation and every replay; closed owners remain unusable, and graph-derived stacks never cross segment or forward lifetimes. Replay suppresses processor call counts and Longshot overlap metrics.
 
-Segment checkpointing runs only in training with gradients enabled. Evaluation accepts the resolved policy but executes eagerly. It supports the regional `GCW_BT_PROCESSOR_BACKEND=compile` path and composes with `standard_processor_layers`. FSDP layer checkpointing and Qwen3.5 MoE router-loss execution reject this policy explicitly.
+Segment checkpointing runs only in training with gradients enabled. Evaluation accepts the resolved policy but executes eagerly. It supports both regional backends: `GCW_BT_PROCESSOR_BACKEND=compile` for BT and `GCW_CACHE_PROCESSOR_BACKEND=compile` for BGT, Flow-BGT, and noiseless Diffusion-BGT. Both compose with `standard_processor_layers`; segment replay keeps selection, gather, and writeback eager around the compiled tensor region. FSDP layer checkpointing and Qwen3.5 MoE router-loss execution reject this policy explicitly.
 
-Both policies increase backward compute. Both are runtime provenance and exact-resume fingerprint fields; changing either across resume is rejected.
+Both checkpointing policies increase backward compute. They and the selected regional backend are runtime provenance and exact-resume fingerprint fields; changing any of them across resume is rejected.
 
 ## Joint Finetuning
 
