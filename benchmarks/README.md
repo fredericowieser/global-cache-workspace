@@ -1,0 +1,20 @@
+# Cache-processor benchmarks
+
+`benchmarks.harness` measures maintained BT/BGT cache-processor operations and a complete optimizer step. The optimizer path loads a normal `TrainConfig`, initializes its configured checkpoint, and follows its trainable policy, AdamW schedule, gradient clipping, gradient accumulation, compile policy, and BF16 setting. It loads one real training batch through the configured stream and reuses it so data-loader and network time stay outside the measurement.
+
+```bash
+uv run --extra gpu python -m benchmarks.harness \
+  --train-config configs/train/smoke_bgt.yaml \
+  --device cuda \
+  --warmup 5 \
+  --steps 30 \
+  --output artifacts/benchmarks/smoke-bgt.json
+```
+
+Use `--suite processor` or `--suite train-step` to isolate one part. The default `all` suite records index selection, gather, processor transform, scatter, end-to-end processor forward, and the full training optimizer step.
+
+The output is atomic authenticated JSON under the repository's existing SHA-256 convention. Its payload binds the resolved config and hash, authored config-file hash, source commit and source-tree hash, processor variant, device/Torch/CUDA identity, warmup count, every measured step, interpolated median/p10/p90, peak allocated CUDA memory, and actual non-padding and supervised token counts. `source_dirty` must be false before treating a run as canonical evidence.
+
+Micro-operation timings are forward-only and intentionally exclude fixture construction. The optimizer-step timing includes zeroing gradients, all configured accumulation microsteps, forward, backward, clipping, schedule updates, and AdamW update. It excludes data loading, evaluation, checkpoint writing, and distributed communication. `GCW_COMPILE` retains its normal effect; use warmup iterations to keep compilation outside measured steps. CPU reports zero peak memory because Torch exposes no equivalent CPU allocator peak.
+
+Correctness parity runs in ordinary CPU pytest. GPU performance execution is opt-in through `GCW_RUN_GPU_PERF_TESTS=1` and carries both `gpu` and `performance` markers; no latency threshold runs in CPU CI.

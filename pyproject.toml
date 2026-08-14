@@ -32,6 +32,7 @@ exclude = ["src/gcw/spikes"]
 [tool.hatch.build.targets.sdist]
 only-include = [
     "/src",
+    "/benchmarks",
     "/scripts",
     "/examples",
     "/configs",
@@ -131,6 +132,7 @@ pythonpath = ["."]
 markers = [
     "slow: network- or download-dependent tests",
     "gpu: requires a CUDA GPU",
+    "performance: opt-in performance measurements and thresholds",
 ]
 
 [tool.ruff]
