@@ -31,6 +31,7 @@ from gcw.flops import total_training_flops, training_flops_per_token
 from gcw.models import build_model
 from gcw.models.backbones.transformer import Block
 from gcw.models.lora import LoRALinear
+from gcw.models.cache_processors.backend import bt_processor_backend_metadata
 from gcw.params import processor_params, total_non_embedding_params
 from gcw.tracking import RunTracker
 from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
@@ -111,7 +112,13 @@ def train(config: TrainConfig) -> None:
         _apply_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
-        model = maybe_compile(model)
+        if config.model.variant == "bt" and _whole_model_compile_requested():
+            raise RuntimeError(
+                "GCW_COMPILE cannot compile a BT language model; use "
+                "GCW_BT_PROCESSOR_BACKEND=compile for the prepared processor region"
+            )
+        if config.model.variant != "bt":
+            model = maybe_compile(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
             model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
 
@@ -144,6 +151,7 @@ def train(config: TrainConfig) -> None:
         "resume_saved_world_size": checkpoint.resume_state.saved_world_size if checkpoint is not None else world_size,
         "resume_current_world_size": world_size,
         "model_runtime_backends": _model_runtime_backends(model, device),
+        "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     budget_message = (
@@ -378,6 +386,11 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
     raise ValueError(f"unsupported trainable policy: {policy}")
 
 
+def _whole_model_compile_requested() -> bool:
+    value = os.environ.get("GCW_COMPILE", "0").strip().lower()
+    return value not in {"", "0", "false", "no", "none", "off"}
+
+
 def _model_runtime_backends(model: torch.nn.Module, device: torch.device) -> dict[str, str]:
     model = _unwrap(model)
     model = getattr(model, "backbone", model)
@@ -409,6 +422,9 @@ def _training_fingerprint(
         "data_kind": config.data.kind,
         "mode": config.mode,
         "distributed": config.distributed,
+        "bt_processor_backend_fingerprint": (
+            bt_processor_backend_metadata()["fingerprint_sha256"] if config.model.variant == "bt" else None
+        ),
         "initialization": {
             "backbone_checkpoint": config.backbone_checkpoint,
             "init_checkpoint": config.init_checkpoint,

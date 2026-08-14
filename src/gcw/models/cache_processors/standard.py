@@ -6,6 +6,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from gcw.config import CacheProcessorConfig, DiffusionProcessorConfig, FlowProcessorConfig, ModelConfig
+from gcw.models.cache_processors.backend import (
+    BTProcessorBackend,
+    bt_processor_backend_metadata,
+    resolve_bt_processor_backend,
+    run_prepared_bt_processor_region,
+)
 from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
@@ -19,7 +25,6 @@ from gcw.models.cache_processors.ops import (
     prepare_batched_cache_processor_parameters,
     rotary_for_indices,
     run_batched_cache_processors,
-    run_prepared_batched_cache_processors,
     scatter_cache_layers,
     scatter_cache_values,
     select_kv_norm_indices,
@@ -174,6 +179,7 @@ class PreparedPerLayerCacheProcessorExecution:
 
     def __init__(self, processor: PerLayerCacheProcessor):
         self._processor = processor
+        self._backend = processor.execution_backend
         self._prepared: PreparedBatchedCacheProcessorParameters | None = None
         self._closed = False
 
@@ -189,7 +195,12 @@ class PreparedPerLayerCacheProcessorExecution:
             raise RuntimeError("prepared cache-processor execution cannot be reused across forwards")
         if self._prepared is None:
             self._prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
-        return self._processor(cache, select_all=select_all, _prepared=self._prepared)
+        return self._processor(
+            cache,
+            select_all=select_all,
+            _prepared=self._prepared,
+            _prepared_backend=self._backend,
+        )
 
 
 class PerLayerCacheProcessor(CacheProcessorBase):
@@ -206,9 +217,13 @@ class PerLayerCacheProcessor(CacheProcessorBase):
         num_kv_heads, head_dim = model_config.stored_cache_shape
         layer_dim = self.config.stream_factor * num_kv_heads * head_dim
         self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.cache_num_layers))
+        self.execution_backend: BTProcessorBackend = resolve_bt_processor_backend()
 
     def prepare_forward_execution(self) -> PreparedPerLayerCacheProcessorExecution:
         return PreparedPerLayerCacheProcessorExecution(self)
+
+    def execution_backend_metadata(self) -> dict[str, object]:
+        return bt_processor_backend_metadata(self.execution_backend)
 
     def forward(
         self,
@@ -216,6 +231,7 @@ class PerLayerCacheProcessor(CacheProcessorBase):
         *,
         select_all: bool = False,
         _prepared: PreparedBatchedCacheProcessorParameters | None = None,
+        _prepared_backend: BTProcessorBackend = "eager",
     ) -> CacheLike:
         indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
         if self.config.update_stream == "v":
@@ -224,7 +240,7 @@ class PerLayerCacheProcessor(CacheProcessorBase):
             updated = (
                 run_batched_cache_processors(self.blocks, merged, indices)
                 if _prepared is None
-                else run_prepared_batched_cache_processors(_prepared, merged, indices)
+                else run_prepared_bt_processor_region(_prepared_backend, _prepared, merged, indices)
             )
             new_values = split_layer_values(updated, values.shape[2], values.shape[4])
             return scatter_cache_values(cache, indices, new_values)
@@ -233,7 +249,7 @@ class PerLayerCacheProcessor(CacheProcessorBase):
         updated = (
             run_batched_cache_processors(self.blocks, merged, indices)
             if _prepared is None
-            else run_prepared_batched_cache_processors(_prepared, merged, indices)
+            else run_prepared_bt_processor_region(_prepared_backend, _prepared, merged, indices)
         )
         new_keys, new_values = split_layer_kv(updated, keys.shape[2], keys.shape[4])
         return scatter_cache_layers(cache, indices, new_keys, new_values)
