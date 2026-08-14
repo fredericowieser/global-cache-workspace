@@ -13,7 +13,7 @@ from gcw.models.cache_processors.backend import (
     resolve_bt_processor_backend,
     run_prepared_bt_processor_region,
 )
-from gcw.models.cache_processors.base import CacheProcessorBase
+from gcw.models.cache_processors.base import CacheProcessorBase, cache_processor_recomputation_id
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
     PreparedBatchedCacheProcessorParameters,
@@ -196,6 +196,8 @@ class PreparedPerLayerCacheProcessorExecution:
         self._processor = processor
         self._backend = processor.execution_backend
         self._prepared: PreparedBatchedCacheProcessorParameters | None = None
+        self._recomputation_id: object | None = None
+        self._recomputed_prepared: PreparedBatchedCacheProcessorParameters | None = None
         self._closed = False
 
     def __enter__(self) -> PreparedPerLayerCacheProcessorExecution:
@@ -203,17 +205,27 @@ class PreparedPerLayerCacheProcessorExecution:
 
     def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
         self._prepared = None
+        self._recomputed_prepared = None
+        self._recomputation_id = None
         self._closed = True
 
     def __call__(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
         if self._closed:
             raise RuntimeError("prepared cache-processor execution cannot be reused across forwards")
-        if self._prepared is None:
-            self._prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
+        recomputation_id = cache_processor_recomputation_id()
+        if recomputation_id is None:
+            if self._prepared is None:
+                self._prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
+            prepared = self._prepared
+        else:
+            if recomputation_id is not self._recomputation_id:
+                self._recomputation_id = recomputation_id
+                self._recomputed_prepared = prepare_batched_cache_processor_parameters(self._processor.blocks)
+            prepared = self._recomputed_prepared
         return self._processor(
             cache,
             select_all=select_all,
-            _prepared=self._prepared,
+            _prepared=prepared,
             _prepared_backend=self._backend,
         )
 

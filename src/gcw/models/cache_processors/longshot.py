@@ -18,7 +18,7 @@ from gcw.config import (
     WorkspaceFlowRefinementConfig,
     linear_attention_following_cache_indices,
 )
-from gcw.models.cache_processors.base import CacheProcessorBase
+from gcw.models.cache_processors.base import CacheProcessorBase, cache_processor_recomputation_id
 from gcw.models.cache_processors.ops import (
     scatter_latest as _scatter_latest,
     scatter_latest_values as _scatter_latest_values,
@@ -538,6 +538,8 @@ class CacheProcessor(nn.Module):
         selected_heads: torch.Tensor,
         next_selected_heads: torch.Tensor,
     ) -> None:
+        if cache_processor_recomputation_id() is not None:
+            return
         assert selected_heads.shape[-1] > 0, "selected_heads must include at least one cache head"
         assert next_selected_heads.shape[-1] > 0, "next_selected_heads must include at least one cache head"
         maintained = (selected_heads[:, :, None] == next_selected_heads[:, None, :]).any(dim=-1)

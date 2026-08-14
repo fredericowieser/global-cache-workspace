@@ -1,10 +1,28 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextvars import ContextVar
 from typing import Any, Callable
 
 import torch.nn as nn
+
+
+_RECOMPUTATION_ID: ContextVar[object | None] = ContextVar("gcw_cache_processor_recomputation_id", default=None)
+
+
+@contextmanager
+def cache_processor_recomputation():
+    """Suppress observable processor bookkeeping while checkpoint backward replays a segment."""
+    token = _RECOMPUTATION_ID.set(object())
+    try:
+        yield
+    finally:
+        _RECOMPUTATION_ID.reset(token)
+
+
+def cache_processor_recomputation_id() -> object | None:
+    return _RECOMPUTATION_ID.get()
 
 
 class CacheProcessorBase(nn.Module, ABC):
@@ -20,7 +38,8 @@ class CacheProcessorBase(nn.Module, ABC):
         self._calls = 0
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        self._calls += 1
+        if cache_processor_recomputation_id() is None:
+            self._calls += 1
         return super().__call__(*args, **kwargs)
 
     def pop_call_count(self) -> int:

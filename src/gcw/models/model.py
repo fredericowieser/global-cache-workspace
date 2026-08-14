@@ -47,6 +47,7 @@ class LanguageModel(nn.Module):
         targets: torch.Tensor | None = None,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        activation_checkpoint_windows: int = 0,
     ) -> torch.Tensor:
         processor = self._processor_config()
         # Prepared tensors are local to this context and therefore to this
@@ -59,6 +60,7 @@ class LanguageModel(nn.Module):
                 processor=execution,
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
+                activation_checkpoint_windows=activation_checkpoint_windows,
             )
 
     @torch.no_grad()

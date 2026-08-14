@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import math
 import os
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any, Callable, cast
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from gcw.config import ModelConfig
 from gcw.models.backbones.base import Backbone
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.models.cache_processors.base import cache_processor_recomputation, cache_processor_recomputation_id
 
 CacheLike = CacheState | WindowedCache
 ProcessorFn = Callable[..., CacheLike | StaticCacheState]
+LinearStateLayout = tuple[tuple[int, bool], ...]
 
 try:
     from torch.nn.attention import SDPBackend as _SDPBackend, sdpa_kernel as _sdpa_kernel
@@ -28,6 +32,43 @@ except ImportError:  # pragma: no cover - older torch fallback
 SDPBackend: Any = _SDPBackend
 causal_lower_right: Any = _causal_lower_right
 sdpa_kernel: Any = _sdpa_kernel
+
+
+def _flatten_windowed_cache(cache: WindowedCache | None) -> tuple[tuple[torch.Tensor, ...], LinearStateLayout]:
+    if cache is None:
+        return (), ()
+    tensors = [cache.keys, cache.values, cache.scores]
+    layout: list[tuple[int, bool]] = []
+    for layer_idx, state in sorted((cache.linear_states or {}).items()):
+        recurrent, convolution = state
+        has_convolution = convolution is not None
+        layout.append((layer_idx, has_convolution))
+        tensors.append(recurrent)
+        if convolution is not None:
+            tensors.append(convolution)
+    return tuple(tensors), tuple(layout)
+
+
+def _unflatten_windowed_cache(tensors: tuple[torch.Tensor, ...], layout: LinearStateLayout) -> WindowedCache:
+    if len(tensors) < 3:
+        raise ValueError("a flattened WindowedCache boundary requires keys, values, and scores")
+    position = 3
+    linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] = {}
+    for layer_idx, has_convolution in layout:
+        if position >= len(tensors):
+            raise ValueError("flattened WindowedCache is missing a recurrent state tensor")
+        recurrent = tensors[position]
+        position += 1
+        convolution = tensors[position] if has_convolution else None
+        position += int(has_convolution)
+        linear_states[layer_idx] = (recurrent, convolution)
+    if position != len(tensors):
+        raise ValueError("flattened WindowedCache contains unexpected state tensors")
+    return WindowedCache(tensors[0], tensors[1], tensors[2], linear_states or None)
+
+
+def _window_checkpoint_contexts():
+    return nullcontext(), cache_processor_recomputation()
 
 
 class Linear(nn.Linear):
@@ -322,6 +363,7 @@ class TF(Backbone):
         processor: ProcessorFn | None = None,
         process_every: int = 64,
         attention_mask: torch.Tensor | None = None,
+        activation_checkpoint_windows: int = 0,
     ) -> torch.Tensor:
         if processor is None:
             return self.forward_full(input_ids, targets, loss_reduction, attention_mask=attention_mask)
@@ -333,6 +375,7 @@ class TF(Backbone):
                 process_every=process_every,
                 loss_reduction=loss_reduction,
                 attention_mask=attention_mask,
+                activation_checkpoint_windows=activation_checkpoint_windows,
             )
         logits, _ = self.forward_windowed(input_ids, processor=processor, process_every=process_every)
         return logits
@@ -450,16 +493,91 @@ class TF(Backbone):
         process_every: int,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        activation_checkpoint_windows: int = 0,
     ) -> torch.Tensor:
+        del attention_mask
+        if activation_checkpoint_windows < 0:
+            raise ValueError("activation_checkpoint_windows must be non-negative")
         cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
-        hidden_chunks = []
-        for start in range(0, input_ids.shape[1], process_every):
-            if start > 0:
-                cache = cast(CacheLike, processor(cache))
-            end = start + process_every
-            hidden, cache = self.forward_chunk(input_ids[:, start:end], start, cache, logits=False, cache_format="windowed")
-            hidden_chunks.append(hidden)
+        hidden_chunks: list[torch.Tensor] = []
+        checkpoint_active = activation_checkpoint_windows > 0 and self.training and torch.is_grad_enabled()
+        windows_per_segment = activation_checkpoint_windows if checkpoint_active else 1
+        segment_span = windows_per_segment * process_every
+        for segment_start in range(0, input_ids.shape[1], segment_span):
+            segment_end = min(segment_start + segment_span, input_ids.shape[1])
+            if checkpoint_active:
+                hidden, cache = self._checkpointed_window_segment(
+                    input_ids[:, segment_start:segment_end],
+                    segment_start,
+                    cache,
+                    processor=processor,
+                    process_every=process_every,
+                )
+                hidden_chunks.append(hidden)
+                continue
+            for start in range(segment_start, segment_end, process_every):
+                if start > 0:
+                    cache = cast(CacheLike, processor(cache))
+                end = min(start + process_every, input_ids.shape[1])
+                hidden, cache = self.forward_chunk(
+                    input_ids[:, start:end],
+                    start,
+                    cache,
+                    logits=False,
+                    cache_format="windowed",
+                )
+                hidden_chunks.append(hidden)
         return self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction)
+
+    def _checkpointed_window_segment(
+        self,
+        segment_input_ids: torch.Tensor,
+        segment_start: int,
+        cache: CacheLike,
+        *,
+        processor: ProcessorFn,
+        process_every: int,
+    ) -> tuple[torch.Tensor, WindowedCache]:
+        boundary_cache = cache if isinstance(cache, WindowedCache) else None
+        input_tensors, input_layout = _flatten_windowed_cache(boundary_cache)
+        output_layout: list[tuple[int, bool]] = []
+
+        def run_segment(ids: torch.Tensor, *flat_cache: torch.Tensor) -> tuple[torch.Tensor, ...]:
+            if boundary_cache is None:
+                current: CacheLike = CacheState([], [], ids.new_empty(ids.shape[0], 0, dtype=torch.float32))
+            else:
+                current = _unflatten_windowed_cache(flat_cache, input_layout)
+            segment_hidden: list[torch.Tensor] = []
+            for relative_start in range(0, ids.shape[1], process_every):
+                start = segment_start + relative_start
+                if start > 0:
+                    current = cast(CacheLike, processor(current))
+                hidden, current = self.forward_chunk(
+                    ids[:, relative_start : relative_start + process_every],
+                    start,
+                    current,
+                    logits=False,
+                    cache_format="windowed",
+                )
+                segment_hidden.append(hidden)
+            if not isinstance(current, WindowedCache):
+                raise TypeError("checkpointed window segment requires WindowedCache output")
+            flat_output, layout = _flatten_windowed_cache(current)
+            if cache_processor_recomputation_id() is None:
+                output_layout[:] = layout
+            return (torch.cat(segment_hidden, dim=1), *flat_output)
+
+        outputs = checkpoint(
+            run_segment,
+            segment_input_ids,
+            *input_tensors,
+            use_reentrant=False,
+            preserve_rng_state=True,
+            context_fn=_window_checkpoint_contexts,
+        )
+        if not isinstance(outputs, tuple) or len(outputs) < 4:
+            raise RuntimeError("checkpointed window segment returned an invalid tensor boundary")
+        return outputs[0], _unflatten_windowed_cache(outputs[1:], tuple(output_layout))
 
     def forward_windowed(
         self,

@@ -782,7 +782,10 @@ class Qwen35MoeTF(Qwen35TF):
         process_every: int,
         loss_reduction: str = "mean",
         attention_mask: torch.Tensor | None = None,
+        activation_checkpoint_windows: int = 0,
     ) -> torch.Tensor:
+        if activation_checkpoint_windows:
+            raise ValueError("segmented window activation checkpointing does not yet support qwen3_5_moe router logits")
         cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
         hidden_chunks: list[torch.Tensor] = []
         router_chunks: list[list[torch.Tensor]] = [[] for _ in self.layers]
