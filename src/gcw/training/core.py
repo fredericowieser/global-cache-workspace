@@ -173,23 +173,24 @@ def train(config: TrainConfig) -> None:
     for step in range(start_step, config.max_steps):
         step_start = time.perf_counter()
         opt.zero_grad(set_to_none=True)
-        loss_total = 0.0
-        batch_non_padding_tokens = 0
-        batch_supervised_tokens = 0
+        step_metric_totals = _new_step_metric_totals(device)
         for micro_step in range(grad_accum_steps):
             batch = next(stream)
             if step == 0 and micro_step == 0:
                 _validate_train_batch(batch.x, batch.y, config)
-            batch_non_padding_tokens += int(
-                batch.x.numel() if batch.attention_mask is None else batch.attention_mask.sum().item()
-            )
-            batch_supervised_tokens += int((batch.y != -100).sum().item())
             sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
             with sync_context:
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=config.bf16 and device.type == "cuda"):
                     loss = _model_loss(model, batch.x, batch.y, attention_mask=batch.attention_mask)
-                loss_total += float(loss.detach().cpu())
+                _accumulate_step_metrics(
+                    step_metric_totals,
+                    loss=loss,
+                    x=batch.x,
+                    y=batch.y,
+                    attention_mask=batch.attention_mask,
+                )
                 (loss / grad_accum_steps).backward()
+        loss_total, batch_non_padding_tokens, batch_supervised_tokens = _read_step_metric_totals(step_metric_totals)
         if audit_output is not None and step + 1 == config.max_steps:
             audit_gradients = _gradient_audit(model)
         grad_norm = None
@@ -571,6 +572,30 @@ def _retained_checkpoint_every() -> int | None:
     if every <= 0:
         raise ValueError("GCW_STEP_CHECKPOINT_EVERY must be positive")
     return every
+
+
+def _new_step_metric_totals(device: torch.device) -> torch.Tensor:
+    # Preserve the former Python-float sum while sharing one eventual device-to-host transfer.
+    return torch.zeros(3, dtype=torch.float64, device=device)
+
+
+@torch.no_grad()
+def _accumulate_step_metrics(
+    totals: torch.Tensor,
+    *,
+    loss: torch.Tensor,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+) -> None:
+    totals[0].add_(loss.detach())
+    totals[1].add_(x.numel() if attention_mask is None else attention_mask.sum())
+    totals[2].add_((y != -100).sum())
+
+
+def _read_step_metric_totals(totals: torch.Tensor) -> tuple[float, int, int]:
+    loss, non_padding_tokens, supervised_tokens = totals.cpu().tolist()
+    return loss, int(non_padding_tokens), int(supervised_tokens)
 
 
 def _validate_train_batch(x: torch.Tensor, y: torch.Tensor, config: TrainConfig) -> None:
