@@ -34,6 +34,27 @@ Every processor checkpoint runs processor off/on × thinking off/on across the m
 
 Processor-off results test the frozen-backbone invariant. Any material difference from the untouched instruct checkpoint indicates checkpoint or evaluation drift.
 
+## Full single-seed series
+
+`scripts/run_math_experiments_full_single_seed.py` declares the first full-epoch series. It evaluates the untouched instruct model, then trains and evaluates full SFT, BT, BGT, noisy Diffusion-BGT, Longshot, Longshot internal recurrence ×4, Longshot external recurrence ×4, LoRA rank 32, and Flow-BGT in that order.
+
+The series uses Warmup–Stable–Decay (WSD): linear warmup for 3% of optimizer steps, a constant peak learning rate for 87%, then linear decay to zero for 10%. Full SFT uses `5e-6`; LoRA and every frozen-backbone processor use `1e-4`. A unified processor rate prevents mechanism-specific optimizer tuning from becoming an architectural advantage.
+
+The 697,744-row split leaves a 16-row remainder at global batch 64. The series uses standard drop-last epoch semantics: 697,728 rows and 10,902 optimizer steps. Every arm sees the same retained rows once, in the same order. The script defaults to a read-only JSON plan and requires `--execute` before it creates artifacts or launches work. It checkpoints exact-resume state, stops launching new cells at the declared deadline, and resumes completed training and evaluation cells on the next invocation.
+
+Every non-processor target runs thinking off/on. Every processor target runs processor off/on × thinking off/on over the complete general and math suites. Training metrics and FLOP estimates remain in local run records and mirror to W&B. Evaluation results remain in local evaluation records and publish scalar metrics plus authenticated result artifacts to W&B.
+
+```bash
+uv run --extra gpu --extra eval --extra convert python \
+  scripts/run_math_experiments_full_single_seed.py \
+  --model /path/to/Qwen3-0.6B \
+  --backbone-checkpoint /path/to/native-backbone \
+  --data-manifest /path/to/manifest.json \
+  --experiment-root /path/to/experiment-root
+```
+
+The command above only prints the resolved plan. Add `--execute` after inspecting it.
+
 ## Staging gates
 
 1. Publish the data retention and contamination manifest.
