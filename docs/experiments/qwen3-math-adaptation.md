@@ -30,7 +30,9 @@ All runs mirror to `huawei-noahs-ark/global-cache-workspace`. Local run artifact
 
 ## Evaluation
 
-Evaluation has two lanes. Full standard general benchmarks use no chat template and option log-likelihood once per model/processor state. Separate chat-generation cells run thinking off/on: labeled-choice extraction for general multiple-choice tasks and numeric-last-answer scoring for math tasks, always with a 2,048-token generation cap. Large general tasks use authenticated deterministic subsets for the secondary thinking comparison; standard general scores remain full-dataset. LAMBADA is excluded because next-word completion has no meaningful thinking-on analogue. Reports retain processor invocation count, elapsed time, peak VRAM, parse and truncation rates, trainable parameters, generated tokens, throughput, and FLOPs.
+Evaluation protocol V3 has two lanes. HellaSwag, PIQA, WinoGrande, ARC Easy, ARC Challenge, MMLU, LogiQA, and AGIEval Gaokao MathQA use their full LM Evaluation Harness datasets, plain prompts, no chat template, and benchmark-native option likelihood. These scores have no thinking dimension. Gaokao follows the official harness rule: its selected argmax option counts as correct when it belongs to the gold set, including the seven multi-answer rows. GSM8K OpenMath, SVAMP, and GSM8K Hard use the official Qwen chat template with thinking off/on, deterministic generation, a 2,048-token cap, and numeric-last-answer scoring. Reports retain processor invocation count, elapsed time, peak VRAM, parse and truncation rates, trainable parameters, generated tokens, throughput, and FLOPs.
+
+Completed V2 multiple-choice chat-generation results remain supplementary discontinued diagnostics. They never enter V3 aggregate tables. Valid canonical-likelihood and numeric-generation artifacts may be reused byte-for-byte when their hashes and protocol contracts pass validation; reuse manifests record the source path and digest. LAMBADA remains excluded because next-word completion has no meaningful thinking-on analogue.
 
 Processor-off results test the frozen-backbone invariant. Any material difference from the untouched instruct checkpoint indicates checkpoint or evaluation drift.
 
@@ -42,7 +44,7 @@ The series uses Warmup–Stable–Decay (WSD): linear warmup for 3% of optimizer
 
 The 697,744-row split leaves a 16-row remainder at global batch 64. The series uses standard drop-last epoch semantics: 697,728 rows and 10,902 optimizer steps. Every arm sees the same retained rows once, in the same order. The script defaults to a read-only JSON plan and requires `--execute` before it creates artifacts or launches work. It checkpoints exact-resume state, stops launching new cells at the declared deadline, and resumes completed training and evaluation cells on the next invocation.
 
-Every non-processor target gets one full standard-general cell plus thinking off/on chat-generation cells. Every processor target gets those three cells with processor off and on. Training metrics and FLOP estimates remain in local run records and mirror to W&B. Evaluation results remain in local evaluation records and publish scalar metrics plus authenticated result artifacts to W&B.
+Every non-processor target gets full canonical-likelihood coverage plus thinking off/on numeric-generation cells. Every processor target gets the same evidence with processor off and on. Multiple-choice chat generation is not scheduled. Training metrics and FLOP estimates remain in local run records and mirror to W&B. Evaluation results remain in local evaluation records and publish scalar metrics plus authenticated result artifacts to W&B.
 
 ```bash
 uv run --extra gpu --extra eval --extra convert python \

@@ -25,7 +25,7 @@ from scripts.generate_math_experiment_configs import generate
 
 
 EXPERIMENT = "qwen3-06b-instruct-math-full-single-seed-v1"
-GENERAL_TASKS = (
+CANONICAL_CORE_TASKS = (
     "hellaswag",
     "piqa",
     "winogrande",
@@ -33,14 +33,18 @@ GENERAL_TASKS = (
     "arc_challenge",
     "mmlu",
 )
-MATH_TASKS = (
-    "gsm8k_openmath",
-    "svamp",
-    "gsm8k_hard",
+CANONICAL_REASONING_TASKS = (
     "logiqa",
     "agieval_gaokao_mathqa",
 )
-CHAT_TASKS = (*GENERAL_TASKS, *MATH_TASKS)
+CANONICAL_TASKS = (*CANONICAL_CORE_TASKS, *CANONICAL_REASONING_TASKS)
+NUMERIC_MATH_TASKS = (
+    "gsm8k_openmath",
+    "svamp",
+    "gsm8k_hard",
+)
+EVALUATION_ROOT = "evaluations-v3"
+LEGACY_EVALUATION_ROOT = "evaluations-v2"
 TRAIN_ORDER = (
     "full-sft",
     "bt",
@@ -137,7 +141,7 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
     dropped_rows = rows - effective_rows
     max_steps = effective_rows // GLOBAL_BATCH_ROWS
     return {
-        "schema": "gcw.math_experiment_series.v1",
+        "schema": "gcw.math_experiment_series.v2",
         "experiment": args.experiment,
         "source_commit": source_commit,
         "status": "planned_not_started",
@@ -163,21 +167,26 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
         "validation": {"rows": VALIDATION_ROWS, "approximately_every_steps": max_steps // 20},
         "training_order": list(TRAIN_ORDER),
         "evaluation_order": ["instruct-baseline", *TRAIN_ORDER],
-        "tasks": {"general": list(GENERAL_TASKS), "math": list(MATH_TASKS)},
+        "tasks": {
+            "canonical_multiple_choice": list(CANONICAL_TASKS),
+            "numeric_math": list(NUMERIC_MATH_TASKS),
+        },
         "evaluation_protocols": {
-            "standard_general": {
-                "tasks": list(GENERAL_TASKS),
+            "canonical_likelihood": {
+                "tasks": list(CANONICAL_TASKS),
                 "prompt": "plain_no_chat_template",
                 "thinking_dimension": False,
                 "coverage": "full",
+                "scoring": "official_lm_evaluation_harness_task_definition",
+                "gaokao_multi_answer_rule": "argmax_option_in_gold_set",
             },
-            "chat_generation": {
-                "tasks": list(CHAT_TASKS),
+            "numeric_generation": {
+                "tasks": list(NUMERIC_MATH_TASKS),
                 "prompt": "official_chat_template",
                 "thinking_modes": ["thinking_off", "thinking_on"],
                 "max_new_tokens": 2048,
-                "general_coverage": "authenticated_deterministic_subset",
-                "math_coverage": "full",
+                "coverage": "full",
+                "scoring": "numeric_last_answer",
             },
         },
         "evaluation_processor_states": {
@@ -364,7 +373,7 @@ def _mirror_evaluation(
         name=run_name,
         group=args.experiment,
         job_type="evaluation",
-        id=_wandb_id(args.experiment, f"eval-v2-{arm}-{processor}-{cell_name}"),
+        id=_wandb_id(args.experiment, f"eval-v3-{arm}-{processor}-{cell_name}"),
         resume="allow",
         tags=tags,
         config={
@@ -393,19 +402,60 @@ def _target_args(target: Path, *, hf_target: bool) -> list[str]:
     return ["--hf-model", str(target)] if hf_target else ["--checkpoint", str(target)]
 
 
-def _evaluate_standard_general(
+def _reuse_result(source: Path, target: Path, *, protocol: str) -> bool:
+    if not source.is_file() or target.exists():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    if _sha256(source) != _sha256(target):
+        target.unlink()
+        raise RuntimeError(f"reused evaluation evidence changed while copying {source}")
+    marker = target.parent / "reused-evidence.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "schema": "gcw.reused_evaluation_evidence.v1",
+                "source": str(source.resolve()),
+                "source_sha256": _sha256(source),
+                "protocol": protocol,
+                "bytes_preserved": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    return True
+
+
+def _validate_canonical_result(result: Path, tasks: tuple[str, ...]) -> None:
+    payload = json.loads(result.read_text())
+    protocol = payload.get("gcw_protocol", {})
+    if protocol.get("prompt_mode") != "plain" or protocol.get("apply_chat_template") is not False:
+        raise ValueError(f"canonical result does not use the plain no-chat protocol: {result}")
+    missing = sorted(set(tasks) - set(payload.get("results", {})))
+    if missing:
+        raise ValueError(f"canonical result is missing tasks {missing}: {result}")
+
+
+def _evaluate_canonical_group(
     args: argparse.Namespace,
     root: Path,
     arm: str,
     processor: str,
     target: Path,
     *,
+    group: str,
+    tasks: tuple[str, ...],
     hf_target: bool,
     env: dict[str, str],
 ) -> None:
-    cell = root / "evaluations-v2" / arm / f"processor-{processor}" / "standard-general"
+    cell = root / EVALUATION_ROOT / arm / f"processor-{processor}" / "canonical-likelihood" / group
     result = cell / "result.json"
     published = cell / "wandb-published.json"
+    if arm == "instruct-baseline" and processor == "on" and group == "core" and not result.exists():
+        legacy = root / LEGACY_EVALUATION_ROOT / arm / "processor-on" / "standard-general" / "result.json"
+        _reuse_result(legacy, result, protocol="canonical_plain_likelihood_core_v1")
     if not result.is_file():
         cell.mkdir(parents=True, exist_ok=True)
         cell_env = dict(env)
@@ -415,32 +465,39 @@ def _evaluate_standard_general(
             "-m",
             "gcw.cli",
             "eval",
-            "general",
-            "--batch-size",
-            str(args.eval_batch_size),
-            "--prompt-mode",
-            "plain",
-            "--processor",
-            processor,
-            "--out",
-            str(result),
-            *_target_args(target, hf_target=hf_target),
+            "general" if group == "core" else "tasks",
         ]
+        if group != "core":
+            command.extend(["--tasks", *tasks])
+        command.extend(
+            [
+                "--batch-size",
+                str(args.eval_batch_size),
+                "--prompt-mode",
+                "plain",
+                "--processor",
+                processor,
+                "--out",
+                str(result),
+                *_target_args(target, hf_target=hf_target),
+            ]
+        )
         _run(command, cell / "eval.log", cell_env)
+    _validate_canonical_result(result, tasks)
     if not published.is_file():
         _mirror_evaluation(
             result,
             args,
             arm,
             processor,
-            "standard-general-v1",
+            f"canonical-likelihood-{group}-v1",
             thinking=None,
-            tasks=GENERAL_TASKS,
+            tasks=tasks,
         )
         published.write_text(json.dumps({"result_sha256": _sha256(result), "published": True}, indent=2) + "\n")
 
 
-def _chat_summary(task_results: list[Path], *, arm: str, processor: str, thinking: str) -> dict[str, Any]:
+def _numeric_summary(task_results: list[Path], *, arm: str, processor: str, thinking: str) -> dict[str, Any]:
     tasks: dict[str, Any] = {}
     for path in task_results:
         payload = json.loads(path.read_text())
@@ -454,17 +511,28 @@ def _chat_summary(task_results: list[Path], *, arm: str, processor: str, thinkin
             "payload_sha256": payload["payload_sha256"],
         }
     return {
-        "schema": "gcw.chat_benchmark_composite.v1",
+        "schema": "gcw.numeric_math_benchmark_composite.v1",
         "arm": arm,
         "processor": processor,
         "thinking": thinking,
-        "protocol": "official_chat_template_answer_generation_v1",
+        "protocol": "official_chat_template_numeric_last_v1",
         "max_new_tokens": 2048,
         "tasks": tasks,
     }
 
 
-def _evaluate_chat_mode(
+def _validate_numeric_result(result: Path, task: str, thinking: str) -> None:
+    payload = json.loads(result.read_text())
+    if payload.get("mode") != thinking or payload.get("max_new_tokens") != 2048:
+        raise ValueError(f"numeric result has the wrong generation contract: {result}")
+    if set(payload.get("tasks", {})) != {task} or set(payload.get("datasets", {})) != {task}:
+        raise ValueError(f"numeric result has the wrong task payload: {result}")
+    rows = payload.get("rows", [])
+    if not rows or any(row.get("target_kind") != "numeric" for row in rows):
+        raise ValueError(f"numeric result contains non-numeric or missing rows: {result}")
+
+
+def _evaluate_numeric_mode(
     args: argparse.Namespace,
     root: Path,
     arm: str,
@@ -476,54 +544,74 @@ def _evaluate_chat_mode(
     env: dict[str, str],
     deadline: datetime,
 ) -> bool:
-    cell = root / "evaluations-v2" / arm / f"processor-{processor}" / "chat-generation" / thinking
+    cell = root / EVALUATION_ROOT / arm / f"processor-{processor}" / "numeric-generation" / thinking
     task_results: list[Path] = []
-    for task in CHAT_TASKS:
+    for task in NUMERIC_MATH_TASKS:
         if _deadline_reached(deadline):
             return False
         task_cell = cell / "tasks" / task
         task_result = task_cell / "result.json"
         task_results.append(task_result)
-        if task_result.is_file():
-            continue
-        task_cell.mkdir(parents=True, exist_ok=True)
-        command = [
-            sys.executable,
-            "-m",
-            "gcw.cli",
-            "eval",
-            "chat",
-            "--tasks",
-            task,
-            "--mode",
-            thinking,
-            "--batch-size",
-            str(args.eval_batch_size),
-            "--max-new-tokens",
-            "2048",
-            "--processor",
-            processor,
-            "--tokenizer-path",
-            str(Path(args.model).expanduser().resolve()),
-            "--out",
-            str(task_result),
-            *_target_args(target, hf_target=hf_target),
-        ]
-        _run(command, task_cell / "eval.log", env)
+        if arm == "instruct-baseline" and processor == "on" and not task_result.exists():
+            legacy = (
+                root
+                / LEGACY_EVALUATION_ROOT
+                / arm
+                / "processor-on"
+                / "chat-generation"
+                / thinking
+                / "tasks"
+                / task
+                / "result.json"
+            )
+            _reuse_result(legacy, task_result, protocol="official_chat_template_numeric_last_v1")
+        if not task_result.is_file():
+            task_cell.mkdir(parents=True, exist_ok=True)
+            command = [
+                sys.executable,
+                "-m",
+                "gcw.cli",
+                "eval",
+                "chat",
+                "--tasks",
+                task,
+                "--mode",
+                thinking,
+                "--batch-size",
+                str(args.eval_batch_size),
+                "--max-new-tokens",
+                "2048",
+                "--processor",
+                processor,
+                "--tokenizer-path",
+                str(Path(args.model).expanduser().resolve()),
+                "--out",
+                str(task_result),
+                *_target_args(target, hf_target=hf_target),
+            ]
+            _run(command, task_cell / "eval.log", env)
+        _validate_numeric_result(task_result, task, thinking)
     result = cell / "result.json"
     published = cell / "wandb-published.json"
     if not result.is_file():
         result.parent.mkdir(parents=True, exist_ok=True)
-        result.write_text(json.dumps(_chat_summary(task_results, arm=arm, processor=processor, thinking=thinking), indent=2, sort_keys=True) + "\n")
+        result.write_text(
+            json.dumps(
+                _numeric_summary(task_results, arm=arm, processor=processor, thinking=thinking),
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
     if not published.is_file():
         _mirror_evaluation(
             result,
             args,
             arm,
             processor,
-            "chat-generation-v1",
+            "numeric-generation-v1",
             thinking=thinking,
-            tasks=CHAT_TASKS,
+            tasks=NUMERIC_MATH_TASKS,
             artifact_files=tuple(task_results),
         )
         published.write_text(json.dumps({"result_sha256": _sha256(result), "published": True}, indent=2) + "\n")
@@ -543,9 +631,30 @@ def _evaluate(
     for processor in _processor_states(arm):
         if _deadline_reached(deadline):
             return False
-        _evaluate_standard_general(args, root, arm, processor, target, hf_target=hf_target, env=env)
+        _evaluate_canonical_group(
+            args,
+            root,
+            arm,
+            processor,
+            target,
+            group="core",
+            tasks=CANONICAL_CORE_TASKS,
+            hf_target=hf_target,
+            env=env,
+        )
+        _evaluate_canonical_group(
+            args,
+            root,
+            arm,
+            processor,
+            target,
+            group="reasoning",
+            tasks=CANONICAL_REASONING_TASKS,
+            hf_target=hf_target,
+            env=env,
+        )
         for thinking in ("thinking_off", "thinking_on"):
-            if not _evaluate_chat_mode(
+            if not _evaluate_numeric_mode(
                 args,
                 root,
                 arm,
@@ -680,7 +789,7 @@ def execute(args: argparse.Namespace) -> None:
             return
 
     completion = {
-        "schema": "gcw.math_experiment_series_completion.v1",
+        "schema": "gcw.math_experiment_series_completion.v2",
         "experiment": args.experiment,
         "source_commit": source_commit,
         "completed_at": datetime.now(timezone.utc).isoformat(),
