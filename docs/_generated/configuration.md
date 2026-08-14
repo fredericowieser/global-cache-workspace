@@ -146,6 +146,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
 | `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor']` | `'all'` |
+| `activation_checkpointing` | `Literal['none', 'standard_processor_layers']` | `'none'` |
 | `backbone_checkpoint` | `str \| None` | `None` |
 | `init_checkpoint` | `str \| None` | `None` |
 | `resume` | `gcw.config.ResumeConfig \| None` | `None` |
@@ -156,6 +157,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `max_steps` | `int` | `2` |
 | `total_batch_size` | `int` | `0` |
 | `global_batch_rows` | `int` | `0` |
+| `logical_pair_grouping` | `bool` | `False` |
 | `learning_rate` | `float` | `0.0003` |
 | `adam_beta1` | `float` | `0.9` |
 | `adam_beta2` | `float` | `0.95` |

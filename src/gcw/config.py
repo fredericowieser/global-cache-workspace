@@ -650,10 +650,22 @@ class TrainConfig:
                 raise ValueError("logical_pair_grouping requires SFT data")
             if self.data.sft_loss_scope != "answer_only":
                 raise ValueError("logical_pair_grouping requires answer-only SFT loss")
-            if isinstance(self.batch_size, bool) or self.batch_size < 2 or self.batch_size % 2:
+            if (
+                isinstance(self.batch_size, bool)
+                or not isinstance(self.batch_size, int)
+                or self.batch_size < 2
+                or self.batch_size % 2
+            ):
                 raise ValueError("logical_pair_grouping requires an even physical batch_size of at least 2")
-            if self.global_batch_rows <= 0 or self.global_batch_rows % 2:
+            if (
+                isinstance(self.global_batch_rows, bool)
+                or not isinstance(self.global_batch_rows, int)
+                or self.global_batch_rows <= 0
+                or self.global_batch_rows % 2
+            ):
                 raise ValueError("logical_pair_grouping requires a positive even global_batch_rows")
+            if self.global_batch_rows % self.batch_size:
+                raise ValueError("logical_pair_grouping requires global_batch_rows divisible by physical batch_size")
             if self.model.router_aux_loss_coef:
                 raise ValueError("logical_pair_grouping does not support router auxiliary loss")
             diffusion = self.model.diffusion_processor

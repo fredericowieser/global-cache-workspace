@@ -83,7 +83,7 @@ def _assert_loss_and_gradient_parity(
     torch.testing.assert_close(optimized_head_grad, reference_head_grad, atol=atol, rtol=rtol)
 
 
-@pytest.mark.parametrize("reduction", ["mean", "sum", "none"])
+@pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
 @pytest.mark.parametrize("masked", [False, True], ids=["unmasked", "masked"])
 @pytest.mark.parametrize("tied", [False, True], ids=["untied", "tied"])
 def test_answer_only_loss_forward_backward_matches_eager_reference(reduction: str, masked: bool, tied: bool):
@@ -94,7 +94,7 @@ def test_answer_only_loss_forward_backward_matches_eager_reference(reduction: st
     _assert_loss_and_gradient_parity(model, hidden, targets, reduction, atol=1e-6, rtol=1e-5)
 
 
-@pytest.mark.parametrize("reduction", ["mean", "sum", "none"])
+@pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
 @pytest.mark.parametrize("tied", [False, True], ids=["untied", "tied"])
 def test_answer_only_loss_all_masked_is_differentiable_and_matches_reference(reduction: str, tied: bool):
     model = _make_model(tied=tied)
@@ -130,7 +130,7 @@ def test_answer_only_loss_projects_only_valid_positions(monkeypatch: pytest.Monk
     loss.sum().backward()
 
 
-@pytest.mark.parametrize("reduction", ["mean", "sum", "none"])
+@pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
 @pytest.mark.parametrize("tied", [False, True], ids=["untied", "tied"])
 def test_answer_only_loss_bfloat16_matches_eager_reference(reduction: str, tied: bool):
     device = torch.device("cuda") if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.device("cpu")

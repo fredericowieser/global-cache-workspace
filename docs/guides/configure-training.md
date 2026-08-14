@@ -40,6 +40,14 @@ data:
 
 Use `global_batch_rows` when experiments must consume the same examples per optimizer step despite different sequence padding or physical microbatches. It is mutually exclusive with the legacy token-budget field `total_batch_size`.
 
+### Adjacent logical-pair objective
+
+Set `logical_pair_grouping: true` to preserve an objective defined by adjacent two-row groups while using a larger physical batch. GCW computes answer-only cross-entropy as a token mean within each adjacent pair, averages the pair losses in the physical batch, then averages physical groups across gradient accumulation. With `global_batch_rows: 64`, every optimizer step remains the mean of exactly 32 pair losses regardless of whether the physical batch is 2, 4, or 8 rows.
+
+Logical pairing preserves source order and drops an incomplete final physical group instead of pairing the dataset tail with the next epoch. The SFT cursor records the post-group row, so exact-topology resume repeats the same drop-last transition. The objective requires an even physical batch, answer-only SFT, an even row-based global batch divisible by the physical batch, and zero router auxiliary loss. Noisy Diffusion is rejected because changing the physical batch changes RNG assignment; deterministic Diffusion with zero noise is supported.
+
+The option defaults to `false`. Its objective protocol, exact-resume fingerprint, run metadata, training loss, perplexity, and validation loss are distinct from ordinary token-mean SFT.
+
 Set `trainable: lora` with `model.lora` for low-rank backbone adaptation. GCW freezes base weights and trains only `lora_a` and `lora_b` on explicitly named projections. Zero-initialized output factors preserve the starting backbone exactly.
 
 ## Frozen-Backbone Cache Processor Training
