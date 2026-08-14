@@ -56,6 +56,8 @@ Longshot also treats `(layer, KV head)` as the cache-head axis, but it first com
 
 A cross-head processor then mixes those summaries. The residual anchors at the latest selected state, and the module writes one updated frontier position. Analysis can reapply this processor $k$ times to the same prefix cache. Those iterations probe recurrent refinement of memory; they do not generate $k$ additional tokens.
 
+Longshot computes cache-selection magnitudes with the same eager FP32 expressions in bounded outer-row chunks. Each FP32 cast or square allocation is capped at 32 MiB, replacing a full-cache temporary; BF16 forward autograd saves the existing BF16 source rather than a full FP32 conversion. Chunking never splits a reduction row, so the feature-axis accumulation order and top-k decisions match the eager oracle. A single reduction row larger than 32 MiB exceeds the cap by design: feature chunking would change reduction order and can flip adversarial near ties.
+
 ## Variant comparison
 
 | Variant | Reads across time | Mixes layers directly | Mixes cache heads directly | Write target | Principal control |
