@@ -37,10 +37,11 @@ def test_combined_plan_is_closed_default_off_and_records_rejections() -> None:
     assert payload["pair_weight"] == "1/32"
     assert payload["eager_fallback"] is False
     assert "fused_liger_row_sum" in payload["excluded"]
+    assert "triton_cache_training" in payload["excluded"]
     assert "regional_cuda_graphs" in payload["excluded"]
     assert "pair_waves" in payload["excluded"]
     assert "triton_processor_pointwise" in payload["excluded"]
-    assert combined_v1_plan_sha256() == "19e9d6f7981e6236dc31a5f521a81658aa524286d77afc60cf31de7bda1093a0"
+    assert combined_v1_plan_sha256() == "c7b26243b0b414a6e5f3c148c82bfe081c63b8a22c41e9130881145f71189b85"
     assert require_optimized_step_admission(OptimizedStepConfig()) is None
     with pytest.raises(ValueError, match="requires receipt_path"):
         OptimizedStepConfig(enabled=True)
