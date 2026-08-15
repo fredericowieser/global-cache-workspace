@@ -69,6 +69,7 @@ from gcw.performance.longshot_cache import (
     longshot_full_history_execution_metadata,
 )
 from gcw.performance.kv_score_sidecar import (
+    KVScoreSidecarExecutionContext,
     configure_kv_score_sidecar_execution,
     kv_score_sidecar_execution_metadata,
 )
@@ -197,7 +198,29 @@ def train(config: TrainConfig) -> None:
     configure_longshot_full_history_execution(
         model, config.performance.longshot_full_history
     )
-    configure_kv_score_sidecar_execution(model, config.performance.kv_score_sidecar)
+    configure_kv_score_sidecar_execution(
+        model,
+        config.performance.kv_score_sidecar,
+        context=KVScoreSidecarExecutionContext(
+            model_variant=config.model.variant,
+            model_family=config.model.family,
+            physical_batch_size=config.batch_size,
+            distributed=config.distributed,
+            backbone_chunk_backend=config.backbone_chunk_backend,
+            adaptive_batching_enabled=config.performance.adaptive_batching.enabled,
+            longshot_full_history_enabled=config.performance.longshot_full_history.enabled,
+            whole_model_compile_requested=whole_model_compile_requested(),
+            activation_checkpointing=config.activation_checkpointing,
+            incompatible_refinement_enabled=any(
+                value is not None
+                for value in (
+                    config.model.flow_processor,
+                    config.model.diffusion_processor,
+                    config.model.workspace_flow_refinement,
+                )
+            ),
+        ),
+    )
     noisy_diffusion_backend = configure_noisy_diffusion_recurrence_backend(
         model,
         config.model,

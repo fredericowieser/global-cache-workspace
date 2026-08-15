@@ -13,6 +13,7 @@ import torch
 
 from gcw.architecture import resolve_experiment, resolve_model
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, to_dict
+from gcw.config import FlowProcessorConfig
 from gcw.data.training import RandomCursor
 from gcw.models import build_model
 from gcw.models.backbones.transformer import _flatten_windowed_cache, _unflatten_windowed_cache
@@ -27,14 +28,16 @@ from gcw.performance.config import (
     PerformanceConfig,
 )
 from gcw.performance.kv_score_sidecar import (
+    KVScoreSidecarExecutionContext,
     KVScoreSidecarState,
     configure_kv_score_sidecar_execution,
+    kv_score_sidecar_execution,
     kv_score_sidecar_execution_metadata,
     kv_score_sidecar_spec,
     refresh_kv_score_sidecar,
     synchronize_kv_score_sidecar,
 )
-from gcw.performance.longshot_scores import chunked_fp32_squared_l2
+from gcw.performance.longshot_cache import configure_longshot_full_history_execution
 from gcw.training.core import _training_fingerprint
 from gcw.training.checkpoint import ResumeState, save_training_checkpoint
 
@@ -85,6 +88,22 @@ def _processor(**kwargs: object) -> GlobalCacheProcessor:
     return GlobalCacheProcessor(_model_config(**kwargs))
 
 
+def _sidecar_context(**changes: object) -> KVScoreSidecarExecutionContext:
+    context = KVScoreSidecarExecutionContext(
+        model_variant="longshot",
+        model_family="qwen3",
+        physical_batch_size=2,
+        distributed="none",
+        backbone_chunk_backend="eager",
+        adaptive_batching_enabled=False,
+        longshot_full_history_enabled=False,
+        whole_model_compile_requested=False,
+        activation_checkpointing="none",
+        incompatible_refinement_enabled=False,
+    )
+    return replace(context, **changes)
+
+
 def _cache(
     *,
     dtype: torch.dtype = torch.float32,
@@ -116,7 +135,7 @@ def _oracle_scores(processor: GlobalCacheProcessor, cache: WindowedCache) -> tor
         rotary_style=processor.rotary_style,
         rotary_dim=processor.rotary_dim,
     )
-    return chunked_fp32_squared_l2(merged)
+    return merged.float().pow(2).sum(dim=-1)
 
 
 def _assert_fp32_bits_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
@@ -188,7 +207,9 @@ def test_policy_selection_keeps_full_live_gather_and_refreshes_value_and_kv_writ
             iterations = 2 if iteration_mode == "external" else 1
             reference = _processor(update_stream=update_stream, iteration_mode=iteration_mode, iterations=iterations)
             sidecar = copy.deepcopy(reference)
-            configure_kv_score_sidecar_execution(sidecar, KVScoreSidecarConfig(enabled=True))
+            configure_kv_score_sidecar_execution(
+                sidecar, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+            )
             source = _cache(sequence=10, requires_grad=True)
             expected_cache = _clone_cache(source, requires_grad=True)
             actual_cache = _clone_cache(source, requires_grad=True)
@@ -221,7 +242,9 @@ def test_selected_kv_loss_cache_and_parameter_gradients_and_adam_state_match_mul
     reference = _processor(update_stream="kv", iteration_mode="external", iterations=2)
     sidecar = copy.deepcopy(reference)
     before_keys = tuple(sidecar.state_dict())
-    configure_kv_score_sidecar_execution(sidecar, KVScoreSidecarConfig(enabled=True))
+    configure_kv_score_sidecar_execution(
+        sidecar, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+    )
     assert tuple(sidecar.state_dict()) == before_keys
     reference_optimizer = torch.optim.AdamW(reference.parameters(), lr=3e-4)
     sidecar_optimizer = torch.optim.AdamW(sidecar.parameters(), lr=3e-4)
@@ -270,7 +293,9 @@ def test_native_and_segmented_checkpoint_replay_match_eager_gradients(
     reference = build_model(config).train()
     reference.init_weights()
     sidecar = copy.deepcopy(reference)
-    configure_kv_score_sidecar_execution(sidecar, KVScoreSidecarConfig(enabled=True))
+    configure_kv_score_sidecar_execution(
+        sidecar, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+    )
     input_ids = torch.randint(0, config.vocab_size, (2, 12))
     targets = torch.randint(0, config.vocab_size, (2, 12))
     expected = reference(input_ids, targets, activation_checkpoint_windows=activation_checkpoint_windows)
@@ -280,6 +305,27 @@ def test_native_and_segmented_checkpoint_replay_match_eager_gradients(
     actual.backward()
     for actual_parameter, expected_parameter in zip(sidecar.parameters(), reference.parameters(), strict=True):
         assert torch.equal(actual_parameter.grad, expected_parameter.grad)
+
+
+def test_sidecar_logits_and_reference_generation_preserve_public_windowed_paths() -> None:
+    torch.manual_seed(63)
+    config = _model_config()
+    reference = build_model(config).eval()
+    reference.init_weights()
+    sidecar = copy.deepcopy(reference)
+    configure_kv_score_sidecar_execution(
+        sidecar, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+    )
+    input_ids = torch.randint(0, config.vocab_size, (2, 12))
+    with torch.no_grad():
+        expected_logits = reference(input_ids)
+        actual_logits = sidecar(input_ids)
+        expected_tokens = reference.generate(input_ids[:, :8], max_new_tokens=3)
+        actual_tokens = sidecar.generate(input_ids[:, :8], max_new_tokens=3)
+    assert torch.equal(actual_logits, expected_logits)
+    assert torch.equal(actual_tokens, expected_tokens)
+    with pytest.raises(TypeError, match="WindowedCache"):
+        sidecar.generate_fast(input_ids[:, :8], max_new_tokens=1)
 
 
 def test_select_all_refreshes_sidecar_and_disabled_path_does_not_touch_lifecycle(
@@ -297,7 +343,9 @@ def test_select_all_refreshes_sidecar_and_disabled_path_does_not_touch_lifecycle
     monkeypatch.undo()
 
     sidecar = copy.deepcopy(reference)
-    configure_kv_score_sidecar_execution(sidecar, KVScoreSidecarConfig(enabled=True))
+    configure_kv_score_sidecar_execution(
+        sidecar, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+    )
     actual = sidecar(_clone_cache(disabled_cache), select_all=True)
     assert isinstance(actual, WindowedCache)
     assert actual.kv_score_sidecar is not None
@@ -332,8 +380,8 @@ def test_fresh_python_process_training_checkpoint_resume_reconstructs_sidecar(tm
     continuous.init_weights()
     resumed = copy.deepcopy(continuous)
     policy = KVScoreSidecarConfig(enabled=True)
-    configure_kv_score_sidecar_execution(continuous, policy)
-    configure_kv_score_sidecar_execution(resumed, policy)
+    configure_kv_score_sidecar_execution(continuous, policy, context=_sidecar_context())
+    configure_kv_score_sidecar_execution(resumed, policy, context=_sidecar_context())
     continuous_optimizer = torch.optim.AdamW(continuous.parameters(), lr=3e-4)
     resumed_optimizer = torch.optim.AdamW(resumed.parameters(), lr=3e-4)
     first = (torch.randint(0, 32, (2, 12)), torch.randint(0, 32, (2, 12)))
@@ -470,3 +518,65 @@ def test_default_off_config_receipts_and_enabled_fingerprint_metadata() -> None:
 def test_invalid_policy_compositions_fail_closed(overrides: dict[str, object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         _train_config(enabled=True, **overrides)
+
+
+@pytest.mark.parametrize(
+    ("context", "message"),
+    [
+        (None, "explicit execution context"),
+        (_sidecar_context(physical_batch_size=4), "physical batch size 2"),
+        (_sidecar_context(distributed="ddp"), "single-process"),
+        (_sidecar_context(backbone_chunk_backend="compile"), "backbone_chunk_backend='eager'"),
+        (_sidecar_context(adaptive_batching_enabled=True), "adaptive batching"),
+        (_sidecar_context(longshot_full_history_enabled=True), "full-history"),
+        (_sidecar_context(whole_model_compile_requested=True), "whole-model compilation"),
+        (_sidecar_context(activation_checkpointing="standard_processor_layers"), "native and segmented"),
+        (_sidecar_context(incompatible_refinement_enabled=True), "Flow, Diffusion"),
+    ],
+)
+def test_direct_enable_requires_validated_execution_context(
+    context: KVScoreSidecarExecutionContext | None, message: str
+) -> None:
+    model = build_model(_model_config())
+    with pytest.raises(ValueError, match=message):
+        configure_kv_score_sidecar_execution(
+            model, KVScoreSidecarConfig(enabled=True), context=context
+        )
+    assert not kv_score_sidecar_execution(model.cache_processor).enabled
+
+
+@pytest.mark.parametrize(
+    "model_config",
+    [
+        replace(_model_config(), family="gemma4"),
+        replace(_model_config(), flow_processor=FlowProcessorConfig()),
+    ],
+)
+def test_direct_enable_rejects_spoofed_actual_model_composition(
+    model_config: ModelConfig,
+ ) -> None:
+    processor = GlobalCacheProcessor(model_config)
+    with pytest.raises(ValueError, match="does not match the actual model composition"):
+        configure_kv_score_sidecar_execution(
+            processor, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+        )
+    assert not kv_score_sidecar_execution(processor).enabled
+
+
+def test_direct_enable_rejects_an_already_configured_full_history_policy() -> None:
+    processor = _processor()
+    configure_longshot_full_history_execution(processor, LongshotFullHistoryConfig(enabled=True))
+    with pytest.raises(ValueError, match="configured Longshot full-history"):
+        configure_kv_score_sidecar_execution(
+            processor, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+        )
+
+
+def test_explicit_disable_removes_forward_local_execution_policy() -> None:
+    processor = _processor()
+    configure_kv_score_sidecar_execution(
+        processor, KVScoreSidecarConfig(enabled=True), context=_sidecar_context()
+    )
+    assert kv_score_sidecar_execution(processor).enabled
+    configure_kv_score_sidecar_execution(processor, KVScoreSidecarConfig())
+    assert not kv_score_sidecar_execution(processor).enabled

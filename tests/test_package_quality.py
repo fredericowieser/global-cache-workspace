@@ -33,6 +33,7 @@ def test_package_version_and_curated_subpackage_exports() -> None:
     )
     assert performance.__all__ == (
         "AdaptiveBatchingConfig",
+        "KVScoreSidecarConfig",
         "NoisyDiffusionBackendConfig",
         "PerformanceConfig",
         "PhysicalBatchBandConfig",

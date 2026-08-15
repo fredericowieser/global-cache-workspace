@@ -721,6 +721,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
             raise ValueError("Longshot requires cache_processor config")
         self.config = model_config.cache_processor
         self.workspace_flow_refinement = model_config.workspace_flow_refinement
+        self._gcw_longshot_model_composition = (
+            model_config.variant,
+            model_config.family,
+            model_config.flow_processor is not None,
+            model_config.diffusion_processor is not None,
+            model_config.workspace_flow_refinement is not None,
+        )
         if self.config.processor_mode != "standard":
             raise ValueError("Longshot supports only cache_processor.processor_mode='standard'")
         if self.config.update_stream not in {"kv", "v"}:
@@ -1014,6 +1021,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
 
     def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:
         if kv_score_sidecar_execution(self).enabled:
+            if isinstance(cache, CacheState):
+                cache = WindowedCache.from_cache_state(cache)
             if not isinstance(cache, WindowedCache):
                 raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
             self._synchronize_kv_score_sidecar(cache)

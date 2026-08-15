@@ -9,6 +9,7 @@ from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.performance.config import KVScoreSidecarConfig
 from gcw.performance.kv_score_sidecar import (
+    KVScoreSidecarExecutionContext,
     configure_kv_score_sidecar_execution,
     kv_score_sidecar_execution_metadata,
 )
@@ -64,7 +65,22 @@ def main() -> None:
         current_world_size=1,
     )
     checkpoint.restore_model(model)
-    configure_kv_score_sidecar_execution(model, KVScoreSidecarConfig(enabled=True))
+    configure_kv_score_sidecar_execution(
+        model,
+        KVScoreSidecarConfig(enabled=True),
+        context=KVScoreSidecarExecutionContext(
+            model_variant="longshot",
+            model_family="qwen3",
+            physical_batch_size=2,
+            distributed="none",
+            backbone_chunk_backend="eager",
+            adaptive_batching_enabled=False,
+            longshot_full_history_enabled=False,
+            whole_model_compile_requested=False,
+            activation_checkpointing="none",
+            incompatible_refinement_enabled=False,
+        ),
+    )
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     checkpoint.restore_optimizer(optimizer, device="cpu")
     input_ids, targets = torch.load(batch_path, weights_only=True)
