@@ -50,6 +50,12 @@ from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
     chunked_fp32_squared_l2,
 )
+from gcw.performance.kv_score_sidecar import (
+    kv_score_sidecar_execution,
+    kv_score_sidecar_spec,
+    refresh_kv_score_sidecar,
+    synchronize_kv_score_sidecar,
+)
 
 CacheLike = CacheState | StaticCacheState | WindowedCache
 
@@ -470,10 +476,13 @@ class CacheProcessor(nn.Module):
                         topk_heads,
                     )
                     if topk_linear_heads > 0:
-                        linear_selected = _select_heads_from_head_scores(
-                            head_scores[:, kv_cache_heads:],
-                            topk_linear_heads,
-                        ) + kv_cache_heads
+                        linear_selected = (
+                            _select_heads_from_head_scores(
+                                head_scores[:, kv_cache_heads:],
+                                topk_linear_heads,
+                            )
+                            + kv_cache_heads
+                        )
                         next_selected_heads = torch.cat([kv_selected, linear_selected], dim=-1)
                     else:
                         next_selected_heads = kv_selected
@@ -549,7 +558,11 @@ class CacheProcessor(nn.Module):
         *,
         return_attn_scores: bool,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        if _gradient_checkpointing_enabled(self.config.gradient_checkpointing) and self.training and torch.is_grad_enabled():
+        if (
+            _gradient_checkpointing_enabled(self.config.gradient_checkpointing)
+            and self.training
+            and torch.is_grad_enabled()
+        ):
             return checkpoint(layer, h, selected_heads, return_attn_scores, use_reentrant=False)
         return layer(h, selected_heads, return_attn_scores=return_attn_scores)
 
@@ -645,7 +658,11 @@ class LinearStateAdapter(nn.Module):
         self.feature_dim = self.linear_key_dim + self.linear_value_dim
         self.query_projs = nn.ModuleDict()
         for key in self._query_projection_keys(specs):
-            out_dim = self.linear_key_dim if self.query_mode != "per_linear_state" else self.linear_value_heads * self.linear_key_dim
+            out_dim = (
+                self.linear_key_dim
+                if self.query_mode != "per_linear_state"
+                else self.linear_value_heads * self.linear_key_dim
+            )
             self.query_projs[key] = nn.Linear(self.context_dim, out_dim)
         self.query_context_norm = RMSNorm(self.context_dim, processor_config.norm_eps)
         self.input_norm = RMSNorm(self.feature_dim, processor_config.norm_eps)
@@ -665,7 +682,9 @@ class LinearStateAdapter(nn.Module):
             _zero_projection(self.output_proj)
 
     def query(self, layer_idx: int, following_cache_idx: int, context: torch.Tensor) -> torch.Tensor:
-        projected = self.query_projs[self.query_cache_key(layer_idx, following_cache_idx)](self.query_context_norm(context))
+        projected = self.query_projs[self.query_cache_key(layer_idx, following_cache_idx)](
+            self.query_context_norm(context)
+        )
         if self.query_mode != "per_linear_state":
             query = projected[:, None, :].expand(-1, self.linear_value_heads, -1)
         else:
@@ -786,11 +805,15 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
             head_scores = chunked_fp32_l2_norm(merged)
         if select_all:
-            selected_heads = torch.arange(
-                self.num_kv_cache_heads,
-                dtype=torch.long,
-                device=merged.device,
-            ).unsqueeze(0).expand(merged.shape[0], -1)
+            selected_heads = (
+                torch.arange(
+                    self.num_kv_cache_heads,
+                    dtype=torch.long,
+                    device=merged.device,
+                )
+                .unsqueeze(0)
+                .expand(merged.shape[0], -1)
+            )
         else:
             selected_heads = _select_heads_from_head_scores(head_scores, self.config.topk_heads)
         return LongshotWorkspaceSource(
@@ -810,9 +833,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
     ) -> None:
         expected_shape = source.merged[:, :, -1, -self.block.output_dim :].shape
         if workspace.shape != expected_shape:
-            raise ValueError(
-                f"Longshot workspace shape must be {tuple(expected_shape)}, got {tuple(workspace.shape)}"
-            )
+            raise ValueError(f"Longshot workspace shape must be {tuple(expected_shape)}, got {tuple(workspace.shape)}")
 
     def deliberate(self, workspace: torch.Tensor, source: LongshotWorkspaceSource) -> torch.Tensor:
         self._validate_workspace_shape(workspace, source)
@@ -889,6 +910,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             values=cache.values.clone(),
             scores=cache.scores.clone(),
             linear_states=cache.linear_states,
+            kv_score_sidecar=cache.kv_score_sidecar,
         )
         values = _split_merged_values(
             workspace[:, :, None],
@@ -896,12 +918,40 @@ class GlobalCacheProcessor(CacheProcessorBase):
             self.num_kv_heads,
             self.head_dim,
         )
-        return cast(WindowedCache, _scatter_latest_values(branch, source.latest_indices, values))
+        branch = cast(WindowedCache, _scatter_latest_values(branch, source.latest_indices, values))
+        return cast(WindowedCache, self._refresh_kv_score_sidecar(branch, source.latest_indices))
 
     def _select_kv_norm_history(
         self,
         cache: CacheLike,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        sidecar_policy = kv_score_sidecar_execution(self)
+        if sidecar_policy.enabled:
+            policy = longshot_full_history_execution(self)
+            if policy.enabled:
+                raise RuntimeError("KV-score sidecar cannot run with Longshot full-history execution")
+            if not isinstance(cache, WindowedCache):
+                raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
+            self._synchronize_kv_score_sidecar(cache)
+            state = cache.kv_score_sidecar
+            if state is None:
+                raise RuntimeError("KV-score sidecar bootstrap did not produce state")
+            all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
+            merged_all = gather_per_cache_head_kv(
+                cache,
+                all_indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+                rotary_dim=self.rotary_dim,
+            )
+            scores = state.scores
+            indices = select_per_cache_head_kv_norm_indices_from_scores(
+                scores, self.config.process_every, self.config.topk
+            )
+            index = indices[..., None].expand(-1, -1, -1, merged_all.shape[-1])
+            return torch.gather(merged_all, dim=2, index=index), scores, indices
+
         policy = longshot_full_history_execution(self)
         if not policy.enabled:
             all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
@@ -921,9 +971,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             return torch.gather(merged_all, dim=2, index=index), scores, indices
 
         if not isinstance(cache, WindowedCache):
-            raise TypeError(
-                "enabled Longshot selected-history execution requires contiguous WindowedCache storage"
-            )
+            raise TypeError("enabled Longshot selected-history execution requires contiguous WindowedCache storage")
         # The eager per-row FP32 expression and existing top-k remain the oracle.
         with torch.no_grad():
             if self.config.unrope_keys:
@@ -965,6 +1013,10 @@ class GlobalCacheProcessor(CacheProcessorBase):
         return torch.cat([keys, values], dim=-1), scores, indices
 
     def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:
+        if kv_score_sidecar_execution(self).enabled:
+            if not isinstance(cache, WindowedCache):
+                raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
+            self._synchronize_kv_score_sidecar(cache)
         if self.config.score == "kv_norm" and not select_all:
             merged, scores, indices = self._select_kv_norm_history(cache)
             if indices.shape[-1] == 0:
@@ -989,7 +1041,9 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
             kv_head_scores = chunked_fp32_l2_norm(merged)
         latest = latest_shared_indices(indices)
-        kv_hidden = self.block.encode_input(merged) if self.block.has_linear_state_adapter() and cache.linear_states else None
+        kv_hidden = (
+            self.block.encode_input(merged) if self.block.has_linear_state_adapter() and cache.linear_states else None
+        )
         linear_inputs = self._linear_state_inputs(cache, kv_hidden)
         selected_heads = self._select_combined_heads(
             batch=merged.shape[0],
@@ -1016,7 +1070,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
             cache = self._scatter_linear_state_updates(cache, linear_delta, linear_inputs.specs)
         if self.config.update_stream == "v":
             values = _split_merged_values(updated[:, :, None, :], self.num_layers, self.num_kv_heads, self.head_dim)
-            return _scatter_latest_values(cache, latest, values), selected_heads
+            cache = _scatter_latest_values(cache, latest, values)
+            return self._refresh_kv_score_sidecar(cache, latest), selected_heads
         keys, values = _split_merged(updated[:, :, None, :], self.num_layers, self.num_kv_heads, self.head_dim)
         if self.config.unrope_keys:
             keys = rotate_cache_keys(
@@ -1026,7 +1081,23 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
             )
-        return _scatter_latest(cache, latest, keys, values), selected_heads
+        cache = _scatter_latest(cache, latest, keys, values)
+        return self._refresh_kv_score_sidecar(cache, latest), selected_heads
+
+    def _synchronize_kv_score_sidecar(self, cache: WindowedCache) -> None:
+        spec = kv_score_sidecar_spec(self)
+        cache.kv_score_sidecar = synchronize_kv_score_sidecar(cache.kv_score_sidecar, cache.keys, cache.values, spec)
+
+    def _refresh_kv_score_sidecar(self, cache: CacheLike, positions: torch.Tensor) -> CacheLike:
+        if not kv_score_sidecar_execution(self).enabled:
+            return cache
+        if not isinstance(cache, WindowedCache):
+            raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
+        spec = kv_score_sidecar_spec(self)
+        cache.kv_score_sidecar = refresh_kv_score_sidecar(
+            cache.kv_score_sidecar, cache.keys, cache.values, positions, spec
+        )
+        return cache
 
     def _select_combined_heads(
         self,
@@ -1063,7 +1134,9 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 continue
             recurrent_state = state[1]
             if spec.following_cache_idx not in context_cache:
-                context_cache[spec.following_cache_idx] = self._following_kv_hidden_context(kv_hidden, spec.following_cache_idx)
+                context_cache[spec.following_cache_idx] = self._following_kv_hidden_context(
+                    kv_hidden, spec.following_cache_idx
+                )
             query_key = self.block.linear_state_query_cache_key(spec.layer_idx, spec.following_cache_idx)
             cache_key = (query_key, spec.following_cache_idx)
             if cache_key not in query_cache:

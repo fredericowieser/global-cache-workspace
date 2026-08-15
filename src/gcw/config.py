@@ -818,6 +818,51 @@ class TrainConfig:
                     "performance.longshot_full_history.max_temp_bytes must cover at least "
                     f"one FP32 K/V row ({minimum_temp_bytes} bytes)"
                 )
+        sidecar = self.performance.kv_score_sidecar
+        if sidecar.enabled:
+            processor = self.model.cache_processor
+            if self.model.variant != "longshot" or processor is None:
+                raise ValueError("performance.kv_score_sidecar requires a Longshot cache processor")
+            if self.performance.longshot_full_history.enabled:
+                raise ValueError(
+                    "performance.kv_score_sidecar does not compose with performance.longshot_full_history"
+                )
+            if self.batch_size != 2:
+                raise ValueError("performance.kv_score_sidecar requires fixed eager batch_size=2")
+            if self.distributed != "none":
+                raise ValueError(
+                    "performance.kv_score_sidecar supports only single-process distributed='none'"
+                )
+            if self.backbone_chunk_backend != "eager":
+                raise ValueError("performance.kv_score_sidecar requires backbone_chunk_backend='eager'")
+            if self.performance.adaptive_batching.enabled:
+                raise ValueError("performance.kv_score_sidecar does not compose with adaptive batching")
+            if processor.score != "kv_norm":
+                raise ValueError(
+                    "performance.kv_score_sidecar requires cache_processor.score='kv_norm'"
+                )
+            if processor.attention_dropout != 0.0:
+                raise ValueError(
+                    "performance.kv_score_sidecar requires cache_processor.attention_dropout=0"
+                )
+            if processor.linear_state_cache:
+                raise ValueError("performance.kv_score_sidecar rejects linear recurrent cache state")
+            if (
+                self.model.flow_processor is not None
+                or self.model.diffusion_processor is not None
+                or self.model.workspace_flow_refinement is not None
+            ):
+                raise ValueError(
+                    "performance.kv_score_sidecar does not compose with Flow, Diffusion, or workspace refinement"
+                )
+            if self.activation_checkpointing != "none":
+                raise ValueError(
+                    "performance.kv_score_sidecar supports Longshot native and segmented checkpointing only"
+                )
+            if self.model.family not in {"smollm", "llama", "qwen3"}:
+                raise ValueError(
+                    "performance.kv_score_sidecar requires a dense WindowedCache-compatible family"
+                )
         noisy_diffusion_backend = self.performance.noisy_diffusion.recurrence_backend
         if noisy_diffusion_backend == "compile":
             diffusion = self.model.diffusion_processor
@@ -928,6 +973,8 @@ def to_dict(value: Any) -> Any:
         payload = {field.name: to_dict(getattr(value, field.name)) for field in fields(value)}
         if not value.longshot_full_history.enabled:
             payload.pop("longshot_full_history")
+        if not value.kv_score_sidecar.enabled:
+            payload.pop("kv_score_sidecar")
         return payload
     if is_dataclass(value):
         return {f.name: to_dict(getattr(value, f.name)) for f in fields(value)}

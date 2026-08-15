@@ -32,6 +32,9 @@ def _config_payload(value: object) -> object:
             payload.pop("reference_loss")
         if not value.longshot_full_history.enabled:
             payload.pop("longshot_full_history")
+        if not value.kv_score_sidecar.enabled:
+            # Preserve receipts created before this default-off execution policy existed.
+            payload.pop("kv_score_sidecar")
         if value.noisy_diffusion.recurrence_backend == "eager":
             # Preserve receipts created before this default-off execution policy existed.
             payload.pop("noisy_diffusion")

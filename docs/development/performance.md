@@ -103,6 +103,21 @@ Running that command on a live H200 (or another BF16 Flash-capable CUDA host) re
 
 The regional compilers are **not** admitted for the Qwen3 math campaign. Formal H200 fixed-batch-two trajectories changed discontinuous cache decisions despite preserving physical shape: BT changed 222–241 of roughly 680 selections per step, BGT changed 228–251, and Flow-BGT changed 241–258. Gradient relative L2 reached 6.8%, 8.1%, and 17.3%, respectively. `compile_full_windows` also failed. Throughput from those backends is screening evidence only; unchanged RNG and optimizer-step counters cannot override selection/write, pair-loss, gradient, parameter, and Adam-state failures.
 
+## Longshot KV-score sidecar
+
+The conservative KV-score sidecar is explicit, default-off, and mutually exclusive with the selected-history gather:
+
+```yaml
+performance:
+  kv_score_sidecar:
+    enabled: true
+```
+
+The sidecar preserves the authoritative full-history K/V gather and gathers selected K/V from live cache tensors with their autograd path intact. It replaces only repeated complete score-table evaluation. Bootstrap evaluates every existing row; later backbone windows append only new rows. Longshot writes functionally replace every affected score after final K/V storage, including value-only writes and each external-recurrence cycle. Every row remains exactly `cat([optionally_inverse_roped_key, value], dim=-1).float().pow(2).sum(dim=-1)`. The table is detached FP32 selector-only state carried by `CacheState` and `WindowedCache`, including segmented checkpoint tensor boundaries. It is not model, optimizer, or training-checkpoint state, so a fresh process reconstructs it on the first selection.
+
+Version 1 admits only fixed physical batch two, one process, eager dense SmolLM/Llama/Qwen3 Longshot, `score: kv_norm`, and zero processor dropout. It rejects adaptive batching, `longshot_full_history`, compiled execution, linear recurrent state, Flow, Diffusion, and workspace refinement. Invalid or mismatched carried state fails closed. The authenticated metadata sets `campaign_admitted: false`. CPU tests establish bitwise score parity, exact selection/write identity, loss and gradient parity, Adam trajectory parity, native and segmented checkpoint replay, cache copy/pickle behavior, and fresh-process training-checkpoint resume. No GPU throughput, peak-memory, or BF16 hardware parity claim exists yet.
+
+
 ## Longshot selected-history gather
 
 Longshot KV-norm full-history optimization is explicit and default-off:

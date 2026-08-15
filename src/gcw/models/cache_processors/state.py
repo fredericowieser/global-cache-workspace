@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
+
+if TYPE_CHECKING:
+    from gcw.performance.kv_score_sidecar import KVScoreSidecarState
 
 
 @dataclass
@@ -11,6 +15,7 @@ class CacheState:
     values: list[torch.Tensor]
     scores: torch.Tensor
     linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None = None
+    kv_score_sidecar: KVScoreSidecarState | None = None
 
     @property
     def batch_size(self) -> int:
@@ -33,14 +38,16 @@ class CacheState:
 
     def append_scores(self, chunk_scores: torch.Tensor) -> "CacheState":
         scores = chunk_scores if self.scores.numel() == 0 else torch.cat([self.scores, chunk_scores], dim=1)
-        return CacheState(self.keys, self.values, scores, self.linear_states)
+        return CacheState(self.keys, self.values, scores, self.linear_states, self.kv_score_sidecar)
 
     def select_indices(self, process_every: int = 64, topk: int = 32) -> torch.Tensor:
         return select_l2_indices(self.scores, process_every=process_every, topk=topk)
 
     def all_indices(self) -> torch.Tensor:
         seq = self.scores.shape[1]
-        return torch.arange(seq, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.scores.shape[0], -1)
+        return (
+            torch.arange(seq, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.scores.shape[0], -1)
+        )
 
     def all_heads(self) -> torch.Tensor:
         heads = self.num_layers * self.keys[0].shape[1]
@@ -56,6 +63,7 @@ class CacheState:
         index = _expand_cache_indices(indices, k)
         self.keys[layer_idx] = k.scatter(2, index, keys.to(k.dtype))
         self.values[layer_idx] = v.scatter(2, index, values.to(v.dtype))
+        self.kv_score_sidecar = None
 
 
 def processor_call_count(seq_len: int, process_every: int = 64) -> int:
@@ -159,11 +167,19 @@ class StaticCacheState:
 
     def all_indices(self) -> torch.Tensor:
         seq = self.length
-        return torch.arange(seq, dtype=torch.long, device=self.score_storage.device).unsqueeze(0).expand(self.batch_size, -1)
+        return (
+            torch.arange(seq, dtype=torch.long, device=self.score_storage.device)
+            .unsqueeze(0)
+            .expand(self.batch_size, -1)
+        )
 
     def all_heads(self) -> torch.Tensor:
         heads = self.num_layers * self.keys[0].shape[1]
-        return torch.arange(heads, dtype=torch.long, device=self.score_storage.device).unsqueeze(0).expand(self.batch_size, -1)
+        return (
+            torch.arange(heads, dtype=torch.long, device=self.score_storage.device)
+            .unsqueeze(0)
+            .expand(self.batch_size, -1)
+        )
 
     def gather_layer(self, layer_idx: int, indices: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         k, v = self.layer(layer_idx)

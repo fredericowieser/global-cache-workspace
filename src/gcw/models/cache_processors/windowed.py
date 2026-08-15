@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 
 from gcw.models.cache_processors.state import CacheState, select_l2_indices
+
+if TYPE_CHECKING:
+    from gcw.performance.kv_score_sidecar import KVScoreSidecarState
 
 
 @dataclass
@@ -13,6 +17,7 @@ class WindowedCache:
     values: torch.Tensor
     scores: torch.Tensor
     linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None = None
+    kv_score_sidecar: KVScoreSidecarState | None = None
 
     @classmethod
     def from_lists(
@@ -21,12 +26,25 @@ class WindowedCache:
         values: list[torch.Tensor],
         scores: torch.Tensor,
         linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None = None,
+        kv_score_sidecar: KVScoreSidecarState | None = None,
     ) -> "WindowedCache":
-        return cls(torch.stack(keys, dim=0), torch.stack(values, dim=0), scores, linear_states)
+        return cls(
+            torch.stack(keys, dim=0),
+            torch.stack(values, dim=0),
+            scores,
+            linear_states,
+            kv_score_sidecar,
+        )
 
     @classmethod
     def from_cache_state(cls, cache: CacheState) -> "WindowedCache":
-        return cls.from_lists(cache.keys, cache.values, cache.scores, cache.linear_states)
+        return cls.from_lists(
+            cache.keys,
+            cache.values,
+            cache.scores,
+            cache.linear_states,
+            cache.kv_score_sidecar,
+        )
 
     @property
     def batch_size(self) -> int:
@@ -48,7 +66,9 @@ class WindowedCache:
 
     def all_indices(self) -> torch.Tensor:
         seq = self.scores.shape[1]
-        return torch.arange(seq, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.scores.shape[0], -1)
+        return (
+            torch.arange(seq, dtype=torch.long, device=self.scores.device).unsqueeze(0).expand(self.scores.shape[0], -1)
+        )
 
     def all_heads(self) -> torch.Tensor:
         heads = self.keys.shape[0] * self.keys.shape[2]
@@ -66,6 +86,13 @@ class WindowedCache:
         new_values = v.scatter(2, index, values.to(v.dtype))
         self.keys = torch.cat([self.keys[:layer_idx], new_keys.unsqueeze(0), self.keys[layer_idx + 1 :]], dim=0)
         self.values = torch.cat([self.values[:layer_idx], new_values.unsqueeze(0), self.values[layer_idx + 1 :]], dim=0)
+        self.kv_score_sidecar = None
 
     def to_cache_state(self) -> CacheState:
-        return CacheState(list(self.keys.unbind(0)), list(self.values.unbind(0)), self.scores, self.linear_states)
+        return CacheState(
+            list(self.keys.unbind(0)),
+            list(self.values.unbind(0)),
+            self.scores,
+            self.linear_states,
+            self.kv_score_sidecar,
+        )

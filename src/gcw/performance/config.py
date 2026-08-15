@@ -119,6 +119,17 @@ class LongshotFullHistoryConfig:
 
 
 @dataclass(frozen=True)
+class KVScoreSidecarConfig:
+    """Default-off exact FP32 Longshot selector-score cache."""
+
+    enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("performance.kv_score_sidecar.enabled must be a boolean")
+
+
+@dataclass(frozen=True)
 class NoisyDiffusionBackendConfig:
     """Execution policy for noisy Diffusion-BGT's deterministic recurrence."""
 
@@ -126,9 +137,7 @@ class NoisyDiffusionBackendConfig:
 
     def __post_init__(self) -> None:
         if self.recurrence_backend not in {"eager", "compile"}:
-            raise ValueError(
-                "performance.noisy_diffusion.recurrence_backend must be 'eager' or 'compile'"
-            )
+            raise ValueError("performance.noisy_diffusion.recurrence_backend must be 'eager' or 'compile'")
 
 
 @dataclass(frozen=True)
@@ -138,6 +147,7 @@ class PerformanceConfig:
     adaptive_batching: AdaptiveBatchingConfig = field(default_factory=AdaptiveBatchingConfig)
     reference_loss: ReferenceLossConfig = field(default_factory=ReferenceLossConfig)
     longshot_full_history: LongshotFullHistoryConfig = field(default_factory=LongshotFullHistoryConfig)
+    kv_score_sidecar: KVScoreSidecarConfig = field(default_factory=KVScoreSidecarConfig)
     noisy_diffusion: NoisyDiffusionBackendConfig = field(default_factory=NoisyDiffusionBackendConfig)
 
     def __post_init__(self) -> None:
@@ -160,6 +170,15 @@ class PerformanceConfig:
             )
         elif not isinstance(longshot_full_history, LongshotFullHistoryConfig):
             raise ValueError("performance.longshot_full_history must be a mapping")
+        kv_score_sidecar: Any = self.kv_score_sidecar
+        if isinstance(kv_score_sidecar, dict):
+            object.__setattr__(
+                self,
+                "kv_score_sidecar",
+                KVScoreSidecarConfig(**kv_score_sidecar),
+            )
+        elif not isinstance(kv_score_sidecar, KVScoreSidecarConfig):
+            raise ValueError("performance.kv_score_sidecar must be a mapping")
         noisy_diffusion: Any = self.noisy_diffusion
         if isinstance(noisy_diffusion, dict):
             object.__setattr__(

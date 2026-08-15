@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 import os
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import replace
-from typing import Any, Callable, cast
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import torch
 import torch.nn as nn
@@ -33,6 +33,16 @@ ProcessorFn = Callable[..., CacheLike | StaticCacheState]
 ProcessorExecutionFactory = Callable[[], AbstractContextManager[ProcessorFn]]
 LinearStateLayout = tuple[tuple[int, bool], ...]
 
+if TYPE_CHECKING:
+    from gcw.performance.kv_score_sidecar import KVScoreSidecarSpec
+
+
+@dataclass(frozen=True)
+class WindowedCacheLayout:
+    sidecar_spec: KVScoreSidecarSpec | None = None
+    linear_states: LinearStateLayout = ()
+
+
 try:
     from torch.nn.attention import SDPBackend as _SDPBackend, sdpa_kernel as _sdpa_kernel
     from torch.nn.attention.bias import causal_lower_right as _causal_lower_right
@@ -46,27 +56,39 @@ causal_lower_right: Any = _causal_lower_right
 sdpa_kernel: Any = _sdpa_kernel
 
 
-def _flatten_windowed_cache(cache: WindowedCache | None) -> tuple[tuple[torch.Tensor, ...], LinearStateLayout]:
+def _flatten_windowed_cache(cache: WindowedCache | None) -> tuple[tuple[torch.Tensor, ...], WindowedCacheLayout]:
     if cache is None:
-        return (), ()
+        return (), WindowedCacheLayout()
     tensors = [cache.keys, cache.values, cache.scores]
-    layout: list[tuple[int, bool]] = []
+    sidecar_spec = None
+    if cache.kv_score_sidecar is not None:
+        sidecar_spec = cache.kv_score_sidecar.spec
+        tensors.append(cache.kv_score_sidecar.scores)
+    linear_layout: list[tuple[int, bool]] = []
     for layer_idx, state in sorted((cache.linear_states or {}).items()):
         recurrent, convolution = state
         has_convolution = convolution is not None
-        layout.append((layer_idx, has_convolution))
+        linear_layout.append((layer_idx, has_convolution))
         tensors.append(recurrent)
         if convolution is not None:
             tensors.append(convolution)
-    return tuple(tensors), tuple(layout)
+    return tuple(tensors), WindowedCacheLayout(sidecar_spec, tuple(linear_layout))
 
 
-def _unflatten_windowed_cache(tensors: tuple[torch.Tensor, ...], layout: LinearStateLayout) -> WindowedCache:
+def _unflatten_windowed_cache(tensors: tuple[torch.Tensor, ...], layout: WindowedCacheLayout) -> WindowedCache:
     if len(tensors) < 3:
         raise ValueError("a flattened WindowedCache boundary requires keys, values, and scores")
     position = 3
+    sidecar = None
+    if layout.sidecar_spec is not None:
+        if position >= len(tensors):
+            raise ValueError("flattened WindowedCache is missing KV-score sidecar state")
+        from gcw.performance.kv_score_sidecar import KVScoreSidecarState
+
+        sidecar = KVScoreSidecarState(layout.sidecar_spec, tensors[position].detach())
+        position += 1
     linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] = {}
-    for layer_idx, has_convolution in layout:
+    for layer_idx, has_convolution in layout.linear_states:
         if position >= len(tensors):
             raise ValueError("flattened WindowedCache is missing a recurrent state tensor")
         recurrent = tensors[position]
@@ -76,7 +98,7 @@ def _unflatten_windowed_cache(tensors: tuple[torch.Tensor, ...], layout: LinearS
         linear_states[layer_idx] = (recurrent, convolution)
     if position != len(tensors):
         raise ValueError("flattened WindowedCache contains unexpected state tensors")
-    return WindowedCache(tensors[0], tensors[1], tensors[2], linear_states or None)
+    return WindowedCache(tensors[0], tensors[1], tensors[2], linear_states or None, sidecar)
 
 
 def _window_checkpoint_contexts():
@@ -646,9 +668,7 @@ class TF(Backbone):
                     cache_format="windowed",
                 )
                 hidden_chunks.append(hidden)
-        return self.loss_from_hidden(
-            torch.cat(hidden_chunks, dim=1), targets, loss_reduction, loss_backend
-        )
+        return self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction, loss_backend)
 
     def _checkpointed_window_segment(
         self,
@@ -661,7 +681,7 @@ class TF(Backbone):
     ) -> tuple[torch.Tensor, WindowedCache]:
         boundary_cache = cache if isinstance(cache, WindowedCache) else None
         input_tensors, input_layout = _flatten_windowed_cache(boundary_cache)
-        output_layout: list[tuple[int, bool]] = []
+        output_layout: list[WindowedCacheLayout] = []
 
         def run_segment(ids: torch.Tensor, *flat_cache: torch.Tensor) -> tuple[torch.Tensor, ...]:
             if boundary_cache is None:
@@ -689,7 +709,7 @@ class TF(Backbone):
                 raise TypeError("checkpointed window segment requires WindowedCache output")
             flat_output, layout = _flatten_windowed_cache(current)
             if cache_processor_recomputation_id() is None:
-                output_layout[:] = layout
+                output_layout[:] = [layout]
             return (torch.cat(segment_hidden, dim=1), *flat_output)
 
         outputs = checkpoint(
@@ -702,7 +722,9 @@ class TF(Backbone):
         )
         if not isinstance(outputs, tuple) or len(outputs) < 4:
             raise RuntimeError("checkpointed window segment returned an invalid tensor boundary")
-        return outputs[0], _unflatten_windowed_cache(outputs[1:], tuple(output_layout))
+        if len(output_layout) != 1:
+            raise RuntimeError("checkpointed window segment did not record its cache layout")
+        return outputs[0], _unflatten_windowed_cache(outputs[1:], output_layout[0])
 
     def forward_windowed(
         self,
@@ -781,11 +803,7 @@ class TF(Backbone):
                 logits=logits,
                 cache_format=cache_format,
             )
-        if (
-            self.backbone_chunk_backend in {"compile", "compile_full_windows"}
-            and full_qwen3_window
-            and has_past
-        ):
+        if self.backbone_chunk_backend in {"compile", "compile_full_windows"} and full_qwen3_window and has_past:
             return self._forward_compiled_embedding_chunk(
                 inputs_embeds, start_pos, cache, logits=logits, cache_format=cache_format
             )
@@ -815,8 +833,18 @@ class TF(Backbone):
         )
         new_scores = chunk_scores if old_scores.numel() == 0 else torch.cat([old_scores, chunk_scores], dim=1)
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
-            return out, WindowedCache.from_lists(keys, values, new_scores)
-        return out, CacheState(keys, values, new_scores)
+            return out, WindowedCache.from_lists(
+                keys,
+                values,
+                new_scores,
+                kv_score_sidecar=None if cache is None else cache.kv_score_sidecar,
+            )
+        return out, CacheState(
+            keys,
+            values,
+            new_scores,
+            kv_score_sidecar=None if cache is None else cache.kv_score_sidecar,
+        )
 
     def _forward_compiled_initial_embedding_chunk(
         self,
@@ -842,7 +870,6 @@ class TF(Backbone):
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
             return out, WindowedCache(keys, values, chunk_scores)
         return out, CacheState(list(keys.unbind(0)), list(values.unbind(0)), chunk_scores)
-
 
     def _forward_compiled_embedding_chunk(
         self,
@@ -882,8 +909,18 @@ class TF(Backbone):
         new_scores = torch.cat([cache.scores, chunk_scores], dim=1)
         out = self.logits_from_hidden(hidden) if logits else hidden
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
-            return out, WindowedCache(keys, values, new_scores)
-        return out, CacheState(list(keys.unbind(0)), list(values.unbind(0)), new_scores)
+            return out, WindowedCache(
+                keys,
+                values,
+                new_scores,
+                kv_score_sidecar=None if cache is None else cache.kv_score_sidecar,
+            )
+        return out, CacheState(
+            list(keys.unbind(0)),
+            list(values.unbind(0)),
+            new_scores,
+            kv_score_sidecar=None if cache is None else cache.kv_score_sidecar,
+        )
 
     def forward_chunk_static(
         self,

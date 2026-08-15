@@ -68,6 +68,10 @@ from gcw.performance.longshot_cache import (
     configure_longshot_full_history_execution,
     longshot_full_history_execution_metadata,
 )
+from gcw.performance.kv_score_sidecar import (
+    configure_kv_score_sidecar_execution,
+    kv_score_sidecar_execution_metadata,
+)
 from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
 from gcw.performance.losses import (
     configure_reference_loss_execution,
@@ -193,6 +197,7 @@ def train(config: TrainConfig) -> None:
     configure_longshot_full_history_execution(
         model, config.performance.longshot_full_history
     )
+    configure_kv_score_sidecar_execution(model, config.performance.kv_score_sidecar)
     noisy_diffusion_backend = configure_noisy_diffusion_recurrence_backend(
         model,
         config.model,
@@ -204,6 +209,8 @@ def train(config: TrainConfig) -> None:
     else:
         if whole_model_compile_requested() and config.performance.longshot_full_history.enabled:
             raise RuntimeError("Longshot selected-history execution cannot be combined with GCW_COMPILE")
+        if whole_model_compile_requested() and config.performance.kv_score_sidecar.enabled:
+            raise RuntimeError("KV-score sidecar cannot be combined with GCW_COMPILE")
         if whole_model_compile_requested() and config.performance.reference_loss.mode != "legacy":
             raise RuntimeError("bounded reference-loss execution cannot be combined with GCW_COMPILE")
         regional_backend = resolve_cache_processor_backend(config.model)
@@ -318,6 +325,18 @@ def train(config: TrainConfig) -> None:
                 )
             }
             if config.performance.longshot_full_history.enabled
+            else {}
+        ),
+        **(
+            {
+                "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(
+                    config.performance.kv_score_sidecar,
+                    unrope_keys=bool(
+                        config.model.cache_processor and config.model.cache_processor.unrope_keys
+                    ),
+                )
+            }
+            if config.performance.kv_score_sidecar.enabled
             else {}
         ),
         **(
@@ -772,6 +791,18 @@ def _training_fingerprint(
                 )
             }
             if config.performance.longshot_full_history.enabled
+            else {}
+        ),
+        **(
+            {
+                "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(
+                    config.performance.kv_score_sidecar,
+                    unrope_keys=bool(
+                        config.model.cache_processor and config.model.cache_processor.unrope_keys
+                    ),
+                )
+            }
+            if config.performance.kv_score_sidecar.enabled
             else {}
         ),
         **(
