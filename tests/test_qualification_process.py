@@ -42,8 +42,6 @@ def test_producer_and_resumer_are_distinct_sequential_processes(tmp_path: Path) 
             str(worker),
             "--role",
             "resumer",
-            "--producer",
-            str(producer_output),
             "--output",
             str(resumer_output),
         ),
@@ -58,6 +56,10 @@ def test_producer_and_resumer_are_distinct_sequential_processes(tmp_path: Path) 
     assert resumer_payload["producer_pid"] == result.producer.pid
     assert resumer_payload["pid"] == result.resumer.pid
     assert len(result.producer.output.sha256) == len(result.resumer.output.sha256) == 64
+    assert result.producer.input is None
+    assert result.resumer.input is not None
+    assert result.resumer.input.sha256 == result.producer.output.sha256
+    assert result.resumer.input.size_bytes == result.producer.output.size_bytes
 
 
 def test_worker_rejects_existing_output_before_launch(tmp_path: Path) -> None:

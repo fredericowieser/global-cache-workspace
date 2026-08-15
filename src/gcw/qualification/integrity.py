@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from gcw.provenance import canonical_json_bytes
+from gcw.qualification.inputs import capture_file
 from gcw.runtime import atomic_write_bytes
 
 
@@ -121,11 +122,11 @@ def load_integrity_document(
 ) -> dict[str, Any]:
     """Read an artifact once, then validate only the captured bytes."""
     try:
-        payload = path.read_bytes()
-    except OSError as exc:
+        captured = capture_file(path, role="qualification_integrity_artifact")
+    except ValueError as exc:
         raise QualificationIntegrityError("integrity artifact is unreadable") from exc
     return deserialize_integrity_document(
-        payload,
+        captured.content,
         expected_schema=expected_schema,
         expected_kind=expected_kind,
     )

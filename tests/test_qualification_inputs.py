@@ -52,6 +52,10 @@ def test_source_snapshot_rejects_ambiguous_paths_and_symlinks(tmp_path: Path) ->
     source.mkdir()
     (source / "real.py").write_text("VALUE = 1\n")
     (source / "link.py").symlink_to(source / "real.py")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "nested.py").write_text("VALUE = 2\n")
+    (source / "linked-dir").symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(QualificationInputError, match="unsafe"):
         capture_source(source, ("../real.py",))
@@ -59,5 +63,7 @@ def test_source_snapshot_rejects_ambiguous_paths_and_symlinks(tmp_path: Path) ->
         capture_source(source, ("real.py", "real.py"))
     with pytest.raises(QualificationInputError, match="symlink"):
         capture_source(source, ("link.py",))
+    with pytest.raises(QualificationInputError, match="unsafe"):
+        capture_source(source, ("linked-dir/nested.py",))
     with pytest.raises(QualificationInputError, match="cannot open"):
         capture_file(source / "link.py", role="symlink")

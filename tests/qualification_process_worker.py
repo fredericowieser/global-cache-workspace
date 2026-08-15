@@ -4,19 +4,17 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--role", choices=("producer", "resumer"), required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--producer", type=Path)
     args = parser.parse_args()
     producer_pid = None
     if args.role == "resumer":
-        if args.producer is None:
-            raise RuntimeError("resumer requires producer artifact")
-        producer = json.loads(args.producer.read_text())
+        producer = json.loads(sys.stdin.buffer.read())
         producer_pid = int(producer["pid"])
         if producer_pid == os.getpid():
             raise RuntimeError("resumer reused producer PID")

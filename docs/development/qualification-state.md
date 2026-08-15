@@ -69,15 +69,25 @@ and SHA-256 consistency checks. The API deliberately says integrity rather than
 authentication. An unkeyed digest becomes authoritative only when its expected value
 is independently anchored.
 
+`receipts.py` is a separate keyed layer. A trusted supervisor can issue a
+domain-separated HMAC-SHA256 receipt over a closed integer/string/boolean JSON
+payload and context. Verification captures receipt and private-key bytes once,
+requires canonical encoding, rejects duplicate keys and floats, compares the tag
+in constant time, and requires an externally supplied exact context. Contexts must
+bind a fresh qualification ID/audience, source and import identities, resolved
+configuration, kernel-manifest digest, accelerator class and UUID, runtime versions,
+and evidence hashes. Workers must never receive the key.
+
 ## Q3 fresh-process boundary
 
 `process.py` launches workers without a shell, with explicit arguments,
 environment, working directory, timeout, and exclusive output. The producer must
-exit completely before a distinct resumer process starts. The parent captures each
-worker output once and records its identity. Model-specific producer/resumer workers
-must still use production checkpoint save/open/restore and Q1 state comparison; the
-generic process primitive does not claim that merely spawning two processes proves
-resume parity.
+exit completely before a distinct resumer process starts. The trusted parent captures
+the producer output once and transports those exact bytes to the resumer over stdin;
+the resumer never reopens the mutable producer path. Input/output identities are
+recorded and must match. Model-specific producer/resumer workers must still use
+production checkpoint save/open/restore and Q1 state comparison; the generic process
+primitive does not claim that merely spawning two processes proves resume parity.
 
 ## Q4 device and timing primitives
 
@@ -90,23 +100,26 @@ reports allocator peaks. H100 and H200 remain distinct lineages.
 
 ## Threat boundary
 
-This substrate detects accidental or adversarial modification of captured content
-when the trusted comparison side or expected digest is already available. It is
-not evidence authentication, signing, provenance attestation, process isolation,
-or protection against an attacker who can replace both state and its expected
-hash. Q1 archives are ordinary in-memory or byte records and are not sealed
-artifacts. Capture also cannot make concurrent mutation safe; callers must capture
-at a quiescent training boundary.
+Unkeyed state and integrity artifacts detect accidental or adversarial modification
+only when the trusted comparison side or expected digest is independently available.
+Keyed receipts authenticate against replacement by a party that does not possess
+the HMAC key, but they are shared-authority authentication: a verifier holding the
+symmetric key can also issue receipts. They are not non-repudiation, scheduler or
+hardware attestation, process isolation, or protection against root/same-UID key
+extraction. Q1 archives remain ordinary in-memory or byte records until a trusted
+supervisor validates and authenticates their evidence hashes. Capture also cannot
+make concurrent mutation safe; callers must capture at a quiescent boundary.
 
 Q1 CUDA state support is representational and its tests are opt-in. Ordinary CPU
 CI records CUDA as unavailable or explicitly omitted and runs no GPU workloads.
 
 ## Deferred milestones
 
-Trusted-key authentication, external authority, and OS-enforced immutable execution
-remain deferred; read-only modes and unkeyed digests are not substitutes. The generic
-fresh-process primitive still needs model-specific production checkpoint workers and
-full Q1 comparison before it can qualify graph or wave execution. Private-pool,
+Asymmetric/external signing authority and OS-enforced immutable execution remain
+deferred; HMAC receipts, read-only modes, and unkeyed digests are not substitutes.
+The generic fresh-process primitive still needs model-specific production checkpoint
+workers, closed import staging, descendant cleanup, and full Q1 comparison before it
+can qualify graph or wave execution. Private-pool,
 stream/event, process-lifetime, and parent-observed GPU release evidence must be
 attached to each executor. CUDA Graph and pair-wave candidates therefore remain
 benchmark-only until those complete hardware protocols pass.

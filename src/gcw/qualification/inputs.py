@@ -83,49 +83,17 @@ class SourceSnapshot:
 
 def capture_file(path: Path, *, role: str) -> CapturedBlob:
     """Read a regular non-symlink file once through one stable descriptor."""
-    if not isinstance(role, str) or not role:
-        raise QualificationInputError("captured blob role must be a nonempty string")
+    _validate_role(role)
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
         raise QualificationInputError(f"cannot open qualification input {path}") from exc
     try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise QualificationInputError(f"qualification input is not a regular file: {path}")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 8 * 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        after = os.fstat(descriptor)
+        blob, _metadata = _capture_descriptor(descriptor, role=role, label=str(path))
+        return blob
     finally:
         os.close(descriptor)
-    identity_before = (
-        before.st_dev,
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-        before.st_ctime_ns,
-    )
-    identity_after = (
-        after.st_dev,
-        after.st_ino,
-        after.st_size,
-        after.st_mtime_ns,
-        after.st_ctime_ns,
-    )
-    if identity_before != identity_after:
-        raise QualificationInputError(f"qualification input changed while being read: {path}")
-    content = b"".join(chunks)
-    if len(content) != before.st_size:
-        raise QualificationInputError(f"qualification input size changed while being read: {path}")
-    return CapturedBlob(
-        BlobIdentity(role, len(content), hashlib.sha256(content).hexdigest()),
-        content,
-    )
 
 
 def capture_train_config(path: Path) -> ConfigSnapshot:
@@ -137,19 +105,23 @@ def capture_train_config(path: Path) -> ConfigSnapshot:
 
 
 def capture_source(root: Path, relative_paths: Iterable[str]) -> SourceSnapshot:
-    """Capture a sorted, unique, closed set of source members."""
-    if root.is_symlink() or not root.is_dir():
-        raise QualificationInputError("source root must be a real directory")
+    """Capture a sorted, unique, closed set through one descriptor-rooted tree."""
     normalized = tuple(sorted(_normalize_relative_path(value) for value in relative_paths))
     if not normalized or len(set(normalized)) != len(normalized):
         raise QualificationInputError("source member paths must be nonempty and unique")
-    members: list[SourceMemberSnapshot] = []
-    for relative in normalized:
-        source = root.joinpath(*PurePosixPath(relative).parts)
-        _reject_symlink_components(root, relative)
-        blob = capture_file(source, role=f"source:{relative}")
-        mode = stat.S_IMODE(source.stat(follow_symlinks=False).st_mode)
-        members.append(SourceMemberSnapshot(relative, mode, blob))
+    root_flags = (
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+    )
+    try:
+        root_descriptor = os.open(root, root_flags)
+    except OSError as exc:
+        raise QualificationInputError("source root must be a real directory") from exc
+    try:
+        if not stat.S_ISDIR(os.fstat(root_descriptor).st_mode):
+            raise QualificationInputError("source root must be a real directory")
+        members = [_capture_source_member(root_descriptor, relative) for relative in normalized]
+    finally:
+        os.close(root_descriptor)
     manifest = [
         {
             "path": member.relative_path,
@@ -175,13 +147,83 @@ def _normalize_relative_path(value: str) -> str:
     return normalized
 
 
-def _reject_symlink_components(root: Path, relative: str) -> None:
-    current = root
-    for component in PurePosixPath(relative).parts:
-        current = current / component
+def _validate_role(role: str) -> None:
+    if not isinstance(role, str) or not role:
+        raise QualificationInputError("captured blob role must be a nonempty string")
+
+
+def _capture_descriptor(
+    descriptor: int,
+    *,
+    role: str,
+    label: str,
+) -> tuple[CapturedBlob, os.stat_result]:
+    _validate_role(role)
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise QualificationInputError(f"qualification input is not a regular file: {label}")
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(descriptor, 8 * 1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    after = os.fstat(descriptor)
+
+    def identity(value: os.stat_result) -> tuple[int, ...]:
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+            value.st_mode,
+        )
+
+    if identity(before) != identity(after):
+        raise QualificationInputError(f"qualification input changed while being read: {label}")
+    content = b"".join(chunks)
+    if len(content) != before.st_size:
+        raise QualificationInputError(f"qualification input size changed while being read: {label}")
+    return (
+        CapturedBlob(
+            BlobIdentity(role, len(content), hashlib.sha256(content).hexdigest()),
+            content,
+        ),
+        before,
+    )
+
+
+def _capture_source_member(root_descriptor: int, relative: str) -> SourceMemberSnapshot:
+    parts = PurePosixPath(relative).parts
+    directory = os.dup(root_descriptor)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        for component in parts[:-1]:
+            try:
+                child = os.open(
+                    component,
+                    flags | getattr(os, "O_DIRECTORY", 0),
+                    dir_fd=directory,
+                )
+            except OSError as exc:
+                raise QualificationInputError(f"source member traverses an unsafe component: {relative}") from exc
+            os.close(directory)
+            directory = child
+            if not stat.S_ISDIR(os.fstat(directory).st_mode):
+                raise QualificationInputError(f"source member traverses a non-directory: {relative}")
         try:
-            metadata = current.stat(follow_symlinks=False)
+            descriptor = os.open(parts[-1], flags, dir_fd=directory)
         except OSError as exc:
-            raise QualificationInputError(f"source member is missing: {relative}") from exc
-        if stat.S_ISLNK(metadata.st_mode):
-            raise QualificationInputError(f"source member traverses a symlink: {relative}")
+            raise QualificationInputError(f"source member is missing, unsafe, or symlinked: {relative}") from exc
+        try:
+            blob, metadata = _capture_descriptor(
+                descriptor,
+                role=f"source:{relative}",
+                label=relative,
+            )
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory)
+    return SourceMemberSnapshot(relative, stat.S_IMODE(metadata.st_mode), blob)
