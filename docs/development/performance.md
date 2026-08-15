@@ -105,9 +105,18 @@ performance:
     recurrence_backend: compile
 ```
 
-The model samples `torch.randn_like` eagerly at the existing boundary before dispatch. The compiled full-graph region receives that concrete noisy state and runs only the task-directed recurrence and field evaluations. Thus compilation cannot capture, move, repeat, or fuse the random draw. The policy preserves the configured recurrence count, time conditioning, cache update equations, state dictionary, and writeback path.
+The model samples `torch.randn_like` eagerly at the existing boundary before dispatch. The compiled full-graph region receives that concrete noisy state and runs only the task-directed recurrence and field evaluations. Thus compilation cannot capture, move, repeat, or fuse the random draw. Each `TaskDirectedDiffusion` module owns its state-neutral runner, so models with different recurrence configurations cannot share stale compiled bindings. The policy preserves the configured recurrence count, time conditioning, cache update equations, state dictionary, and writeback path.
 
-This backend is independent from `GCW_CACHE_PROCESSOR_BACKEND`. The latter continues to reject noisy Diffusion-BGT. The narrow backend requires a noisy BGT model and single-process training, rejects adaptive grouping, records its noise boundary and compiler options in provenance, and enters the exact-resume fingerprint only when enabled. Any compiler creation or runtime failure is fatal; the run never retries the recurrence eagerly.
+This backend is independent from `GCW_CACHE_PROCESSOR_BACKEND`. The latter continues to reject noisy Diffusion-BGT. The narrow backend requires a noisy BGT model, zero cache-processor attention dropout, and single-process training. It rejects adaptive grouping, records its noise boundary and compiler options in provenance, and enters the exact-resume fingerprint only when enabled. PyTorch non-reentrant checkpoint replay's private early-stop signal passes through unchanged; every other compiler creation or runtime failure is fatal and never retries eagerly.
+
+Run the opt-in CUDA smoke after changing this boundary:
+
+```bash
+GCW_RUN_CUDA_DIFFUSION_COMPILE_TESTS=1 \
+  uv run --extra gpu pytest -q tests/test_noisy_diffusion_compile_backend.py
+```
+
+The smoke covers production field closures, refinement and field gradients, repeated noise/RNG events, optimizer trajectory and resume, alternating shapes, and graph/recompile telemetry.
 
 
 ## Change control

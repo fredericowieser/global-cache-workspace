@@ -821,6 +821,12 @@ class TrainConfig:
                     "compiled noisy-Diffusion recurrence requires BGT with "
                     "diffusion_processor.noise_scale>0"
                 )
+            processor = self.model.cache_processor
+            if processor is not None and processor.attention_dropout != 0.0:
+                raise ValueError(
+                    "compiled noisy-Diffusion recurrence requires "
+                    "cache_processor.attention_dropout=0"
+                )
             if self.distributed != "none":
                 raise ValueError(
                     "compiled noisy-Diffusion recurrence currently supports distributed='none'"

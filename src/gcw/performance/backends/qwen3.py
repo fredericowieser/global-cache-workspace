@@ -8,8 +8,15 @@ from typing import Any, Literal
 import torch
 import torch.nn as nn
 
+<<<<<<< HEAD
 from gcw.performance._compile import require_torch_compile
 from gcw.performance.compile_telemetry import compile_acceptance_recorder
+=======
+from gcw.performance._compile import (
+    is_non_reentrant_checkpoint_early_stop,
+    require_torch_compile,
+)
+>>>>>>> 04113bb (Harden noisy diffusion compilation)
 from gcw.provenance import canonical_json_sha256
 
 
@@ -161,7 +168,7 @@ def run_qwen3_backbone_chunk_region(
             operation,
         )
     except Exception as error:
-        if _is_non_reentrant_checkpoint_early_stop(error):
+        if is_non_reentrant_checkpoint_early_stop(error):
             raise
         raise RuntimeError(
             f"compiled Qwen3 backbone chunk failed; eager fallback is disabled when backbone_chunk_backend={backend}"
