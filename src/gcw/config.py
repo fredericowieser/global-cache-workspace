@@ -110,7 +110,9 @@ class CacheProcessorConfig:
         if self.gate_mode not in {"sigmoid", "direct"}:
             raise ValueError("cache_processor.gate_mode must be 'sigmoid' or 'direct'")
         if self.processor_mode not in {"standard", "workspace_broadcast", "head_mask_broadcast"}:
-            raise ValueError("cache_processor.processor_mode must be 'standard', 'workspace_broadcast', or 'head_mask_broadcast'")
+            raise ValueError(
+                "cache_processor.processor_mode must be 'standard', 'workspace_broadcast', or 'head_mask_broadcast'"
+            )
         if not 0.0 < self.writer_head_fraction <= 1.0:
             raise ValueError("cache_processor.writer_head_fraction must be in (0, 1]")
         if self.salience_temperature <= 0.0:
@@ -183,9 +185,7 @@ class DiffusionProcessorConfig:
             "diffusion_processor.refinement_gate_init", self.refinement_gate_init
         )
         self.noise_scale = _validated_float32("diffusion_processor.noise_scale", self.noise_scale)
-        self.conditioning_scale = _validated_float32(
-            "diffusion_processor.conditioning_scale", self.conditioning_scale
-        )
+        self.conditioning_scale = _validated_float32("diffusion_processor.conditioning_scale", self.conditioning_scale)
         if self.noise_scale < 0.0:
             raise ValueError("diffusion_processor.noise_scale must be non-negative")
         if self.conditioning_scale < 0.0:
@@ -314,10 +314,14 @@ class ModelConfig:
             self.layer_types = list(self.layer_types)
             if len(self.layer_types) != self.num_layers:
                 raise ValueError("layer_types must have length num_layers")
-            allowed = {"full_attention", "linear_attention", "sliding_attention"} if self.family == "gemma4" else {
-                "full_attention",
-                "linear_attention",
-            }
+            allowed = (
+                {"full_attention", "linear_attention", "sliding_attention"}
+                if self.family == "gemma4"
+                else {
+                    "full_attention",
+                    "linear_attention",
+                }
+            )
             unknown = sorted(set(self.layer_types) - allowed)
             if unknown:
                 raise ValueError(f"unsupported layer_types: {unknown}")
@@ -393,8 +397,7 @@ class ModelConfig:
             }
             if any(width <= 0 or width % 2 for width in rotary_widths):
                 raise ValueError(
-                    "cache_processor.unrope_keys requires a positive even rotary width "
-                    "for every stored cache layer"
+                    "cache_processor.unrope_keys requires a positive even rotary width for every stored cache layer"
                 )
         from gcw.architecture import require_model_config
 
@@ -482,7 +485,9 @@ class ModelConfig:
         return self.moe_experts_implementation
 
 
-def linear_attention_following_cache_indices(config: ModelConfig, *, require_layer_types: bool = False) -> list[tuple[int, int]]:
+def linear_attention_following_cache_indices(
+    config: ModelConfig, *, require_layer_types: bool = False
+) -> list[tuple[int, int]]:
     if config.layer_types is None:
         if require_layer_types:
             raise ValueError("Longshot linear_state_cache requires layer_types")
@@ -492,7 +497,9 @@ def linear_attention_following_cache_indices(config: ModelConfig, *, require_lay
     for layer_idx, layer_type in enumerate(config.layer_types):
         if layer_type != "linear_attention":
             continue
-        following = next((cache_idx for cache_idx, full_idx in enumerate(cache_layer_indices) if full_idx > layer_idx), None)
+        following = next(
+            (cache_idx for cache_idx, full_idx in enumerate(cache_layer_indices) if full_idx > layer_idx), None
+        )
         if following is None:
             raise ValueError(f"linear_attention layer {layer_idx} has no following full-attention cache layer")
         pairs.append((layer_idx, following))
@@ -537,9 +544,7 @@ class DataConfig:
             for value in hashes
         )
         if self.canonical_execution and not authenticated:
-            raise ValueError(
-                "canonical data requires authenticated artifact and source-ID sha256 hashes"
-            )
+            raise ValueError("canonical data requires authenticated artifact and source-ID sha256 hashes")
 
 
 @dataclass(frozen=True)
@@ -555,8 +560,7 @@ class ResumeConfig:
             raise ValueError("resume.topology must be 'same' or 'elastic_ddp'")
         digest = self.expected_manifest_sha256
         if digest is not None and (
-            len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
+            len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest)
         ):
             raise ValueError("resume.expected_manifest_sha256 must be a lowercase sha256 or null")
 
@@ -647,13 +651,8 @@ class TrainConfig:
         if self.trainable not in {"all", "backbone", "lora", "cache_processor"}:
             raise ValueError("trainable must be 'all', 'backbone', 'lora', or 'cache_processor'")
         if self.activation_checkpointing not in {"none", "standard_processor_layers"}:
-            raise ValueError(
-                "activation_checkpointing must be 'none' or 'standard_processor_layers'"
-            )
-        if (
-            self.activation_checkpointing == "standard_processor_layers"
-            and self.model.variant not in {"bt", "bgt"}
-        ):
+            raise ValueError("activation_checkpointing must be 'none' or 'standard_processor_layers'")
+        if self.activation_checkpointing == "standard_processor_layers" and self.model.variant not in {"bt", "bgt"}:
             raise ValueError(
                 "activation_checkpointing='standard_processor_layers' requires a BT or BGT cache processor"
             )
@@ -666,15 +665,11 @@ class TrainConfig:
             if self.model.family != "qwen3":
                 raise ValueError(f"backbone_chunk_backend={selected_backend} requires model.family='qwen3'")
             if self.model.variant == "tf" or self.model.cache_processor is None:
-                raise ValueError(
-                    f"backbone_chunk_backend={selected_backend} requires a windowed cache processor"
-                )
+                raise ValueError(f"backbone_chunk_backend={selected_backend} requires a windowed cache processor")
             if self.trainable != "cache_processor":
                 raise ValueError(f"backbone_chunk_backend={selected_backend} requires trainable='cache_processor'")
             if self.model.cache_processor.process_every != 64:
-                raise ValueError(
-                    f"backbone_chunk_backend={selected_backend} requires cache_processor.process_every=64"
-                )
+                raise ValueError(f"backbone_chunk_backend={selected_backend} requires cache_processor.process_every=64")
             if self.sequence_len < 128:
                 raise ValueError(f"backbone_chunk_backend={selected_backend} requires sequence_len >= 128")
             if self.distributed == "fsdp":
@@ -682,9 +677,7 @@ class TrainConfig:
         threshold = self.longshot_gradient_checkpointing_seq_len_threshold
         if threshold is not None:
             if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:
-                raise ValueError(
-                    "longshot_gradient_checkpointing_seq_len_threshold must be a positive integer or null"
-                )
+                raise ValueError("longshot_gradient_checkpointing_seq_len_threshold must be a positive integer or null")
             processor = self.model.cache_processor
             if self.model.variant != "longshot" or processor is None:
                 raise ValueError(
@@ -701,13 +694,14 @@ class TrainConfig:
             raise ValueError("set only one of total_batch_size and global_batch_rows")
         if self.global_batch_rows < 0:
             raise ValueError("global_batch_rows must be non-negative")
-        if isinstance(self.activation_checkpoint_windows, bool) or not isinstance(self.activation_checkpoint_windows, int):
+        if isinstance(self.activation_checkpoint_windows, bool) or not isinstance(
+            self.activation_checkpoint_windows, int
+        ):
             raise ValueError("activation_checkpoint_windows must be an integer")
         if self.activation_checkpoint_windows < 0:
             raise ValueError("activation_checkpoint_windows must be non-negative")
-        if (
-            isinstance(self.activation_checkpoint_min_padded_sequence_length, bool)
-            or not isinstance(self.activation_checkpoint_min_padded_sequence_length, int)
+        if isinstance(self.activation_checkpoint_min_padded_sequence_length, bool) or not isinstance(
+            self.activation_checkpoint_min_padded_sequence_length, int
         ):
             raise ValueError("activation_checkpoint_min_padded_sequence_length must be an integer")
         if self.activation_checkpoint_min_padded_sequence_length < 0:
@@ -745,50 +739,32 @@ class TrainConfig:
                 raise ValueError("logical_pair_grouping does not support router auxiliary loss")
             diffusion = self.model.diffusion_processor
             if diffusion is not None and diffusion.noise_scale > 0.0:
-                raise ValueError("logical_pair_grouping rejects noisy Diffusion because RNG assignment changes with batching")
+                raise ValueError(
+                    "logical_pair_grouping rejects noisy Diffusion because RNG assignment changes with batching"
+                )
         longshot_history = self.performance.longshot_full_history
         if longshot_history.enabled:
             processor = self.model.cache_processor
             if self.model.variant != "longshot" or processor is None:
-                raise ValueError(
-                    "performance.longshot_full_history requires a Longshot cache processor"
-                )
+                raise ValueError("performance.longshot_full_history requires a Longshot cache processor")
             if self.trainable != "cache_processor":
-                raise ValueError(
-                    "performance.longshot_full_history requires trainable='cache_processor'"
-                )
+                raise ValueError("performance.longshot_full_history requires trainable='cache_processor'")
             if self.distributed != "none":
-                raise ValueError(
-                    "performance.longshot_full_history supports only single-process distributed='none'"
-                )
+                raise ValueError("performance.longshot_full_history supports only single-process distributed='none'")
             if self.backbone_chunk_backend != "eager":
-                raise ValueError(
-                    "performance.longshot_full_history requires backbone_chunk_backend='eager'"
-                )
+                raise ValueError("performance.longshot_full_history requires backbone_chunk_backend='eager'")
             if self.performance.adaptive_batching.enabled:
-                raise ValueError(
-                    "performance.longshot_full_history does not compose with adaptive batching"
-                )
+                raise ValueError("performance.longshot_full_history does not compose with adaptive batching")
             if processor.score != "kv_norm":
-                raise ValueError(
-                    "performance.longshot_full_history requires cache_processor.score='kv_norm'"
-                )
+                raise ValueError("performance.longshot_full_history requires cache_processor.score='kv_norm'")
             if processor.attention_dropout != 0.0:
-                raise ValueError(
-                    "performance.longshot_full_history requires cache_processor.attention_dropout=0"
-                )
+                raise ValueError("performance.longshot_full_history requires cache_processor.attention_dropout=0")
             if processor.linear_state_cache:
-                raise ValueError(
-                    "performance.longshot_full_history does not support linear recurrent cache state"
-                )
+                raise ValueError("performance.longshot_full_history does not support linear recurrent cache state")
             if self.model.flow_processor is not None or self.model.workspace_flow_refinement is not None:
-                raise ValueError(
-                    "performance.longshot_full_history does not support Flow or workspace refinement"
-                )
+                raise ValueError("performance.longshot_full_history does not support Flow or workspace refinement")
             if self.activation_checkpointing != "none":
-                raise ValueError(
-                    "performance.longshot_full_history supports Longshot and segmented checkpointing only"
-                )
+                raise ValueError("performance.longshot_full_history supports Longshot and segmented checkpointing only")
             if (
                 processor.iterations > 1
                 and processor.iteration_mode == "internal"
@@ -799,9 +775,7 @@ class TrainConfig:
                     "cache_processor.internal_iteration_score='kv_norm'"
                 )
             if self.model.family not in {"smollm", "llama", "qwen3"}:
-                raise ValueError(
-                    "performance.longshot_full_history requires a dense WindowedCache backbone family"
-                )
+                raise ValueError("performance.longshot_full_history requires a dense WindowedCache backbone family")
             head_dim = self.model.stored_cache_shape[1]
             if processor.unrope_keys:
                 rotary_dim = int(head_dim * self.model.partial_rotary_factor)
@@ -824,27 +798,19 @@ class TrainConfig:
             if self.model.variant != "longshot" or processor is None:
                 raise ValueError("performance.kv_score_sidecar requires a Longshot cache processor")
             if self.performance.longshot_full_history.enabled:
-                raise ValueError(
-                    "performance.kv_score_sidecar does not compose with performance.longshot_full_history"
-                )
+                raise ValueError("performance.kv_score_sidecar does not compose with performance.longshot_full_history")
             if self.batch_size != 2:
                 raise ValueError("performance.kv_score_sidecar requires fixed eager batch_size=2")
             if self.distributed != "none":
-                raise ValueError(
-                    "performance.kv_score_sidecar supports only single-process distributed='none'"
-                )
+                raise ValueError("performance.kv_score_sidecar supports only single-process distributed='none'")
             if self.backbone_chunk_backend != "eager":
                 raise ValueError("performance.kv_score_sidecar requires backbone_chunk_backend='eager'")
             if self.performance.adaptive_batching.enabled:
                 raise ValueError("performance.kv_score_sidecar does not compose with adaptive batching")
             if processor.score != "kv_norm":
-                raise ValueError(
-                    "performance.kv_score_sidecar requires cache_processor.score='kv_norm'"
-                )
+                raise ValueError("performance.kv_score_sidecar requires cache_processor.score='kv_norm'")
             if processor.attention_dropout != 0.0:
-                raise ValueError(
-                    "performance.kv_score_sidecar requires cache_processor.attention_dropout=0"
-                )
+                raise ValueError("performance.kv_score_sidecar requires cache_processor.attention_dropout=0")
             if processor.linear_state_cache:
                 raise ValueError("performance.kv_score_sidecar rejects linear recurrent cache state")
             if (
@@ -860,9 +826,7 @@ class TrainConfig:
                     "performance.kv_score_sidecar supports Longshot native and segmented checkpointing only"
                 )
             if self.model.family not in {"smollm", "llama", "qwen3"}:
-                raise ValueError(
-                    "performance.kv_score_sidecar requires a dense WindowedCache-compatible family"
-                )
+                raise ValueError("performance.kv_score_sidecar requires a dense WindowedCache-compatible family")
         triton_cache = self.performance.triton_cache_movement
         if triton_cache.enabled:
             processor = self.model.cache_processor
@@ -871,53 +835,33 @@ class TrainConfig:
             if self.model.family != "qwen3":
                 raise ValueError("performance.triton_cache_movement currently supports only Qwen3")
             if self.batch_size != 2 or self.distributed != "none":
-                raise ValueError(
-                    "performance.triton_cache_movement requires fixed batch two and distributed='none'"
-                )
+                raise ValueError("performance.triton_cache_movement requires fixed batch two and distributed='none'")
             if self.trainable != "cache_processor" or not self.bf16:
-                raise ValueError(
-                    "performance.triton_cache_movement requires BF16 cache-processor-only training"
-                )
+                raise ValueError("performance.triton_cache_movement requires BF16 cache-processor-only training")
             if self.backbone_chunk_backend != "eager":
-                raise ValueError(
-                    "performance.triton_cache_movement does not compose with compiled backbone execution"
-                )
+                raise ValueError("performance.triton_cache_movement does not compose with compiled backbone execution")
             if self.performance.adaptive_batching.enabled:
-                raise ValueError(
-                    "performance.triton_cache_movement does not compose with adaptive batching"
-                )
+                raise ValueError("performance.triton_cache_movement does not compose with adaptive batching")
             if processor.processor_mode != "standard" or processor.update_stream != "kv":
-                raise ValueError(
-                    "performance.triton_cache_movement v1 requires standard K/V cache updates"
-                )
+                raise ValueError("performance.triton_cache_movement v1 requires standard K/V cache updates")
             if processor.attention_dropout != 0.0:
                 raise ValueError("performance.triton_cache_movement requires zero processor dropout")
             if self.performance.longshot_full_history.enabled:
-                raise ValueError(
-                    "performance.triton_cache_movement does not compose with Longshot selected-history"
-                )
+                raise ValueError("performance.triton_cache_movement does not compose with Longshot selected-history")
         noisy_diffusion_backend = self.performance.noisy_diffusion.recurrence_backend
         if noisy_diffusion_backend == "compile":
             diffusion = self.model.diffusion_processor
             if self.model.variant != "bgt" or diffusion is None or diffusion.noise_scale <= 0.0:
                 raise ValueError(
-                    "compiled noisy-Diffusion recurrence requires BGT with "
-                    "diffusion_processor.noise_scale>0"
+                    "compiled noisy-Diffusion recurrence requires BGT with diffusion_processor.noise_scale>0"
                 )
             processor = self.model.cache_processor
             if processor is not None and processor.attention_dropout != 0.0:
-                raise ValueError(
-                    "compiled noisy-Diffusion recurrence requires "
-                    "cache_processor.attention_dropout=0"
-                )
+                raise ValueError("compiled noisy-Diffusion recurrence requires cache_processor.attention_dropout=0")
             if self.distributed != "none":
-                raise ValueError(
-                    "compiled noisy-Diffusion recurrence currently supports distributed='none'"
-                )
+                raise ValueError("compiled noisy-Diffusion recurrence currently supports distributed='none'")
             if self.performance.adaptive_batching.enabled:
-                raise ValueError(
-                    "compiled noisy-Diffusion recurrence does not enable adaptive batching"
-                )
+                raise ValueError("compiled noisy-Diffusion recurrence does not enable adaptive batching")
         reference_loss = self.performance.reference_loss
         if reference_loss.mode != "legacy" and self.loss_backend != "reference":
             raise ValueError("bounded reference-loss execution requires loss_backend='reference'")
@@ -972,9 +916,15 @@ class EvalConfig:
 
 
 SMOLLM_CONFIGS: dict[str, ModelConfig] = {
-    "smollm-135m": ModelConfig(num_layers=30, hidden_size=576, num_heads=9, num_kv_heads=3, head_dim=64, intermediate_size=1536),
-    "smollm-360m": ModelConfig(num_layers=32, hidden_size=960, num_heads=15, num_kv_heads=5, head_dim=64, intermediate_size=2560),
-    "smollm-1.7b": ModelConfig(num_layers=24, hidden_size=2048, num_heads=32, num_kv_heads=32, head_dim=64, intermediate_size=8192),
+    "smollm-135m": ModelConfig(
+        num_layers=30, hidden_size=576, num_heads=9, num_kv_heads=3, head_dim=64, intermediate_size=1536
+    ),
+    "smollm-360m": ModelConfig(
+        num_layers=32, hidden_size=960, num_heads=15, num_kv_heads=5, head_dim=64, intermediate_size=2560
+    ),
+    "smollm-1.7b": ModelConfig(
+        num_layers=24, hidden_size=2048, num_heads=32, num_kv_heads=32, head_dim=64, intermediate_size=8192
+    ),
 }
 
 
@@ -1010,6 +960,8 @@ def to_dict(value: Any) -> Any:
             payload.pop("kv_score_sidecar")
         if not value.triton_cache_movement.enabled:
             payload.pop("triton_cache_movement")
+        if not value.optimized_step.enabled:
+            payload.pop("optimized_step")
         return payload
     if is_dataclass(value):
         return {f.name: to_dict(getattr(value, f.name)) for f in fields(value)}
@@ -1018,7 +970,6 @@ def to_dict(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: to_dict(v) for k, v in value.items()}
     return value
-
 
 
 def dump_yaml(path: str | Path, value: Any) -> None:

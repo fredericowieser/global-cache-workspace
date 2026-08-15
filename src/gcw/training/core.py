@@ -645,7 +645,7 @@ def train(config: TrainConfig) -> None:
             use_fsdp=use_fsdp,
             initial_processor_state=initial_processor_state,
         )
-    stream.close()
+    _close_training_stream(stream)
     if tracker is not None:
         tracker.finish(summary={**run_meta, "completed_step": config.max_steps})
     cleanup_distributed()
@@ -1129,7 +1129,7 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
         dist.all_reduce(total_weight, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_tokens, op=dist.ReduceOp.SUM)
     if validation_stream is not None:
-        validation_stream.close()
+        _close_training_stream(validation_stream)
     if was_training:
         model.train()
     if not config.logical_pair_grouping:
@@ -1140,6 +1140,12 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
         "val/perplexity": math.exp(min(20.0, val_loss)),
         "val/tokens": float(total_tokens.cpu()),
     }
+
+
+def _close_training_stream(stream: TrainingBatchStream) -> None:
+    close = getattr(stream, "close", None)
+    if callable(close):
+        close()
 
 
 def _training_batch_loader(stream: TrainingBatchStream):

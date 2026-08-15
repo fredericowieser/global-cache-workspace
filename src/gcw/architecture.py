@@ -38,6 +38,9 @@ def _config_payload(value: object) -> object:
         if not value.triton_cache_movement.enabled:
             # Preserve receipts created before this default-off execution policy existed.
             payload.pop("triton_cache_movement")
+        if not value.optimized_step.enabled:
+            # Preserve receipts created before this default-off execution policy existed.
+            payload.pop("optimized_step")
         if value.noisy_diffusion.recurrence_backend == "eager":
             # Preserve receipts created before this default-off execution policy existed.
             payload.pop("noisy_diffusion")
