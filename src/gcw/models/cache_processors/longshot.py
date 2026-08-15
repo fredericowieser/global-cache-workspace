@@ -46,6 +46,7 @@ from gcw.performance.longshot_cache import (
 )
 from gcw.performance.longshot_scores import (
     chunked_fp32_concatenated_kv_squared_l2,
+    chunked_fp32_unroped_concatenated_kv_squared_l2,
     chunked_fp32_l2_norm,
     chunked_fp32_squared_l2,
 )
@@ -923,28 +924,43 @@ class GlobalCacheProcessor(CacheProcessorBase):
             raise TypeError(
                 "enabled Longshot selected-history execution requires contiguous WindowedCache storage"
             )
-        if self.config.unrope_keys:
-            raise RuntimeError(
-                "enabled Longshot full-history execution cannot score unrope_keys=True "
-                "without rotating the full history"
-            )
         # The eager per-row FP32 expression and existing top-k remain the oracle.
         with torch.no_grad():
-            scores = chunked_fp32_concatenated_kv_squared_l2(
-                cache.keys,
-                cache.values,
-                max_temp_bytes=policy.max_temp_bytes,
-            )
+            if self.config.unrope_keys:
+                scores = chunked_fp32_unroped_concatenated_kv_squared_l2(
+                    cache.keys,
+                    cache.values,
+                    theta=self.rope_theta,
+                    rotary_style=self.rotary_style,
+                    rotary_dim=self.rotary_dim,
+                    max_temp_bytes=policy.max_temp_bytes,
+                )
+            else:
+                scores = chunked_fp32_concatenated_kv_squared_l2(
+                    cache.keys,
+                    cache.values,
+                    max_temp_bytes=policy.max_temp_bytes,
+                )
             indices = select_per_cache_head_kv_norm_indices_from_scores(
                 scores, self.config.process_every, self.config.topk
             )
 
-        keys, values = gather_windowed_per_cache_head_kv(cache.keys, cache.values, indices)
+        keys, values = gather_windowed_per_cache_head_kv(
+            cache.keys,
+            cache.values,
+            indices,
+            unrope_keys=self.config.unrope_keys,
+            rope_theta=self.rope_theta,
+            rotary_style=self.rotary_style,
+            rotary_dim=self.rotary_dim,
+        )
         record_longshot_full_history_event(
             self,
             keys=cache.keys,
             selected_positions=indices.shape[-1],
             max_temp_bytes=policy.max_temp_bytes,
+            unrope_keys=self.config.unrope_keys,
+            rotary_dim=self.rotary_dim,
         )
         return torch.cat([keys, values], dim=-1), scores, indices
 

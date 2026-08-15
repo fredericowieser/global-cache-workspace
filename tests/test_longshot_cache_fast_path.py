@@ -15,6 +15,7 @@ from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
     gather_per_cache_head_kv,
+    rotate_cache_keys,
     select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_processors.windowed import WindowedCache
@@ -27,7 +28,9 @@ from gcw.performance.longshot_cache import (
 )
 from gcw.performance.longshot_scores import (
     chunked_fp32_concatenated_kv_squared_l2,
+    chunked_fp32_unroped_concatenated_kv_squared_l2,
     chunked_fp32_squared_l2,
+    unroped_score_estimated_temp_bytes_per_row,
 )
 from gcw.training.objectives import row_loss_sums_and_counts
 
@@ -52,6 +55,65 @@ def test_layer_major_kv_scores_match_identity_gather_forward_backward(dtype: tor
     assert torch.equal(actual_grads[1], expected_grads[1])
 
 
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize(("rotary_style", "rotary_dim"), [("llama", 4), ("llama", 8), ("ppt", 8)])
+def test_chunk_local_unrope_scores_and_gradients_match_full_history_oracle(
+    dtype: torch.dtype,
+    rotary_style: str,
+    rotary_dim: int,
+) -> None:
+    torch.manual_seed(72)
+    keys = torch.randn(3, 2, 2, 7, 8, dtype=dtype, requires_grad=True)
+    values = torch.randn(3, 2, 2, 7, 8, dtype=dtype, requires_grad=True)
+    cache = WindowedCache(keys=keys, values=values, scores=torch.randn(2, 7))
+    all_indices = expand_cache_head_indices(cache.all_indices(), 6)
+    merged = gather_per_cache_head_kv(
+        cache,
+        all_indices,
+        unrope_keys=True,
+        rotary_style=rotary_style,
+        rotary_dim=rotary_dim,
+    )
+    expected = chunked_fp32_squared_l2(merged, max_temp_bytes=1024)
+    actual = chunked_fp32_unroped_concatenated_kv_squared_l2(
+        keys,
+        values,
+        theta=10000.0,
+        rotary_style=rotary_style,
+        rotary_dim=rotary_dim,
+        max_temp_bytes=1024,
+    )
+
+    assert torch.equal(actual, expected)
+    upstream = torch.randn_like(actual)
+    expected_grads = torch.autograd.grad(expected, (keys, values), upstream, retain_graph=True)
+    actual_grads = torch.autograd.grad(actual, (keys, values), upstream)
+    assert torch.equal(actual_grads[0], expected_grads[0])
+    assert torch.equal(actual_grads[1], expected_grads[1])
+
+
+def test_chunk_local_unrope_never_rotates_more_rows_than_the_budget() -> None:
+    keys = torch.randn(2, 2, 2, 7, 8, dtype=torch.bfloat16)
+    values = torch.randn_like(keys)
+    bytes_per_row = unroped_score_estimated_temp_bytes_per_row(
+        dtype=keys.dtype, head_dim=8, rotary_dim=8
+    )
+    with patch(
+        "gcw.performance.longshot_scores.rotate_cache_keys", wraps=rotate_cache_keys
+    ) as rotate:
+        chunked_fp32_unroped_concatenated_kv_squared_l2(
+            keys,
+            values,
+            theta=10000.0,
+            rotary_style="llama",
+            rotary_dim=8,
+            max_temp_bytes=3 * bytes_per_row,
+        )
+
+    assert len(rotate.call_args_list) > 1
+    assert max(call.args[0].shape[0] for call in rotate.call_args_list) <= 3
+
+
 def test_layer_major_kv_score_saves_sources_not_full_merged_history() -> None:
     keys = torch.randn(3, 2, 2, 7, 4, dtype=torch.bfloat16, requires_grad=True)
     values = torch.randn(3, 2, 2, 7, 4, dtype=torch.bfloat16, requires_grad=True)
@@ -68,16 +130,23 @@ def test_layer_major_kv_score_saves_sources_not_full_merged_history() -> None:
     assert all(tensor.shape != (2, 6, 7, 8) for tensor in saved)
 
 
+@pytest.mark.parametrize("unrope_keys", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_direct_selected_kv_gather_matches_flatten_then_gather(dtype: torch.dtype) -> None:
+def test_direct_selected_kv_gather_matches_flatten_then_gather(
+    dtype: torch.dtype, unrope_keys: bool
+) -> None:
     torch.manual_seed(73)
     keys = torch.randn(3, 2, 2, 7, 4, dtype=dtype, requires_grad=True)
     values = torch.randn(3, 2, 2, 7, 4, dtype=dtype, requires_grad=True)
     indices = torch.randint(0, 7, (2, 6, 3))
     cache = WindowedCache(keys=keys, values=values, scores=torch.randn(2, 7))
 
-    expected = gather_per_cache_head_kv(cache, indices)
-    selected_keys, selected_values = gather_windowed_per_cache_head_kv(keys, values, indices)
+    expected = gather_per_cache_head_kv(
+        cache, indices, unrope_keys=unrope_keys, rotary_dim=4
+    )
+    selected_keys, selected_values = gather_windowed_per_cache_head_kv(
+        keys, values, indices, unrope_keys=unrope_keys, rotary_dim=4
+    )
     actual = torch.cat([selected_keys, selected_values], dim=-1)
 
     assert torch.equal(actual, expected)
@@ -88,7 +157,7 @@ def test_direct_selected_kv_gather_matches_flatten_then_gather(dtype: torch.dtyp
     assert torch.equal(actual_grads[1], expected_grads[1])
 
 
-@pytest.mark.parametrize("unrope_keys", [False])
+@pytest.mark.parametrize("unrope_keys", [False, True])
 def test_windowed_kv_norm_scores_indices_and_selected_history_match_reference(
     unrope_keys: bool,
 ) -> None:
@@ -119,7 +188,7 @@ def test_windowed_kv_norm_scores_indices_and_selected_history_match_reference(
     [("internal", 1), ("internal", 2), ("external", 2)],
 )
 @pytest.mark.parametrize("update_stream", ["kv", "v"])
-@pytest.mark.parametrize("unrope_keys", [False])
+@pytest.mark.parametrize("unrope_keys", [False, True])
 def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
     iteration_mode: str,
     iterations: int,
@@ -181,8 +250,11 @@ def test_default_windowed_kv_norm_path_remains_eager() -> None:
     gather.assert_called_once()
 
 
-def test_windowed_kv_norm_path_does_not_call_full_history_gather() -> None:
-    processor = _processor(iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=False)
+@pytest.mark.parametrize("unrope_keys", [False, True])
+def test_windowed_kv_norm_path_does_not_call_full_history_gather(unrope_keys: bool) -> None:
+    processor = _processor(
+        iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=unrope_keys
+    )
     configure_longshot_full_history_execution(
         processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
@@ -211,19 +283,26 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather() -> None:
             "performance/longshot_full_history_reference_score_estimated_fp32_working_set_bound_bytes"
         ]
     )
+    if unrope_keys:
+        assert (
+            metrics[
+                "performance/longshot_full_history_optimized_selected_unrope_estimated_live_bytes"
+            ]
+            < metrics["performance/longshot_full_history_reference_unrope_estimated_live_bytes"]
+        )
 
     with pytest.raises(TypeError, match="WindowedCache"):
         processor._select_kv_norm_history(cache.to_cache_state())
 
 
-def test_enabled_full_history_rejects_unrope_before_execution() -> None:
+def test_enabled_full_history_admits_bounded_chunk_local_unrope() -> None:
     processor = _processor(
         iteration_mode="internal", iterations=1, update_stream="kv", unrope_keys=True
     )
-    with pytest.raises(ValueError, match="unrope_keys=True"):
-        configure_longshot_full_history_execution(
-            processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
-        )
+    configure_longshot_full_history_execution(
+        processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
+    )
+    assert processor._select_kv_norm_history(_cache(requires_grad=False)[0])[2].shape[-1] > 0
 
 
 def test_full_history_telemetry_ignores_checkpoint_recomputation() -> None:
@@ -357,10 +436,11 @@ def _run_processor(processor: GlobalCacheProcessor) -> _RunResult:
     )
 
 
-def test_selected_history_matches_native_checkpoint_recomputation() -> None:
+@pytest.mark.parametrize("unrope_keys", [False, True])
+def test_selected_history_matches_native_checkpoint_recomputation(unrope_keys: bool) -> None:
     torch.manual_seed(97)
     optimized = _processor(
-        iteration_mode="internal", iterations=2, update_stream="kv", unrope_keys=False
+        iteration_mode="internal", iterations=2, update_stream="kv", unrope_keys=unrope_keys
     )
     optimized.config.gradient_checkpointing = True
     optimized.train()
