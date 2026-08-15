@@ -5,6 +5,7 @@ import torch
 
 from gcw.config import DataConfig, ModelConfig, TrainConfig
 from gcw.performance.config import TritonCacheMovementConfig
+from gcw.performance.kernel_manifest import kernel_manifest_sha256
 from gcw.performance.triton.execution import (
     triton_cache_movement_metadata,
     validate_triton_cache_movement_request,
@@ -30,6 +31,8 @@ def test_triton_cache_policy_is_typed_default_off_and_fingerprinted() -> None:
     assert config.performance.triton_cache_movement.enabled is True
     metadata = triton_cache_movement_metadata(config.performance.triton_cache_movement)
     assert metadata["status"] == "benchmark_only_not_campaign_admitted"
+    assert metadata["kernel_manifest_sha256"] == kernel_manifest_sha256()
+    assert metadata["runtime_autotuning"] is False
     assert len(str(metadata["fingerprint_sha256"])) == 64
 
 

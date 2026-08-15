@@ -9,6 +9,7 @@ from typing import Any
 import torch
 
 from gcw.performance.config import TritonCacheMovementConfig
+from gcw.performance.kernel_manifest import kernel_manifest_sha256
 from gcw.performance.triton.runtime import require_triton_runtime
 from gcw.provenance import canonical_json_sha256
 
@@ -88,17 +89,19 @@ def triton_cache_movement_enabled(processor: torch.nn.Module) -> bool:
 def triton_cache_movement_metadata(config: TritonCacheMovementConfig) -> dict[str, object]:
     """Return stable benchmark provenance for the exact movement boundary."""
     execution = {
-        "schema": "gcw.triton_cache_movement.v2",
+        "schema": "gcw.triton_cache_movement.v3",
         "enabled": config.enabled,
         "status": "benchmark_only_not_campaign_admitted",
         "physical_batch": 2,
         "dtype": "bfloat16_raw_int16_payload",
         "layouts": ["bt_layer", "bgt_global", "per_cache_head"],
-        "forward": "fused_gather_layout_and_bt_bgt_split_functional_scatter",
+        "forward": "fused_gather_layout_split_scatter_and_fp32_to_bf16_finishing",
         "backward": "exact_unique_index_gather_scatter",
         "selection": "unchanged_eager",
         "writeback": "triton_bt_bgt_eager_longshot_icarus",
         "runtime": "triton_3.6.0_sm90",
+        "runtime_autotuning": False,
+        "kernel_manifest_sha256": kernel_manifest_sha256(),
         "fallback": "disabled",
     }
     return {
