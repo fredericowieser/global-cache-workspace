@@ -31,6 +31,7 @@ from gcw.performance.longshot_scores import (
     chunked_fp32_unroped_concatenated_kv_squared_l2,
     chunked_fp32_squared_l2,
     unroped_score_estimated_temp_bytes_per_row,
+    unrope_rotation_estimated_inner_allocation_bytes,
 )
 from gcw.training.objectives import row_loss_sums_and_counts
 
@@ -114,6 +115,44 @@ def test_chunk_local_unrope_never_rotates_more_rows_than_the_budget() -> None:
     assert max(call.args[0].shape[0] for call in rotate.call_args_list) <= 3
 
 
+def test_rotate_cache_keys_inner_allocator_events_fit_the_reported_bound() -> None:
+    rows = 5
+    head_dim = rotary_dim = 8
+    keys = torch.randn(rows, head_dim, dtype=torch.bfloat16)
+    positions = torch.arange(rows)
+
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU],
+        profile_memory=True,
+    ) as profile:
+        rotate_cache_keys(
+            keys,
+            positions,
+            theta=10000.0,
+            rotary_style="llama",
+            inverse=True,
+            rotary_dim=rotary_dim,
+        )
+
+    inner_events = [
+        event
+        for event in profile.events()
+        if event.cpu_memory_usage > 0
+        and not any(child.cpu_memory_usage > 0 for child in event.cpu_children)
+    ]
+    names = {event.name for event in inner_events}
+    assert {"aten::cos", "aten::sin", "aten::cat"} <= names
+    profiled_inner_allocation_bytes = sum(event.cpu_memory_usage for event in inner_events)
+    output_bytes = rows * head_dim * keys.element_size()
+    reported_bound = unrope_rotation_estimated_inner_allocation_bytes(
+        rows,
+        dtype=keys.dtype,
+        head_dim=head_dim,
+        rotary_dim=rotary_dim,
+    )
+    assert output_bytes < profiled_inner_allocation_bytes <= reported_bound
+
+
 def test_layer_major_kv_score_saves_sources_not_full_merged_history() -> None:
     keys = torch.randn(3, 2, 2, 7, 4, dtype=torch.bfloat16, requires_grad=True)
     values = torch.randn(3, 2, 2, 7, 4, dtype=torch.bfloat16, requires_grad=True)
@@ -155,6 +194,90 @@ def test_direct_selected_kv_gather_matches_flatten_then_gather(
     actual_grads = torch.autograd.grad(actual, (keys, values), upstream)
     assert torch.equal(actual_grads[0], expected_grads[0])
     assert torch.equal(actual_grads[1], expected_grads[1])
+
+
+def test_qwen3_backbone_cache_positions_drive_exact_llama_unrope_history_scoring() -> None:
+    torch.manual_seed(74)
+    config = ModelConfig(
+        variant="longshot",
+        family="qwen3",
+        sequence_len=16,
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        qk_norm=True,
+        rotary_style="llama",
+        cache_processor=CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            score="kv_norm",
+            hidden_size=16,
+            intermediate_size=32,
+            num_layers=1,
+            num_heads=2,
+            num_kv_heads=2,
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            update_stream="v",
+            unrope_keys=True,
+            gradient_checkpointing=False,
+        ),
+    )
+    model = build_model(config).eval()
+    model.init_weights()
+    pre_rotary_keys: list[torch.Tensor] = []
+    hooks = []
+    for layer in model.backbone.layers:
+        assert layer.self_attn is not None
+        hooks.append(
+            layer.self_attn.k_norm.register_forward_hook(
+                lambda _module, _inputs, output: pre_rotary_keys.append(output.detach())
+            )
+        )
+    try:
+        _, cache = model.backbone.forward_chunk(
+            torch.randint(0, config.vocab_size, (2, 11)),
+            0,
+            cache_format="windowed",
+        )
+    finally:
+        for hook in hooks:
+            hook.remove()
+
+    assert isinstance(cache, WindowedCache)
+    assert cache.keys.shape == (2, 2, 1, 11, 8)
+    expected_unrotated = torch.stack(pre_rotary_keys).permute(0, 1, 3, 2, 4)
+    all_indices = expand_cache_head_indices(cache.all_indices(), config.num_layers)
+    gathered = gather_per_cache_head_kv(
+        cache,
+        all_indices,
+        unrope_keys=True,
+        rope_theta=config.rope_theta,
+        rotary_style=config.rotary_style,
+        rotary_dim=config.head_dim,
+    )
+    actual_unrotated = (
+        gathered[..., : config.head_dim]
+        .reshape(2, config.num_layers, config.num_kv_heads, 11, config.head_dim)
+        .permute(1, 0, 2, 3, 4)
+    )
+    torch.testing.assert_close(actual_unrotated, expected_unrotated, atol=2e-6, rtol=2e-5)
+
+    optimized = model.cache_processor
+    assert isinstance(optimized, GlobalCacheProcessor)
+    reference = copy.deepcopy(optimized)
+    configure_longshot_full_history_execution(
+        optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
+    )
+    actual = optimized._select_kv_norm_history(cache)
+    expected = reference._select_kv_norm_history(cache)
+    for actual_tensor, expected_tensor in zip(actual, expected, strict=True):
+        assert torch.equal(actual_tensor, expected_tensor)
 
 
 @pytest.mark.parametrize("unrope_keys", [False, True])
@@ -289,6 +412,38 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(unrope_keys: bo
                 "performance/longshot_full_history_optimized_selected_unrope_estimated_live_bytes"
             ]
             < metrics["performance/longshot_full_history_reference_unrope_estimated_live_bytes"]
+        )
+        full_rows = 2 * 2 * 2 * 6
+        selected_rows = full_rows // 6 * source.indices.shape[-1]
+        score_row_bound = unroped_score_estimated_temp_bytes_per_row(
+            dtype=torch.float32, head_dim=8, rotary_dim=8
+        )
+        expected_score_calls = (full_rows + (1024 // score_row_bound) - 1) // (
+            1024 // score_row_bound
+        )
+        assert (
+            metrics[
+                "performance/longshot_full_history_optimized_score_unrope_rotate_cache_keys_calls"
+            ]
+            == expected_score_calls
+        )
+        assert (
+            metrics[
+                "performance/longshot_full_history_optimized_score_unrope_rotate_cache_keys_rows"
+            ]
+            == full_rows
+        )
+        assert (
+            metrics[
+                "performance/longshot_full_history_optimized_selected_unrope_rotate_cache_keys_calls"
+            ]
+            == 1.0
+        )
+        assert (
+            metrics[
+                "performance/longshot_full_history_optimized_selected_unrope_rotate_cache_keys_rows"
+            ]
+            == selected_rows
         )
 
     with pytest.raises(TypeError, match="WindowedCache"):

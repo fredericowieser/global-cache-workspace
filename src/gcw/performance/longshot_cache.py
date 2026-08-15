@@ -11,6 +11,8 @@ from gcw.performance.config import LongshotFullHistoryConfig
 from gcw.performance.longshot_scores import (
     LONGSHOT_SCORE_FP32_CHUNK_BYTES,
     unroped_score_estimated_temp_bytes_per_row,
+    unrope_rotation_estimated_fixed_temp_bytes,
+    unrope_rotation_estimated_inner_allocation_bytes,
     unrope_rotation_estimated_temp_bytes_per_row,
 )
 from gcw.provenance import canonical_json_sha256
@@ -216,17 +218,65 @@ def record_longshot_full_history_event(
             head_dim=head_dim,
             rotary_dim=rotary_dim,
         )
+        rotation_fixed_bound = unrope_rotation_estimated_fixed_temp_bytes(
+            rotary_dim=rotary_dim
+        )
+        score_rows_per_chunk = max(1, max_temp_bytes // score_row_bound)
+        score_rotation_calls = (full_rows + score_rows_per_chunk - 1) // score_rows_per_chunk
+        selected_rotation_calls = int(selected_rows > 0)
         unrope_live_bytes_per_row = rotation_row_bound + 4 * head_dim * element_bytes
-        score_working_set_bound = min(full_rows * score_row_bound, max_temp_bytes)
+        score_working_set_bound = (
+            min(full_rows * score_row_bound, max_temp_bytes) + rotation_fixed_bound
+        )
         event["optimized_score_estimated_fp32_working_set_bound_bytes"] = (
             score_working_set_bound
         )
         event.update(
             {
-                "reference_unrope_estimated_live_bytes": full_rows * unrope_live_bytes_per_row,
+                "reference_unrope_estimated_live_bytes": full_rows
+                * unrope_live_bytes_per_row
+                + rotation_fixed_bound,
                 "optimized_selected_unrope_estimated_live_bytes": selected_rows
-                * unrope_live_bytes_per_row,
-                "optimized_unrope_score_estimated_working_set_bound_bytes": score_working_set_bound,
+                * unrope_live_bytes_per_row
+                + selected_rotation_calls * rotation_fixed_bound,
+                "optimized_unrope_score_estimated_working_set_bound_bytes": (
+                    score_working_set_bound
+                ),
+                "optimized_score_unrope_rotate_cache_keys_calls": score_rotation_calls,
+                "optimized_score_unrope_rotate_cache_keys_rows": full_rows,
+                "optimized_score_unrope_rotate_cache_keys_estimated_inner_allocation_bytes": (
+                    unrope_rotation_estimated_inner_allocation_bytes(
+                        full_rows,
+                        dtype=keys.dtype,
+                        head_dim=head_dim,
+                        rotary_dim=rotary_dim,
+                        calls=score_rotation_calls,
+                    )
+                ),
+                "optimized_selected_unrope_rotate_cache_keys_calls": (
+                    selected_rotation_calls
+                ),
+                "optimized_selected_unrope_rotate_cache_keys_rows": selected_rows,
+                "optimized_selected_unrope_rotate_cache_keys_estimated_inner_allocation_bytes": (
+                    unrope_rotation_estimated_inner_allocation_bytes(
+                        selected_rows,
+                        dtype=keys.dtype,
+                        head_dim=head_dim,
+                        rotary_dim=rotary_dim,
+                        calls=selected_rotation_calls,
+                    )
+                ),
+                "reference_unrope_rotate_cache_keys_calls": int(full_rows > 0),
+                "reference_unrope_rotate_cache_keys_rows": full_rows,
+                "reference_unrope_rotate_cache_keys_estimated_inner_allocation_bytes": (
+                    unrope_rotation_estimated_inner_allocation_bytes(
+                        full_rows,
+                        dtype=keys.dtype,
+                        head_dim=head_dim,
+                        rotary_dim=rotary_dim,
+                        calls=int(full_rows > 0),
+                    )
+                ),
             }
         )
     current = getattr(processor, _METRICS_ATTRIBUTE, None)

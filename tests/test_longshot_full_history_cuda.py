@@ -151,6 +151,7 @@ def _language_model_config(*, unrope_keys: bool = False) -> ModelConfig:
         num_heads=2,
         num_kv_heads=1,
         head_dim=8,
+        rotary_style="llama",
         cache_processor=CacheProcessorConfig(
             process_every=4,
             topk=2,
@@ -340,6 +341,7 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
         head_dim=128,
         rope_theta=1_000_000.0,
         qk_norm=True,
+        rotary_style="llama",
         cache_processor=CacheProcessorConfig(
             process_every=64,
             topk=32,
@@ -358,36 +360,119 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
         ),
     )
     reference = GlobalCacheProcessor(config).cuda().eval()
-    optimized = copy.deepcopy(reference)
-    configure_longshot_full_history_execution(
-        optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=2 * 1024 * 1024)
-    )
-    generator = torch.Generator().manual_seed(271)
-    shape = (28, 2, 8, 8192, 128)
-    cache = WindowedCache(
-        keys=torch.randn(shape, generator=generator, dtype=torch.bfloat16).cuda(),
-        values=torch.randn(shape, generator=generator, dtype=torch.bfloat16).cuda(),
-        scores=torch.randn(2, 8192, generator=generator).cuda(),
-    )
+    caps = (2 * 1024 * 1024, 8 * 1024 * 1024)
+    histories = (2048, 8192)
+    allocator_evidence: dict[int, dict[int, int]] = {}
+    reference_evidence: dict[int, int] = {}
 
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats()
-    expected = reference._select_kv_norm_history(cache)
-    torch.cuda.synchronize()
-    reference_peak = torch.cuda.max_memory_allocated()
-    expected_cpu = tuple(tensor.cpu() for tensor in expected)
-    del expected
-    torch.cuda.empty_cache()
+    for sequence in histories:
+        generator = torch.Generator(device="cuda").manual_seed(271 + sequence)
+        shape = (28, 2, 8, sequence, 128)
+        cache = WindowedCache(
+            keys=torch.randn(
+                shape, generator=generator, dtype=torch.bfloat16, device="cuda"
+            ),
+            values=torch.randn(
+                shape, generator=generator, dtype=torch.bfloat16, device="cuda"
+            ),
+            scores=torch.randn(
+                2, sequence, generator=generator, dtype=torch.float32, device="cuda"
+            ),
+        )
 
-    torch.cuda.reset_peak_memory_stats()
-    actual = optimized._select_kv_norm_history(cache)
-    torch.cuda.synchronize()
-    optimized_peak = torch.cuda.max_memory_allocated()
-    for actual_tensor, expected_tensor in zip(actual, expected_cpu, strict=True):
-        assert torch.equal(actual_tensor.cpu(), expected_tensor)
-    record_property("production_reference_peak_allocated_bytes", reference_peak)
-    record_property("production_optimized_peak_allocated_bytes", optimized_peak)
-    assert optimized_peak < reference_peak
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        reference_baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        expected = reference._select_kv_norm_history(cache)
+        torch.cuda.synchronize()
+        reference_end = torch.cuda.memory_allocated()
+        reference_peak = torch.cuda.max_memory_allocated()
+        reference_transient = reference_peak - max(reference_baseline, reference_end)
+        reference_evidence[sequence] = reference_transient
+        expected_cpu = tuple(tensor.cpu() for tensor in expected)
+        del expected
+        torch.cuda.empty_cache()
+
+        allocator_evidence[sequence] = {}
+        for cap in caps:
+            policy = LongshotFullHistoryConfig(enabled=True, max_temp_bytes=cap)
+            authenticated = longshot_full_history_execution_metadata(
+                policy, unrope_keys=True
+            )
+            assert authenticated["max_temp_bytes"] == cap
+            optimized = copy.deepcopy(reference)
+            configure_longshot_full_history_execution(optimized, policy)
+
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            baseline = torch.cuda.memory_allocated()
+            torch.cuda.reset_peak_memory_stats()
+            actual = optimized._select_kv_norm_history(cache)
+            torch.cuda.synchronize()
+            end = torch.cuda.memory_allocated()
+            peak = torch.cuda.max_memory_allocated()
+            transient = peak - max(baseline, end)
+            allocator_evidence[sequence][cap] = transient
+            metrics = pop_longshot_full_history_metrics(optimized)
+
+            for actual_tensor, expected_tensor in zip(actual, expected_cpu, strict=True):
+                assert torch.equal(actual_tensor.cpu(), expected_tensor)
+            assert (
+                metrics[
+                    "performance/longshot_full_history_optimized_score_unrope_rotate_cache_keys_rows"
+                ]
+                == 28 * 2 * 8 * sequence
+            )
+            assert (
+                metrics[
+                    "performance/longshot_full_history_optimized_score_unrope_rotate_cache_keys_calls"
+                ]
+                > 1.0
+            )
+            assert (
+                metrics[
+                    "performance/longshot_full_history_optimized_score_unrope_rotate_cache_keys_estimated_inner_allocation_bytes"
+                ]
+                > metrics[
+                    "performance/longshot_full_history_reference_full_history_logical_payload_bytes"
+                ]
+            )
+
+            # The cap in ``authenticated`` is fingerprinted. The other term is
+            # history-independent selected-key rotation, reported by runtime
+            # telemetry and inclusive of rotate_cache_keys inner allocations.
+            allowance = (
+                2 * int(authenticated["max_temp_bytes"])
+                + int(
+                    metrics[
+                        "performance/longshot_full_history_optimized_selected_unrope_estimated_live_bytes"
+                    ]
+                )
+            )
+            assert transient <= allowance
+            assert allowance < int(
+                metrics[
+                    "performance/longshot_full_history_reference_unrope_estimated_live_bytes"
+                ]
+            )
+            assert transient < reference_transient
+
+            del actual, optimized
+            torch.cuda.empty_cache()
+
+        del cache
+        torch.cuda.empty_cache()
+
+    for cap in caps:
+        short = allocator_evidence[histories[0]][cap]
+        long = allocator_evidence[histories[1]][cap]
+        # Four times the history may change the live score result but must not
+        # add a full-history temporary; only cap-sized allocator variation is allowed.
+        assert abs(long - short) <= 2 * cap
+
+    record_property("production_allocator_transient_bytes", allocator_evidence)
+    record_property("production_reference_transient_bytes", reference_evidence)
 
 
 def test_cuda_bf16_unrope_full_checkpoint_resume_replays_exactly(tmp_path) -> None:

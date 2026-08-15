@@ -238,6 +238,36 @@ def unrope_rotation_estimated_temp_bytes_per_row(
     return dtype_elements * element_bytes + fp32_elements * _FP32_BYTES + 8
 
 
+def unrope_rotation_estimated_fixed_temp_bytes(*, rotary_dim: int) -> int:
+    """Bound fixed-size allocations made inside one ``rotate_cache_keys`` call.
+
+    The inverse-frequency construction allocates FP32 arange, division, power,
+    reciprocal, and scaling results. Scalar conversion overhead is included so
+    tiny chunks are not reported as though rotation had only row-sized costs.
+    """
+    if rotary_dim <= 0 or rotary_dim % 2:
+        raise ValueError("Longshot rotary_dim must be positive and even")
+    return 5 * (rotary_dim // 2) * _FP32_BYTES + 5 * _FP32_BYTES
+
+
+def unrope_rotation_estimated_inner_allocation_bytes(
+    rows: int,
+    *,
+    dtype: torch.dtype,
+    head_dim: int,
+    rotary_dim: int,
+    calls: int = 1,
+) -> int:
+    """Bound allocations inside ``rotate_cache_keys``, including call overhead."""
+    if rows < 0 or calls < 0 or (rows == 0) != (calls == 0):
+        raise ValueError(
+            "Longshot rotation rows and calls must both be zero or both be positive"
+        )
+    return rows * unrope_rotation_estimated_temp_bytes_per_row(
+        dtype=dtype, head_dim=head_dim, rotary_dim=rotary_dim
+    ) + calls * unrope_rotation_estimated_fixed_temp_bytes(rotary_dim=rotary_dim)
+
+
 class _ChunkedUnropedConcatenatedKVSquaredL2(torch.autograd.Function):
     @staticmethod
     def forward(
