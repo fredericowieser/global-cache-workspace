@@ -98,24 +98,6 @@ KERNEL_LAUNCHES = (
         "bf16_bits",
         ("per_cache_head",),
     ),
-    KernelLaunchSpec(
-        "processor_silu_mul_forward",
-        "pointwise",
-        CACHE_COPY_BLOCK,
-        CACHE_NUM_WARPS,
-        ("bf16", "bf16"),
-        "bf16",
-        ("contiguous",),
-    ),
-    KernelLaunchSpec(
-        "processor_silu_mul_backward",
-        "pointwise",
-        CACHE_COPY_BLOCK,
-        CACHE_NUM_WARPS,
-        ("bf16", "bf16", "bf16"),
-        "bf16",
-        ("contiguous",),
-    ),
 )
 
 

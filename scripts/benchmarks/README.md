@@ -32,7 +32,7 @@ python -m scripts.benchmarks.triton_cache_movement \
   --output artifacts/benchmarks/triton-cache-h200.json
 ```
 
-The microbenchmark compares the complete eager and candidate gather/backward operation. Its timing does not establish optimizer-step or campaign admission. `triton_processor.py` separately compares the production-shaped cache-processor `silu(gate) * up` forward/backward boundary and enforces the `5e-4` relative-L2 numerical gate before reporting speed.
+The microbenchmark compares the complete eager and candidate gather/backward operation. Its timing does not establish optimizer-step or campaign admission. `triton_processor.py` reproduces the rejected cache-processor `silu(gate) * up` candidate and intentionally enforces the `5e-4` relative-L2 gate before timing; the observed forward drift was `0.00288389` on both GPU classes.
 
 ## Fused structured row loss
 

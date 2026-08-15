@@ -27,8 +27,6 @@ def test_kernel_manifest_is_closed_deterministic_and_autotune_free() -> None:
         "scatter_shared_update_fp32_to_bf16",
         "scatter_shared_kv_grad_bits",
         "scatter_per_cache_head_grad_bits",
-        "processor_silu_mul_forward",
-        "processor_silu_mul_backward",
     )
     assert all(spec.autotuning is False for spec in KERNEL_LAUNCHES)
     assert {spec.block for spec in KERNEL_LAUNCHES} == {
@@ -36,4 +34,4 @@ def test_kernel_manifest_is_closed_deterministic_and_autotune_free() -> None:
         CACHE_COPY_BLOCK,
     }
     assert {spec.num_warps for spec in KERNEL_LAUNCHES} == {CACHE_NUM_WARPS}
-    assert kernel_manifest_sha256() == "528c52aac8d5b2ee057bf56ecbc2adb545c5f16e1bba5ea1a833e59d64ec2466"
+    assert kernel_manifest_sha256() == "02f46571ce4668a800298dd826011bdf9550794ef224371c9337d21b5977ea03"
