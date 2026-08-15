@@ -177,12 +177,19 @@ def run_qwen3_backbone_chunk_region(
             backbone, inputs_embeds, cos, sin, past_keys, past_values, attention_bias
         )
     if backend == "cuda_graph":
-        operation = partial(_qwen3_backbone_chunk_tensor_region, backbone)
+        # PyTorch's CausalBias is a symbolic CPU Tensor subclass. Keep it in
+        # the captured closure while all replay-varying inputs remain CUDA
+        # tensors covered by the static signature.
+        operation = partial(
+            _qwen3_backbone_chunk_tensor_region,
+            backbone,
+            attention_bias=attention_bias,
+        )
         return run_graphed_callable(
             backbone,
             region="qwen3_full_window_with_past",
             operation=operation,
-            args=(inputs_embeds, cos, sin, past_keys, past_values, attention_bias),
+            args=(inputs_embeds, cos, sin, past_keys, past_values),
         )
     if backend not in {"compile", "compile_full_windows"}:
         raise ValueError(f"unsupported Qwen3 backbone chunk backend: {backend}")
