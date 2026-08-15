@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import pickle
 import os
 from collections.abc import Callable
 from dataclasses import replace
@@ -71,7 +72,7 @@ def _install_fake_compiler(
 
         def compiled(*args: object, **inner_kwargs: object) -> torch.Tensor:
             dispatch_rng_states.append(torch.get_rng_state().clone())
-            state = args[0]
+            state = args[1]
             assert isinstance(state, torch.Tensor)
             dispatched_states.append(state.detach().clone())
             if fail:
@@ -333,9 +334,11 @@ def test_cuda_fullgraph_compiles_field_callable_and_preserves_backward() -> None
     repeated = torch.randn(1, 6, 8, device="cuda", requires_grad=True)
     compiled(repeated, lambda value, time: compiled_field(value, time)).square().mean().backward()
     after = noisy_diffusion_compile_telemetry(compiled)
-    assert after["runner_compile_count"] == 1
+    assert after["runner_creation_count"] == 1
     assert after["runner_dispatch_count"] == 2
-    assert int(after["dynamo_unique_graphs"]) >= int(before["dynamo_unique_graphs"])
+    # The fake compiler creates a wrapper but performs no Dynamo compilation.
+    assert after["dynamo_new_unique_graphs"] == 0
+    assert before["runner_creation_count"] == 1
 
 
 def test_default_noisy_diffusion_policy_preserves_pre_feature_receipts() -> None:
@@ -390,45 +393,115 @@ def test_compiled_backend_rejects_attention_dropout_before_dispatch(
         )
 
 
-def test_compiled_runner_is_owned_per_module_without_stale_bindings(
+def test_materialized_runner_does_not_bind_deepcopy_to_source(
     monkeypatch: pytest.MonkeyPatch,
- ) -> None:
+) -> None:
     compile_calls, _, _ = _install_fake_compiler(monkeypatch)
-    first_config = tiny_diffusion_config()
-    second_config = copy.deepcopy(first_config)
-    assert first_config.diffusion_processor is not None
-    assert second_config.diffusion_processor is not None
-    second_config.diffusion_processor.num_steps = 2
-    first = TaskDirectedDiffusion(4, first_config.diffusion_processor)
-    second = TaskDirectedDiffusion(4, second_config.diffusion_processor)
-    first_holder = _DiffusionHolder(first)
-    second_holder = _DiffusionHolder(second)
-    configure_noisy_diffusion_recurrence_backend(first_holder, first_config, _compiled_policy())
-    configure_noisy_diffusion_recurrence_backend(second_holder, second_config, _compiled_policy())
-    first_keys = tuple(first_holder.state_dict())
-    second_keys = tuple(second_holder.state_dict())
-
-    first_field = _RecordingField(4)
-    second_field = _RecordingField(4)
-    for width in (3, 5, 3):
-        first(torch.zeros(1, width, 4), first_field, noise=torch.ones(1, width, 4))
-        second(torch.zeros(1, width + 1, 4), second_field, noise=torch.ones(1, width + 1, 4))
-
-    assert len(compile_calls) == 2
-    assert first_field.times == [0.0, 0.25, 0.5, 0.75] * 3
-    assert second_field.times == [0.0, 0.5] * 3
-    assert noisy_diffusion_compile_telemetry(first)["runner_dispatch_count"] == 3
-    assert noisy_diffusion_compile_telemetry(second)["runner_dispatch_count"] == 3
-    assert first.__dict__["_gcw_noisy_diffusion_compiled_recurrence_runner"] is not (
-        second.__dict__["_gcw_noisy_diffusion_compiled_recurrence_runner"]
+    config = tiny_diffusion_config()
+    assert config.cache_processor is not None
+    assert config.diffusion_processor is not None
+    source = CacheProcessor(
+        8, config.cache_processor, diffusion_config=config.diffusion_processor
     )
-    assert tuple(first_holder.state_dict()) == first_keys
-    assert tuple(second_holder.state_dict()) == second_keys
+    configure_noisy_diffusion_recurrence_backend(source, config, _compiled_policy())
+    value = torch.randn(1, 4, 8)
+    positions = torch.arange(4).view(1, 4)
+    source_output = source.compute_update(value, positions)
+    assert source.diffusion is not None
+    assert noisy_diffusion_compile_telemetry(source.diffusion)["runner_creation_count"] == 1
+
+    copied = copy.deepcopy(source)
+    assert copied.diffusion is not None
+    assert noisy_diffusion_compile_telemetry(copied.diffusion)["runner_owned"] is False
+    with torch.no_grad():
+        copied.diffusion.refinement_gate.add_(1.0)
+        copied.layers[0].down_proj.weight.add_(0.25)
+    copied_output = copied.compute_update(value, positions)
+    assert len(compile_calls) == 2
+    assert not torch.allclose(copied_output, source_output)
+
+    source.zero_grad(set_to_none=True)
+    copied.zero_grad(set_to_none=True)
+    copied.compute_update(value, positions).square().mean().backward()
+    assert source.diffusion.refinement_gate.grad is None
+    assert source.layers[0].down_proj.weight.grad is None
+    assert copied.diffusion.refinement_gate.grad is not None
+    assert copied.layers[0].down_proj.weight.grad is not None
+    assert torch.count_nonzero(copied.diffusion.refinement_gate.grad) > 0
+    assert torch.count_nonzero(copied.layers[0].down_proj.weight.grad) > 0
+
+
+def test_materialized_runner_is_not_serialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile_calls, _, _ = _install_fake_compiler(monkeypatch)
+    config = tiny_diffusion_config()
+    assert config.diffusion_processor is not None
+    diffusion = TaskDirectedDiffusion(4, config.diffusion_processor)
+    configure_noisy_diffusion_recurrence_backend(
+        _DiffusionHolder(diffusion), config, _compiled_policy()
+    )
+    field = _Field(4)
+    value = torch.randn(1, 3, 4)
+    expected = diffusion(value, field, noise=torch.ones_like(value))
+    restored = pickle.loads(pickle.dumps(diffusion))
+    assert noisy_diffusion_compile_telemetry(restored)["runner_owned"] is False
+    actual = restored(value, field, noise=torch.ones_like(value))
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert len(compile_calls) == 2
+
+
+def test_dynamo_telemetry_counts_graphs_not_lazy_wrapper_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    try:
+        from torch._dynamo.testing import CompileCounterWithBackend
+        from torch._dynamo.utils import counters
+    except ImportError:  # pragma: no cover - version-dependent support
+        pytest.skip("Torch Dynamo compile counters are unavailable")
+    torch._dynamo.reset()
+    counters.clear()
+    real_compile = torch.compile
+    compile_counter = CompileCounterWithBackend("eager")
+
+    def counting_compile(function: Callable[..., torch.Tensor], **kwargs: object):
+        assert kwargs == {"backend": "inductor", "dynamic": False, "fullgraph": True}
+        return real_compile(
+            function,
+            backend=compile_counter,
+            dynamic=False,
+            fullgraph=True,
+        )
+
+    monkeypatch.setattr(torch, "compile", counting_compile)
+    config = tiny_diffusion_config()
+    assert config.diffusion_processor is not None
+    diffusion = TaskDirectedDiffusion(4, config.diffusion_processor)
+    configure_noisy_diffusion_recurrence_backend(
+        _DiffusionHolder(diffusion), config, _compiled_policy()
+    )
+    before = noisy_diffusion_compile_telemetry(diffusion)
+    assert before["runner_creation_count"] == 0
+    assert before["dynamo_new_unique_graphs"] == 0
+
+    field = _Field(4)
+    for width in (3, 3, 5, 3, 5):
+        value = torch.zeros(1, width, 4)
+        diffusion(value, field, noise=torch.ones_like(value))
+    after = noisy_diffusion_compile_telemetry(diffusion)
+
+    assert after["runner_creation_count"] == 1
+    assert after["runner_dispatch_count"] == 5
+    assert compile_counter.frame_count == 2
+    assert int(after["dynamo_new_unique_graphs"]) > 0
+    assert after["dynamo_new_graph_breaks"] == 0
+    assert int(after["dynamo_new_recompiles"]) <= 1
 
 
 def test_compiled_boundary_preserves_checkpoint_early_stop_exactly(
     monkeypatch: pytest.MonkeyPatch,
  ) -> None:
+    _install_fake_compiler(monkeypatch)
     config = tiny_diffusion_config()
     assert config.diffusion_processor is not None
     diffusion = TaskDirectedDiffusion(4, config.diffusion_processor)
@@ -443,13 +516,19 @@ def test_compiled_boundary_preserves_checkpoint_early_stop_exactly(
     signal = signal_type("checkpoint replay complete")
 
     def early_stop(
-        _state: torch.Tensor, _bottleneck: torch.Tensor, _field: Callable[..., torch.Tensor]
+        _diffusion: TaskDirectedDiffusion,
+        _state: torch.Tensor,
+        _bottleneck: torch.Tensor,
+        _field: Callable[..., torch.Tensor],
     ) -> torch.Tensor:
         raise signal
 
-    object.__setattr__(
-        diffusion, "_gcw_noisy_diffusion_compiled_recurrence_runner", early_stop
-    )
+    # Replace only the external execution runner; no model state is modified.
+    from gcw.performance.backends import diffusion as diffusion_backend
+
+    diffusion(torch.zeros(1, 2, 4), _Field(4), noise=torch.zeros(1, 2, 4))
+    runner_state = diffusion_backend._compiled_runner_states[diffusion]
+    runner_state.runner = early_stop
     with pytest.raises(signal_type) as caught:
         diffusion(torch.zeros(1, 2, 4), _Field(4))
     assert caught.value is signal
@@ -613,6 +692,43 @@ def _cuda_cache_processor_step(
     return float(loss.detach())
 
 
+def _assert_module_state_close(
+    actual: nn.Module,
+    expected: nn.Module,
+    *,
+    atol: float = 2e-5,
+    rtol: float = 2e-4,
+) -> None:
+    actual_state = actual.state_dict()
+    expected_state = expected.state_dict()
+    assert tuple(actual_state) == tuple(expected_state)
+    for name, expected_value in expected_state.items():
+        torch.testing.assert_close(actual_state[name], expected_value, atol=atol, rtol=rtol)
+
+
+def _assert_optimizer_state_close(
+    actual: torch.optim.Optimizer,
+    expected: torch.optim.Optimizer,
+    *,
+    atol: float = 2e-5,
+    rtol: float = 2e-4,
+) -> None:
+    actual_state = actual.state_dict()
+    expected_state = expected.state_dict()
+    assert actual_state["param_groups"] == expected_state["param_groups"]
+    assert actual_state["state"].keys() == expected_state["state"].keys()
+    for parameter_id, expected_slots in expected_state["state"].items():
+        actual_slots = actual_state["state"][parameter_id]
+        assert actual_slots.keys() == expected_slots.keys()
+        for slot_name, expected_value in expected_slots.items():
+            actual_value = actual_slots[slot_name]
+            if isinstance(expected_value, torch.Tensor):
+                assert isinstance(actual_value, torch.Tensor)
+                torch.testing.assert_close(actual_value, expected_value, atol=atol, rtol=rtol)
+            else:
+                assert actual_value == expected_value
+
+
 @pytest.mark.skipif(
     not torch.cuda.is_available() or os.environ.get("GCW_RUN_CUDA_DIFFUSION_COMPILE_TESTS") != "1",
     reason="set GCW_RUN_CUDA_DIFFUSION_COMPILE_TESTS=1 for production closure/trajectory smoke",
@@ -638,7 +754,7 @@ def test_cuda_production_closure_optimizer_resume_and_graph_telemetry() -> None:
 
     eager_losses = [
         _cuda_cache_processor_step(eager, eager_optimizer, value, positions)
-        for _ in range(2)
+        for _ in range(4)
     ]
     eager_cpu_rng = torch.get_rng_state().clone()
     eager_cuda_rng = torch.cuda.get_rng_state().clone()
@@ -647,7 +763,7 @@ def test_cuda_production_closure_optimizer_resume_and_graph_telemetry() -> None:
     telemetry_before = noisy_diffusion_compile_telemetry(compiled.diffusion)  # type: ignore[arg-type]
     compiled_losses = [
         _cuda_cache_processor_step(compiled, compiled_optimizer, value, positions)
-        for _ in range(2)
+        for _ in range(4)
     ]
     telemetry_after = noisy_diffusion_compile_telemetry(compiled.diffusion)  # type: ignore[arg-type]
 
@@ -656,23 +772,30 @@ def test_cuda_production_closure_optimizer_resume_and_graph_telemetry() -> None:
     )
     assert torch.equal(torch.get_rng_state(), eager_cpu_rng)
     assert torch.equal(torch.cuda.get_rng_state(), eager_cuda_rng)
+    _assert_module_state_close(compiled, eager)
+    _assert_optimizer_state_close(compiled_optimizer, eager_optimizer)
     assert compiled.diffusion is not None
     assert compiled.diffusion.refinement_gate.grad is not None
     assert compiled.layers[0].down_proj.weight.grad is not None
     assert torch.count_nonzero(compiled.diffusion.refinement_gate.grad) > 0
     assert torch.count_nonzero(compiled.layers[0].down_proj.weight.grad) > 0
-    assert telemetry_after["runner_compile_count"] == 1
-    assert telemetry_after["runner_dispatch_count"] == 2
-    assert int(telemetry_after["dynamo_unique_graphs"]) >= int(
-        telemetry_before["dynamo_unique_graphs"]
+    assert telemetry_after["runner_creation_count"] == 1
+    assert telemetry_after["runner_dispatch_count"] == 4
+    assert int(telemetry_after["dynamo_new_unique_graphs"]) > int(
+        telemetry_before["dynamo_new_unique_graphs"]
     )
+    assert telemetry_after["dynamo_new_graph_breaks"] == 0
+    assert int(telemetry_after["dynamo_new_recompiles"]) <= 1
 
     first = copy.deepcopy(template)
     configure_noisy_diffusion_recurrence_backend(first, config, _compiled_policy())
     first_optimizer = torch.optim.AdamW(first.parameters(), lr=1e-3)
     torch.set_rng_state(initial_cpu_rng)
     torch.cuda.set_rng_state(initial_cuda_rng)
-    _cuda_cache_processor_step(first, first_optimizer, value, positions)
+    resumed_losses = [
+        _cuda_cache_processor_step(first, first_optimizer, value, positions)
+        for _ in range(2)
+    ]
     saved_model = copy.deepcopy(first.state_dict())
     saved_optimizer = copy.deepcopy(first_optimizer.state_dict())
     saved_cpu_rng = torch.get_rng_state().clone()
@@ -685,12 +808,15 @@ def test_cuda_production_closure_optimizer_resume_and_graph_telemetry() -> None:
     resumed_optimizer.load_state_dict(saved_optimizer)
     torch.set_rng_state(saved_cpu_rng)
     torch.cuda.set_rng_state(saved_cuda_rng)
-    resumed_loss = _cuda_cache_processor_step(
-        resumed, resumed_optimizer, value, positions
+    resumed_losses.extend(
+        _cuda_cache_processor_step(resumed, resumed_optimizer, value, positions)
+        for _ in range(2)
     )
 
-    assert resumed_loss == pytest.approx(compiled_losses[1], abs=2e-5, rel=2e-4)
-    for name, expected in compiled.state_dict().items():
-        torch.testing.assert_close(
-            resumed.state_dict()[name], expected, atol=2e-5, rtol=2e-4
-        )
+    torch.testing.assert_close(
+        torch.tensor(resumed_losses), torch.tensor(compiled_losses), atol=2e-5, rtol=2e-4
+    )
+    _assert_module_state_close(resumed, compiled)
+    _assert_optimizer_state_close(resumed_optimizer, compiled_optimizer)
+    assert torch.equal(torch.get_rng_state(), eager_cpu_rng)
+    assert torch.equal(torch.cuda.get_rng_state(), eager_cuda_rng)
