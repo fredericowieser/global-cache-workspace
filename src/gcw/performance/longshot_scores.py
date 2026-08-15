@@ -156,3 +156,138 @@ def _validate_input(x: torch.Tensor, *, reduction_start: int, max_temp_bytes: in
 def _rows_per_chunk(reduction_shape: torch.Size, max_temp_bytes: int) -> int:
     fp32_bytes_per_row = math.prod(reduction_shape) * _FP32_BYTES
     return max(1, max_temp_bytes // max(fp32_bytes_per_row, 1))
+
+
+def chunked_fp32_concatenated_kv_squared_l2(
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    *,
+    max_temp_bytes: int = LONGSHOT_SCORE_FP32_CHUNK_BYTES,
+) -> torch.Tensor:
+    """Score layer-major K/V without materializing the full merged cache.
+
+    Each feature reduction remains exactly
+    ``cat([key, value]).float().pow(2).sum(-1)``. Only independent outer
+    rows are chunked.
+    """
+    return _ChunkedConcatenatedKVSquaredL2.apply(keys, values, max_temp_bytes)
+
+
+class _ChunkedConcatenatedKVSquaredL2(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx: Any,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        max_temp_bytes: int,
+    ) -> torch.Tensor:
+        _validate_layer_major_kv(keys, values, max_temp_bytes=max_temp_bytes)
+        ctx.max_temp_bytes = max_temp_bytes
+        ctx.save_for_backward(keys, values)
+        return _run_layer_major_kv_scores(keys, values, max_temp_bytes=max_temp_bytes)
+
+    @staticmethod
+    def backward(
+        ctx: Any,
+        grad_output: torch.Tensor,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, None]:
+        keys, values = ctx.saved_tensors
+        key_grad, value_grad = _recomputed_layer_major_kv_backward(
+            keys,
+            values,
+            grad_output,
+            max_temp_bytes=ctx.max_temp_bytes,
+            need_key_grad=ctx.needs_input_grad[0],
+            need_value_grad=ctx.needs_input_grad[1],
+        )
+        return key_grad, value_grad, None
+
+
+def _run_layer_major_kv_scores(
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    *,
+    max_temp_bytes: int,
+) -> torch.Tensor:
+    layers, batch, heads, seq, head_dim = keys.shape
+    rows_per_chunk = _rows_per_chunk(torch.Size((2 * head_dim,)), max_temp_bytes)
+    key_rows = keys.view(-1, head_dim)
+    value_rows = values.view(-1, head_dim)
+    score_rows = torch.empty(key_rows.shape[0], dtype=torch.float32, device=keys.device)
+    for start in range(0, key_rows.shape[0], rows_per_chunk):
+        end = min(start + rows_per_chunk, key_rows.shape[0])
+        merged = torch.cat([key_rows[start:end], value_rows[start:end]], dim=-1)
+        score_rows[start:end] = eager_fp32_squared_l2(merged)
+    by_layer = score_rows.view(layers, batch, heads, seq)
+    return by_layer.permute(1, 0, 2, 3).reshape(batch, layers * heads, seq)
+
+
+def _recomputed_layer_major_kv_backward(
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    grad_output: torch.Tensor,
+    *,
+    max_temp_bytes: int,
+    need_key_grad: bool,
+    need_value_grad: bool,
+) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+    layers, batch, heads, seq, head_dim = keys.shape
+    rows_per_chunk = _rows_per_chunk(torch.Size((2 * head_dim,)), max_temp_bytes)
+    grad_rows = (
+        grad_output.reshape(batch, layers, heads, seq)
+        .permute(1, 0, 2, 3)
+        .contiguous()
+        .view(-1)
+    )
+    key_rows = keys.view(-1, head_dim)
+    value_rows = values.view(-1, head_dim)
+    key_result = torch.empty_like(key_rows) if need_key_grad else None
+    value_result = torch.empty_like(value_rows) if need_value_grad else None
+    create_graph = torch.is_grad_enabled()
+    for start in range(0, key_rows.shape[0], rows_per_chunk):
+        end = min(start + rows_per_chunk, key_rows.shape[0])
+        with torch.enable_grad():
+            key_chunk = key_rows[start:end]
+            value_chunk = value_rows[start:end]
+            if not key_chunk.requires_grad:
+                key_chunk = key_chunk.detach().requires_grad_(True)
+            if not value_chunk.requires_grad:
+                value_chunk = value_chunk.detach().requires_grad_(True)
+            scores = eager_fp32_squared_l2(torch.cat([key_chunk, value_chunk], dim=-1))
+            key_chunk_grad, value_chunk_grad = torch.autograd.grad(
+                scores,
+                (key_chunk, value_chunk),
+                grad_rows[start:end],
+                create_graph=create_graph,
+            )
+        if key_result is not None:
+            key_result[start:end] = key_chunk_grad
+        if value_result is not None:
+            value_result[start:end] = value_chunk_grad
+    return (
+        None if key_result is None else key_result.view_as(keys),
+        None if value_result is None else value_result.view_as(values),
+    )
+
+
+def _validate_layer_major_kv(
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    *,
+    max_temp_bytes: int,
+) -> None:
+    if keys.ndim != 5:
+        raise ValueError(
+            "Longshot layer-major cache tensors must have shape "
+            "(layers, batch, heads, seq, dim)"
+        )
+    if keys.shape != values.shape:
+        raise ValueError("Longshot cache keys and values must have identical shapes")
+    if not keys.is_floating_point() or not values.is_floating_point():
+        raise TypeError("Longshot cache keys and values must be floating-point tensors")
+    if keys.dtype != values.dtype or keys.device != values.device:
+        raise ValueError("Longshot cache keys and values must share dtype and device")
+    if not keys.is_contiguous() or not values.is_contiguous():
+        raise ValueError("Longshot layer-major cache tensors must be contiguous")
+    if max_temp_bytes <= 0:
+        raise ValueError("Longshot score max_temp_bytes must be positive")

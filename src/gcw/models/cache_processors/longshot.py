@@ -39,7 +39,9 @@ from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow, sinusoidal_time_embedding
 from gcw.models.backbones.transformer import RMSNorm, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.performance.longshot_cache import gather_windowed_per_cache_head_kv
 from gcw.performance.longshot_scores import (
+    chunked_fp32_concatenated_kv_squared_l2,
     chunked_fp32_l2_norm,
     chunked_fp32_squared_l2,
 )
@@ -753,25 +755,9 @@ class GlobalCacheProcessor(CacheProcessorBase):
 
     def encode_source(self, cache: CacheLike, *, select_all: bool = False) -> LongshotWorkspaceSource:
         if self.config.score == "kv_norm" and not select_all:
-            all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
-            merged_all = gather_per_cache_head_kv(
-                cache,
-                all_indices,
-                unrope_keys=self.config.unrope_keys,
-                rope_theta=self.rope_theta,
-                rotary_style=self.rotary_style,
-                rotary_dim=self.rotary_dim,
-            )
-            scores = chunked_fp32_squared_l2(merged_all)
-            indices = select_per_cache_head_kv_norm_indices_from_scores(
-                scores,
-                self.config.process_every,
-                self.config.topk,
-            )
+            merged, scores, indices = self._select_kv_norm_history(cache)
             if indices.shape[-1] == 0:
                 raise ValueError("Longshot workspace source requires at least one selected position")
-            index = indices[..., None].expand(-1, -1, -1, merged_all.shape[-1])
-            merged = torch.gather(merged_all, dim=2, index=index)
             head_scores = gather_per_cache_head_scores(scores, indices).float().sum(dim=-1)
         else:
             if select_all:
@@ -905,10 +891,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
         )
         return cast(WindowedCache, _scatter_latest_values(branch, source.latest_indices, values))
 
-    def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:
-        if self.config.score == "kv_norm" and not select_all:
+    def _select_kv_norm_history(
+        self,
+        cache: CacheLike,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if not isinstance(cache, WindowedCache):
             all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
-            merged = gather_per_cache_head_kv(
+            merged_all = gather_per_cache_head_kv(
                 cache,
                 all_indices,
                 unrope_keys=self.config.unrope_keys,
@@ -916,14 +905,48 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
             )
-            scores = chunked_fp32_squared_l2(merged)
+            scores = chunked_fp32_squared_l2(merged_all)
             indices = select_per_cache_head_kv_norm_indices_from_scores(
                 scores, self.config.process_every, self.config.topk
             )
+            index = indices[..., None].expand(-1, -1, -1, merged_all.shape[-1])
+            return torch.gather(merged_all, dim=2, index=index), scores, indices
+
+        # Selection is discrete. Score it without retaining a full-history
+        # autograd graph, then gather only positions that enter the processor.
+        with torch.no_grad():
+            score_keys = cache.keys
+            if self.config.unrope_keys:
+                score_keys = rotate_cache_keys(
+                    score_keys,
+                    cache.all_indices(),
+                    theta=self.rope_theta,
+                    rotary_style=self.rotary_style,
+                    inverse=True,
+                    rotary_dim=self.rotary_dim,
+                )
+            scores = chunked_fp32_concatenated_kv_squared_l2(score_keys, cache.values)
+            indices = select_per_cache_head_kv_norm_indices_from_scores(
+                scores, self.config.process_every, self.config.topk
+            )
+
+        keys, values = gather_windowed_per_cache_head_kv(cache.keys, cache.values, indices)
+        if self.config.unrope_keys:
+            keys = rotate_cache_keys(
+                keys,
+                indices,
+                theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+                inverse=True,
+                rotary_dim=self.rotary_dim,
+            )
+        return torch.cat([keys, values], dim=-1), scores, indices
+
+    def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:
+        if self.config.score == "kv_norm" and not select_all:
+            merged, scores, indices = self._select_kv_norm_history(cache)
             if indices.shape[-1] == 0:
                 return cache, None
-            index = indices[..., None].expand(-1, -1, -1, merged.shape[-1])
-            merged = torch.gather(merged, dim=2, index=index)
             kv_head_scores = gather_per_cache_head_scores(scores, indices).float().sum(dim=-1)
         else:
             if select_all:

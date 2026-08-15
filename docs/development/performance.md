@@ -12,6 +12,7 @@ The package is intentionally divided by responsibility:
 - `checkpointing.py`: checkpoint admission, decisions, and telemetry;
 - `losses.py`: explicit loss-backend admission, bounded reference-loss execution, and provenance;
 - `longshot_scores.py`: bounded-memory reductions preserving eager FP32 reduction order;
+- `longshot_cache.py`: state-neutral selected-history gathers that avoid flattening or copying full WindowedCache histories;
 - `whole_model.py`: legacy whole-model compile policy;
 - `telemetry.py`: read-only optimized-region metrics;
 - `backends/qwen3.py`: Qwen3 backbone chunk compilation;
