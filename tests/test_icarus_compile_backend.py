@@ -542,27 +542,39 @@ def test_compile_training_admission_rejects_unqualified_distributed_topologies(
             distributed=distributed,
             world_size=world_size,
             distributed_initialized=False,
+            batch_size=2,
             adaptive_batch_sizes=None,
             device=torch.device("cuda"),
         )
 
 
-def test_compile_training_admission_rejects_unqualified_adaptive_shapes() -> None:
-    with pytest.raises(RuntimeError, match="qualified only on CUDA"):
+def test_compile_training_admission_rejects_nonoracle_batches() -> None:
+    with pytest.raises(RuntimeError, match="fixed batch_size=2"):
         validate_icarus_training_admission(
             "compile",
             distributed="none",
             world_size=1,
             distributed_initialized=False,
-            adaptive_batch_sizes=(16, 8, 4, 2),
-            device=torch.device("cpu"),
-        )
-    with pytest.raises(RuntimeError, match="16/8/4/2"):
-        validate_icarus_training_admission(
-            "compile",
-            distributed="none",
-            world_size=1,
-            distributed_initialized=False,
-            adaptive_batch_sizes=(8, 4, 2),
+            batch_size=4,
+            adaptive_batch_sizes=None,
             device=torch.device("cuda"),
         )
+    with pytest.raises(RuntimeError, match="does not admit adaptive batching"):
+        validate_icarus_training_admission(
+            "compile",
+            distributed="none",
+            world_size=1,
+            distributed_initialized=False,
+            batch_size=2,
+            adaptive_batch_sizes=(16, 8, 4, 2),
+            device=torch.device("cuda"),
+        )
+    validate_icarus_training_admission(
+        "compile",
+        distributed="none",
+        world_size=1,
+        distributed_initialized=False,
+        batch_size=2,
+        adaptive_batch_sizes=None,
+        device=torch.device("cuda"),
+    )

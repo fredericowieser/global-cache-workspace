@@ -137,6 +137,7 @@ def train(config: TrainConfig) -> None:
         distributed=config.distributed,
         world_size=max(world_size, int(os.environ.get("WORLD_SIZE", "1"))),
         distributed_initialized=dist.is_available() and dist.is_initialized(),
+        batch_size=config.batch_size,
         adaptive_batch_sizes=(
             tuple(band.physical_rows for band in adaptive_batching.bands)
             if adaptive_batching.enabled

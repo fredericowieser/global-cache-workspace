@@ -66,6 +66,7 @@ def validate_icarus_training_admission(
     distributed: str,
     world_size: int,
     distributed_initialized: bool,
+    batch_size: int,
     adaptive_batch_sizes: Sequence[int] | None,
     device: torch.device,
 ) -> None:
@@ -79,8 +80,15 @@ def validate_icarus_training_admission(
             "GCW_ICARUS_PROCESSOR_BACKEND=compile is not supported with DDP or FSDP; "
             "distributed execution has not been CUDA-qualified"
         )
-    if adaptive_batch_sizes is not None and (device.type != "cuda" or set(adaptive_batch_sizes) != {2, 4, 8, 16}):
-        raise RuntimeError("compiled Icarus adaptive batching is qualified only on CUDA with the 16/8/4/2 row bands")
+    if batch_size != 2:
+        raise RuntimeError(
+            "GCW_ICARUS_PROCESSOR_BACKEND=compile is qualified only for fixed batch_size=2"
+        )
+    if adaptive_batch_sizes is not None:
+        raise RuntimeError(
+            "GCW_ICARUS_PROCESSOR_BACKEND=compile does not admit adaptive batching; "
+            "fixed batch-2 is authoritative until exact optimizer-trajectory parity is established"
+        )
 
 
 def icarus_processor_backend_metadata(

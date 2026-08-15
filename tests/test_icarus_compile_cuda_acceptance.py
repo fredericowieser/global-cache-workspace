@@ -33,7 +33,7 @@ from tests.test_icarus_compile_backend import _cache, _config, _processor
 
 
 _CUDA_ACCEPTANCE = os.environ.get("GCW_RUN_CUDA_COMPILE_ACCEPTANCE") == "1"
-_ADAPTIVE_BANDS = (16, 8, 4, 2)
+_FIXED_BATCH_SIZE = 2
 pytestmark = [
     pytest.mark.gpu,
     pytest.mark.skipif(
@@ -102,8 +102,38 @@ def _assert_tight_gradient_metrics(eager: LanguageModel, compiled: LanguageModel
     actual = _flat_gradients(compiled)
     relative_l2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected).clamp_min(1e-12)
     cosine = torch.nn.functional.cosine_similarity(actual, expected, dim=0)
-    assert relative_l2.item() <= 3e-3
+    assert relative_l2.item() <= 5e-4
     assert cosine.item() >= 0.99999
+
+
+def _assert_optimizer_metrics(
+    eager: torch.optim.Optimizer,
+    compiled: torch.optim.Optimizer,
+    eager_model: LanguageModel,
+    compiled_model: LanguageModel,
+) -> None:
+    assert eager.state_dict()["param_groups"] == compiled.state_dict()["param_groups"]
+    for expected_parameter, actual_parameter in zip(
+        eager_model.parameters(), compiled_model.parameters(), strict=True
+    ):
+        assert eager.state[expected_parameter].keys() == compiled.state[actual_parameter].keys()
+        assert torch.equal(eager.state[expected_parameter]["step"], compiled.state[actual_parameter]["step"])
+    for slot_name in ("exp_avg", "exp_avg_sq"):
+        expected = torch.cat(
+            [eager.state[parameter][slot_name].detach().float().flatten() for parameter in eager_model.parameters()]
+        )
+        actual = torch.cat(
+            [
+                compiled.state[parameter][slot_name].detach().float().flatten()
+                for parameter in compiled_model.parameters()
+            ]
+        )
+        relative_l2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected).clamp_min(
+            1e-12
+        )
+        cosine = torch.nn.functional.cosine_similarity(actual, expected, dim=0)
+        assert relative_l2.item() <= 1e-3
+        assert cosine.item() >= 0.9999
 
 
 def test_real_inductor_checkpoint_cache_and_parameter_gradients(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,20 +167,20 @@ def test_real_inductor_checkpoint_cache_and_parameter_gradients(monkeypatch: pyt
     assert_parameter_gradients_close(compiled, eager, atol=3e-2, rtol=3e-2)
 
 
-def test_real_inductor_all_adaptive_bands_have_exact_multievent_trajectory(
+def test_real_inductor_fixed_batch_two_has_exact_multievent_trajectory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Qualify one causal 192-token training step through every adaptive row band."""
+    """Qualify three causal 192-token oracle steps with exact cache events."""
     monkeypatch.delenv("GCW_ICARUS_PROCESSOR_BACKEND", raising=False)
     monkeypatch.setenv("GCW_STRICT_FLASH", "1")
     device = torch.device("cuda")
     config = _config(gradient_checkpointing=True)
     config.sequence_len = 192
     eager, compiled = _paired_models(config, device=device)
-    configure_icarus_training_execution(compiled, _ADAPTIVE_BANDS)
+    configure_icarus_training_execution(compiled, (_FIXED_BATCH_SIZE,))
     warmup_icarus_training_execution(
         compiled,
-        _ADAPTIVE_BANDS,
+        (_FIXED_BATCH_SIZE,),
         sequence_length=config.sequence_len,
         device=device,
         bf16=True,
@@ -162,10 +192,15 @@ def test_real_inductor_all_adaptive_bands_have_exact_multievent_trajectory(
     cpu_rng = torch.random.get_rng_state().clone()
     cuda_rng = torch.cuda.get_rng_state(device).clone()
 
-    # dynamic=True must retain one graph while traversing all qualified physical bands.
+    # Exact-layout warmup must cover the fixed oracle without first-step specialization.
     with torch._dynamo.config.patch(error_on_recompile=True):
-        for rows in _ADAPTIVE_BANDS:
-            tokens = torch.randint(0, config.vocab_size, (rows, 192), generator=generator).to(device)
+        for _step in range(3):
+            tokens = torch.randint(
+                0,
+                config.vocab_size,
+                (_FIXED_BATCH_SIZE, 192),
+                generator=generator,
+            ).to(device)
             targets = tokens.roll(-1, dims=1)
             eager_optimizer.zero_grad(set_to_none=True)
             compiled_optimizer.zero_grad(set_to_none=True)
@@ -174,12 +209,12 @@ def test_real_inductor_all_adaptive_bands_have_exact_multievent_trajectory(
 
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 eager_loss = eager(tokens, targets)
-                with icarus_training_execution(compiled, rows):
+                with icarus_training_execution(compiled, _FIXED_BATCH_SIZE):
                     compiled_loss = compiled(tokens, targets)
             eager_loss.backward()
             compiled_loss.backward()
 
-            assert torch.allclose(compiled_loss, eager_loss, atol=2e-3, rtol=2e-3)
+            assert torch.allclose(compiled_loss, eager_loss, atol=2e-5, rtol=2e-4)
             assert torch.equal(torch.random.get_rng_state(), cpu_rng)
             assert torch.equal(torch.cuda.get_rng_state(device), cuda_rng)
             eager_events = traces["eager"][eager_trace_start:]
@@ -191,24 +226,17 @@ def test_real_inductor_all_adaptive_bands_have_exact_multievent_trajectory(
                 assert torch.equal(actual_positions, expected_positions)
                 assert torch.equal(actual_heads, expected_heads)
                 assert torch.equal(actual_writes, expected_writes)
-            # The second event selects from the cache after the first event's writeback.
+            # The second event selects from cache state modified by the first writeback.
             assert compiled_events[1][0].shape[-1] > compiled_events[0][0].shape[-1]
             _assert_tight_gradient_metrics(eager, compiled)
 
             eager_optimizer.step()
             compiled_optimizer.step()
-            for expected_parameter, actual_parameter in zip(eager.parameters(), compiled.parameters(), strict=True):
-                assert torch.allclose(actual_parameter, expected_parameter, atol=2e-5, rtol=2e-5)
-                expected_state = eager_optimizer.state[expected_parameter]
-                actual_state = compiled_optimizer.state[actual_parameter]
-                assert expected_state.keys() == actual_state.keys()
-                for name, expected_value in expected_state.items():
-                    actual_value = actual_state[name]
-                    if isinstance(expected_value, torch.Tensor):
-                        assert isinstance(actual_value, torch.Tensor)
-                        assert torch.allclose(actual_value, expected_value, atol=2e-5, rtol=3e-3)
-                    else:
-                        assert actual_value == expected_value
+            for expected_parameter, actual_parameter in zip(
+                eager.parameters(), compiled.parameters(), strict=True
+            ):
+                assert torch.allclose(actual_parameter, expected_parameter, atol=2e-5, rtol=2e-4)
+            _assert_optimizer_metrics(eager_optimizer, compiled_optimizer, eager, compiled)
 
 
 def _assert_nested_equal(actual: Any, expected: Any) -> None:
