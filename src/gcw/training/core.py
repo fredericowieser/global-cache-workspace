@@ -37,6 +37,7 @@ from gcw.performance.adjacent_pairs import (
 from gcw.performance.backends.qwen3 import (
     configure_qwen3_backbone_chunk_backend,
     qwen3_backbone_chunk_backend_metadata,
+    validate_qwen3_backbone_chunk_backend,
 )
 from gcw.performance.checkpointing import (
     apply_fsdp_activation_checkpointing as _apply_fsdp_activation_checkpointing,
@@ -108,6 +109,7 @@ def train_from_config(path: str | Path) -> None:
 
 def train(config: TrainConfig) -> None:
     require_optimized_step_admission(config.performance.optimized_step)
+    validate_qwen3_backbone_chunk_backend(config.backbone_chunk_backend)
     validate_experiment(config)
     _, model_receipt = resolve_model(config.model).require()
     resolve_experiment(config, model_receipt).require()

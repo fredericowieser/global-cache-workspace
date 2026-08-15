@@ -6,6 +6,7 @@ import pytest
 import torch
 from torch import nn
 
+from gcw.performance.backends.qwen3 import validate_qwen3_backbone_chunk_backend
 from gcw.performance.cuda_graphs import (
     clear_cuda_graph_runtime,
     cuda_graph_capture_stats,
@@ -22,6 +23,17 @@ def test_tensor_graph_signature_binds_shape_stride_dtype_device_and_grad() -> No
     assert first != second
     assert first.tensors[0][0] == (2, 3)
     assert first.tensors[0][-1] is True
+
+
+def test_cuda_graph_backend_is_quarantined_without_benchmark_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.delenv("GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH", raising=False)
+    with pytest.raises(RuntimeError, match="benchmark-only"):
+        validate_qwen3_backbone_chunk_backend("cuda_graph")
+    monkeypatch.setenv("GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH", "1")
+    validate_qwen3_backbone_chunk_backend("cuda_graph")
 
 
 def test_cuda_graph_request_fails_closed_on_cpu() -> None:

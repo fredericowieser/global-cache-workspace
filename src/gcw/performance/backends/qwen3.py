@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
+import os
 from threading import Lock
 from typing import Any, Literal
 
@@ -50,6 +51,11 @@ def validate_qwen3_backbone_chunk_backend(backend: Qwen3BackboneChunkBackend) ->
     if backend == "cuda_graph":
         if not torch.cuda.is_available():
             raise RuntimeError("backbone_chunk_backend=cuda_graph requires CUDA")
+        if os.environ.get("GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH") != "1":
+            raise RuntimeError(
+                "backbone_chunk_backend=cuda_graph is benchmark-only after failing its retention gate; "
+                "set GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH=1 only in isolated reproduction runs"
+            )
         return
     if backend not in {"compile", "compile_full_windows"}:
         raise ValueError(f"unsupported Qwen3 backbone chunk backend: {backend}")

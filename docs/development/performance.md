@@ -103,11 +103,11 @@ The default `performance.reference_loss.mode: legacy` preserves the existing 256
 
 Evaluation and configurations that omit the policy remain on the legacy reference path.
 
-## Qwen3 CUDA Graph window candidate
+## Rejected Qwen3 CUDA Graph window candidate
 
-`backbone_chunk_backend: cuda_graph` is a default-off, benchmark-only backend for complete Qwen3 64-token windows. It uses an external weak model-identity runtime and `torch.cuda.make_graphed_callables` with a closed tensor signature covering shape, stride, dtype, device, and gradient requirement. Initial full windows and each exact past-cache length receive separate captures; partial tails remain eager. Capture saves and restores CPU/CUDA RNG and existing backbone gradients, and replay failures are fatal without eager fallback. Captured objects never enter model state or checkpoints and are rebuilt after a fresh-process resume.
+`backbone_chunk_backend: cuda_graph` is a benchmark-only backend for complete Qwen3 64-token windows. It uses an external weak model-identity runtime and `torch.cuda.make_graphed_callables` with a closed tensor signature covering shape, stride, dtype, device, and gradient requirement. Initial full windows and each exact past-cache length receive separate captures; partial tails remain eager. Capture saves and restores CPU/CUDA RNG and existing backbone gradients, and replay failures are fatal without eager fallback. Captured objects never enter model state or checkpoints and are rebuilt after a fresh-process resume. Synthetic Qwen forward/backward parity passed on H100 and H200.
 
-This first implementation intentionally exposes capture count, replay count, and allocator growth for qualification. It does not claim private-pool release or production admission yet. Complete-window graph memory scales with retained backward activations and exact past-length signatures, so difficult rows may reject the backend on memory even when tensor parity passes. It must pass H100/H200 processor-gradient, Adam, cache-event, restart, distinct-input, pool-accounting, and full-step timing gates before composing with Triton movement or pair waves.
+The matched H200 real-BT repeated-pair complete-step screen measured eager at `29.4534 s` and graphs at `28.8908 s`, only `1.0195x`, with identical `30,747,511,296`-byte peak allocation. This fails the `1.15x` graph/component retention gate before distinct-pair, difficult-row, restart, or private-pool qualification. Ordinary requests now fail before model allocation. Reproduction requires the explicit `GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH=1` override; provenance remains `campaign_admitted: false`. The graph candidate cannot enter `combined_v1`.
 
 ## Compiled Qwen3 full windows
 

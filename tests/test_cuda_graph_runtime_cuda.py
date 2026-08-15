@@ -84,8 +84,11 @@ def _model_config() -> ModelConfig:
     )
 
 
-def test_qwen_cuda_graph_windows_match_eager_processor_gradients() -> None:
+def test_qwen_cuda_graph_windows_match_eager_processor_gradients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _require_cuda_gate()
+    monkeypatch.setenv("GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH", "1")
     torch.manual_seed(17)
     eager = build_model(_model_config()).cuda()
     assert isinstance(eager, LanguageModel)
