@@ -64,6 +64,7 @@ from gcw.performance.backends.icarus import (
     validate_icarus_training_admission,
     warmup_icarus_training_execution,
 )
+from gcw.performance.execution_plan import require_optimized_step_admission
 from gcw.performance.longshot_cache import (
     configure_longshot_full_history_execution,
     longshot_full_history_execution_metadata,
@@ -106,6 +107,7 @@ def train_from_config(path: str | Path) -> None:
 
 
 def train(config: TrainConfig) -> None:
+    require_optimized_step_admission(config.performance.optimized_step)
     validate_experiment(config)
     _, model_receipt = resolve_model(config.model).require()
     resolve_experiment(config, model_receipt).require()

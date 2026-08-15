@@ -35,6 +35,7 @@ def test_package_version_and_curated_subpackage_exports() -> None:
         "AdaptiveBatchingConfig",
         "KVScoreSidecarConfig",
         "NoisyDiffusionBackendConfig",
+        "OptimizedStepConfig",
         "PerformanceConfig",
         "PhysicalBatchBandConfig",
         "ReferenceLossConfig",

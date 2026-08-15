@@ -141,6 +141,29 @@ class TritonCacheMovementConfig:
 
 
 @dataclass(frozen=True)
+class OptimizedStepConfig:
+    """Receipt-bound selector for one fully qualified composed executor."""
+
+    enabled: bool = False
+    profile: Literal["combined_v1"] = "combined_v1"
+    receipt_path: str | None = None
+    key_path: str | None = None
+    key_id: str | None = None
+    qualification_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("performance.optimized_step.enabled must be a boolean")
+        if self.profile != "combined_v1":
+            raise ValueError("performance.optimized_step.profile must be 'combined_v1'")
+        bindings = (self.receipt_path, self.key_path, self.key_id, self.qualification_id)
+        if self.enabled and any(not isinstance(value, str) or not value for value in bindings):
+            raise ValueError("enabled optimized_step requires receipt_path, key_path, key_id, and qualification_id")
+        if not self.enabled and any(value is not None for value in bindings):
+            raise ValueError("disabled optimized_step must not carry dormant receipt or key bindings")
+
+
+@dataclass(frozen=True)
 class NoisyDiffusionBackendConfig:
     """Execution policy for noisy Diffusion-BGT's deterministic recurrence."""
 
@@ -160,6 +183,7 @@ class PerformanceConfig:
     longshot_full_history: LongshotFullHistoryConfig = field(default_factory=LongshotFullHistoryConfig)
     kv_score_sidecar: KVScoreSidecarConfig = field(default_factory=KVScoreSidecarConfig)
     triton_cache_movement: TritonCacheMovementConfig = field(default_factory=TritonCacheMovementConfig)
+    optimized_step: OptimizedStepConfig = field(default_factory=OptimizedStepConfig)
     noisy_diffusion: NoisyDiffusionBackendConfig = field(default_factory=NoisyDiffusionBackendConfig)
 
     def __post_init__(self) -> None:
@@ -200,6 +224,15 @@ class PerformanceConfig:
             )
         elif not isinstance(triton_cache_movement, TritonCacheMovementConfig):
             raise ValueError("performance.triton_cache_movement must be a mapping")
+        optimized_step: Any = self.optimized_step
+        if isinstance(optimized_step, dict):
+            object.__setattr__(
+                self,
+                "optimized_step",
+                OptimizedStepConfig(**optimized_step),
+            )
+        elif not isinstance(optimized_step, OptimizedStepConfig):
+            raise ValueError("performance.optimized_step must be a mapping")
         noisy_diffusion: Any = self.noisy_diffusion
         if isinstance(noisy_diffusion, dict):
             object.__setattr__(

@@ -71,6 +71,17 @@ At each optimizer step GCW reserves exactly 32 consecutive two-row source batche
 
 Version 1 requires single-process execution, 64 global rows, a two-row source stream, answer-only logical pairing, `reference` loss, at most 4,096 tokens, and zero processor/LoRA dropout. Evaluation remains fixed at batch two. Noisy Diffusion and other admitted RNG-shape changes fail during configuration admission. The ordered bands and planner/weighting rules are authenticated in run metadata and the exact-resume fingerprint.
 
+The composed optimized executor has one reserved, default-off selector:
+
+```yaml
+performance:
+  optimized_step:
+    enabled: false
+    profile: combined_v1
+```
+
+This source build does not admit `combined_v1`. When disabled, receipt/key fields must remain absent. Future enablement requires all of `receipt_path`, `key_path`, `key_id`, and `qualification_id`, then a source-, config-, kernel-, runtime-, and GPU-bound authenticated receipt. There is no eager fallback. Do not add these fields to campaign configs until the H100 and H200 qualification receipts are published and the source admission bit changes.
+
 Set `trainable: lora` with `model.lora` for low-rank backbone adaptation. GCW freezes base weights and trains only `lora_a` and `lora_b` on explicitly named projections. Zero-initialized output factors preserve the starting backbone exactly.
 
 ## Loss backend

@@ -173,6 +173,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `longshot_full_history` | `gcw.performance.config.LongshotFullHistoryConfig` | `LongshotFullHistoryConfig(enabled=False, max_temp_bytes=33554432)` |
 | `kv_score_sidecar` | `gcw.performance.config.KVScoreSidecarConfig` | `KVScoreSidecarConfig(enabled=False)` |
 | `triton_cache_movement` | `gcw.performance.config.TritonCacheMovementConfig` | `TritonCacheMovementConfig(enabled=False)` |
+| `optimized_step` | `gcw.performance.config.OptimizedStepConfig` | `OptimizedStepConfig(enabled=False, profile='combined_v1', receipt_path=None, key_path=None, key_id=None, qualification_id=None)` |
 | `noisy_diffusion` | `gcw.performance.config.NoisyDiffusionBackendConfig` | `NoisyDiffusionBackendConfig(recurrence_backend='eager')` |
 
 ## `TrainConfig`
@@ -199,7 +200,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `total_batch_size` | `int` | `0` |
 | `global_batch_rows` | `int` | `0` |
 | `logical_pair_grouping` | `bool` | `False` |
-| `performance` | `gcw.performance.config.PerformanceConfig` | `PerformanceConfig(adaptive_batching=AdaptiveBatchingConfig(enabled=False, bands=(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2))), reference_loss=ReferenceLossConfig(mode='legacy', max_projected_positions=1024, checkpoint_chunks=False), longshot_full_history=LongshotFullHistoryConfig(enabled=False, max_temp_bytes=33554432), kv_score_sidecar=KVScoreSidecarConfig(enabled=False), triton_cache_movement=TritonCacheMovementConfig(enabled=False), noisy_diffusion=NoisyDiffusionBackendConfig(recurrence_backend='eager'))` |
+| `performance` | `gcw.performance.config.PerformanceConfig` | `PerformanceConfig(adaptive_batching=AdaptiveBatchingConfig(enabled=False, bands=(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2))), reference_loss=ReferenceLossConfig(mode='legacy', max_projected_positions=1024, checkpoint_chunks=False), longshot_full_history=LongshotFullHistoryConfig(enabled=False, max_temp_bytes=33554432), kv_score_sidecar=KVScoreSidecarConfig(enabled=False), triton_cache_movement=TritonCacheMovementConfig(enabled=False), optimized_step=OptimizedStepConfig(enabled=False, profile='combined_v1', receipt_path=None, key_path=None, key_id=None, qualification_id=None), noisy_diffusion=NoisyDiffusionBackendConfig(recurrence_backend='eager'))` |
 | `learning_rate` | `float` | `0.0003` |
 | `adam_beta1` | `float` | `0.9` |
 | `adam_beta2` | `float` | `0.95` |

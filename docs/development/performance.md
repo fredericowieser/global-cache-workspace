@@ -69,6 +69,12 @@ The CUDA parity harness is the admission gate. Semantic cache selection/write ev
 
 A future experiment may preserve the oracle only by retaining a physical shape of two for every model invocation. Candidate mechanisms include independently dispatched pair kernels or CUDA streams followed by a merge in source-pair order. Such an experiment must demonstrate that each pair uses the same kernels and algorithm choices as fixed eager execution, and that gradients are accumulated into each parameter in exactly the reference order. A batched/vmapped forward, concurrent backward into shared `.grad` tensors, unordered reductions, padding to a common width, and grouped GEMMs with changed algorithms are not admissible assumptions. Concurrency also requires proof that model state, compiled runners, checkpoint recomputation, allocator lifetimes, and RNG are stream-safe. Sequential batch-two execution is the only currently established exact design, and it offers no batching speedup.
 
+## Receipt-bound composed profile
+
+`performance.optimized_step` is the single production selector reserved for the final composition. Its only profile is `combined_v1`; enabling it requires explicit receipt, private-key, key-ID, and qualification-ID bindings. `gcw.performance.execution_plan` fixes physical batch two, exactly 32 pairs, `1/32` weighting, no eager fallback, the kernel-manifest digest, every candidate/infrastructure component, and rejected exclusions. The profile is marked `campaign_admitted: false` in this build, so any enablement fails before opening caller-supplied receipt paths or allocating a model. Candidate benchmarks continue to use their narrow explicit overrides.
+
+Promotion requires changing the source-bound admission bit only after H100 and H200 evidence is accepted. That changes the plan digest. Runtime must then authenticate an exact source/config/device/runtime context and a receipt that names both independent accelerator lineages and their evidence hashes. A receipt from an older plan, another GPU UUID, or another qualification challenge fails closed.
+
 ## Static workspace and ragged planning primitives
 
 `gcw.performance.workspaces` provides closed signature/lane arenas with explicit leases spanning staging through backward completion. An arena cannot be restaged while any forward/backward owns it, stale or double releases fail, and unseen signatures or tensor metadata fail closed. The arenas are runtime objects rather than model state. They are infrastructure for graph inputs and pair lanes; allocation alone is not a speed claim.
