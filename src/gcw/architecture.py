@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
+from gcw.performance.config import PerformanceConfig
 from gcw.provenance import canonical_json_sha256
 
 if TYPE_CHECKING:
@@ -25,6 +26,11 @@ _SUPPORTED_CHECKPOINT_FORMATS = ("native_safetensors",)
 
 
 def _config_payload(value: object) -> object:
+    if isinstance(value, PerformanceConfig):
+        payload = {field.name: _config_payload(getattr(value, field.name)) for field in fields(value)}
+        if value.reference_loss.mode == "legacy":
+            payload.pop("reference_loss")
+        return payload
     if is_dataclass(value) and not isinstance(value, type):
         return {field.name: _config_payload(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, (list, tuple)):

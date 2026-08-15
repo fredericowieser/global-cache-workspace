@@ -53,7 +53,12 @@ from gcw.performance.backends.cache_processors import (
     resolve_cache_processor_backend,
 )
 from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
-from gcw.performance.losses import loss_backend_metadata, require_loss_backend
+from gcw.performance.losses import (
+    configure_reference_loss_execution,
+    loss_backend_metadata,
+    reference_loss_execution_metadata,
+    require_loss_backend,
+)
 from gcw.performance.telemetry import (
     cache_processor_metrics as _cache_processor_metrics,
     model_runtime_backends as _model_runtime_backends,
@@ -154,10 +159,13 @@ def train(config: TrainConfig) -> None:
         model, config.activation_checkpointing
     )
     configure_qwen3_backbone_chunk_backend(model, config.backbone_chunk_backend)
+    configure_reference_loss_execution(model, config.performance.reference_loss)
     if use_fsdp:
         _apply_fsdp_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
+        if whole_model_compile_requested() and config.performance.reference_loss.mode != "legacy":
+            raise RuntimeError("bounded reference-loss execution cannot be combined with GCW_COMPILE")
         regional_backend = resolve_cache_processor_backend(config.model)
         if whole_model_compile_requested() and (
             config.model.variant == "bt"
@@ -224,6 +232,15 @@ def train(config: TrainConfig) -> None:
         ),
         "longshot_gradient_checkpointing": _longshot_gradient_checkpointing_runtime(config),
         "loss_backend": loss_backend_metadata(config.loss_backend),
+        **(
+            {
+                "reference_loss_execution": reference_loss_execution_metadata(
+                    config.performance.reference_loss
+                )
+            }
+            if config.performance.reference_loss.mode != "legacy"
+            else {}
+        ),
     }
     checkpoint_meta = _checkpoint_metadata(config, run_meta)
     budget_message = (
@@ -623,6 +640,15 @@ def _training_fingerprint(
                 )
             }
             if config.performance.adaptive_batching.enabled
+            else {}
+        ),
+        **(
+            {
+                "reference_loss_execution": reference_loss_execution_metadata(
+                    config.performance.reference_loss
+                )
+            }
+            if config.performance.reference_loss.mode != "legacy"
             else {}
         ),
         **(

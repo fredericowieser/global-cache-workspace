@@ -8,7 +8,7 @@ performance package from creating configuration import cycles.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -78,10 +78,34 @@ class AdaptiveBatchingConfig:
 
 
 @dataclass(frozen=True)
+class ReferenceLossConfig:
+    """Default-compatible execution policy for the full-vocabulary reference loss."""
+
+    mode: Literal["legacy", "bounded"] = "legacy"
+    max_projected_positions: int = 1024
+    checkpoint_chunks: bool = False
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"legacy", "bounded"}:
+            raise ValueError("performance.reference_loss.mode must be 'legacy' or 'bounded'")
+        if (
+            isinstance(self.max_projected_positions, bool)
+            or not isinstance(self.max_projected_positions, int)
+            or self.max_projected_positions <= 0
+        ):
+            raise ValueError("performance.reference_loss.max_projected_positions must be a positive integer")
+        if not isinstance(self.checkpoint_chunks, bool):
+            raise ValueError("performance.reference_loss.checkpoint_chunks must be a boolean")
+        if self.mode == "legacy" and self.checkpoint_chunks:
+            raise ValueError("reference-loss chunk checkpointing requires mode='bounded'")
+
+
+@dataclass(frozen=True)
 class PerformanceConfig:
     """Training performance policies whose defaults preserve reference execution."""
 
     adaptive_batching: AdaptiveBatchingConfig = field(default_factory=AdaptiveBatchingConfig)
+    reference_loss: ReferenceLossConfig = field(default_factory=ReferenceLossConfig)
 
     def __post_init__(self) -> None:
         value: Any = self.adaptive_batching
@@ -89,3 +113,8 @@ class PerformanceConfig:
             object.__setattr__(self, "adaptive_batching", AdaptiveBatchingConfig(**value))
         elif not isinstance(value, AdaptiveBatchingConfig):
             raise ValueError("performance.adaptive_batching must be a mapping")
+        reference_loss: Any = self.reference_loss
+        if isinstance(reference_loss, dict):
+            object.__setattr__(self, "reference_loss", ReferenceLossConfig(**reference_loss))
+        elif not isinstance(reference_loss, ReferenceLossConfig):
+            raise ValueError("performance.reference_loss must be a mapping")

@@ -17,7 +17,12 @@ from gcw.performance.backends.qwen3 import Qwen3BackboneChunkBackend, run_qwen3_
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.models.cache_processors.base import cache_processor_recomputation, cache_processor_recomputation_id
-from gcw.performance.losses import liger_fused_linear_cross_entropy, require_loss_backend
+from gcw.performance.losses import (
+    bounded_reference_loss,
+    liger_fused_linear_cross_entropy,
+    reference_loss_execution,
+    require_loss_backend,
+)
 
 CacheLike = CacheState | WindowedCache
 ProcessorFn = Callable[..., CacheLike | StaticCacheState]
@@ -477,7 +482,10 @@ class TF(Backbone):
         if loss_reduction not in {"mean", "sum", "none", "row_sum"}:
             raise ValueError("loss_reduction must be 'mean', 'sum', 'none', or 'row_sum'")
         if loss_backend == "reference":
-            return self.loss_from_hidden_reference(x, targets, loss_reduction)
+            execution = reference_loss_execution(self)
+            if execution.mode == "legacy":
+                return self.loss_from_hidden_reference(x, targets, loss_reduction)
+            return bounded_reference_loss(self.logits_from_hidden, x, targets, loss_reduction, execution)
         if loss_backend == "target_only":
             return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
         if loss_reduction in {"none", "row_sum"}:

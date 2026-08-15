@@ -10,7 +10,7 @@ The package is intentionally divided by responsibility:
 - `adjacent_pairs.py`: deterministic reservation, planning, and collation;
 - `prepared_bt.py`: forward-local vectorized BT parameter stacks;
 - `checkpointing.py`: checkpoint admission, decisions, and telemetry;
-- `losses.py`: explicit loss-backend admission and provenance;
+- `losses.py`: explicit loss-backend admission, bounded reference-loss execution, and provenance;
 - `longshot_scores.py`: bounded-memory reductions preserving eager FP32 reduction order;
 - `whole_model.py`: legacy whole-model compile policy;
 - `telemetry.py`: read-only optimized-region metrics;
@@ -28,6 +28,14 @@ Adaptive batching is default-off, training-only, and single-process in version 1
 For every physical group, training computes each original pair's combined-token mean and backpropagates the group's pair-loss sum divided by 32. There is one zero-gradient operation, clip, schedule update, and AdamW step for all groups. Evaluation remains on the fixed reference path.
 
 The policy schema, ordered bands, ordering rule, weighting rule, and single-process restriction enter run metadata and the exact-resume fingerprint. Noisy Diffusion, nonzero processor/LoRA dropout, and distributed execution fail before reservation or model execution.
+
+## Bounded reference-loss execution
+
+The default `performance.reference_loss.mode: legacy` preserves the existing 256-position CUDA projection chunks and does not enter the training fingerprint. Opt-in `mode: bounded` still projects every prompt, answer, and padding position through the full vocabulary and still uses the `reference` loss backend. It changes only the physical subchunk width by limiting `batch_rows * projected_positions`; losses are reassembled into the legacy logical chunks before FP32 row reduction.
+
+`checkpoint_chunks: true` may recompute individual projection/cross-entropy chunks during backward to reduce retained activation memory. The policy adds no parameters or buffers. Its budget must cover the maximum physical row count, so the projected-position limit remains a hard bound. The budget, checkpoint choice, implementation identity, Torch version, and derived chunk rule are authenticated in run metadata and exact-resume fingerprints. This first implementation fails closed with distributed execution, a non-reference loss backend, or legacy whole-model compilation.
+
+Evaluation and configurations that omit the policy remain on the legacy reference path.
 
 ## Change control
 

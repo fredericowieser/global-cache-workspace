@@ -739,6 +739,9 @@ class TrainConfig:
             diffusion = self.model.diffusion_processor
             if diffusion is not None and diffusion.noise_scale > 0.0:
                 raise ValueError("logical_pair_grouping rejects noisy Diffusion because RNG assignment changes with batching")
+        reference_loss = self.performance.reference_loss
+        if reference_loss.mode != "legacy" and self.loss_backend != "reference":
+            raise ValueError("bounded reference-loss execution requires loss_backend='reference'")
         adaptive_batching = self.performance.adaptive_batching
         if adaptive_batching.enabled:
             if not self.logical_pair_grouping:
@@ -763,6 +766,18 @@ class TrainConfig:
                 raise ValueError("adaptive batching v1 physical_rows must be exactly 16, 8, 4, 2")
             if adaptive_batching.bands[-1].max_padded_tokens < self.sequence_len:
                 raise ValueError("adaptive batching fallback band must cover sequence_len")
+        if reference_loss.mode == "bounded":
+            if self.distributed != "none":
+                raise ValueError("bounded reference-loss execution currently supports only distributed='none'")
+            maximum_physical_rows = (
+                max(band.physical_rows for band in adaptive_batching.bands)
+                if adaptive_batching.enabled
+                else self.batch_size
+            )
+            if reference_loss.max_projected_positions < maximum_physical_rows:
+                raise ValueError(
+                    "performance.reference_loss.max_projected_positions must cover the maximum physical rows"
+                )
         if not math.isfinite(self.grad_clip) or self.grad_clip <= 0.0:
             raise ValueError("grad_clip must be finite and positive")
         from gcw.architecture import require_train_config

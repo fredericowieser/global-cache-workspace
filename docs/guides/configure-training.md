@@ -87,6 +87,19 @@ loss_backend: reference  # reference | target_only | liger
 
 The selected backend and implementation metadata enter local run records, W&B config, checkpoint state, and the exact-resume fingerprint. Resume rejects a backend change.
 
+Keep `loss_backend: reference` while bounding the physical full-vocabulary projection with an opt-in execution policy:
+
+```yaml
+loss_backend: reference
+performance:
+  reference_loss:
+    mode: bounded
+    max_projected_positions: 1024
+    checkpoint_chunks: false
+```
+
+The budget limits `physical_batch_rows * sequence_positions` per projection subchunk and must be at least the maximum admitted physical row count. GCW still projects ignored prompt and padding positions, rebuilds the legacy logical loss chunks, and computes the same FP32 reductions and objective. Set `checkpoint_chunks: true` only after measuring the projection/backward memory trade-off. The bounded policy is default-off, state-neutral, authenticated for resume, and initially limited to single-process execution; it is incompatible with a non-reference loss backend or legacy whole-model compilation.
+
 ## Frozen-Backbone Cache Processor Training
 
 Use a native GCW backbone checkpoint and select processor-only gradients:

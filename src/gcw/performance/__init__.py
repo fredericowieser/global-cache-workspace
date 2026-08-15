@@ -10,10 +10,12 @@ from gcw.performance.config import (
     AdaptiveBatchingConfig,
     PhysicalBatchBandConfig,
     PerformanceConfig,
+    ReferenceLossConfig,
 )
 
 __all__ = (
     "AdaptiveBatchingConfig",
     "PerformanceConfig",
     "PhysicalBatchBandConfig",
+    "ReferenceLossConfig",
 )

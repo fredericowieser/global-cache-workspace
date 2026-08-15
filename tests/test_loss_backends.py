@@ -8,17 +8,23 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from gcw.architecture import _config_payload
 from gcw.config import DataConfig, ModelConfig, TrainConfig
 from gcw.models.backbones import transformer as transformer_module
 from gcw.models.backbones.transformer import TF
 from gcw.models.backbones.gemma4 import Gemma4TF
+from gcw.performance import PerformanceConfig, ReferenceLossConfig
 from gcw.performance import losses as losses_module
 from gcw.performance.losses import (
     LIGER_KERNEL_VERSION,
+    bounded_reference_loss,
     checkpoint_loss_backend,
+    configure_reference_loss_execution,
     loss_backend_metadata,
+    reference_loss_execution_metadata,
     require_loss_backend,
 )
+from gcw.training import core as training_module
 from gcw.training.core import _checkpoint_metadata, _training_fingerprint
 
 
@@ -38,6 +44,13 @@ def _model(*, tied: bool, dtype: torch.dtype = torch.float32) -> TF:
     model = TF(config, pad_vocab_size_to=8)
     model.init_weights()
     return model.to(dtype=dtype)
+
+
+def _head_weight(model: TF) -> torch.Tensor:
+    if model.config.tie_embeddings:
+        return model.embed_tokens.weight
+    assert model.lm_head is not None
+    return model.lm_head.weight
 
 
 def _install_fake_liger(monkeypatch: pytest.MonkeyPatch, calls: list[dict[str, Any]]) -> None:
@@ -231,6 +244,208 @@ def test_backend_is_state_dict_neutral_and_in_runtime_provenance(monkeypatch: py
     assert checkpoint["loss_backend"]["name"] == "target_only"
     assert TrainConfig(model=model.config, data=DataConfig(kind="random")).loss_backend == "reference"
     assert checkpoint_loss_backend(checkpoint, torch.device("cpu")) == "target_only"
+
+
+@pytest.mark.parametrize("tied", [True, False], ids=["tied", "untied"])
+@pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
+def test_bounded_reference_loss_matches_legacy_values_and_gradients(tied: bool, reduction: str) -> None:
+    model = _model(tied=tied)
+    hidden = torch.randn(2, 9, model.config.hidden_size)
+    targets = torch.tensor([[0, 1, -100, 10, 2, 3, -1, 4, 5], [3, -100, 4, 5, 6, 7, 8, 9, 10]])
+
+    legacy_hidden = hidden.detach().clone().requires_grad_(True)
+    legacy = model.loss_from_hidden(legacy_hidden, targets, reduction, "reference")
+    legacy.sum().backward()
+    legacy_hidden_grad = legacy_hidden.grad.detach().clone()
+    legacy_head_grad = _head_weight(model).grad.detach().clone()
+
+    model.zero_grad(set_to_none=True)
+    configure_reference_loss_execution(
+        model,
+        ReferenceLossConfig(mode="bounded", max_projected_positions=3),
+    )
+    bounded_hidden = hidden.detach().clone().requires_grad_(True)
+    bounded = model.loss_from_hidden(bounded_hidden, targets, reduction, "reference")
+    bounded.sum().backward()
+
+    torch.testing.assert_close(bounded, legacy, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(bounded_hidden.grad, legacy_hidden_grad, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(_head_weight(model).grad, legacy_head_grad, rtol=1e-5, atol=1e-6)
+
+
+def test_bounded_reference_loss_caps_projected_positions_and_preserves_masked_shape() -> None:
+    hidden = torch.randn(4, 11, 8, requires_grad=True)
+    targets = torch.arange(44).reshape(4, 11) % 13
+    targets[:, 3] = -100
+    projected_shapes: list[tuple[int, ...]] = []
+
+    def logits(values: torch.Tensor) -> torch.Tensor:
+        projected_shapes.append(tuple(values.shape))
+        return F.linear(values, torch.randn(13, 8))
+
+    losses = bounded_reference_loss(
+        logits,
+        hidden,
+        targets,
+        "none",
+        ReferenceLossConfig(mode="bounded", max_projected_positions=9),
+    )
+
+    assert losses.shape == targets.shape
+    assert torch.count_nonzero(losses[:, 3]) == 0
+    assert sum(shape[0] * shape[1] for shape in projected_shapes) == targets.numel()
+    assert max(shape[0] * shape[1] for shape in projected_shapes) <= 9
+
+
+def test_checkpointed_bounded_reference_loss_matches_uncheckpointed_gradients() -> None:
+    model = _model(tied=True)
+    hidden = torch.randn(2, 9, model.config.hidden_size)
+    targets = torch.tensor([[0, 1, -100, 10, 2, 3, -1, 4, 5], [3, -100, 4, 5, 6, 7, 8, 9, 10]])
+
+    configure_reference_loss_execution(
+        model,
+        ReferenceLossConfig(mode="bounded", max_projected_positions=4),
+    )
+    eager_hidden = hidden.detach().clone().requires_grad_(True)
+    eager = model.loss_from_hidden(eager_hidden, targets, "row_sum", "reference")
+    eager.sum().backward()
+    eager_hidden_grad = eager_hidden.grad.detach().clone()
+    eager_head_grad = _head_weight(model).grad.detach().clone()
+
+    model.zero_grad(set_to_none=True)
+    configure_reference_loss_execution(
+        model,
+        ReferenceLossConfig(mode="bounded", max_projected_positions=4, checkpoint_chunks=True),
+    )
+    checkpointed_hidden = hidden.detach().clone().requires_grad_(True)
+    checkpointed = model.loss_from_hidden(checkpointed_hidden, targets, "row_sum", "reference")
+    checkpointed.sum().backward()
+
+    torch.testing.assert_close(checkpointed, eager)
+    torch.testing.assert_close(checkpointed_hidden.grad, eager_hidden_grad)
+    torch.testing.assert_close(_head_weight(model).grad, eager_head_grad)
+
+
+@pytest.mark.parametrize("tied", [True, False], ids=["tied", "untied"])
+@pytest.mark.parametrize("checkpoint_chunks", [False, True], ids=["eager", "checkpointed"])
+@pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
+def test_bounded_reference_all_masked_is_zero_and_differentiable(
+    tied: bool,
+    checkpoint_chunks: bool,
+    reduction: str,
+) -> None:
+    model = _model(tied=tied)
+    configure_reference_loss_execution(
+        model,
+        ReferenceLossConfig(
+            mode="bounded",
+            max_projected_positions=4,
+            checkpoint_chunks=checkpoint_chunks,
+        ),
+    )
+    hidden = torch.randn(2, 9, model.config.hidden_size, requires_grad=True)
+    targets = torch.full((2, 9), -100, dtype=torch.long)
+
+    loss = model.loss_from_hidden(hidden, targets, reduction, "reference")
+    loss.sum().backward()
+
+    assert torch.count_nonzero(loss) == 0
+    assert hidden.grad is not None and torch.count_nonzero(hidden.grad) == 0
+    assert _head_weight(model).grad is not None
+    assert torch.count_nonzero(_head_weight(model).grad) == 0
+
+
+def test_reference_loss_execution_is_state_neutral_and_conditionally_fingerprinted(tmp_path) -> None:
+    model = _model(tied=True)
+    state_keys = tuple(model.state_dict())
+    bounded = ReferenceLossConfig(mode="bounded", max_projected_positions=512, checkpoint_chunks=True)
+    configure_reference_loss_execution(model, bounded)
+
+    default_config = TrainConfig(model=model.config, data=DataConfig(kind="random"), output_dir=str(tmp_path))
+    bounded_config = TrainConfig(
+        model=model.config,
+        data=DataConfig(kind="random"),
+        output_dir=str(tmp_path),
+        performance=PerformanceConfig(reference_loss=bounded),
+    )
+    default_fingerprint = _training_fingerprint(default_config, 1, 16, 16, 1)
+    bounded_fingerprint = _training_fingerprint(bounded_config, 1, 16, 16, 1)
+    default_payload = _config_payload(default_config)
+    bounded_payload = _config_payload(bounded_config)
+    metadata = reference_loss_execution_metadata(bounded)
+
+    assert tuple(model.state_dict()) == state_keys
+    assert isinstance(default_payload, dict) and isinstance(bounded_payload, dict)
+    assert "reference_loss" not in default_payload["performance"]
+    assert bounded_payload["performance"]["reference_loss"]["mode"] == "bounded"
+    assert "reference_loss_execution" not in default_fingerprint
+    assert bounded_fingerprint["reference_loss_execution"]["schema"] == "gcw.reference_loss_execution.v1"
+    assert metadata["fingerprint_sha256"] == bounded_fingerprint["reference_loss_execution"]["fingerprint_sha256"]
+
+
+def test_reference_loss_configuration_fails_closed(tmp_path) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        ReferenceLossConfig(mode="bounded", max_projected_positions=0)
+    with pytest.raises(ValueError, match="requires mode='bounded'"):
+        ReferenceLossConfig(checkpoint_chunks=True)
+    with pytest.raises(ValueError, match="requires loss_backend='reference'"):
+        TrainConfig(
+            model=_model(tied=True).config,
+            data=DataConfig(kind="random"),
+            output_dir=str(tmp_path),
+            loss_backend="target_only",
+            performance=PerformanceConfig(reference_loss=ReferenceLossConfig(mode="bounded")),
+        )
+    with pytest.raises(ValueError, match="must cover the maximum physical rows"):
+        TrainConfig(
+            model=_model(tied=True).config,
+            data=DataConfig(kind="random"),
+            output_dir=str(tmp_path),
+            batch_size=2,
+            performance=PerformanceConfig(
+                reference_loss=ReferenceLossConfig(mode="bounded", max_projected_positions=1)
+            ),
+        )
+    with pytest.raises(ValueError, match="supports only distributed='none'"):
+        TrainConfig(
+            model=_model(tied=True).config,
+            data=DataConfig(kind="random"),
+            output_dir=str(tmp_path),
+            distributed="ddp",
+            performance=PerformanceConfig(reference_loss=ReferenceLossConfig(mode="bounded")),
+        )
+
+
+def test_training_configures_bounded_reference_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    calls: list[ReferenceLossConfig] = []
+    original = transformer_module.bounded_reference_loss
+
+    def record(*args: Any, **kwargs: Any) -> torch.Tensor:
+        calls.append(args[-1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(transformer_module, "bounded_reference_loss", record)
+    monkeypatch.setattr(training_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    config = TrainConfig(
+        model=_model(tied=True).config,
+        data=DataConfig(kind="random"),
+        output_dir=str(tmp_path / "bounded-train"),
+        batch_size=2,
+        sequence_len=16,
+        max_steps=1,
+        save_final=False,
+        eval_every=0,
+        eval_on_start=False,
+        performance=PerformanceConfig(reference_loss=ReferenceLossConfig(mode="bounded", max_projected_positions=4)),
+    )
+
+    training_module.train(config)
+
+    assert calls
+    assert all(config.mode == "bounded" for config in calls)
 
 
 @pytest.mark.gpu
