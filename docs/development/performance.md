@@ -34,6 +34,10 @@ Commit `de763ac` tested a default-off collector that retained detached loss and 
 
 The externally anchored rejection report is `/home/fred/gcw-performance/evidence/bt-stepmetrics-rejection-de763ac.json`, SHA-256 `5bd0efb8059757eca27f27d1eaea8e58d1a19ca2dc7e4b5568dc5a50039e9c4c`. The aborted replication is quarantined at `/home/fred/gcw-performance/failed-performance-cells/20260815T114222Z-bt-stepmetrics-opt-b-early-stop`. An earlier source-origin preflight failure occurred before GPU allocation and is separately quarantined at `/home/fred/gcw-performance/failed-performance-cells/20260815T113224Z-bt-stepmetrics-de763ac-import-origin`.
 
+## Input-staging stop decision
+
+**[PERF INCREASE][PROCESSOR][PRELIMINARY]** A source-bound H200 diagnostic measured the complete fixed-batch-two input path for 32 adjacent row-0 pairs: JSONL access, tokenization, collation, and 96 blocking `x`/`y`/mask transfers. The median CPU-only path was `0.06080` seconds and the CUDA path was `0.06397` seconds for `783,054` payload bytes, leaving only `0.00317` seconds attributable to blocking H2D transfer. Relative to the matched `17.3395`-second BT step, eliminating all input preparation has a ceiling near `1.004x`; eliminating only transfer has a ceiling below `1.001x`. This misses the predeclared 5% implementation gate by more than an order of magnitude, so pinned-memory, copy-stream, and cursor-prefetch changes were not implemented. The diagnostic is `/home/fred/gcw-performance/evidence/input-staging-row0-diagnostic-85ad623.json`, SHA-256 `359f8e87edf0581ad36a7a6560d985677cb3d905b14d7cc2d3af1d65c4805f63`.
+
 ## Adaptive adjacent-pair batching
 
 Adaptive batching is default-off, training-only, and single-process in version 1. The source stream remains physical batch two. Each optimizer step reserves exactly 32 consecutive source pairs, preserving all 64 rows and the original cursor transition. The planner greedily chooses only contiguous groups from the configured 16/8/4/2-row bands. It never sorts, buckets, moves rows, or splits pairs.
