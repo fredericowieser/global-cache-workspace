@@ -20,7 +20,12 @@ from gcw.models.cache_processors.ops import expand_cache_head_indices, gather_pe
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.model import LanguageModel
 from gcw.performance.backends import icarus as backend_module
-from gcw.performance.backends.icarus import icarus_processor_backend_metadata
+from gcw.performance.backends.icarus import (
+    configure_icarus_training_execution,
+    icarus_processor_backend_metadata,
+    icarus_training_execution,
+    validate_icarus_training_admission,
+)
 from gcw.training.core import _training_fingerprint
 
 
@@ -134,10 +139,11 @@ def _install_fake_compiler(
     region_inputs: list[tuple[torch.Tensor, torch.Tensor]] = []
 
     def fake_compile(function: Callable[..., torch.Tensor], **kwargs: object):
-        compile_calls.append((function.__name__, dict(kwargs)))
+        original = getattr(function, "func", function)
+        compile_calls.append((original.__name__, dict(kwargs)))
 
         def compiled(*args: object, **inner_kwargs: object) -> torch.Tensor:
-            positions, selected_heads = args[2], args[3]
+            positions, selected_heads = args[1], args[2]
             assert isinstance(positions, torch.Tensor)
             assert isinstance(selected_heads, torch.Tensor)
             region_inputs.append((positions.detach().clone(), selected_heads.detach().clone()))
@@ -146,7 +152,6 @@ def _install_fake_compiler(
         return compiled
 
     monkeypatch.setattr(torch, "compile", fake_compile)
-    backend_module._compiled_icarus_runner = None
     return compile_calls, region_inputs
 
 
@@ -174,9 +179,15 @@ def test_compiled_icarus_post_selection_matches_outputs_indices_and_gradients(
     eager.zero_grad(set_to_none=True)
     compiled.zero_grad(set_to_none=True)
     expected = eager(eager_cache)
-    actual = compiled(compiled_cache)
+    # Requested compilation is inert for direct calls and generation.
+    direct = compiled(clone_cache(source, requires_grad=False))
+    assert compile_calls == []
+    assert_cache_close(direct, eager(clone_cache(source, requires_grad=False)))
+    configure_icarus_training_execution(compiled, (2,))
+    with icarus_training_execution(compiled, 2):
+        actual = compiled(compiled_cache)
+        cache_objective(actual).backward()
     cache_objective(expected).backward()
-    cache_objective(actual).backward()
 
     assert_cache_close(actual, expected)
     assert_tensor_gradients_close(compiled_inputs, eager_inputs)
@@ -184,7 +195,7 @@ def test_compiled_icarus_post_selection_matches_outputs_indices_and_gradients(
     assert compile_calls == [
         (
             "_run_icarus_post_selection",
-            {"backend": "inductor", "dynamic": False, "fullgraph": True},
+            {"backend": "inductor", "dynamic": True, "fullgraph": True},
         )
     ]
     assert len(region_inputs) == 1
@@ -221,10 +232,12 @@ def test_compiled_icarus_preserves_processor_checkpointing(monkeypatch: pytest.M
 
     expected = eager(eager_cache)
     expected = eager(expected)
-    actual = compiled(compiled_cache)
-    actual = compiled(actual)
+    configure_icarus_training_execution(compiled, (1,))
+    with icarus_training_execution(compiled, 1):
+        actual = compiled(compiled_cache)
+        actual = compiled(actual)
+        cache_objective(actual).backward()
     cache_objective(expected).backward()
-    cache_objective(actual).backward()
 
     assert_cache_close(actual, expected)
     assert_parameter_gradients_close(compiled, eager)
@@ -274,7 +287,7 @@ def test_compiled_icarus_is_state_neutral_fingerprinted_and_fail_closed(
 
     metadata = processor.execution_backend_metadata()
     assert metadata == icarus_processor_backend_metadata(config, "compile")
-    assert metadata["selection_policy"] == "eager_exact"
+    assert metadata["selection_policy"] == "eager_fp32_exact_topk"
     assert metadata["writeback_policy"] == "eager_exact"
     assert len(str(metadata["fingerprint_sha256"])) == 64
     fingerprint = _training_fingerprint(TrainConfig(model=config, data=DataConfig(kind="random")), 1, 128, 128, 1)
@@ -287,10 +300,13 @@ def test_compiled_icarus_is_state_neutral_fingerprinted_and_fail_closed(
         return fail
 
     monkeypatch.setattr(torch, "compile", failing_compile)
-    backend_module._compiled_icarus_runner = None
     failing = _processor(config)
-    with pytest.raises(RuntimeError, match="eager fallback is disabled") as error:
-        failing(_cache(config))
+    # Direct invocation is deliberately eager even when compilation was requested.
+    failing(_cache(config))
+    configure_icarus_training_execution(failing, (2,))
+    with pytest.raises(RuntimeError, match="shape=.*eager fallback is disabled") as error:
+        with icarus_training_execution(failing, 2):
+            failing(_cache(config))
     assert isinstance(error.value.__cause__, RuntimeError)
     assert str(error.value.__cause__) == "inductor failed"
 
@@ -339,20 +355,138 @@ def test_compiled_icarus_cuda_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     compiled = copy.deepcopy(eager)
     monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
     monkeypatch.setenv("GCW_STRICT_FLASH", "1")
-    backend_module._compiled_icarus_runner = None
     compiled.execution_backend = "compile"
+    configure_icarus_training_execution(compiled, (1,))
     source = _cache(config, batch=1, seq=64, device=device, dtype=torch.bfloat16)
     eager_cache = clone_cache(source, requires_grad=True)
     compiled_cache = clone_cache(source, requires_grad=True)
 
     with torch.autocast("cuda", dtype=torch.bfloat16):
         expected = eager(eager_cache)
-        actual = compiled(compiled_cache)
+        with icarus_training_execution(compiled, 1):
+            actual = compiled(compiled_cache)
+            actual_loss = cache_objective(actual)
+            actual_loss.backward()
         expected_loss = cache_objective(expected)
-        actual_loss = cache_objective(actual)
     expected_loss.backward()
-    actual_loss.backward()
 
     assert_cache_close(actual, expected, atol=2e-2, rtol=2e-2)
     assert_parameter_gradients_close(compiled, eager, atol=2e-2, rtol=2e-2)
     assert torch.isfinite(actual_loss)
+
+
+def test_compile_warmup_is_rng_and_gradient_neutral_and_module_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
+    compile_calls, region_inputs = _install_fake_compiler(monkeypatch)
+    first = _processor(_config())
+    second = _processor(_config())
+    configure_icarus_training_execution(first, (2, 4))
+    configure_icarus_training_execution(second, (2,))
+    rng_before = torch.random.get_rng_state().clone()
+    backend_module.warmup_icarus_training_execution(
+        first, (2, 4), sequence_length=128, device=torch.device("cpu"), bf16=False
+    )
+    backend_module.warmup_icarus_training_execution(
+        second, (2,), sequence_length=128, device=torch.device("cpu"), bf16=False
+    )
+
+    assert torch.equal(torch.random.get_rng_state(), rng_before)
+    assert all(parameter.grad is None for parameter in first.parameters())
+    assert all(parameter.grad is None for parameter in second.parameters())
+    assert len(compile_calls) == 2
+    assert len(region_inputs) == 3
+    assert {positions.shape[-1] for positions, _heads in region_inputs} == {64}
+    assert first.block.__dict__[backend_module._RUNNER_ATTRIBUTE] is not (
+        second.block.__dict__[backend_module._RUNNER_ATTRIBUTE]
+    )
+    calls_after_warmup = len(region_inputs)
+    first(_cache(_config(), batch=2))
+    assert len(region_inputs) == calls_after_warmup
+
+
+def test_compile_scope_rejects_unadmitted_shapes_and_preserves_checkpoint_control_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
+    processor = _processor(_config())
+    configure_icarus_training_execution(processor, (2,))
+    with pytest.raises(RuntimeError, match="batch 4 was not admitted"):
+        with icarus_training_execution(processor, 4):
+            pass
+
+    stop_type = type(
+        "_StopRecomputationError",
+        (Exception,),
+        {"__module__": "torch.utils.checkpoint"},
+    )
+
+    def control_flow_compile(_function: Callable[..., torch.Tensor], **_kwargs: object):
+        def fail(*_args: object, **_inner_kwargs: object) -> torch.Tensor:
+            raise stop_type()
+
+        return fail
+
+    monkeypatch.setattr(torch, "compile", control_flow_compile)
+    with pytest.raises(stop_type):
+        with icarus_training_execution(processor, 2):
+            processor(_cache(_config(), batch=2))
+
+
+def test_requested_compile_keeps_language_model_generation_eager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile_calls: list[object] = []
+
+    def observe_compile(function: object, **_kwargs: object) -> object:
+        compile_calls.append(function)
+        return function
+
+    monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
+    monkeypatch.setattr(torch, "compile", observe_compile)
+    model = build_model(_config())
+    assert isinstance(model, LanguageModel)
+    model.init_weights()
+    prompt = torch.arange(128).view(1, -1) % model.config.vocab_size
+    generated = model.generate(prompt, max_new_tokens=1)
+
+    assert generated.shape == (1, 129)
+    assert compile_calls == []
+
+
+@pytest.mark.parametrize(("distributed", "world_size"), (("ddp", 1), ("fsdp", 1), ("none", 2)))
+def test_compile_training_admission_rejects_unqualified_distributed_topologies(
+    distributed: str,
+    world_size: int,
+) -> None:
+    with pytest.raises(RuntimeError, match="DDP or FSDP"):
+        validate_icarus_training_admission(
+            "compile",
+            distributed=distributed,
+            world_size=world_size,
+            distributed_initialized=False,
+            adaptive_batch_sizes=None,
+            device=torch.device("cuda"),
+        )
+
+
+def test_compile_training_admission_rejects_unqualified_adaptive_shapes() -> None:
+    with pytest.raises(RuntimeError, match="qualified only on CUDA"):
+        validate_icarus_training_admission(
+            "compile",
+            distributed="none",
+            world_size=1,
+            distributed_initialized=False,
+            adaptive_batch_sizes=(16, 8, 4, 2),
+            device=torch.device("cpu"),
+        )
+    with pytest.raises(RuntimeError, match="16/8/4/2"):
+        validate_icarus_training_admission(
+            "compile",
+            distributed="none",
+            world_size=1,
+            distributed_initialized=False,
+            adaptive_batch_sizes=(8, 4, 2),
+            device=torch.device("cuda"),
+        )

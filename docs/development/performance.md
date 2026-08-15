@@ -22,7 +22,7 @@ There is no backend registry. Every compiled region owns narrow admission checks
 
 Model modules retain cache selection, gather/writeback semantics, recurrent scheduling, and state dictionaries. `training/objectives.py` retains the adjacent-pair mathematical objective. The performance package may choose physical execution groups, but it cannot redefine the objective or optimizer step.
 
-The Icarus backend illustrates this boundary. Its eager caller computes FP32 scores, token selection, cache-head selection, gather indices, latest write positions, and cache scatter. The optional compiled callable receives only the selected tensor, selected positions, selected heads, and existing processor module. It executes the deterministic RoPE/attention/transform region and returns an update tensor. Admission rejects stochastic dropout and unproven Flow/Diffusion refinements.
+The Icarus backend illustrates this boundary. Its eager caller computes FP32 scores, exact top-k token/cache-head selection, gather indices, latest write positions, and cache scatter. An allocation-preflighted processor module owns a dynamic compiled callable that receives only selected tensors and executes the deterministic RoPE/attention/transform region. The callable is active only inside an admitted training forward/backward scope; direct calls, evaluation, and generation remain eager. Synthetic warmup covers admitted row counts without data or RNG consumption. Admission rejects distributed execution, unqualified adaptive shapes, stochastic dropout, and Flow/Diffusion refinements.
 
 ## Adaptive adjacent-pair batching
 

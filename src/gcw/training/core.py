@@ -53,8 +53,12 @@ from gcw.performance.backends.cache_processors import (
     resolve_cache_processor_backend,
 )
 from gcw.performance.backends.icarus import (
+    configure_icarus_training_execution,
     icarus_processor_backend_metadata,
+    icarus_training_execution,
     resolve_icarus_processor_backend,
+    validate_icarus_training_admission,
+    warmup_icarus_training_execution,
 )
 from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
 from gcw.performance.losses import (
@@ -120,8 +124,18 @@ def train(config: TrainConfig) -> None:
     audit_gradients: dict[str, Any] | None = None
     use_fsdp = _fsdp_active(config)
     icarus_backend = resolve_icarus_processor_backend(config.model)
-    if use_fsdp and icarus_backend == "compile":
-        raise RuntimeError("GCW_ICARUS_PROCESSOR_BACKEND=compile is not supported with FSDP")
+    validate_icarus_training_admission(
+        icarus_backend,
+        distributed=config.distributed,
+        world_size=max(world_size, int(os.environ.get("WORLD_SIZE", "1"))),
+        distributed_initialized=dist.is_available() and dist.is_initialized(),
+        adaptive_batch_sizes=(
+            tuple(band.physical_rows for band in adaptive_batching.bands)
+            if adaptive_batching.enabled
+            else None
+        ),
+        device=device,
+    )
     if use_fsdp and config.resume is not None:
         raise ValueError("exact training resume is not supported with FSDP")
 
@@ -194,6 +208,24 @@ def train(config: TrainConfig) -> None:
             model = maybe_compile_whole_model(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
             model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
+
+    icarus_admitted_batches = (
+        tuple(band.physical_rows for band in adaptive_batching.bands)
+        if adaptive_batching.enabled
+        else (config.batch_size,)
+    )
+    if icarus_backend == "compile":
+        configure_icarus_training_execution(model, icarus_admitted_batches)
+        warmup_icarus_training_execution(
+            model,
+            icarus_admitted_batches,
+            sequence_length=config.sequence_len,
+            device=device,
+            bf16=config.bf16,
+        )
+    icarus_execution_scope = (
+        partial(icarus_training_execution, model) if icarus_backend == "compile" else nullcontext
+    )
 
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     opt = _build_optimizer(params, config)
@@ -325,7 +357,7 @@ def train(config: TrainConfig) -> None:
                 enabled=micro_step < physical_microsteps - 1,
                 use_fsdp=use_fsdp,
             )
-            with sync_context:
+            with sync_context, icarus_execution_scope(batch.x.shape[0]):
                 with torch.autocast(
                     device_type=device.type,
                     dtype=torch.bfloat16,
