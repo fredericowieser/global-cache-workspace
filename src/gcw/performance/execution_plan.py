@@ -26,6 +26,7 @@ class OptimizedComponent:
 COMBINED_V1_COMPONENTS = (
     OptimizedComponent("triton_cache_movement", "v1", "candidate"),
     OptimizedComponent("triton_cache_finishing", "v1", "candidate"),
+    OptimizedComponent("triton_processor_pointwise", "v1", "candidate"),
     OptimizedComponent("static_workspaces", "v1", "infrastructure"),
     OptimizedComponent("ragged_pair_plans", "v1", "infrastructure"),
     OptimizedComponent("activation_lifetime", "v1", "infrastructure"),

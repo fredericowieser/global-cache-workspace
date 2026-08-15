@@ -17,7 +17,7 @@ KERNEL_MANIFEST_SCHEMA = "gcw.kernel_manifest.v1"
 @dataclass(frozen=True)
 class KernelLaunchSpec:
     name: str
-    operation: Literal["copy", "gather", "scatter"]
+    operation: Literal["copy", "gather", "scatter", "pointwise"]
     block: int
     num_warps: int
     input_dtypes: tuple[str, ...]
@@ -34,7 +34,7 @@ class KernelLaunchSpec:
             raise ValueError("production kernel manifest forbids runtime autotuning")
 
 
-CACHE_MOVEMENT_LAUNCHES = (
+KERNEL_LAUNCHES = (
     KernelLaunchSpec(
         "copy_kv_bits",
         "copy",
@@ -98,6 +98,24 @@ CACHE_MOVEMENT_LAUNCHES = (
         "bf16_bits",
         ("per_cache_head",),
     ),
+    KernelLaunchSpec(
+        "processor_silu_mul_forward",
+        "pointwise",
+        CACHE_COPY_BLOCK,
+        CACHE_NUM_WARPS,
+        ("bf16", "bf16"),
+        "bf16",
+        ("contiguous",),
+    ),
+    KernelLaunchSpec(
+        "processor_silu_mul_backward",
+        "pointwise",
+        CACHE_COPY_BLOCK,
+        CACHE_NUM_WARPS,
+        ("bf16", "bf16", "bf16"),
+        "bf16",
+        ("contiguous",),
+    ),
 )
 
 
@@ -111,7 +129,7 @@ def kernel_manifest_payload() -> dict[str, object]:
             "physical_batch_rows": 2,
             "runtime_autotuning": False,
         },
-        "launches": [asdict(spec) for spec in CACHE_MOVEMENT_LAUNCHES],
+        "launches": [asdict(spec) for spec in KERNEL_LAUNCHES],
     }
 
 

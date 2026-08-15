@@ -39,7 +39,7 @@ def test_combined_plan_is_closed_default_off_and_records_rejections() -> None:
     assert "fused_liger_row_sum" in payload["excluded"]
     assert "regional_cuda_graphs" in payload["excluded"]
     assert "pair_waves" in payload["excluded"]
-    assert combined_v1_plan_sha256() == "9a7137d84598418abcd97ed5fda3c244ebae62bcdbd00e4d080309a2befb6e76"
+    assert combined_v1_plan_sha256() == "930b345be10c5e00d9653c134f66e7278bede4b8576b8bb6817433c0d7ee2b7c"
     assert require_optimized_step_admission(OptimizedStepConfig()) is None
     with pytest.raises(ValueError, match="requires receipt_path"):
         OptimizedStepConfig(enabled=True)

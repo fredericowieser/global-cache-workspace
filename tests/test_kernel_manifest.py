@@ -3,7 +3,7 @@ from __future__ import annotations
 from gcw.performance.kernel_manifest import (
     CACHE_COPY_BLOCK,
     CACHE_FEATURE_BLOCK,
-    CACHE_MOVEMENT_LAUNCHES,
+    KERNEL_LAUNCHES,
     CACHE_NUM_WARPS,
     kernel_manifest_payload,
     kernel_manifest_sha256,
@@ -18,7 +18,7 @@ def test_kernel_manifest_is_closed_deterministic_and_autotune_free() -> None:
         "physical_batch_rows": 2,
         "runtime_autotuning": False,
     }
-    names = tuple(spec.name for spec in CACHE_MOVEMENT_LAUNCHES)
+    names = tuple(spec.name for spec in KERNEL_LAUNCHES)
     assert names == (
         "copy_kv_bits",
         "gather_per_cache_head_bits",
@@ -27,11 +27,13 @@ def test_kernel_manifest_is_closed_deterministic_and_autotune_free() -> None:
         "scatter_shared_update_fp32_to_bf16",
         "scatter_shared_kv_grad_bits",
         "scatter_per_cache_head_grad_bits",
+        "processor_silu_mul_forward",
+        "processor_silu_mul_backward",
     )
-    assert all(spec.autotuning is False for spec in CACHE_MOVEMENT_LAUNCHES)
-    assert {spec.block for spec in CACHE_MOVEMENT_LAUNCHES} == {
+    assert all(spec.autotuning is False for spec in KERNEL_LAUNCHES)
+    assert {spec.block for spec in KERNEL_LAUNCHES} == {
         CACHE_FEATURE_BLOCK,
         CACHE_COPY_BLOCK,
     }
-    assert {spec.num_warps for spec in CACHE_MOVEMENT_LAUNCHES} == {CACHE_NUM_WARPS}
-    assert kernel_manifest_sha256() == "02f46571ce4668a800298dd826011bdf9550794ef224371c9337d21b5977ea03"
+    assert {spec.num_warps for spec in KERNEL_LAUNCHES} == {CACHE_NUM_WARPS}
+    assert kernel_manifest_sha256() == "528c52aac8d5b2ee057bf56ecbc2adb545c5f16e1bba5ea1a833e59d64ec2466"
