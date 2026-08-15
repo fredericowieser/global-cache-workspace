@@ -20,3 +20,27 @@ The output is atomic authenticated JSON under the repository's existing SHA-256 
 Micro-operation timings are forward-only and intentionally exclude fixture construction. The optimizer-step timing includes zeroing gradients, all configured accumulation microsteps, forward, backward, clipping, schedule updates, and AdamW update. It excludes data loading, evaluation, checkpoint writing, and distributed communication. `GCW_COMPILE` retains its normal effect; use warmup iterations to keep compilation outside measured steps. CPU reports zero peak memory because Torch exposes no equivalent CPU allocator peak.
 
 Correctness parity runs in ordinary CPU pytest. GPU performance execution is opt-in through `GCW_RUN_GPU_PERF_TESTS=1` and carries both `gpu` and `performance` markers; no latency threshold runs in CPU CI.
+
+## Formal adaptive CUDA parity
+
+`benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one reserved sequence of 32-pair optimizer steps. It is a correctness harness, not a timer. Instrumented runs record no latency measurements.
+
+```bash
+uv run --extra gpu python -m benchmarks.adaptive_cuda_parity \
+  --train-config /path/to/adaptive-bt.yaml \
+  --device cuda \
+  --steps 3 \
+  --output artifacts/benchmarks/adaptive-bt-parity.json
+```
+
+The train config must enable `performance.adaptive_batching`. The executable compiled CLI currently supports deterministic Qwen3 BT/BGT because those are the maintained regional compiled backends. It rejects other families, distributed execution, processor or LoRA dropout, and noisy Diffusion before model allocation. It loads all variants from one state, restores one RNG snapshot, and emits authenticated JSON containing:
+
+- stable step, pair, row, selection, and write-destination keys;
+- primary cache events and checkpoint-recomputation linkage;
+- all 32 pair losses in source order;
+- named trainable gradients and parameter trajectory;
+- named AdamW moments and optimizer step counters;
+- loader cursor and CPU/CUDA RNG digests;
+- operation-specific all-close statistics and an overall fail-closed verdict.
+
+The restoring trace context covers standard BT/BGT selection and writeback plus maintained Icarus/Longshot latest-cache writes. New cache processor families must extend this instrumentation before their adaptive result can be admitted. Run performance timing separately with `benchmarks.harness`; instrumentation intentionally introduces Python hooks and device-to-host copies.
