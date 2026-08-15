@@ -24,6 +24,7 @@ from gcw.performance.backends.qwen3 import (
 from gcw.performance.losses import (
     bounded_reference_loss,
     liger_fused_linear_cross_entropy,
+    liger_fused_linear_cross_entropy_row_sum,
     reference_loss_execution,
     require_loss_backend,
 )
@@ -514,11 +515,17 @@ class TF(Backbone):
             return bounded_reference_loss(self.logits_from_hidden, x, targets, loss_reduction, execution)
         if loss_backend == "target_only":
             return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
-        if loss_reduction in {"none", "row_sum"}:
+        if loss_reduction == "none":
             require_loss_backend(loss_backend, x.device)
-            # Liger 0.8.1 has no unreduced FLCE. Preserve structured reductions via the
-            # explicitly documented target-only implementation rather than changing shape.
+            # Liger 0.8.1 has no per-token reduction.
             return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
+        if loss_reduction == "row_sum":
+            return liger_fused_linear_cross_entropy_row_sum(
+                self.output_weight(),
+                x,
+                targets,
+                softcap=self.config.final_logit_softcapping,
+            )
         return liger_fused_linear_cross_entropy(
             self.output_weight(),
             x,

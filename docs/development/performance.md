@@ -81,6 +81,12 @@ A future experiment may preserve the oracle only by retaining a physical shape o
 
 The initial implementation has CPU planning/failure gates and opt-in H100/H200 BF16 forward/gradient tests. It is not connected to production training, does not yet admit checkpointed or noisy-Diffusion execution, and has no speed claim. Promotion requires complete processor trajectories, explicit noise plumbing, state-neutral runtime ownership, fresh-process resume, resource-release evidence, and matched full-step timing.
 
+## Fused structured row loss
+
+For `loss_backend: liger`, `row_sum` now invokes Liger `0.8.1` once per physical row with sum reduction. This preserves the two row sums required by the adjacent-pair objective without materializing full-vocabulary logits or falling back to the target-only implementation. The per-token `none` reduction still uses the documented target-only fallback. All-ignored rows use Liger's well-defined sum reduction and require no host synchronization.
+
+This is an explicit numerical candidate rather than the reference oracle. H100/H200 BF16 row losses, hidden/head gradients, complete processor gradients, Adam trajectories, difficult-row memory, resume, and full-step timing remain admission gates. A row-loss speed or memory result cannot override changed cache events or optimizer state.
+
 ## Bounded reference-loss execution
 
 The default `performance.reference_loss.mode: legacy` preserves the existing 256-position CUDA projection chunks and does not enter the training fingerprint. Opt-in `mode: bounded` still projects every prompt, answer, and padding position through the full vocabulary and still uses the `reference` loss backend. It changes only the physical subchunk width by limiting `batch_rows * projected_positions`; losses are reassembled into the legacy logical chunks before FP32 row reduction.

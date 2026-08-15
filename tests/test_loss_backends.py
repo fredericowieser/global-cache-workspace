@@ -171,6 +171,32 @@ def test_fake_liger_receives_gemma_logit_softcap(monkeypatch: pytest.MonkeyPatch
     assert calls[0]["kwargs"]["softcap"] == 2.0
 
 
+def test_liger_row_sum_uses_one_fused_sum_per_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+    _install_fake_liger(monkeypatch, calls)
+    model = _model(tied=True)
+    hidden = torch.randn(2, 5, model.config.hidden_size)
+    targets = torch.tensor([[1, -1, 2, 3, 4], [3, 4, -100, 5, 6]])
+    reference_hidden = hidden.detach().clone().requires_grad_(True)
+    actual_hidden = hidden.detach().clone().requires_grad_(True)
+    reference = model.loss_from_hidden(reference_hidden, targets, "row_sum", "reference")
+    actual = model.loss_from_hidden(actual_hidden, targets, "row_sum", "liger")
+    upstream = torch.tensor([0.25, 1.75])
+    reference.backward(upstream)
+    reference_weight_grad = _head_weight(model).grad.detach().clone()
+    model.zero_grad(set_to_none=True)
+    actual.backward(upstream)
+
+    torch.testing.assert_close(actual, reference)
+    torch.testing.assert_close(actual_hidden.grad, reference_hidden.grad)
+    torch.testing.assert_close(_head_weight(model).grad, reference_weight_grad)
+    assert len(calls) == 2
+    assert all(call["kwargs"]["reduction"] == "sum" for call in calls)
+    assert all(call["hidden_shape"] == (5, model.config.hidden_size) for call in calls)
+    provenance = loss_backend_metadata("liger")
+    assert provenance["reduction_row_sum"]["effective_backend"] == "liger_per_row_sum_v1"
+
+
 def test_liger_none_uses_explicit_target_only_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
     _install_fake_liger(monkeypatch, calls)
@@ -188,7 +214,7 @@ def test_liger_none_uses_explicit_target_only_fallback(monkeypatch: pytest.Monke
     assert "no per-token reduction" in provenance["reduction_none"]["reason"]
 
 
-@pytest.mark.parametrize("reduction", ["mean", "sum", "none"])
+@pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
 def test_fake_liger_all_ignored_is_zero_and_differentiable(
     monkeypatch: pytest.MonkeyPatch,
     reduction: str,
@@ -207,7 +233,7 @@ def test_fake_liger_all_ignored_is_zero_and_differentiable(
     assert model.lm_head is not None
     assert model.lm_head.weight.grad is not None
     assert torch.count_nonzero(model.lm_head.weight.grad) == 0
-    assert calls == []
+    assert len(calls) == (2 if reduction == "row_sum" else 0)
 
 
 def test_liger_fails_closed_for_cpu_missing_and_wrong_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -482,5 +508,22 @@ def test_liger_cuda_bfloat16_forward_backward_parity_smoke() -> None:
     liger.backward()
 
     torch.testing.assert_close(liger, reference, atol=3e-2, rtol=3e-2)
+    torch.testing.assert_close(liger_hidden.grad, reference_hidden_grad, atol=3e-2, rtol=3e-2)
+    torch.testing.assert_close(head.grad, reference_head_grad, atol=3e-2, rtol=3e-2)
+
+    model.zero_grad(set_to_none=True)
+    upstream = torch.tensor([0.25, 1.75], device="cuda")
+    reference_hidden = hidden.detach().clone().requires_grad_(True)
+    reference_rows = model.loss_from_hidden(reference_hidden, targets, "row_sum", "reference")
+    reference_rows.backward(upstream)
+    assert reference_hidden.grad is not None and head.grad is not None
+    reference_hidden_grad = reference_hidden.grad.detach().clone()
+    reference_head_grad = head.grad.detach().clone()
+
+    model.zero_grad(set_to_none=True)
+    liger_hidden = hidden.detach().clone().requires_grad_(True)
+    liger_rows = model.loss_from_hidden(liger_hidden, targets, "row_sum", "liger")
+    liger_rows.backward(upstream)
+    torch.testing.assert_close(liger_rows, reference_rows, atol=3e-2, rtol=3e-2)
     torch.testing.assert_close(liger_hidden.grad, reference_hidden_grad, atol=3e-2, rtol=3e-2)
     torch.testing.assert_close(head.grad, reference_head_grad, atol=3e-2, rtol=3e-2)

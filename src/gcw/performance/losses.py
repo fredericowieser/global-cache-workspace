@@ -76,8 +76,9 @@ def loss_backend_metadata(backend: LossBackend) -> dict[str, Any]:
                     "reason": "liger-kernel 0.8.1 fused linear CE has no per-token reduction",
                 },
                 "reduction_row_sum": {
-                    "effective_backend": "target_only",
-                    "reason": "liger-kernel 0.8.1 fused linear CE has no per-row reduction",
+                    "effective_backend": "liger_per_row_sum_v1",
+                    "physical_calls_per_row": 1,
+                    "reason": "one fused sum reduction per physical row preserves row structure without logits",
                 },
             }
         )
@@ -223,6 +224,36 @@ def _full_projection_loss_chunk(
         ignore_index=-100,
         reduction="none",
     ).reshape(targets.shape)
+
+
+def liger_fused_linear_cross_entropy_row_sum(
+    weight: torch.Tensor,
+    hidden: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    softcap: float | None = None,
+) -> torch.Tensor:
+    """Return structured row sums through one fused Liger call per row."""
+    if hidden.ndim != 3 or hidden.shape[:-1] != targets.shape:
+        raise ValueError("Liger row-sum loss requires hidden [rows, tokens, width] and matching targets")
+    if weight.ndim != 2 or weight.shape[1] != hidden.shape[-1]:
+        raise ValueError("projection weight shape must be (vocab_size, hidden_size)")
+    require_loss_backend("liger", hidden.device)
+    criterion = _load_liger_factory()(
+        ignore_index=-100,
+        reduction="sum",
+        accum_dtype=torch.float32,
+        softcap=softcap,
+    )
+    row_sums: list[torch.Tensor] = []
+    for row in range(hidden.shape[0]):
+        row_hidden = hidden[row].reshape(-1, hidden.shape[-1])
+        row_targets = targets[row].reshape(-1)
+        normalized = torch.where(row_targets >= 0, row_targets, row_targets.new_full((), -100))
+        # Sum reduction is well-defined for an all-ignored row and preserves
+        # differentiable zero gradients without a host synchronization.
+        row_sums.append(criterion(weight, row_hidden, normalized, None).float())
+    return torch.stack(row_sums)
 
 
 def liger_fused_linear_cross_entropy(
