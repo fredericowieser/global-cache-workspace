@@ -1,17 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from enum import IntEnum, StrEnum
+import json
 import random
-from typing import Any
+import struct
+from typing import Any, NamedTuple
 
 import numpy as np
 import pytest
 import torch
 from torch import nn
 
+from gcw.data.training import FineWebCursor, RandomCursor, SFTCursor, TrainingBatch
+from gcw.performance.adjacent_pairs import (
+    AdaptivePairStepPlan,
+    PairGroupPlan,
+    ReservedAdjacentPairs,
+)
+from gcw.performance.config import PhysicalBatchBandConfig
 from gcw.qualification.state import (
+    DataclassValue,
+    EnumValue,
+    FloatValue,
     MappingEntry,
     MappingValue,
+    NamedTupleValue,
+    NumpyScalarValue,
     QualificationStateError,
     StringValue,
     capture_gradient_snapshot,
@@ -21,7 +36,21 @@ from gcw.qualification.state import (
     deserialize_training_state,
     encode_value,
     serialize_training_state,
+    validate_training_state,
 )
+
+
+class RuntimeKind(IntEnum):
+    REFERENCE = 1
+
+
+class RuntimeLabel(StrEnum):
+    EAGER = "eager"
+
+
+class CursorTuple(NamedTuple):
+    epoch: int
+    row: int
 
 
 class MixedChild(nn.Module):
@@ -48,9 +77,18 @@ class QualificationToy(nn.Module):
         self.child = MixedChild()
         self.train()
         self.child.eval()
+        self.extra_generation = 5
 
     def forward(self) -> torch.Tensor:
         return self.weight.square().sum() + self.column.square().sum()
+
+    def get_extra_state(self) -> object:
+        return {"generation": self.extra_generation, "cursor": SFTCursor(epoch=2, row=10)}
+
+    def set_extra_state(self, state: object) -> None:
+        if not isinstance(state, dict) or type(state.get("generation")) is not int:
+            raise ValueError("invalid toy extra state")
+        self.extra_generation = state["generation"]
 
 
 def _fixture() -> tuple[QualificationToy, torch.optim.SGD, Any, Any]:
@@ -63,11 +101,13 @@ def _fixture() -> tuple[QualificationToy, torch.optim.SGD, Any, Any]:
         momentum=0.9,
     )
     model.forward().backward()
+    model.frozen.grad = torch.tensor([11.0])
     raw = capture_gradient_snapshot(model)
     assert model.weight.grad is not None
     assert model.column.grad is not None
     model.weight.grad.mul_(0.25)
     model.column.grad.add_(3.0)
+    model.frozen.grad.add_(2.0)
     post = capture_gradient_snapshot(model)
     optimizer.state[model.weight] = {
         "nested": {"momentum": torch.tensor([1.0, 2.0]), "history": [1, {"accepted": True}]},
@@ -109,6 +149,10 @@ def test_complete_capture_aliases_gradients_optimizer_rng_and_context() -> None:
     state = _capture(model, optimizer, raw, post)
 
     assert [(module.name, module.training) for module in state.modules] == [("", True), ("child", False)]
+    assert state.modules[0].has_extra_state
+    assert not state.modules[1].has_extra_state
+    assert [record.module_alias for record in state.module_extra_states] == ["<root>"]
+    assert isinstance(state.module_extra_states[0].state, MappingValue)
     parameters = {slot.name: slot for slot in state.parameters}
     assert parameters["absent_parameter"].present is False
     assert parameters["frozen"].trainable is False
@@ -130,7 +174,8 @@ def test_complete_capture_aliases_gradients_optimizer_rng_and_context() -> None:
 
     raw_by_name = {gradient.parameter_alias: gradient for gradient in state.raw_gradients.gradients}
     post_by_name = {gradient.parameter_alias: gradient for gradient in state.post_clip_gradients.gradients}
-    assert raw_by_name["frozen"].frozen and raw_by_name["frozen"].tensor is None
+    assert raw_by_name["frozen"].frozen and raw_by_name["frozen"].tensor is not None
+    assert raw_by_name["frozen"].tensor != post_by_name["frozen"].tensor
     assert raw_by_name["tied"].tensor != post_by_name["tied"].tensor
     assert raw_by_name["column"].tensor != post_by_name["column"].tensor
 
@@ -178,6 +223,40 @@ def test_capture_is_deterministic_round_trips_and_does_not_mutate_live_state() -
     assert np.array_equal(current_numpy_rng[1], numpy_rng[1])
     assert current_numpy_rng[2:] == numpy_rng[2:]
     assert torch.equal(torch.random.get_rng_state(), torch_rng)
+
+
+def test_deserialization_revalidates_scalars_and_requires_canonical_archive_bytes() -> None:
+    model, optimizer, raw, post = _fixture()
+    archive = serialize_training_state(_capture(model, optimizer, raw, post))
+    magic = b"GCWQSTATE\x00\x01"
+    manifest_length = struct.unpack(">Q", archive[len(magic) : len(magic) + 8])[0]
+    manifest_start = len(magic) + 8
+    manifest_stop = manifest_start + manifest_length
+    manifest = json.loads(archive[manifest_start:manifest_stop])
+
+    malformed = dict(manifest)
+    malformed["step_ordinal"] = True
+    malformed_bytes = json.dumps(
+        malformed, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    malformed_archive = (
+        magic
+        + struct.pack(">Q", len(malformed_bytes))
+        + malformed_bytes
+        + archive[manifest_stop:]
+    )
+    with pytest.raises(QualificationStateError, match="step_ordinal"):
+        deserialize_training_state(malformed_archive)
+
+    noncanonical_bytes = json.dumps(manifest, sort_keys=True, indent=1, ensure_ascii=False).encode()
+    noncanonical_archive = (
+        magic
+        + struct.pack(">Q", len(noncanonical_bytes))
+        + noncanonical_bytes
+        + archive[manifest_stop:]
+    )
+    with pytest.raises(QualificationStateError, match="canonical serialized form"):
+        deserialize_training_state(noncanonical_archive)
 
 
 def _assert_path(expected: Any, actual: Any, path: str, kind: str | None = None) -> None:
@@ -348,8 +427,6 @@ def test_comparison_reports_precise_paths_for_important_field_classes() -> None:
 def test_fail_closed_for_values_cycles_foreign_params_duplicates_and_bad_snapshots() -> None:
     with pytest.raises(QualificationStateError, match="non-string mapping key"):
         encode_value({1: "ambiguous"})
-    with pytest.raises(QualificationStateError, match="nonfinite"):
-        encode_value(float("nan"))
     with pytest.raises(QualificationStateError, match="unsupported non-deterministic"):
         encode_value({"set"})
     cyclic: list[object] = []
@@ -374,6 +451,88 @@ def test_fail_closed_for_values_cycles_foreign_params_duplicates_and_bad_snapsho
 
     with pytest.raises(QualificationStateError, match="does not match canonical"):
         _capture(model, torch.optim.SGD([model.weight], lr=0.1), replace(raw, gradients=raw.gradients[:-1]), post)
+
+
+def test_production_dataclasses_namedtuples_and_enums_preserve_exact_types() -> None:
+    batch = TrainingBatch(
+        x=torch.arange(4).reshape(2, 2),
+        y=torch.arange(4).reshape(2, 2),
+        attention_mask=torch.ones(2, 2, dtype=torch.bool),
+    )
+    reservation = ReservedAdjacentPairs(
+        pairs=tuple(batch for _ in range(32)),
+        padded_lengths=tuple(2 for _ in range(32)),
+    )
+    band = PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=16)
+    groups = tuple(
+        PairGroupPlan(start, start + 8, 16, 2, band) for start in range(0, 32, 8)
+    )
+    plan = AdaptivePairStepPlan(reservation, groups)
+    for value in (
+        RandomCursor((1, 2, 3)),
+        FineWebCursor(epoch=2, shard_index=3, step_in_shard=4),
+        SFTCursor(epoch=5, row=6),
+        reservation,
+        plan,
+    ):
+        encoded = encode_value(value)
+        assert isinstance(encoded, DataclassValue)
+        assert encoded.class_identity.module.startswith("gcw.")
+
+    named = encode_value(CursorTuple(epoch=7, row=8))
+    assert isinstance(named, NamedTupleValue)
+    assert [field.key for field in named.fields] == ["epoch", "row"]
+    integer_enum = encode_value(RuntimeKind.REFERENCE)
+    string_enum = encode_value(RuntimeLabel.EAGER)
+    assert isinstance(integer_enum, EnumValue)
+    assert isinstance(string_enum, EnumValue)
+    assert integer_enum.class_identity.qualname == "RuntimeKind"
+    assert string_enum.class_identity.qualname == "RuntimeLabel"
+
+
+def test_nonfinite_scalar_bits_and_numpy_scalar_dtype_are_preserved() -> None:
+    negative_nan_bits = "fff8000000000001"
+    negative_nan = struct.unpack(">d", bytes.fromhex(negative_nan_bits))[0]
+    encoded_nan = encode_value(negative_nan)
+    assert isinstance(encoded_nan, FloatValue)
+    assert encoded_nan.hexadecimal == negative_nan_bits
+    positive_zero = encode_value(0.0)
+    negative_zero = encode_value(-0.0)
+    assert isinstance(positive_zero, FloatValue)
+    assert isinstance(negative_zero, FloatValue)
+    assert positive_zero.hexadecimal != negative_zero.hexadecimal
+
+    numpy_nan = np.array([0xFFC00001], dtype=np.uint32).view(np.float32)[0]
+    encoded_numpy = encode_value(numpy_nan)
+    assert isinstance(encoded_numpy, NumpyScalarValue)
+    assert encoded_numpy.dtype == np.asarray(numpy_nan).dtype.str
+    assert encoded_numpy.content == np.asarray(numpy_nan).tobytes()
+
+
+def test_extra_state_frozen_gradients_and_deserialized_scalars_fail_closed() -> None:
+    model, optimizer, raw, post = _fixture()
+    state = _capture(model, optimizer, raw, post)
+    frozen = next(record for record in state.raw_gradients.gradients if record.parameter_alias == "frozen")
+    assert frozen.tensor is not None
+    assert frozen.tensor.content == torch.tensor([11.0]).view(torch.uint8).numpy().tobytes()
+
+    model.extra_generation += 1
+    changed = _capture(model, optimizer, raw, post)
+    _assert_path(
+        state,
+        changed,
+        "state.module_extra_states[0].state.entries[1].value.value",
+        "value",
+    )
+
+    with pytest.raises(QualificationStateError, match="step_ordinal"):
+        validate_training_state(replace(state, step_ordinal=True))
+    with pytest.raises(QualificationStateError, match="CUDA RNG disposition"):
+        validate_training_state(
+            replace(state, rng=replace(state.rng, cuda=replace(state.rng.cuda, disposition="forged")))  # type: ignore[arg-type]
+        )
+    with pytest.raises(QualificationStateError, match="module extra state"):
+        validate_training_state(replace(state, module_extra_states=()))
 
 
 def test_sparse_quantized_and_meta_tensors_fail_closed() -> None:

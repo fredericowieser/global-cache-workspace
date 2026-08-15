@@ -12,27 +12,36 @@ state. Production training does not import it.
 
 A capture binds all registered module, parameter, and buffer slots to stable
 qualified names. This includes `None` slots, persistent versus nonpersistent
-buffers, mixed module train/eval modes, frozen parameters, tied object aliases,
-storage aliases, tensor view metadata, and exact cloned logical tensor bytes.
-Raw and post-clip gradients are separate caller-supplied snapshots over the same
-canonical parameter alias inventory; one is never inferred from the other.
+buffers, mixed module train/eval modes, module `get_extra_state()` payloads, frozen
+parameters, tied object aliases, storage aliases, tensor view metadata, and exact
+cloned logical tensor bytes. Raw and post-clip gradients are separate
+caller-supplied snapshots over the same canonical parameter alias inventory; one
+is never inferred from the other. A populated gradient on a frozen parameter is
+captured rather than suppressed, so accidental frozen-state mutation remains
+observable.
 
 The record also covers optimizer class/defaults, ordered groups and membership,
 recursive optimizer state, Python/NumPy/Torch CPU RNG state, and either every CUDA
-RNG state or an explicit unavailable/omitted disposition. Step and cursor fields,
-schedule values, reservation data, and backend runtime data are included. Runtime
-is split into `semantic` and `authority_local`; semantic comparison and hashing
-exclude the latter in the substrate API itself.
+RNG state or an exact unavailable/omitted disposition. Real cursor, reservation,
+and adaptive-plan dataclasses are represented directly rather than requiring
+caller-side type-erasing conversion. Step fields, schedule values, reservation
+data, and backend runtime data are included. Runtime is split into `semantic` and
+`authority_local`; semantic comparison and hashing exclude the latter in the
+substrate API itself.
 
 Values use explicit tagged records. Mappings require string keys and are sorted.
-Unsupported values, cycles, nonfinite floats, foreign or ambiguously duplicated
-optimizer parameters, and sparse, quantized, or meta tensors fail closed. Tensor
-content is copied explicitly to CPU from logical elements, so capture does not
-read unused portions of a view's storage. Serialization uses deterministic JSON
-metadata plus a separately framed binary blob archive; tensors are not
-stringified. Blob digests are content-integrity checks, not authentication.
-Comparison reports field paths and classifies structural, metadata, alias, byte,
-and ordinary value differences.
+Dataclasses, named tuples, and enums retain class identity and field/member
+structure. Python floating-point and NumPy scalar values retain exact dtype and
+bit patterns, including signed zero, infinities, and NaNs. Unsupported values,
+cycles, foreign or ambiguously duplicated optimizer parameters, and sparse,
+quantized, or meta tensors fail closed. Tensor content is copied explicitly to
+CPU from logical elements, so capture does not read unused portions of a view's
+storage. Serialization uses deterministic JSON metadata plus a separately framed
+binary blob archive; tensors are not stringified. Deserialization revalidates
+scalar types and invariants and rejects noncanonical archive encodings. Blob
+digests are content-integrity checks, not authentication. Comparison reports
+field paths and classifies structural, metadata, alias, byte, and ordinary value
+differences.
 
 ## Threat boundary
 
