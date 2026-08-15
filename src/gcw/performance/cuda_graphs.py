@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import threading
+import warnings
 from typing import Any, Callable
 from weakref import WeakKeyDictionary
 
@@ -166,13 +167,33 @@ def _capture_entry(
     )
     allocated_before = torch.cuda.memory_allocated(device)
     reserved_before = torch.cuda.memory_reserved(device)
+    autocast_enabled = torch.is_autocast_enabled("cuda")
+    autocast_dtype = torch.get_autocast_dtype("cuda")
     try:
-        runner = torch.cuda.make_graphed_callables(
-            operation,
-            args,
-            num_warmup_iters=warmup_iterations,
-            allow_unused_input=True,
-        )
+        # make_graphed_callables deliberately captures on a side stream. Its
+        # internal autograd probe can trigger PyTorch's generic cross-stream
+        # AccumulateGrad warning even though this API owns the required waits.
+        # Suppress only that capture-local diagnostic, never runtime warnings.
+        with (
+            warnings.catch_warnings(),
+            torch.autocast(
+                "cuda",
+                enabled=autocast_enabled,
+                dtype=autocast_dtype,
+                cache_enabled=False,
+            ),
+        ):
+            warnings.filterwarnings(
+                "ignore",
+                message="The AccumulateGrad node's stream does not match.*",
+                category=UserWarning,
+            )
+            runner = torch.cuda.make_graphed_callables(
+                operation,
+                args,
+                num_warmup_iters=warmup_iterations,
+                allow_unused_input=True,
+            )
     except BaseException as exc:
         raise RuntimeError(
             f"CUDA Graph capture failed for region {signature.region!r}; eager fallback is disabled"
