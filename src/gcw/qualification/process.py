@@ -11,6 +11,7 @@ import time
 from typing import Mapping, Sequence
 
 from gcw.qualification.inputs import BlobIdentity, CapturedBlob, capture_file
+from gcw.qualification.resources import CUDAReleaseObservation, observe_cuda_release
 
 
 class QualificationProcessError(RuntimeError):
@@ -67,6 +68,8 @@ class WorkerResult:
 class ProducerResumerResult:
     producer: WorkerResult
     resumer: WorkerResult
+    producer_release: CUDAReleaseObservation | None
+    resumer_release: CUDAReleaseObservation | None
 
 
 def run_worker(spec: WorkerSpec, *, timeout_seconds: float) -> WorkerResult:
@@ -151,6 +154,8 @@ def run_producer_resumer(
     resumer: WorkerSpec,
     *,
     timeout_seconds: float,
+    gpu_uuid: str | None = None,
+    release_timeout_seconds: float = 30.0,
 ) -> ProducerResumerResult:
     """Require complete producer exit before starting a distinct resumer."""
     if producer.role != "producer" or resumer.role != "resumer":
@@ -159,6 +164,9 @@ def run_producer_resumer(
         producer,
         timeout_seconds=timeout_seconds,
         stdin_payload=None,
+    )
+    producer_release = (
+        None if gpu_uuid is None else observe_cuda_release(gpu_uuid, timeout_seconds=release_timeout_seconds)
     )
     resumer_result, _resumer_output = _run_worker_capture(
         resumer,
@@ -171,4 +179,12 @@ def run_producer_resumer(
         raise QualificationProcessError("resumer started before producer completion")
     if resumer_result.input is None or resumer_result.input.sha256 != producer_result.output.sha256:
         raise QualificationProcessError("resumer input differs from parent-captured producer output")
-    return ProducerResumerResult(producer_result, resumer_result)
+    resumer_release = (
+        None if gpu_uuid is None else observe_cuda_release(gpu_uuid, timeout_seconds=release_timeout_seconds)
+    )
+    return ProducerResumerResult(
+        producer_result,
+        resumer_result,
+        producer_release,
+        resumer_release,
+    )

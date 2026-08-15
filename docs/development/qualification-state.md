@@ -85,7 +85,9 @@ environment, working directory, timeout, and exclusive output. The producer must
 exit completely before a distinct resumer process starts. The trusted parent captures
 the producer output once and transports those exact bytes to the resumer over stdin;
 the resumer never reopens the mutable producer path. Input/output identities are
-recorded and must match. Model-specific producer/resumer workers must still use
+recorded and must match. When a GPU UUID is supplied, the parent must observe an
+empty compute-process set after the producer before launching the resumer and again
+after the resumer exits. Model-specific producer/resumer workers must still use
 production checkpoint save/open/restore and Q1 state comparison; the generic process
 primitive does not claim that merely spawning two processes proves resume parity.
 
