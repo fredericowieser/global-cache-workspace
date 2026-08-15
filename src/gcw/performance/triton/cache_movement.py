@@ -11,6 +11,89 @@ from gcw.performance.triton.runtime import load_kernel_module
 _KERNEL_MODULE = "gcw.performance.triton._cache_kernels"
 
 
+class _ScatterSharedKV(torch.autograd.Function):
+    @staticmethod
+    def forward(  # type: ignore[override]
+        ctx: Any,
+        old_keys: torch.Tensor,
+        old_values: torch.Tensor,
+        indices: torch.Tensor,
+        update: torch.Tensor,
+        global_layout: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        ctx.global_layout = global_layout
+        ctx.cache_shape = tuple(old_keys.shape)
+        ctx.save_for_backward(indices)
+        kernels = load_kernel_module(_KERNEL_MODULE, old_keys.device)
+        new_key_bits, new_value_bits = kernels.copy_kv_bits(
+            old_keys.view(torch.int16),
+            old_values.view(torch.int16),
+        )
+        if indices.shape[1] > 0:
+            kernels.scatter_shared_update_bits(
+                update.view(torch.int16),
+                indices,
+                new_key_bits,
+                new_value_bits,
+                global_layout=global_layout,
+            )
+        return new_key_bits.view(old_keys.dtype), new_value_bits.view(old_values.dtype)
+
+    @staticmethod
+    def backward(  # type: ignore[override]
+        ctx: Any,
+        grad_keys: torch.Tensor | None,
+        grad_values: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, None, torch.Tensor, None]:
+        (indices,) = ctx.saved_tensors
+        if grad_keys is None and grad_values is None:
+            raise RuntimeError("Triton functional scatter backward received no cache gradients")
+        reference = grad_keys if grad_keys is not None else grad_values
+        assert reference is not None
+        if grad_keys is None:
+            grad_keys = reference.new_zeros(ctx.cache_shape)
+        if grad_values is None:
+            grad_values = reference.new_zeros(ctx.cache_shape)
+        grad_keys = grad_keys.contiguous()
+        grad_values = grad_values.contiguous()
+        kernels = load_kernel_module(_KERNEL_MODULE, reference.device)
+        old_key_bits, old_value_bits = kernels.copy_kv_bits(
+            grad_keys.view(torch.int16),
+            grad_values.view(torch.int16),
+        )
+        if indices.shape[1] == 0:
+            layers, batch, heads, _history, head_dim = ctx.cache_shape
+            shape = (
+                (batch, 0, layers * 2 * heads * head_dim)
+                if ctx.global_layout
+                else (layers, batch, 0, 2 * heads * head_dim)
+            )
+            update_gradient = reference.new_empty(shape)
+        else:
+            update_bits = kernels.gather_shared_kv_bits(
+                grad_keys.view(torch.int16),
+                grad_values.view(torch.int16),
+                indices,
+                global_layout=ctx.global_layout,
+            )
+            update_gradient = update_bits.view(reference.dtype)
+            kernels.scatter_shared_update_bits(
+                update_bits,
+                indices,
+                old_key_bits,
+                old_value_bits,
+                global_layout=ctx.global_layout,
+                zero=True,
+            )
+        return (
+            old_key_bits.view(reference.dtype),
+            old_value_bits.view(reference.dtype),
+            None,
+            update_gradient,
+            None,
+        )
+
+
 class _GatherSharedKV(torch.autograd.Function):
     @staticmethod
     def forward(  # type: ignore[override]
@@ -109,6 +192,38 @@ class _GatherPerCacheHeadKV(torch.autograd.Function):
             cache_shape,
         )
         return grad_key_bits.view(grad_output.dtype), grad_value_bits.view(grad_output.dtype), None
+
+
+def scatter_shared_kv(
+    old_keys: torch.Tensor,
+    old_values: torch.Tensor,
+    indices: torch.Tensor,
+    update: torch.Tensor,
+    *,
+    layout: str,
+    validate_indices: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Functionally split and scatter one BT/BGT merged cache update."""
+    _validate_cache_inputs(old_keys, old_values)
+    if layout not in {"layer", "global"}:
+        raise ValueError("Triton shared cache layout must be 'layer' or 'global'")
+    if indices.device != old_keys.device or indices.dtype != torch.long:
+        raise ValueError("Triton shared cache indices must be torch.long on the K/V device")
+    if indices.ndim != 2 or indices.shape[0] != old_keys.shape[1] or not indices.is_contiguous():
+        raise ValueError("Triton shared cache indices must be contiguous (2, selected)")
+    layers, batch, heads, _history, head_dim = old_keys.shape
+    expected = (
+        (batch, indices.shape[1], layers * 2 * heads * head_dim)
+        if layout == "global"
+        else (layers, batch, indices.shape[1], 2 * heads * head_dim)
+    )
+    if update.shape != expected or update.dtype != old_keys.dtype or update.device != old_keys.device:
+        raise ValueError(f"Triton shared cache update must have shape {expected} and match K/V")
+    if not update.is_contiguous():
+        raise ValueError("Triton shared cache update must be contiguous")
+    if validate_indices:
+        _validate_index_values(indices, old_keys.shape[3])
+    return _ScatterSharedKV.apply(old_keys, old_values, indices, update, layout == "global")
 
 
 def gather_shared_kv(

@@ -23,7 +23,10 @@ from gcw.performance.prepared_bt import (
     run_batched_cache_processors,
 )
 from gcw.models.cache_processors.base import CacheProcessorBase
-from gcw.performance.triton import gather_shared_kv as triton_gather_shared_kv
+from gcw.performance.triton import (
+    gather_shared_kv as triton_gather_shared_kv,
+    scatter_shared_kv as triton_scatter_shared_kv,
+)
 from gcw.performance.triton.execution import triton_cache_movement_enabled
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
@@ -125,9 +128,7 @@ class CacheProcessor(nn.Module):
             raise ValueError("cache processor cannot combine flow and diffusion")
         self.flow = LatentFlow(config.hidden_size, flow_config) if flow_config is not None else None
         self.diffusion = (
-            TaskDirectedDiffusion(config.hidden_size, diffusion_config)
-            if diffusion_config is not None
-            else None
+            TaskDirectedDiffusion(config.hidden_size, diffusion_config) if diffusion_config is not None else None
         )
         self.init_weights()
 
@@ -242,7 +243,9 @@ class PerLayerCacheProcessor(CacheProcessorBase):
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         layer_dim = self.config.stream_factor * num_kv_heads * head_dim
-        self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.cache_num_layers))
+        self.blocks = nn.ModuleList(
+            CacheProcessor(layer_dim, self.config) for _ in range(model_config.cache_num_layers)
+        )
         self.execution_backend: BTProcessorBackend = resolve_bt_processor_backend()
 
     def prepare_forward_execution(self) -> PreparedPerLayerCacheProcessorExecution:
@@ -259,7 +262,9 @@ class PerLayerCacheProcessor(CacheProcessorBase):
         _prepared: PreparedBatchedCacheProcessorParameters | None = None,
         _prepared_backend: BTProcessorBackend = "eager",
     ) -> CacheLike:
-        indices = cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
+        indices = (
+            cache.all_indices() if select_all else cache.select_indices(self.config.process_every, self.config.topk)
+        )
         if self.config.update_stream == "v":
             values = gather_cache_values(cache, indices)
             merged = merge_layer_values(values)
@@ -288,6 +293,17 @@ class PerLayerCacheProcessor(CacheProcessorBase):
             if _prepared is None
             else run_prepared_bt_processor_region(_prepared_backend, _prepared, merged, indices)
         )
+        if triton_cache_movement_enabled(self):
+            assert isinstance(cache, WindowedCache)
+            cache.keys, cache.values = triton_scatter_shared_kv(
+                cache.keys,
+                cache.values,
+                indices,
+                updated,
+                layout="layer",
+                validate_indices=False,
+            )
+            return cache
         new_keys, new_values = split_layer_kv(updated, self.num_kv_heads, self.head_dim)
         return scatter_cache_layers(cache, indices, new_keys, new_values)
 
@@ -363,6 +379,17 @@ class GlobalCacheProcessor(CacheProcessorBase):
             merged,
             indices,
         )
+        if triton_cache_movement_enabled(self):
+            assert isinstance(cache, WindowedCache)
+            cache.keys, cache.values = triton_scatter_shared_kv(
+                cache.keys,
+                cache.values,
+                indices,
+                updated,
+                layout="global",
+                validate_indices=False,
+            )
+            return cache
         new_keys, new_values = split_global_kv(updated, self.num_layers, self.num_kv_heads, self.head_dim)
         return scatter_cache_layers(cache, indices, new_keys, new_values)
 
