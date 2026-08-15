@@ -8,15 +8,11 @@ from typing import Any, Literal
 import torch
 import torch.nn as nn
 
-<<<<<<< HEAD
-from gcw.performance._compile import require_torch_compile
-from gcw.performance.compile_telemetry import compile_acceptance_recorder
-=======
 from gcw.performance._compile import (
     is_non_reentrant_checkpoint_early_stop,
     require_torch_compile,
 )
->>>>>>> 04113bb (Harden noisy diffusion compilation)
+from gcw.performance.compile_telemetry import compile_acceptance_recorder
 from gcw.provenance import canonical_json_sha256
 
 
@@ -168,7 +164,7 @@ def run_qwen3_backbone_chunk_region(
             operation,
         )
     except Exception as error:
-        if is_non_reentrant_checkpoint_early_stop(error):
+        if _is_non_reentrant_checkpoint_early_stop(error):
             raise
         raise RuntimeError(
             f"compiled Qwen3 backbone chunk failed; eager fallback is disabled when backbone_chunk_backend={backend}"
@@ -208,11 +204,9 @@ def run_qwen3_initial_backbone_chunk_region(
         ) from error
 
 
-def _is_non_reentrant_checkpoint_early_stop(error: Exception) -> bool:
-    """Preserve checkpoint's private control flow without weakening fail-closed execution."""
-    error_type = type(error)
-    return error_type.__module__ == "torch.utils.checkpoint" and error_type.__name__ == "_StopRecomputationError"
-
+def _is_non_reentrant_checkpoint_early_stop(error: BaseException) -> bool:
+    """Preserve checkpoint control flow through the shared exact predicate."""
+    return is_non_reentrant_checkpoint_early_stop(error)
 
 def _qwen3_initial_chunk_tensor_region(
     backbone: nn.Module,
