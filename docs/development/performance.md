@@ -70,6 +70,8 @@ GCW_STRICT_FLASH=1 GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1 \
 
 Running that command on a live H200 (or another BF16 Flash-capable CUDA host) remains the hardware acceptance gate; CPU CI validates only the hook and skips execution.
 
+The regional compilers are **not** admitted for the Qwen3 math campaign. Formal H200 fixed-batch-two trajectories changed discontinuous cache decisions despite preserving physical shape: BT changed 222–241 of roughly 680 selections per step, BGT changed 228–251, and Flow-BGT changed 241–258. Gradient relative L2 reached 6.8%, 8.1%, and 17.3%, respectively. `compile_full_windows` also failed. Throughput from those backends is screening evidence only; unchanged RNG and optimizer-step counters cannot override selection/write, pair-loss, gradient, parameter, and Adam-state failures.
+
 ## Longshot selected-history gather
 
 Longshot KV-norm full-history optimization is explicit and default-off:
