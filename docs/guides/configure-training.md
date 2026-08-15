@@ -159,6 +159,8 @@ Each segment exports only hidden output and its tensor-only cache boundary. Back
 
 Segment checkpointing runs only in training with gradients enabled. Evaluation accepts the resolved policy but executes eagerly. It supports both regional backends: `GCW_BT_PROCESSOR_BACKEND=compile` for BT and `GCW_CACHE_PROCESSOR_BACKEND=compile` for BGT, Flow-BGT, and noiseless Diffusion-BGT. Both compose with `standard_processor_layers`; segment replay keeps selection, gather, and writeback eager around the compiled tensor region. FSDP layer checkpointing and Qwen3.5 MoE router-loss execution reject this policy explicitly.
 
+Icarus has a separate deterministic post-selection region. `GCW_ICARUS_PROCESSOR_BACKEND=compile` compiles RoPE, selected-head attention, processor transforms, and the gated residual update. Score reduction, selected token/head indices, destinations, and cache writeback remain eager. The opt-in requires standard Icarus, zero attention dropout, and no Flow or Diffusion refinement. It is fingerprinted for exact resume, fails closed, and cannot be combined with whole-model `GCW_COMPILE`.
+
 Both checkpointing policies increase backward compute. The policies, segment size, minimum padded sequence length, and selected regional backend are runtime provenance and exact-resume fingerprint fields; changing any across resume is rejected.
 
 Longshot keeps its model-level switch as the fixed default. Set an adaptive training threshold only when `model.cache_processor.gradient_checkpointing` remains `true`:

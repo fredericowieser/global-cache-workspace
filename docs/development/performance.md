@@ -15,11 +15,14 @@ The package is intentionally divided by responsibility:
 - `whole_model.py`: legacy whole-model compile policy;
 - `telemetry.py`: read-only optimized-region metrics;
 - `backends/qwen3.py`: Qwen3 backbone chunk compilation;
-- `backends/cache_processors.py`: BT and deterministic BGT-family regional compilation.
+- `backends/cache_processors.py`: BT and deterministic BGT-family regional compilation;
+- `backends/icarus.py`: deterministic Icarus post-selection regional compilation.
 
 There is no backend registry. Every compiled region owns narrow admission checks, fixed compiler options, provenance, and fatal failure behavior. Requested optimized paths never silently retry eagerly.
 
 Model modules retain cache selection, gather/writeback semantics, recurrent scheduling, and state dictionaries. `training/objectives.py` retains the adjacent-pair mathematical objective. The performance package may choose physical execution groups, but it cannot redefine the objective or optimizer step.
+
+The Icarus backend illustrates this boundary. Its eager caller computes FP32 scores, token selection, cache-head selection, gather indices, latest write positions, and cache scatter. The optional compiled callable receives only the selected tensor, selected positions, selected heads, and existing processor module. It executes the deterministic RoPE/attention/transform region and returns an update tensor. Admission rejects stochastic dropout and unproven Flow/Diffusion refinements.
 
 ## Adaptive adjacent-pair batching
 

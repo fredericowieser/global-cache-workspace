@@ -52,6 +52,10 @@ from gcw.performance.backends.cache_processors import (
     cache_processor_backend_metadata,
     resolve_cache_processor_backend,
 )
+from gcw.performance.backends.icarus import (
+    icarus_processor_backend_metadata,
+    resolve_icarus_processor_backend,
+)
 from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
 from gcw.performance.losses import (
     configure_reference_loss_execution,
@@ -115,6 +119,9 @@ def train(config: TrainConfig) -> None:
         raise ValueError("training audit currently requires the approved one-GPU topology")
     audit_gradients: dict[str, Any] | None = None
     use_fsdp = _fsdp_active(config)
+    icarus_backend = resolve_icarus_processor_backend(config.model)
+    if use_fsdp and icarus_backend == "compile":
+        raise RuntimeError("GCW_ICARUS_PROCESSOR_BACKEND=compile is not supported with FSDP")
     if use_fsdp and config.resume is not None:
         raise ValueError("exact training resume is not supported with FSDP")
 
@@ -171,16 +178,18 @@ def train(config: TrainConfig) -> None:
             config.model.variant == "bt"
             or config.backbone_chunk_backend == "compile"
             or regional_backend == "compile"
+            or icarus_backend == "compile"
         ):
             raise RuntimeError(
                 "GCW_COMPILE cannot wrap a regionally compiled language model; disable it and use "
-                "backbone_chunk_backend=compile, GCW_BT_PROCESSOR_BACKEND=compile, and/or "
-                "GCW_CACHE_PROCESSOR_BACKEND=compile"
+                "backbone_chunk_backend=compile, GCW_BT_PROCESSOR_BACKEND=compile, "
+                "GCW_CACHE_PROCESSOR_BACKEND=compile, and/or GCW_ICARUS_PROCESSOR_BACKEND=compile"
             )
         if (
             config.model.variant != "bt"
             and config.backbone_chunk_backend == "eager"
             and regional_backend == "eager"
+            and icarus_backend == "eager"
         ):
             model = maybe_compile_whole_model(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
@@ -224,6 +233,9 @@ def train(config: TrainConfig) -> None:
         "qwen3_backbone_chunk_backend": qwen3_backbone_chunk_backend_metadata(config.backbone_chunk_backend),
         "cache_processor_backend": (
             cache_processor_backend_metadata(config.model) if config.model.variant == "bgt" else None
+        ),
+        "icarus_processor_backend": (
+            icarus_processor_backend_metadata(config.model) if config.model.variant == "icarus" else None
         ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
@@ -620,6 +632,18 @@ def _training_fingerprint(
             cache_processor_backend_metadata(config.model)["fingerprint_sha256"]
             if config.model.variant == "bgt"
             else None
+        ),
+        **(
+            {
+                "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(
+                    config.model
+                )["fingerprint_sha256"]
+            }
+            if (
+                config.model.variant == "icarus"
+                and resolve_icarus_processor_backend(config.model) == "compile"
+            )
+            else {}
         ),
         "initialization": {
             "backbone_checkpoint": config.backbone_checkpoint,
