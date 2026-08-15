@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
+from types import SimpleNamespace
 from typing import Any, Iterator, Sequence
 from unittest.mock import patch
 
@@ -85,9 +86,7 @@ def row_keys_for_pairs(step: int, pair_start: int, pair_stop: int) -> tuple[str,
     if pair_start < 0 or pair_stop <= pair_start:
         raise ValueError("pair range must be non-empty and non-negative")
     return tuple(
-        row_key(step, pair_index, row_in_pair)
-        for pair_index in range(pair_start, pair_stop)
-        for row_in_pair in (0, 1)
+        row_key(step, pair_index, row_in_pair) for pair_index in range(pair_start, pair_stop) for row_in_pair in (0, 1)
     )
 
 
@@ -207,18 +206,16 @@ class CacheEventRecorder:
     def coverage(self) -> dict[str, Any]:
         semantic = [event for event in self.events if event.semantic]
         padding = [event for event in self.events if event.padding_only]
-        primary_counts = Counter(
-            event.stable_event_id for event in semantic if event.phase == "primary"
-        )
+        primary_counts = Counter(event.stable_event_id for event in semantic if event.phase == "primary")
         observed_ids = set(primary_counts)
         expected_ids = set(self._expected_checkpoint)
         missing = sorted(expected_ids - observed_ids)
         unexpected = sorted(observed_ids - expected_ids)
         duplicate = {identity: count for identity, count in sorted(primary_counts.items()) if count != 1}
-        operation_counts = Counter(
-            event.operation for event in semantic if event.phase == "primary"
+        operation_counts = Counter(event.operation for event in semantic if event.phase == "primary")
+        padding_valid = all(
+            not event.destinations and event.cache_boundary >= event.source_padded_width for event in padding
         )
-        padding_valid = all(not event.destinations and event.cache_boundary >= event.source_padded_width for event in padding)
         complete = bool(expected_ids) and not missing and not unexpected and not duplicate and padding_valid
         return {
             "required_operations": list(self.required_operations),
@@ -252,9 +249,7 @@ class CacheEventRecorder:
             checkpoint_expected = self._expected_checkpoint.get(identity, False)
             expected_replays = len(primary[identity]) if checkpoint_expected else 0
             actual_replays = len(replay[identity])
-            values_equal = bool(primary[identity]) and all(
-                value == primary[identity][0] for value in replay[identity]
-            )
+            values_equal = bool(primary[identity]) and all(value == primary[identity][0] for value in replay[identity])
             identity_passed = (
                 len(primary[identity]) == 1
                 and actual_replays == expected_replays
@@ -320,6 +315,14 @@ def trace_cache_events(recorder: CacheEventRecorder) -> Iterator[CacheEventRecor
 
         return wrapped
 
+    def wrap_triton_scatter(original):
+        def wrapped(old_keys, old_values, indices, update, *args, **kwargs):
+            boundary = SimpleNamespace(seq_len=old_keys.shape[3])
+            recorder.record("write_kv", boundary, indices)
+            return original(old_keys, old_values, indices, update, *args, **kwargs)
+
+        return wrapped
+
     with ExitStack() as stack:
         for cache_type in (CacheState, StaticCacheState, WindowedCache):
             stack.enter_context(
@@ -344,6 +347,13 @@ def trace_cache_events(recorder: CacheEventRecorder) -> Iterator[CacheEventRecor
                 standard_module,
                 "scatter_cache_values",
                 wrap_scatter(standard_module.scatter_cache_values, "write_v"),
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                standard_module,
+                "triton_scatter_shared_kv",
+                wrap_triton_scatter(standard_module.triton_scatter_shared_kv),
             )
         )
         yield recorder

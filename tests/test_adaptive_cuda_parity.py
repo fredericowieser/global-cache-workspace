@@ -159,6 +159,41 @@ def test_trace_context_restores_symbols_and_aligns_checkpoint_recomputation() ->
     assert replay["expected_replay_count"] == replay["actual_replay_count"] == 4
 
 
+def test_trace_records_triton_writeback_at_exact_cache_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = CacheEventRecorder(("select", "write_kv"))
+    scope = TraceScope(
+        step=0,
+        group=0,
+        row_keys=("step-0000/pair-00/row-0", "step-0000/pair-00/row-1"),
+        source_padded_widths=(4, 4),
+        process_every=2,
+        checkpoint_expected=False,
+    )
+    recorder.expect_scope(scope)
+    keys = torch.zeros(1, 2, 1, 2, 1)
+    values = torch.zeros_like(keys)
+    indices = torch.tensor([[0], [1]])
+    update = torch.zeros(1, 2, 1, 2)
+    cache = CacheState([keys[0]], [values[0]], torch.zeros(2, 2))
+    monkeypatch.setattr(
+        standard_module,
+        "triton_scatter_shared_kv",
+        lambda old_keys, old_values, _indices, _update, **_kwargs: (old_keys, old_values),
+    )
+    with trace_cache_events(recorder), recorder.bind_scope(scope):
+        recorder.record("select", cache, indices)
+        standard_module.triton_scatter_shared_kv(
+            keys,
+            values,
+            indices,
+            update,
+            layout="layer",
+        )
+    assert recorder.coverage()["complete"] is True
+
+
 def test_recorder_local_scope_is_independent_of_contextvar_propagation() -> None:
     recorder = CacheEventRecorder(("select", "write_v"))
     scope = TraceScope(
