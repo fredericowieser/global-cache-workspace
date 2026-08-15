@@ -103,6 +103,8 @@ The version-2 CUDA gate passed `8/8` tests on both H200 and H100 at commit `d235
 
 **[PERF INCREASE][PROCESSOR][PRELIMINARY]** Matched H200 production screening shows that bounded `unrope_keys: true` execution is a memory policy, not a speed path. At row 0, the warm median changed from `17.5918` to `19.6756` seconds/step (`0.894x`) while peak allocation fell from `35,372.4` to `31,592.3` MiB. At row 11,072, the warm median changed from `38.8263` to `50.9165` seconds/step (`0.763x`) while peak allocation fell from `65,038.3` to `54,958.1` MiB. The difficult final gradient norm differed by `-4.72%` despite a final-loss difference of only `-0.0126%`; row 0 differed by `+0.318%` in gradient norm. Therefore this path remains default-off and is not admitted into the Qwen3 math campaign. Fixed eager Longshot remains authoritative. The authenticated four-cell H200 report is `/home/fred/gcw-performance/evidence/longshot-unropetrue-production-d2353d7.json`, SHA-256 `58d49541b53beee92ccd609a8c719e47659c24069311e00f40bdcdf54c67ba3a`.
 
+The separate H100 lineage is shape-dependent and is not averaged with H200. Row 0 improved from `17.2274` to `15.1429` seconds/step (`1.138x`) while saving `3,780.1` MiB, but row 11,072 regressed from `27.7215` to `41.5330` seconds/step (`0.667x`) while saving `10,080.2` MiB. Its difficult final gradient norm differed by `-4.75%`. The authenticated H100 report is `/home/f50056118/gcw-performance/evidence/longshot-unropetrue-production-h100-d2353d7.json`, SHA-256 `a9fc0022afd1944f7b96100bb23da273d0b8ccdc68e2de43b429da585065cc77`.
+
 ## Noisy Diffusion-BGT recurrence compilation
 
 Noisy Diffusion-BGT remains eager unless training explicitly requests:
