@@ -42,6 +42,10 @@ The microbenchmark compares the complete eager and candidate gather/backward ope
 python -m scripts.benchmarks.fused_row_loss --tokens 1024 --hidden 1024 --vocab 151936
 ```
 
+## Exact pair-wave timing
+
+`scripts.benchmarks.pair_wave_timing` reserves 32 distinct fixed two-row pairs, checks bitwise pair-loss and raw-gradient equality, then compares serial and width-2/4 concurrent-forward accumulation with ordinary source-ordered backward and one gradient clip. It rejects adaptive grouping and Diffusion RNG. The executor remains benchmark-only; any autograd stream-mismatch warning, OOM, parity failure, or speedup below `1.15x` rejects retention.
+
 ## Formal CUDA parity
 
 `scripts.benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one pre-execution reservation of 32-pair optimizer steps. It is a correctness harness, not a timer.

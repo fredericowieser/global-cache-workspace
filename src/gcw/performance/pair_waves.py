@@ -89,17 +89,11 @@ class PairWaveRuntime:
             raise ValueError("overlapped pair waves require CUDA")
         self._closed = False
         self._streams = (
-            tuple(torch.cuda.Stream(device=device) for _ in range(wave_size))
-            if device.type == "cuda"
-            else ()
+            tuple(torch.cuda.Stream(device=device) for _ in range(wave_size)) if device.type == "cuda" else ()
         )
         self._ready = torch.cuda.Event() if device.type == "cuda" else None
-        self._forward_done = (
-            tuple(torch.cuda.Event() for _ in range(wave_size)) if device.type == "cuda" else ()
-        )
-        self._backward_done = (
-            tuple(torch.cuda.Event() for _ in range(wave_size)) if device.type == "cuda" else ()
-        )
+        self._forward_done = tuple(torch.cuda.Event() for _ in range(wave_size)) if device.type == "cuda" else ()
+        self._backward_done = tuple(torch.cuda.Event() for _ in range(wave_size)) if device.type == "cuda" else ()
 
     def execute(
         self,
@@ -190,15 +184,11 @@ class PairWaveRuntime:
         # authority stream. Autograd inserts waits for each lane's forward
         # stream, while shared gradient accumulation remains source ordered and
         # never changes its owning stream between pairs.
-        final_backward: torch.cuda.Event | None = None
         for lane, loss in enumerate(live_losses):
             pair_index = wave.pair_indices[lane]
             with torch.cuda.stream(authority), context_factory(pair_index, pairs[pair_index]):
                 (loss / normalizer).backward()
                 self._backward_done[lane].record(authority)
-            final_backward = self._backward_done[lane]
-        assert final_backward is not None
-        final_backward.synchronize()
 
     def _quiesce(self) -> None:
         if self.device.type != "cuda":
