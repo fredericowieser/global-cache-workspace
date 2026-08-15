@@ -98,6 +98,11 @@ Real-CUDA BF16 cache-write, selected-index, checkpointed-gradient, per-pair traj
 ```bash
 GCW_RUN_LONGSHOT_CUDA_PARITY=1 pytest -q tests/test_longshot_full_history_cuda.py
 ```
+
+The version-2 CUDA gate passed `8/8` tests on both H200 and H100 at commit `d2353d7`, including real Qwen3/Llama RoPE, BF16 checkpointed trajectories, serialized resume, selected-index/write parity, and cap-relative allocator evidence. The H200 JUnit SHA-256 is `d69437ae44e4b395a8b73eebfc93919d9c3292e78ed9d072991980b412ad24e1`; the H100 JUnit SHA-256 is `b33ed905589a3ee4d106af9e9cb3e928402b55ee6597e18fc17ab45c0876ef4f`. For an 8,192-token production-shaped history, measured transient allocation fell from `4,660,642,304` to `33,030,656` bytes.
+
+**[PERF INCREASE][PROCESSOR][PRELIMINARY]** Matched H200 production screening shows that bounded `unrope_keys: true` execution is a memory policy, not a speed path. At row 0, the warm median changed from `17.5918` to `19.6756` seconds/step (`0.894x`) while peak allocation fell from `35,372.4` to `31,592.3` MiB. At row 11,072, the warm median changed from `38.8263` to `50.9165` seconds/step (`0.763x`) while peak allocation fell from `65,038.3` to `54,958.1` MiB. The difficult final gradient norm differed by `-4.72%` despite a final-loss difference of only `-0.0126%`; row 0 differed by `+0.318%` in gradient norm. Therefore this path remains default-off and is not admitted into the Qwen3 math campaign. Fixed eager Longshot remains authoritative. The authenticated four-cell H200 report is `/home/fred/gcw-performance/evidence/longshot-unropetrue-production-d2353d7.json`, SHA-256 `58d49541b53beee92ccd609a8c719e47659c24069311e00f40bdcdf54c67ba3a`.
+
 ## Noisy Diffusion-BGT recurrence compilation
 
 Noisy Diffusion-BGT remains eager unless training explicitly requests:
