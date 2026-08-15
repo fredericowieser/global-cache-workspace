@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 
+from gcw.models.cache_processors.base import cache_processor_recomputation_id
 from gcw.performance.config import LongshotFullHistoryConfig
 from gcw.performance.longshot_scores import LONGSHOT_SCORE_FP32_CHUNK_BYTES
 from gcw.provenance import canonical_json_sha256
@@ -32,6 +33,11 @@ def configure_longshot_full_history_execution(
         raise ValueError("Longshot full-history execution requires attention_dropout=0")
     if processor_config.linear_state_cache:
         raise ValueError("Longshot full-history execution rejects linear recurrent cache state")
+    if processor_config.unrope_keys:
+        raise ValueError(
+            "Longshot full-history execution rejects unrope_keys=True because rotating the full "
+            "history would violate its bounded-memory contract"
+        )
     if (
         processor_config.iterations > 1
         and processor_config.iteration_mode == "internal"
@@ -63,6 +69,7 @@ def longshot_full_history_execution_metadata(config: LongshotFullHistoryConfig) 
         "enabled": config.enabled,
         "max_temp_bytes": config.max_temp_bytes,
         "score_oracle": "cat_kv_float_pow2_sum_last_per_row",
+        "unrope_keys": "rejected_to_preserve_bounded_full_history_scoring",
         "selection_oracle": "stable_existing_fp32_scores_and_torch_topk",
         "gather": "selected_layer_head_positions_only",
         "gradient": "selected_history_only_with_chunk_recomputation",
@@ -120,7 +127,13 @@ def record_longshot_full_history_event(
     selected_positions: int,
     max_temp_bytes: int,
 ) -> None:
-    """Record allocation bounds without reading tensor values or synchronizing CUDA."""
+    """Record logical payload estimates once per original forward.
+
+    These counters describe tensor payload and analytical score working sets. They
+    are not allocator measurements; CUDA peak-memory telemetry remains authoritative.
+    """
+    if cache_processor_recomputation_id() is not None:
+        return
     layers, batch, heads, sequence, head_dim = keys.shape
     element_bytes = keys.element_size()
     full_elements = layers * batch * heads * sequence * 2 * head_dim
@@ -128,12 +141,12 @@ def record_longshot_full_history_event(
     score_elements = batch * layers * heads * sequence * 2 * head_dim
     event = {
         "events": 1,
-        "reference_full_history_gather_bytes": full_elements * element_bytes,
-        "selected_history_gather_bytes": selected_elements * element_bytes,
-        "gather_bytes_avoided": max(0, full_elements - selected_elements) * element_bytes,
-        "reference_score_fp32_temporary_bound_bytes": 2
+        "reference_full_history_logical_payload_bytes": full_elements * element_bytes,
+        "selected_history_logical_payload_bytes": selected_elements * element_bytes,
+        "logical_payload_bytes_avoided": max(0, full_elements - selected_elements) * element_bytes,
+        "reference_score_estimated_fp32_working_set_bound_bytes": 2
         * min(score_elements * 4, LONGSHOT_SCORE_FP32_CHUNK_BYTES),
-        "optimized_score_fp32_temporary_bound_bytes": 2
+        "optimized_score_estimated_fp32_working_set_bound_bytes": 2
         * min(score_elements * 4, max_temp_bytes),
     }
     current = getattr(processor, _METRICS_ATTRIBUTE, None)
@@ -149,6 +162,8 @@ def record_longshot_full_history_event(
 
 def pop_longshot_full_history_metrics(processor: torch.nn.Module) -> dict[str, float]:
     """Pop profiling counters while keeping them outside parameters and buffers."""
+    if cache_processor_recomputation_id() is not None:
+        return {}
     values = getattr(processor, _METRICS_ATTRIBUTE, None)
     if values is None:
         return {}

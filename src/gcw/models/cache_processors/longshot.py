@@ -553,6 +553,8 @@ class CacheProcessor(nn.Module):
         return layer(h, selected_heads, return_attn_scores=return_attn_scores)
 
     def pop_iteration_metrics(self) -> dict[str, float]:
+        if cache_processor_recomputation_id() is not None:
+            return {}
         metrics = {
             f"cache_processor/selected_head_overlap_after_iter_{iteration}": float(
                 (total / self._selected_head_overlap_counts[iteration]).detach().cpu()
@@ -921,20 +923,15 @@ class GlobalCacheProcessor(CacheProcessorBase):
             raise TypeError(
                 "enabled Longshot selected-history execution requires contiguous WindowedCache storage"
             )
+        if self.config.unrope_keys:
+            raise RuntimeError(
+                "enabled Longshot full-history execution cannot score unrope_keys=True "
+                "without rotating the full history"
+            )
         # The eager per-row FP32 expression and existing top-k remain the oracle.
         with torch.no_grad():
-            score_keys = cache.keys
-            if self.config.unrope_keys:
-                score_keys = rotate_cache_keys(
-                    score_keys,
-                    cache.all_indices(),
-                    theta=self.rope_theta,
-                    rotary_style=self.rotary_style,
-                    inverse=True,
-                    rotary_dim=self.rotary_dim,
-                )
             scores = chunked_fp32_concatenated_kv_squared_l2(
-                score_keys,
+                cache.keys,
                 cache.values,
                 max_temp_bytes=policy.max_temp_bytes,
             )
@@ -949,15 +946,6 @@ class GlobalCacheProcessor(CacheProcessorBase):
             selected_positions=indices.shape[-1],
             max_temp_bytes=policy.max_temp_bytes,
         )
-        if self.config.unrope_keys:
-            keys = rotate_cache_keys(
-                keys,
-                indices,
-                theta=self.rope_theta,
-                rotary_style=self.rotary_style,
-                inverse=True,
-                rotary_dim=self.rotary_dim,
-            )
         return torch.cat([keys, values], dim=-1), scores, indices
 
     def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:

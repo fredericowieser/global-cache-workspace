@@ -8,6 +8,8 @@ import pytest
 import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.models import build_model
+from gcw.models.cache_processors.base import cache_processor_recomputation
 from gcw.models.cache_processors import longshot as longshot_module
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.ops import (
@@ -21,11 +23,13 @@ from gcw.performance.longshot_cache import (
     configure_longshot_full_history_execution,
     gather_windowed_per_cache_head_kv,
     pop_longshot_full_history_metrics,
+    record_longshot_full_history_event,
 )
 from gcw.performance.longshot_scores import (
     chunked_fp32_concatenated_kv_squared_l2,
     chunked_fp32_squared_l2,
 )
+from gcw.training.objectives import row_loss_sums_and_counts
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -84,7 +88,7 @@ def test_direct_selected_kv_gather_matches_flatten_then_gather(dtype: torch.dtyp
     assert torch.equal(actual_grads[1], expected_grads[1])
 
 
-@pytest.mark.parametrize("unrope_keys", [False, True])
+@pytest.mark.parametrize("unrope_keys", [False])
 def test_windowed_kv_norm_scores_indices_and_selected_history_match_reference(
     unrope_keys: bool,
 ) -> None:
@@ -115,7 +119,7 @@ def test_windowed_kv_norm_scores_indices_and_selected_history_match_reference(
     [("internal", 1), ("internal", 2), ("external", 2)],
 )
 @pytest.mark.parametrize("update_stream", ["kv", "v"])
-@pytest.mark.parametrize("unrope_keys", [False, True])
+@pytest.mark.parametrize("unrope_keys", [False])
 def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
     iteration_mode: str,
     iterations: int,
@@ -178,7 +182,7 @@ def test_default_windowed_kv_norm_path_remains_eager() -> None:
 
 
 def test_windowed_kv_norm_path_does_not_call_full_history_gather() -> None:
-    processor = _processor(iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=True)
+    processor = _processor(iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=False)
     configure_longshot_full_history_execution(
         processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
@@ -196,16 +200,114 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather() -> None:
     metrics = pop_longshot_full_history_metrics(processor)
     assert metrics["performance/longshot_full_history_events"] == 2.0
     assert (
-        metrics["performance/longshot_full_history_selected_history_gather_bytes"]
-        < metrics["performance/longshot_full_history_reference_full_history_gather_bytes"]
+        metrics["performance/longshot_full_history_selected_history_logical_payload_bytes"]
+        < metrics["performance/longshot_full_history_reference_full_history_logical_payload_bytes"]
     )
     assert (
-        metrics["performance/longshot_full_history_optimized_score_fp32_temporary_bound_bytes"]
-        < metrics["performance/longshot_full_history_reference_score_fp32_temporary_bound_bytes"]
+        metrics[
+            "performance/longshot_full_history_optimized_score_estimated_fp32_working_set_bound_bytes"
+        ]
+        < metrics[
+            "performance/longshot_full_history_reference_score_estimated_fp32_working_set_bound_bytes"
+        ]
     )
 
     with pytest.raises(TypeError, match="WindowedCache"):
         processor._select_kv_norm_history(cache.to_cache_state())
+
+
+def test_enabled_full_history_rejects_unrope_before_execution() -> None:
+    processor = _processor(
+        iteration_mode="internal", iterations=1, update_stream="kv", unrope_keys=True
+    )
+    with pytest.raises(ValueError, match="unrope_keys=True"):
+        configure_longshot_full_history_execution(
+            processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
+        )
+
+
+def test_full_history_telemetry_ignores_checkpoint_recomputation() -> None:
+    processor = _processor(
+        iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=False
+    )
+    cache, _, _ = _cache(requires_grad=False)
+    record_longshot_full_history_event(
+        processor,
+        keys=cache.keys,
+        selected_positions=2,
+        max_temp_bytes=1024,
+    )
+    with cache_processor_recomputation():
+        record_longshot_full_history_event(
+            processor,
+            keys=cache.keys,
+            selected_positions=2,
+            max_temp_bytes=1024,
+        )
+        assert pop_longshot_full_history_metrics(processor) == {}
+    metrics = pop_longshot_full_history_metrics(processor)
+    assert metrics["performance/longshot_full_history_events"] == 1.0
+
+
+def test_segmented_backward_records_full_history_events_once_per_original_forward() -> None:
+    config = ModelConfig(
+        variant="longshot",
+        family="smollm",
+        sequence_len=8,
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        cache_processor=CacheProcessorConfig(
+            process_every=2,
+            topk=2,
+            topk_heads=2,
+            score="kv_norm",
+            hidden_size=8,
+            intermediate_size=16,
+            num_layers=1,
+            num_heads=1,
+            num_kv_heads=1,
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            gradient_checkpointing=True,
+        ),
+    )
+    model = build_model(config)
+    model.init_weights()
+    model.train()
+    configure_longshot_full_history_execution(
+        model, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
+    )
+    processor = model.cache_processor
+    original_select = processor._select_kv_norm_history
+    calls = 0
+
+    def traced(_self: GlobalCacheProcessor, cache: WindowedCache):
+        nonlocal calls
+        calls += 1
+        return original_select(cache)
+
+    object.__setattr__(
+        processor, "_select_kv_norm_history", MethodType(traced, processor)
+    )
+    inputs = torch.randint(0, config.vocab_size, (2, 6))
+    targets = torch.randint(0, config.vocab_size, (2, 6))
+    row_sums, row_counts = row_loss_sums_and_counts(
+        model,
+        inputs,
+        targets,
+        activation_checkpoint_windows=2,
+        longshot_gradient_checkpointing=True,
+    )
+    (row_sums / row_counts).mean().backward()
+
+    metrics = pop_longshot_full_history_metrics(processor)
+    assert calls == 4
+    assert metrics["performance/longshot_full_history_events"] == 2.0
 
 
 class _RunResult:

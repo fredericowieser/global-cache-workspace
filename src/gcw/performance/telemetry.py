@@ -6,6 +6,7 @@ from typing import cast
 
 import torch
 
+from gcw.models.cache_processors.base import cache_processor_recomputation_id
 from gcw.performance.longshot_cache import pop_longshot_full_history_metrics
 
 
@@ -22,6 +23,8 @@ def model_runtime_backends(model: torch.nn.Module, device: torch.device) -> dict
 
 def cache_processor_metrics(model: torch.nn.Module) -> dict[str, float]:
     """Pop processor iteration metrics without making telemetry model state."""
+    if cache_processor_recomputation_id() is not None:
+        return {}
     model = _unwrap(model)
     model = getattr(model, "_orig_mod", model)
     processor = getattr(model, "cache_processor", None)

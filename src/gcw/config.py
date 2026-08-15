@@ -777,6 +777,11 @@ class TrainConfig:
                 raise ValueError(
                     "performance.longshot_full_history requires cache_processor.attention_dropout=0"
                 )
+            if processor.unrope_keys:
+                raise ValueError(
+                    "performance.longshot_full_history rejects cache_processor.unrope_keys=true "
+                    "because rotating the full history violates its bounded-memory contract"
+                )
             if processor.linear_state_cache:
                 raise ValueError(
                     "performance.longshot_full_history does not support linear recurrent cache state"

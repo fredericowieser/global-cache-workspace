@@ -81,11 +81,11 @@ performance:
     max_temp_bytes: 33554432
 ```
 
-The eager layer/head flatten, full-history gather, per-row FP32 scoring expression, and existing top-k are the semantic oracle. The opt-in path computes the same FP32 score rows from contiguous layer-major `WindowedCache` tensors, then gathers only selected positions. Its chunk budget bounds FP32 scoring temporaries; runtime telemetry reports reference full-history gather bytes, selected-history gather bytes, avoided bytes, and FP32 temporary bounds.
+The eager layer/head flatten, full-history gather, per-row FP32 scoring expression, and existing top-k are the semantic oracle. The opt-in path computes the same FP32 score rows from contiguous layer-major `WindowedCache` tensors, then gathers only selected positions. Its chunk budget bounds FP32 scoring temporaries. Runtime counters are explicitly named as logical tensor payloads and estimated FP32 working-set bounds; they are not allocator measurements. Measured CUDA peak allocation is the authoritative memory acceptance metric.
 
 The policy, budget, implementation, checkpoint and recurrence contracts, and admission restrictions are authenticated in run metadata and the exact-resume fingerprint. Disabled configurations are omitted from serialized performance payloads, composition receipts, run metadata, and training fingerprints, preserving pre-feature identities.
 
-This first admission supports single-process dense SmolLM/Llama/Qwen3 Longshot training with zero processor dropout, KV-norm scoring, native non-reentrant Longshot layer checkpointing, segmented recomputation, and exact internal or external reselection. It rejects unsupported distributed, whole-model compile, Flow/refinement, linear-state, internal non-KV recurrence, cache type, layout, and shape configurations rather than falling back eagerly.
+This first admission supports single-process dense SmolLM/Llama/Qwen3 Longshot training with zero processor dropout, KV-norm scoring, native non-reentrant Longshot layer checkpointing, segmented recomputation, and exact internal or external reselection. Telemetry is recorded only by the original forward and is suppressed during processor-layer and segmented backward recomputation. The optimized policy rejects `unrope_keys: true`: rotating the entire history before chunked scoring would violate the bounded-memory contract, and no chunk-local exact un-RoPE kernel is admitted yet. It also rejects unsupported distributed, compiled, Flow/refinement, linear-state, internal non-KV recurrence, cache type, layout, and shape configurations rather than falling back eagerly.
 
 Real-CUDA BF16 cache-write, selected-index, checkpointed-gradient, per-pair trajectory, resume, and peak-memory evidence is opt-in:
 

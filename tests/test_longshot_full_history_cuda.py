@@ -29,7 +29,7 @@ pytestmark = [
 ]
 
 
-def _processor(*, layers: int = 2, topk: int = 8) -> GlobalCacheProcessor:
+def _processor(*, layers: int = 2, topk: int = 8, unrope_keys: bool = False) -> GlobalCacheProcessor:
     config = ModelConfig(
         variant="longshot",
         family="smollm",
@@ -58,6 +58,7 @@ def _processor(*, layers: int = 2, topk: int = 8) -> GlobalCacheProcessor:
             internal_iteration_score="kv_norm",
             gradient_checkpointing=True,
             attention_dropout=0.0,
+            unrope_keys=unrope_keys,
             gate_init=0.5,
         ),
     )
@@ -192,7 +193,7 @@ def _language_model_step(
     trace: list[torch.Tensor],
     inputs: torch.Tensor,
     targets: torch.Tensor,
-) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor], dict[str, float]]:
     optimizer.zero_grad(set_to_none=True)
     trace.clear()
     with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -211,7 +212,8 @@ def _language_model_step(
         if parameter.grad is not None
     }
     optimizer.step()
-    return pair_losses.detach(), list(trace), gradients
+    metrics = pop_longshot_full_history_metrics(model.cache_processor)
+    return pair_losses.detach(), list(trace), gradients, metrics
 
 
 def test_cuda_bf16_segmented_language_model_pair_loss_trajectory() -> None:
@@ -228,10 +230,10 @@ def test_cuda_bf16_segmented_language_model_pair_loss_trajectory() -> None:
     for _ in range(2):
         inputs = torch.randint(0, 64, (4, 12), generator=generator).cuda()
         targets = torch.randint(0, 64, (4, 12), generator=generator).cuda()
-        expected_losses, expected_trace, expected_gradients = _language_model_step(
+        expected_losses, expected_trace, expected_gradients, expected_metrics = _language_model_step(
             reference, reference_optimizer, reference_trace, inputs, targets
         )
-        actual_losses, actual_trace, actual_gradients = _language_model_step(
+        actual_losses, actual_trace, actual_gradients, actual_metrics = _language_model_step(
             optimized, optimized_optimizer, optimized_trace, inputs, targets
         )
 
@@ -248,13 +250,17 @@ def test_cuda_bf16_segmented_language_model_pair_loss_trajectory() -> None:
             strict=True,
         ):
             torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+        assert expected_metrics == {}
+        assert actual_metrics["performance/longshot_full_history_events"] == 2.0
 
 
+@pytest.mark.parametrize("unrope_keys", [False])
 def test_cuda_peak_memory_and_counters_prove_selected_only_materialization(
     record_property: Callable[[str, object], None],
+    unrope_keys: bool,
 ) -> None:
     torch.manual_seed(233)
-    reference = _processor(layers=4, topk=16)
+    reference = _processor(layers=4, topk=16, unrope_keys=unrope_keys)
     optimized = copy.deepcopy(reference)
     configure_longshot_full_history_execution(
         optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=2 * 1024 * 1024)
@@ -284,10 +290,14 @@ def test_cuda_peak_memory_and_counters_prove_selected_only_materialization(
     record_property("profile_counters", metrics)
     assert optimized_peak < reference_peak
     assert (
-        metrics["performance/longshot_full_history_selected_history_gather_bytes"]
-        < metrics["performance/longshot_full_history_reference_full_history_gather_bytes"]
+        metrics["performance/longshot_full_history_selected_history_logical_payload_bytes"]
+        < metrics["performance/longshot_full_history_reference_full_history_logical_payload_bytes"]
     )
     assert (
-        metrics["performance/longshot_full_history_optimized_score_fp32_temporary_bound_bytes"]
-        < metrics["performance/longshot_full_history_reference_score_fp32_temporary_bound_bytes"]
+        metrics[
+            "performance/longshot_full_history_optimized_score_estimated_fp32_working_set_bound_bytes"
+        ]
+        < metrics[
+            "performance/longshot_full_history_reference_score_estimated_fp32_working_set_bound_bytes"
+        ]
     )

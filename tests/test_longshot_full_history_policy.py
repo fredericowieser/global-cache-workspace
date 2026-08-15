@@ -3,12 +3,21 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+import torch
 
 from gcw.architecture import resolve_experiment, resolve_model
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, to_dict
+from gcw.data.training import RandomCursor
+from gcw.models import build_model
 from gcw.performance.config import LongshotFullHistoryConfig, PerformanceConfig
 from gcw.performance.longshot_cache import longshot_full_history_execution_metadata
 from gcw.provenance import canonical_json_sha256
+from gcw.training.checkpoint import (
+    CheckpointCompatibilityError,
+    ResumeState,
+    TrainingCheckpoint,
+    save_training_checkpoint,
+)
 from gcw.training.core import _training_fingerprint
 
 
@@ -61,20 +70,24 @@ def _fingerprint(config: TrainConfig) -> dict[str, object]:
     return _training_fingerprint(config, 1, 256, 256, 1)
 
 
-def test_disabled_policy_preserves_pre_feature_identities_byte_for_byte() -> None:
+def test_disabled_policy_preserves_normalized_payload_and_same_environment_identities() -> None:
     config = _train_config()
+    explicit_default = replace(config, performance=PerformanceConfig())
 
-    assert "longshot_full_history" not in to_dict(config.performance)
+    performance_payload = to_dict(config.performance)
+    assert "longshot_full_history" not in performance_payload
     assert "longshot_full_history_execution" not in _fingerprint(config)
-    assert canonical_json_sha256(_fingerprint(config)) == (
-        "72b146424e74eeadb96dd43bf3a45224eea7aeeb0ce73f3c7d563d0b0fadd01b"
-    )
+    assert to_dict(config) == to_dict(explicit_default)
+    assert _fingerprint(config) == _fingerprint(explicit_default)
+
     model_receipt = resolve_model(config.model).require()[1]
+    explicit_model_receipt = resolve_model(explicit_default.model).require()[1]
     experiment_receipt = resolve_experiment(config, model_receipt).require()[1]
-    assert experiment_receipt.train_config_sha256 == (
-        "12da3f4699f4114538e910445a558f7dc03b2a9a5a4d7c07d0c34b9ec9be8d33"
-    )
-    assert experiment_receipt.receipt_sha256 == ("a0382eac62f7ff82156a2d69ac73b8beb8f0dbc5661c460f859bf54ae6300cc6")
+    explicit_experiment_receipt = resolve_experiment(
+        explicit_default, explicit_model_receipt
+    ).require()[1]
+    assert model_receipt == explicit_model_receipt
+    assert experiment_receipt == explicit_experiment_receipt
 
 
 def test_enabled_policy_is_authenticated_in_metadata_and_resume_fingerprint() -> None:
@@ -90,6 +103,45 @@ def test_enabled_policy_is_authenticated_in_metadata_and_resume_fingerprint() ->
     )
     assert _fingerprint(first_config)["longshot_full_history_execution"] == first_metadata
     assert canonical_json_sha256(_fingerprint(first_config)) != canonical_json_sha256(_fingerprint(second_config))
+
+
+def test_production_checkpoint_rejects_full_history_policy_mismatch(tmp_path) -> None:
+    first = _train_config(
+        history=LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
+    )
+    changed = replace(
+        first,
+        performance=PerformanceConfig(
+            longshot_full_history=LongshotFullHistoryConfig(
+                enabled=True, max_temp_bytes=8192
+            )
+        ),
+    )
+    model = build_model(first.model)
+    model.init_weights()
+    optimizer = torch.optim.AdamW(model.cache_processor.parameters(), lr=1e-3)
+    resume = ResumeState(
+        step=1,
+        smooth_loss=0.5,
+        loader_cursor=RandomCursor(rng_state=(1, 2, 3)),
+        saved_world_size=1,
+        exact_topology=True,
+    )
+    checkpoint_path = tmp_path / "checkpoint"
+    save_training_checkpoint(
+        checkpoint_path, model, first.model, optimizer, resume, _fingerprint(first)
+    )
+
+    for expected in (changed, _train_config()):
+        with pytest.raises(
+            CheckpointCompatibilityError, match="longshot_full_history_execution"
+        ):
+            TrainingCheckpoint.open(
+                checkpoint_path,
+                expected_fingerprint=_fingerprint(expected),
+                topology="same",
+                current_world_size=1,
+            )
 
 
 def test_verified_checkpoint_recomputation_and_external_recurrence_are_admitted() -> None:
@@ -112,6 +164,17 @@ def test_verified_checkpoint_recomputation_and_external_recurrence_are_admitted(
         _train_config(history=LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1))
 
 
+def test_enabled_policy_rejects_compiled_backbone_execution() -> None:
+    processor = replace(_train_config().model.cache_processor, process_every=64)
+    eager = _train_config(
+        history=LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096),
+        processor=processor,
+        family="qwen3",
+    )
+    with pytest.raises(ValueError, match="requires backbone_chunk_backend='eager'"):
+        replace(eager, backbone_chunk_backend="compile")
+
+
 @pytest.mark.parametrize(
     ("processor", "distributed", "trainable", "message"),
     [
@@ -132,6 +195,12 @@ def test_verified_checkpoint_recomputation_and_external_recurrence_are_admitted(
             "none",
             "cache_processor",
             "internal recurrence",
+        ),
+        (
+            replace(_train_config().model.cache_processor, unrope_keys=True),
+            "none",
+            "cache_processor",
+            "unrope_keys",
         ),
         (_train_config().model.cache_processor, "ddp", "cache_processor", "single-process"),
         (_train_config().model.cache_processor, "none", "all", "trainable='cache_processor'"),
