@@ -118,6 +118,8 @@ GCW_RUN_CUDA_DIFFUSION_COMPILE_TESTS=1 \
 
 The smoke covers production field closures, concurrent first dispatch, copy and serialization isolation, refinement and field gradients, repeated noise/RNG events, multi-step eager/compiled AdamW trajectories, uninterrupted/resumed optimizer slots, and alternating shapes. Runner creation and dispatch counts are module-local. PyTorch exposes Dynamo counters process-wide, so their absolute values and since-materialization deltas use the `gcw.noisy_diffusion_compile_telemetry.v2` diagnostic schema and are explicitly excluded from acceptance decisions. Scoped compiler backends or profiler traces provide acceptance evidence instead.
 
+**[PERF INCREASE][PROCESSOR][PRELIMINARY]** On commit `6abe117`, fixed eager batch-2 row-0 screening reduced the warm median from `18.0686` to `17.2364` seconds/step on H200 (`1.048x`) and from `13.2356` to `12.3699` seconds/step on H100 (`1.070x`). Peak allocated memory was unchanged at approximately `31,778` MiB. Both real-Inductor CUDA smoke suites passed (`19/19` on each hardware lineage), but the production BF16 trajectories are not campaign-admitted: the final gradient norm changed by `+2.74%` on H200 and `+2.70%` on H100. The H200 final loss changed from `0.74052975` to `0.74048124`; the H100 final loss changed from `0.74041273` to `0.74025877`. Eager recurrence remains authoritative pending formal production-shape raw-gradient, cache-event, optimizer-state, RNG, and resume parity.
+
 
 ## Change control
 
