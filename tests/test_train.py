@@ -21,14 +21,14 @@ from gcw.data.training import build_training_stream
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
 from gcw.models.lora import LoRALinear
+from gcw.performance.checkpointing import transformer_layer_classes as _transformer_layer_classes
+from gcw.training.objectives import model_loss as _model_loss
 from gcw.training.core import (
     _build_training_model,
     _checkpoint_metadata,
     _checkpoint_state,
     _apply_trainable_policy,
     _load_initial_model,
-    _model_loss,
-    _transformer_layer_classes,
     _validate_train_batch,
     _wsd_lr,
     train,

@@ -79,6 +79,7 @@ reference/glossary
 
 development/architecture
 development/package-boundaries
+development/performance
 development/testing
 development/documentation
 development/invariants

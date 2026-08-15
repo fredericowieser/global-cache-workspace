@@ -137,6 +137,26 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `expected_source_ids_sha256` | `str \| None` | `None` |
 | `experiment_manifest` | `str \| None` | `None` |
 
+## `PhysicalBatchBandConfig`
+
+| Field | Type | Default |
+|---|---|---|
+| `max_padded_tokens` | `int` | `required` |
+| `physical_rows` | `int` | `required` |
+
+## `AdaptiveBatchingConfig`
+
+| Field | Type | Default |
+|---|---|---|
+| `enabled` | `bool` | `False` |
+| `bands` | `tuple[gcw.performance.config.PhysicalBatchBandConfig, ...]` | `(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2))` |
+
+## `PerformanceConfig`
+
+| Field | Type | Default |
+|---|---|---|
+| `adaptive_batching` | `gcw.performance.config.AdaptiveBatchingConfig` | `AdaptiveBatchingConfig(enabled=False, bands=(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2)))` |
+
 ## `TrainConfig`
 
 | Field | Type | Default |
@@ -161,6 +181,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `total_batch_size` | `int` | `0` |
 | `global_batch_rows` | `int` | `0` |
 | `logical_pair_grouping` | `bool` | `False` |
+| `performance` | `gcw.performance.config.PerformanceConfig` | `PerformanceConfig(adaptive_batching=AdaptiveBatchingConfig(enabled=False, bands=(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2))))` |
 | `learning_rate` | `float` | `0.0003` |
 | `adam_beta1` | `float` | `0.9` |
 | `adam_beta2` | `float` | `0.95` |

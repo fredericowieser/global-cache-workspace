@@ -42,11 +42,34 @@ Use `global_batch_rows` when experiments must consume the same examples per opti
 
 ### Adjacent logical-pair objective
 
-Set `logical_pair_grouping: true` to preserve an objective defined by adjacent two-row groups while using a larger physical batch. GCW computes answer-only cross-entropy as a token mean within each adjacent pair, averages the pair losses in the physical batch, then averages physical groups across gradient accumulation. With `global_batch_rows: 64`, every optimizer step remains the mean of exactly 32 pair losses regardless of whether the physical batch is 2, 4, or 8 rows.
+Set `logical_pair_grouping: true` to preserve an objective defined by adjacent two-row groups while using a larger physical batch. GCW computes answer-only cross-entropy as a token mean within each adjacent pair, averages the pair losses in the physical batch, then averages physical groups across gradient accumulation. With `global_batch_rows: 64`, every optimizer step remains the mean of exactly 32 pair losses regardless of whether the fixed physical batch is 2, 4, 8, or 16 rows.
 
 Logical pairing preserves source order and drops an incomplete final physical group instead of pairing the dataset tail with the next epoch. The SFT cursor records the post-group row, so exact-topology resume repeats the same drop-last transition. The objective requires an even physical batch, answer-only SFT, an even row-based global batch divisible by the physical batch, and zero router auxiliary loss. Noisy Diffusion is rejected because changing the physical batch changes RNG assignment; deterministic Diffusion with zero noise is supported.
 
 The option defaults to `false`. Its objective protocol, exact-resume fingerprint, run metadata, training loss, perplexity, and validation loss are distinct from ordinary token-mean SFT.
+
+#### Adaptive physical grouping
+
+Adaptive grouping is a separate default-off execution policy for the same objective:
+
+```yaml
+batch_size: 2                 # source stream remains one original pair
+global_batch_rows: 64
+logical_pair_grouping: true
+loss_backend: reference
+performance:
+  adaptive_batching:
+    enabled: true
+    bands:
+      - {max_padded_tokens: 1024, physical_rows: 16}
+      - {max_padded_tokens: 2048, physical_rows: 8}
+      - {max_padded_tokens: 3072, physical_rows: 4}
+      - {max_padded_tokens: 4096, physical_rows: 2}
+```
+
+At each optimizer step GCW reserves exactly 32 consecutive two-row source batches. It greedily collates only contiguous pairs into the largest admitted band, without sorting, bucketing, moving rows, or splitting pairs. Each physical group's pair-loss sum is divided by 32 before backward, so group count and shape cannot change objective weights. There remains exactly one gradient clip, schedule update, and AdamW step.
+
+Version 1 requires single-process execution, 64 global rows, a two-row source stream, answer-only logical pairing, `reference` loss, at most 4,096 tokens, and zero processor/LoRA dropout. Evaluation remains fixed at batch two. Noisy Diffusion and other admitted RNG-shape changes fail during configuration admission. The ordered bands and planner/weighting rules are authenticated in run metadata and the exact-resume fingerprint.
 
 Set `trainable: lora` with `model.lora` for low-rank backbone adaptation. GCW freezes base weights and trains only `lora_a` and `lora_b` on explicitly named projections. Zero-initialized output factors preserve the starting backbone exactly.
 

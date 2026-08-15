@@ -3,12 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 import os
 from threading import Lock
-from typing import Any, TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 import torch
 import torch.nn as nn
 
-from gcw.models.cache_processors.ops import (
+from gcw.performance._compile import require_torch_compile
+from gcw.performance.prepared_bt import (
     PreparedBatchedCacheProcessorParameters,
     run_prepared_batched_cache_processors,
 )
@@ -46,13 +47,14 @@ def resolve_bt_processor_backend() -> BTProcessorBackend:
     if requested not in {"eager", "compile"}:
         raise ValueError(f"{_BT_BACKEND_ENV} must be 'eager' or 'compile'")
     if requested == "compile":
-        _require_compiler(_BT_BACKEND_ENV)
+        require_torch_compile(f"{_BT_BACKEND_ENV}=compile")
     return requested  # type: ignore[return-value]
 
 
 def bt_processor_backend_metadata(backend: BTProcessorBackend | None = None) -> dict[str, object]:
     """Return provenance and a stable fingerprint for the selected BT region backend."""
     selected = resolve_bt_processor_backend() if backend is None else backend
+    # Keep the v1 region identifier stable so code-only module moves do not invalidate exact resume.
     execution = {
         "schema": "gcw.bt_processor_backend.v1",
         "effective_backend": selected,
@@ -64,6 +66,11 @@ def bt_processor_backend_metadata(backend: BTProcessorBackend | None = None) -> 
         **execution,
         "requested_via": _BT_BACKEND_ENV,
         "requested_value": os.environ.get(_BT_BACKEND_ENV, "eager"),
+        "implementation_module": "gcw.performance.backends.cache_processors",
+        "implementation_symbols": [
+            "gcw.performance.backends.cache_processors.run_prepared_bt_processor_region",
+            "gcw.performance.prepared_bt.run_prepared_batched_cache_processors",
+        ],
         "fingerprint_sha256": canonical_json_sha256(execution),
     }
 
@@ -95,7 +102,7 @@ def _get_compiled_runner() -> PreparedProcessorRunner:
         return _compiled_runner
     with _compiled_runner_lock:
         if _compiled_runner is None:
-            compiler = _require_compiler(_BT_BACKEND_ENV)
+            compiler = require_torch_compile(f"{_BT_BACKEND_ENV}=compile")
             try:
                 _compiled_runner = cast(
                     PreparedProcessorRunner,
@@ -132,7 +139,7 @@ def resolve_cache_processor_backend(model_config: ModelConfig) -> CacheProcessor
             f"{_CACHE_BACKEND_ENV}=compile rejects Diffusion-BGT with noise_scale>0; "
             "fullgraph noise equivalence is not established"
         )
-    _require_compiler(_CACHE_BACKEND_ENV)
+    require_torch_compile(f"{_CACHE_BACKEND_ENV}=compile")
     return "compile"
 
 
@@ -144,6 +151,7 @@ def cache_processor_backend_metadata(
     selected = resolve_cache_processor_backend(model_config) if backend is None else backend
     diffusion = model_config.diffusion_processor
     family = "diffusion_bgt" if diffusion is not None else ("flow_bgt" if model_config.flow_processor else "bgt")
+    # Keep the v1 region identifiers stable so code-only module moves do not invalidate exact resume.
     execution = {
         "schema": "gcw.cache_processor_backend.v1",
         "effective_backend": selected,
@@ -162,6 +170,11 @@ def cache_processor_backend_metadata(
         **execution,
         "requested_via": _CACHE_BACKEND_ENV,
         "requested_value": os.environ.get(_CACHE_BACKEND_ENV, "eager"),
+        "implementation_module": "gcw.performance.backends.cache_processors",
+        "implementation_symbols": [
+            "gcw.performance.backends.cache_processors._run_bgt_transform",
+            "gcw.performance.backends.cache_processors._run_bgt_scaled_update",
+        ],
         "fingerprint_sha256": canonical_json_sha256(execution),
     }
 
@@ -207,7 +220,7 @@ def _get_compiled_bgt_runner(*, scaled_update: bool) -> BGTProcessorRunner:
     with _compiled_bgt_runner_lock:
         runner = _compiled_bgt_scaled_update_runner if scaled_update else _compiled_bgt_transform_runner
         if runner is None:
-            compiler = _require_compiler(_CACHE_BACKEND_ENV)
+            compiler = require_torch_compile(f"{_CACHE_BACKEND_ENV}=compile")
             try:
                 runner = cast(BGTProcessorRunner, compiler(function, **_COMPILE_OPTIONS))
             except Exception as error:
@@ -219,14 +232,3 @@ def _get_compiled_bgt_runner(*, scaled_update: bool) -> BGTProcessorRunner:
             else:
                 _compiled_bgt_transform_runner = runner
     return runner
-
-
-def _require_compiler(environment_name: str) -> Callable[..., Any]:
-    compiler = getattr(torch, "compile", None)
-    if not callable(compiler):
-        raise RuntimeError(f"{environment_name}=compile requires torch.compile")
-    dynamo = getattr(torch, "_dynamo", None)
-    dynamo_config = getattr(dynamo, "config", None)
-    if bool(getattr(dynamo_config, "suppress_errors", False)):
-        raise RuntimeError(f"{environment_name}=compile requires torch._dynamo.config.suppress_errors=False")
-    return compiler

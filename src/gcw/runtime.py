@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, cast
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -55,15 +55,6 @@ def cleanup_distributed() -> None:
         dist.destroy_process_group()
 
 
-def maybe_compile(model: torch.nn.Module) -> torch.nn.Module:
-    mode = os.environ.get("GCW_COMPILE", "0").strip().lower()
-    if mode in {"", "0", "false", "no", "none", "off"}:
-        return model
-    if mode == "default":
-        return cast(torch.nn.Module, torch.compile(model))
-    if mode == "reduce-overhead":
-        return cast(torch.nn.Module, torch.compile(model, mode="reduce-overhead"))
-    raise ValueError("GCW_COMPILE must be 0, default, or reduce-overhead")
 
 
 def fsync_directory(path: Path) -> None:

@@ -22,8 +22,12 @@ printf 'job=%s node=%s source_commit=%s started=%s\n' \
   src/gcw/architecture.py \
   src/gcw/provenance.py \
   src/gcw/config.py \
+  src/gcw/performance/config.py \
+  src/gcw/performance/adjacent_pairs.py \
+  src/gcw/performance/checkpointing.py \
+  src/gcw/performance/prepared_bt.py \
+  src/gcw/training/objectives.py \
   src/gcw/models/__init__.py \
-  src/gcw/distill/__init__.py \
   src/gcw/analysis/__init__.py \
   examples/cpu_smoke.py
 BASH_BIN="$(command -v bash)"

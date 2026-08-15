@@ -16,12 +16,14 @@ from gcw.models.cache_processors.longshot import (
     _gradient_checkpointing_enabled,
     longshot_gradient_checkpointing_override,
 )
+from gcw.performance.checkpointing import (
+    longshot_gradient_checkpointing_decision as _longshot_gradient_checkpointing_decision,
+    longshot_gradient_checkpointing_metadata as _longshot_gradient_checkpointing_runtime,
+)
+from gcw.training.objectives import model_loss as _model_loss
 from gcw.training.checkpoint import CheckpointCompatibilityError
 from gcw.training.core import (
     _eval_loss,
-    _longshot_gradient_checkpointing_decision,
-    _longshot_gradient_checkpointing_runtime,
-    _model_loss,
     _training_fingerprint,
     train,
 )

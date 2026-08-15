@@ -21,30 +21,52 @@ from gcw.runtime import (
     cleanup_distributed,
     dist_info,
     init_distributed,
-    maybe_compile,
     print0,
 )
-from gcw.config import LossBackend, TrainConfig, load_train_config, to_dict
+from gcw.config import TrainConfig, load_train_config, to_dict
 from gcw.data.shards import data_loader
 from gcw.data.training import TrainingBatchStream, build_training_stream, cursor_to_dict, training_data_identity
 from gcw.flops import total_training_flops, training_flops_per_token
 from gcw.models import build_model
-from gcw.models.backbones.backend import (
+from gcw.performance.adjacent_pairs import (
+    PAIRS_PER_STEP,
+    adaptive_batching_metadata,
+    build_adaptive_pair_step,
+    collate_pair_group,
+)
+from gcw.performance.backends.qwen3 import (
     configure_qwen3_backbone_chunk_backend,
     qwen3_backbone_chunk_backend_metadata,
 )
-from gcw.models.backbones.transformer import Block
+from gcw.performance.checkpointing import (
+    apply_fsdp_activation_checkpointing as _apply_fsdp_activation_checkpointing,
+    configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
+    longshot_gradient_checkpointing_decision as _longshot_gradient_checkpointing_decision,
+    longshot_gradient_checkpointing_metadata as _longshot_gradient_checkpointing_runtime,
+    longshot_gradient_checkpointing_step_metrics as _longshot_gradient_checkpointing_step_metrics,
+    transformer_layer_classes as _transformer_layer_classes,
+)
 from gcw.models.lora import LoRALinear
-from gcw.models.cache_processors.backend import (
+from gcw.performance.backends.cache_processors import (
     bt_processor_backend_metadata,
     cache_processor_backend_metadata,
     resolve_cache_processor_backend,
 )
-from gcw.models.cache_processors.longshot import longshot_gradient_checkpointing_override
-from gcw.models.losses import loss_backend_metadata, require_loss_backend
+from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
+from gcw.performance.losses import loss_backend_metadata, require_loss_backend
+from gcw.performance.telemetry import (
+    cache_processor_metrics as _cache_processor_metrics,
+    model_runtime_backends as _model_runtime_backends,
+)
 from gcw.params import processor_params, total_non_embedding_params
 from gcw.tracking import RunTracker
 from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
+from gcw.training.objectives import (
+    adjacent_pair_loss_sum,
+    logical_pair_grouped_loss as _logical_pair_grouped_loss,
+    model_loss as _model_loss,
+    row_loss_sums_and_counts as _row_loss_sums_and_counts,
+)
 
 
 def train_from_config(path: str | Path) -> None:
@@ -59,6 +81,13 @@ def train(config: TrainConfig) -> None:
     device = init_distributed(config.distributed)
     require_loss_backend(config.loss_backend, device)
     _, rank, _, world_size = dist_info()
+    adaptive_batching = config.performance.adaptive_batching
+    if adaptive_batching.enabled and (
+        world_size != 1
+        or int(os.environ.get("WORLD_SIZE", "1")) != 1
+        or (dist.is_available() and dist.is_initialized())
+    ):
+        raise ValueError("adaptive batching v1 requires one process and no initialized distributed group")
     micro_tokens = config.batch_size * config.sequence_len * world_size
     micro_rows = config.batch_size * world_size
     if config.global_batch_rows:
@@ -130,7 +159,7 @@ def train(config: TrainConfig) -> None:
         model = _wrap_fsdp(model, config, device)
     else:
         regional_backend = resolve_cache_processor_backend(config.model)
-        if _whole_model_compile_requested() and (
+        if whole_model_compile_requested() and (
             config.model.variant == "bt"
             or config.backbone_chunk_backend == "compile"
             or regional_backend == "compile"
@@ -145,7 +174,7 @@ def train(config: TrainConfig) -> None:
             and config.backbone_chunk_backend == "eager"
             and regional_backend == "eager"
         ):
-            model = maybe_compile(model)
+            model = maybe_compile_whole_model(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
             model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
 
@@ -169,6 +198,9 @@ def train(config: TrainConfig) -> None:
         "rows_per_step": micro_rows * grad_accum_steps,
         "logical_pair_grouping": config.logical_pair_grouping,
         "logical_pairs_per_step": config.global_batch_rows // 2 if config.logical_pair_grouping else None,
+        "adaptive_batching": adaptive_batching_metadata(
+            adaptive_batching, global_batch_rows=config.global_batch_rows
+        ),
         "total_training_tokens": target_tokens,
         "training_flops_per_token": flops_per_tok,
         "total_training_flops": total_training_flops(config.model, target_tokens, config.sequence_len),
@@ -227,9 +259,22 @@ def train(config: TrainConfig) -> None:
         segmented_window_checkpointed_microbatches = 0
         adaptive_checkpointing_decisions: list[bool] = []
         adaptive_padded_sequence_lengths: list[int] = []
-        for micro_step in range(grad_accum_steps):
-            batch = next(stream)
-            if step == 0 and micro_step == 0:
+        adaptive_step_plan = (
+            build_adaptive_pair_step(stream, adaptive_batching) if adaptive_batching.enabled else None
+        )
+        adaptive_physical_batches = (
+            tuple(collate_pair_group(adaptive_step_plan, group) for group in adaptive_step_plan.groups)
+            if adaptive_step_plan is not None
+            else ()
+        )
+        physical_microsteps = len(adaptive_physical_batches) if adaptive_step_plan is not None else grad_accum_steps
+        for micro_step in range(physical_microsteps):
+            batch = (
+                adaptive_physical_batches[micro_step].batch
+                if adaptive_step_plan is not None
+                else next(stream)
+            )
+            if adaptive_step_plan is None and step == 0 and micro_step == 0:
                 _validate_train_batch(batch.x, batch.y, config)
             batch_non_padding_tokens += int(
                 batch.x.numel() if batch.attention_mask is None else batch.attention_mask.sum().item()
@@ -246,14 +291,31 @@ def train(config: TrainConfig) -> None:
             if longshot_checkpointing is not None:
                 adaptive_checkpointing_decisions.append(longshot_checkpointing)
                 adaptive_padded_sequence_lengths.append(batch.x.shape[1])
-            sync_context = _no_sync(model, enabled=micro_step < grad_accum_steps - 1, use_fsdp=use_fsdp)
+            sync_context = _no_sync(
+                model,
+                enabled=micro_step < physical_microsteps - 1,
+                use_fsdp=use_fsdp,
+            )
             with sync_context:
                 with torch.autocast(
                     device_type=device.type,
                     dtype=torch.bfloat16,
                     enabled=config.bf16 and device.type == "cuda",
                 ):
-                    if config.logical_pair_grouping:
+                    if adaptive_step_plan is not None:
+                        loss = adjacent_pair_loss_sum(
+                            model,
+                            batch.x,
+                            batch.y,
+                            loss_backend=config.loss_backend,
+                            attention_mask=batch.attention_mask,
+                            activation_checkpoint_windows=config.activation_checkpoint_windows,
+                            activation_checkpoint_min_padded_sequence_length=(
+                                config.activation_checkpoint_min_padded_sequence_length
+                            ),
+                            longshot_gradient_checkpointing=longshot_checkpointing,
+                        )
+                    elif config.logical_pair_grouping:
                         loss = _logical_pair_grouped_loss(
                             model,
                             batch.x,
@@ -279,8 +341,13 @@ def train(config: TrainConfig) -> None:
                             ),
                             longshot_gradient_checkpointing=longshot_checkpointing,
                         )
-                loss_total += float(loss.detach().cpu())
-                (loss / grad_accum_steps).backward()
+                normalized_loss = (
+                    loss / PAIRS_PER_STEP if adaptive_step_plan is not None else loss / grad_accum_steps
+                )
+                loss_total += float(
+                    normalized_loss.detach().cpu() if adaptive_step_plan is not None else loss.detach().cpu()
+                )
+                normalized_loss.backward()
         if audit_output is not None and step + 1 == config.max_steps:
             audit_gradients = _gradient_audit(model)
         grad_norm = None
@@ -298,7 +365,7 @@ def train(config: TrainConfig) -> None:
         step_seconds = time.perf_counter() - step_start
         tokens_seen = tokens_per_step * step_num
         flops_seen = flops_per_tok * tokens_seen
-        train_loss = loss_total / grad_accum_steps
+        train_loss = loss_total if adaptive_step_plan is not None else loss_total / grad_accum_steps
         if config.logical_pair_grouping and dist.is_available() and dist.is_initialized():
             metric_totals = torch.tensor(
                 [train_loss, batch_non_padding_tokens, batch_supervised_tokens],
@@ -324,7 +391,9 @@ def train(config: TrainConfig) -> None:
             "train/flops": flops_seen,
             "train/progress": step_num / config.max_steps,
             "train/epoch": getattr(stream.cursor, "epoch", None),
-            "train/grad_accum_steps": grad_accum_steps,
+            "train/grad_accum_steps": physical_microsteps,
+            "train/nominal_grad_accum_steps": grad_accum_steps,
+            "train/adaptive_batching_active": float(adaptive_step_plan is not None),
             "train/micro_tokens_per_step": micro_tokens,
             "train/tokens_per_step": tokens_per_step,
             "train/rows_per_step": micro_rows * grad_accum_steps,
@@ -338,7 +407,7 @@ def train(config: TrainConfig) -> None:
                 segmented_window_checkpointed_microbatches
             ),
             "train/segmented_window_eager_microbatches": (
-                grad_accum_steps - segmented_window_checkpointed_microbatches
+                physical_microsteps - segmented_window_checkpointed_microbatches
             ),
             "timing/step_seconds": step_seconds,
             "timing/tokens_per_second": tokens_per_step / max(step_seconds, 1e-12),
@@ -346,6 +415,8 @@ def train(config: TrainConfig) -> None:
             "optim/grad_norm": _maybe_float(grad_norm),
             "optim/weight_decay": weight_decay,
         }
+        if adaptive_step_plan is not None:
+            train_metrics.update(adaptive_step_plan.metrics())
         if device.type == "cuda":
             train_metrics["system/vram_allocated_mib"] = torch.cuda.max_memory_allocated(device) / 1024 / 1024
             train_metrics["system/vram_reserved_mib"] = torch.cuda.max_memory_reserved(device) / 1024 / 1024
@@ -499,19 +570,6 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
     raise ValueError(f"unsupported trainable policy: {policy}")
 
 
-def _whole_model_compile_requested() -> bool:
-    value = os.environ.get("GCW_COMPILE", "0").strip().lower()
-    return value not in {"", "0", "false", "no", "none", "off"}
-
-
-def _model_runtime_backends(model: torch.nn.Module, device: torch.device) -> dict[str, str]:
-    model = _unwrap(model)
-    model = getattr(model, "backbone", model)
-    for module in model.modules():
-        effective_backends = getattr(module, "effective_backends", None)
-        if effective_backends is not None:
-            return effective_backends(device)
-    return {}
 
 
 def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -557,6 +615,16 @@ def _training_fingerprint(
             config.activation_checkpoint_min_padded_sequence_length
         ),
         "loss_backend": config.loss_backend,
+        **(
+            {
+                "adaptive_batching": adaptive_batching_metadata(
+                    config.performance.adaptive_batching,
+                    global_batch_rows=config.global_batch_rows,
+                )
+            }
+            if config.performance.adaptive_batching.enabled
+            else {}
+        ),
         **(
             {
                 "longshot_gradient_checkpointing_seq_len_threshold": (
@@ -736,94 +804,6 @@ def _validate_train_batch(x: torch.Tensor, y: torch.Tensor, config: TrainConfig)
     if x.shape[1] > config.sequence_len:
         raise ValueError(f"loader sequence length {x.shape[1]} exceeds config.sequence_len {config.sequence_len}")
 
-
-def _model_loss(
-    model: torch.nn.Module,
-    input_ids: torch.Tensor,
-    targets: torch.Tensor,
-    *,
-    loss_reduction: str = "mean",
-    loss_backend: LossBackend = "reference",
-    attention_mask: torch.Tensor | None = None,
-    activation_checkpoint_windows: int = 0,
-    activation_checkpoint_min_padded_sequence_length: int = 0,
-    longshot_gradient_checkpointing: bool | None = None,
-) -> torch.Tensor:
-    kwargs: dict[str, Any] = {
-        "loss_reduction": loss_reduction,
-        "loss_backend": loss_backend,
-    }
-    if attention_mask is not None:
-        kwargs["attention_mask"] = attention_mask
-    if activation_checkpoint_windows:
-        kwargs["activation_checkpoint_windows"] = activation_checkpoint_windows
-        kwargs["activation_checkpoint_min_padded_sequence_length"] = (
-            activation_checkpoint_min_padded_sequence_length
-        )
-    checkpointing_context = (
-        nullcontext()
-        if longshot_gradient_checkpointing is None
-        else longshot_gradient_checkpointing_override(longshot_gradient_checkpointing)
-    )
-    with checkpointing_context:
-        return model(input_ids, targets, **kwargs)
-
-
-def _row_loss_sums_and_counts(
-    model: torch.nn.Module,
-    input_ids: torch.Tensor,
-    targets: torch.Tensor,
-    *,
-    loss_backend: LossBackend = "reference",
-    attention_mask: torch.Tensor | None = None,
-    activation_checkpoint_windows: int = 0,
-    activation_checkpoint_min_padded_sequence_length: int = 0,
-    longshot_gradient_checkpointing: bool | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return one answer-token CE sum and supervised-token count per row."""
-    row_sums = _model_loss(
-        model,
-        input_ids,
-        targets,
-        loss_reduction="row_sum",
-        loss_backend=loss_backend,
-        attention_mask=attention_mask,
-        activation_checkpoint_windows=activation_checkpoint_windows,
-        activation_checkpoint_min_padded_sequence_length=activation_checkpoint_min_padded_sequence_length,
-        longshot_gradient_checkpointing=longshot_gradient_checkpointing,
-    )
-    if row_sums.shape != (targets.shape[0],):
-        raise RuntimeError(f"row_sum loss returned shape {tuple(row_sums.shape)} for batch {targets.shape[0]}")
-    return row_sums, (targets >= 0).sum(dim=1).to(dtype=row_sums.dtype)
-
-
-def _logical_pair_grouped_loss(
-    model: torch.nn.Module,
-    input_ids: torch.Tensor,
-    targets: torch.Tensor,
-    *,
-    loss_backend: LossBackend = "reference",
-    attention_mask: torch.Tensor | None = None,
-    activation_checkpoint_windows: int = 0,
-    activation_checkpoint_min_padded_sequence_length: int = 0,
-    longshot_gradient_checkpointing: bool | None = None,
-) -> torch.Tensor:
-    """Average adjacent two-row token-mean losses within one physical group."""
-    if targets.shape[0] < 2 or targets.shape[0] % 2:
-        raise ValueError("logical pair grouping requires an even physical batch with at least two rows")
-    row_sums, row_counts = _row_loss_sums_and_counts(
-        model,
-        input_ids,
-        targets,
-        loss_backend=loss_backend,
-        attention_mask=attention_mask,
-        activation_checkpoint_windows=activation_checkpoint_windows,
-        activation_checkpoint_min_padded_sequence_length=activation_checkpoint_min_padded_sequence_length,
-        longshot_gradient_checkpointing=longshot_gradient_checkpointing,
-    )
-    pair_sums = row_sums.reshape(-1, 2).sum(dim=1)
-    pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
-    return (pair_sums / pair_counts.clamp_min(1.0)).mean()
 
 
 def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> torch.optim.AdamW:
@@ -1100,121 +1080,6 @@ def _fsdp_param_init_fn(device: torch.device):
     return init_fn
 
 
-def _longshot_gradient_checkpointing_decision(
-    config: TrainConfig,
-    input_ids: torch.Tensor,
-) -> bool | None:
-    threshold = config.longshot_gradient_checkpointing_seq_len_threshold
-    if threshold is None:
-        return None
-    return input_ids.shape[1] >= threshold
-
-
-def _longshot_gradient_checkpointing_runtime(config: TrainConfig) -> dict[str, Any] | None:
-    if config.model.variant != "longshot":
-        return None
-    processor = config.model.cache_processor
-    if processor is None:
-        raise RuntimeError("Longshot runtime metadata requires a cache processor")
-    threshold = config.longshot_gradient_checkpointing_seq_len_threshold
-    adaptive = threshold is not None
-    return {
-        "policy": "padded_sequence_length_threshold" if adaptive else "model_config",
-        "model_config_gradient_checkpointing": processor.gradient_checkpointing,
-        "padded_sequence_length_threshold": threshold,
-        "checkpoint_when": (
-            "padded_input_sequence_length >= threshold" if adaptive else "model.cache_processor.gradient_checkpointing"
-        ),
-        "short_microbatches": "eager" if adaptive else None,
-        "long_microbatches": "checkpointed" if adaptive else None,
-        "implementation": (
-            "torch.utils.checkpoint.checkpoint"
-            if adaptive or processor.gradient_checkpointing
-            else "eager"
-        ),
-        "boundary": "longshot_processor_layer",
-        "use_reentrant": False,
-        "preserve_rng_state": True,
-        "scope": "physical_train_and_eval_forward",
-        "requires_training_and_grad": True,
-        "sequence_length_source": "input_ids.shape[1] after batch padding",
-    }
-
-
-def _longshot_gradient_checkpointing_step_metrics(
-    decisions: list[bool],
-    padded_sequence_lengths: list[int],
-) -> dict[str, float]:
-    if not decisions:
-        return {}
-    checkpointed = sum(decisions)
-    total = len(decisions)
-    return {
-        "cache_processor/longshot_checkpointed_microbatches": float(checkpointed),
-        "cache_processor/longshot_eager_microbatches": float(total - checkpointed),
-        "cache_processor/longshot_checkpointed_microbatch_fraction": checkpointed / total,
-        "cache_processor/longshot_padded_sequence_length_min": float(min(padded_sequence_lengths)),
-        "cache_processor/longshot_padded_sequence_length_max": float(max(padded_sequence_lengths)),
-    }
-
-
-def _configure_native_activation_checkpointing(
-    model: torch.nn.Module,
-    policy: str,
-) -> dict[str, Any]:
-    """Apply checkpointing without wrapping modules or changing state-dict names."""
-    from gcw.models.cache_processors.standard import CacheProcessor
-
-    processors = [module for module in model.modules() if isinstance(module, CacheProcessor)]
-    enabled = policy == "standard_processor_layers"
-    if enabled and not processors:
-        raise ValueError("activation_checkpointing='standard_processor_layers' found no standard processor layers")
-    for processor in processors:
-        processor.activation_checkpointing = enabled
-    layer_boundaries = sum(len(processor.layers) for processor in processors)
-    return {
-        "policy": policy,
-        "implementation": "torch.utils.checkpoint.checkpoint" if enabled else "eager",
-        "boundary": "standard_processor_layer" if enabled else None,
-        "use_reentrant": False if enabled else None,
-        "preserve_rng_state": True if enabled else None,
-        "processor_blocks": len(processors),
-        "layer_boundaries": layer_boundaries if enabled else 0,
-    }
-
-
-def _transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
-    classes: set[type[torch.nn.Module]] = {Block}
-    if family == "gemma4":
-        from gcw.models.backbones.gemma4 import Gemma4Block
-
-        classes.add(Gemma4Block)
-    elif family in {"qwen3_5", "qwen3_5_moe"}:
-        from gcw.models.backbones.qwen3 import Qwen35Block, Qwen35MoeBlock
-
-        classes.add(Qwen35Block)
-        classes.add(Qwen35MoeBlock)
-    return classes
-
-
-def _apply_fsdp_activation_checkpointing(model: torch.nn.Module, *, family: str) -> None:
-    enabled = os.environ.get("GCW_FSDP_ACTIVATION_CHECKPOINTING", "1").lower() in {"1", "true", "yes", "on"}
-    if not enabled:
-        return
-    try:
-        from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-            CheckpointImpl,
-            apply_activation_checkpointing,
-            checkpoint_wrapper,
-        )
-    except ImportError:
-        return
-    layer_classes = _transformer_layer_classes(family)
-    wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
-    apply_activation_checkpointing(
-        model, checkpoint_wrapper_fn=wrapper, check_fn=lambda module: type(module) in layer_classes
-    )
-
 
 def _save_training_checkpoint(
     path: Path,
@@ -1237,16 +1102,6 @@ def _save_training_checkpoint(
         return
     save_checkpoint(path, _unwrap(model), model_config, checkpoint_state)
 
-
-def _cache_processor_metrics(model) -> dict[str, float]:
-    model = _unwrap(model)
-    model = getattr(model, "_orig_mod", model)
-    processor = getattr(model, "cache_processor", None)
-    block = getattr(processor, "block", None)
-    pop_metrics = getattr(block, "pop_iteration_metrics", None)
-    if pop_metrics is None:
-        return {}
-    return pop_metrics()
 
 
 def _compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:

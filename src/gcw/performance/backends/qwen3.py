@@ -8,6 +8,7 @@ from typing import Any, Literal
 import torch
 import torch.nn as nn
 
+from gcw.performance._compile import require_torch_compile
 from gcw.provenance import canonical_json_sha256
 
 
@@ -33,13 +34,7 @@ def validate_qwen3_backbone_chunk_backend(backend: Qwen3BackboneChunkBackend) ->
         return
     if backend != "compile":
         raise ValueError(f"unsupported Qwen3 backbone chunk backend: {backend}")
-    compiler = getattr(torch, "compile", None)
-    if not callable(compiler):
-        raise RuntimeError("backbone_chunk_backend=compile requires torch.compile")
-    dynamo = getattr(torch, "_dynamo", None)
-    dynamo_config = getattr(dynamo, "config", None)
-    if bool(getattr(dynamo_config, "suppress_errors", False)):
-        raise RuntimeError("backbone_chunk_backend=compile requires torch._dynamo.config.suppress_errors=False")
+    require_torch_compile("backbone_chunk_backend=compile")
 
 
 def configure_qwen3_backbone_chunk_backend(
@@ -66,6 +61,7 @@ def qwen3_backbone_chunk_backend_metadata(
     backend: Qwen3BackboneChunkBackend,
 ) -> dict[str, object]:
     """Return stable provenance for the explicitly selected Qwen3 chunk region."""
+    # Keep the v1 region identifier stable so code-only module moves do not invalidate exact resume.
     execution = {
         "schema": "gcw.qwen3_backbone_chunk_backend.v1",
         "effective_backend": backend,
@@ -82,6 +78,10 @@ def qwen3_backbone_chunk_backend_metadata(
         **execution,
         "requested_via": "TrainConfig.backbone_chunk_backend",
         "requested_value": backend,
+        "implementation_module": "gcw.performance.backends.qwen3",
+        "implementation_symbol": (
+            "gcw.performance.backends.qwen3._qwen3_backbone_chunk_tensor_region"
+        ),
         "fingerprint_sha256": canonical_json_sha256(execution),
     }
 
@@ -160,9 +160,7 @@ def _get_qwen3_compiled_runner(backbone: nn.Module) -> Qwen3ChunkRunner:
     with _qwen3_compiled_runners_lock:
         runner = backbone.__dict__.get(_QWEN3_RUNNER_ATTRIBUTE)
         if runner is None:
-            compiler = getattr(torch, "compile", None)
-            if not callable(compiler):
-                raise RuntimeError("backbone_chunk_backend=compile requires torch.compile")
+            compiler = require_torch_compile("backbone_chunk_backend=compile")
             try:
                 runner = compiler(partial(_qwen3_backbone_chunk_tensor_region, backbone), **_QWEN3_COMPILE_OPTIONS)
             except Exception as error:

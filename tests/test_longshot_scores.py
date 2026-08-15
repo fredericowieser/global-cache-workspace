@@ -8,7 +8,7 @@ import torch
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.cache_processors import longshot as longshot_module
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
-from gcw.models.cache_processors.longshot_scores import (
+from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
     chunked_fp32_squared_l2,
     eager_fp32_l2_norm,

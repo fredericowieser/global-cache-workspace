@@ -23,7 +23,7 @@ from gcw.evaluation.scoring import (
     trim_generated_token_ids,
     truncate_context_continuation,
 )
-from gcw.models.losses import checkpoint_loss_backend
+from gcw.performance.losses import checkpoint_loss_backend
 
 
 _encode_generate_prompt = encode_generate_prompt

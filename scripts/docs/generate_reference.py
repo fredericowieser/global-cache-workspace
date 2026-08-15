@@ -20,6 +20,11 @@ from gcw.config import (
     WandbConfig,
     WorkspaceFlowRefinementConfig,
 )
+from gcw.performance.config import (
+    AdaptiveBatchingConfig,
+    PerformanceConfig,
+    PhysicalBatchBandConfig,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 GENERATED = ROOT / "docs" / "_generated"
@@ -29,6 +34,9 @@ CONFIG_TYPES = (
     FlowProcessorConfig,
     WorkspaceFlowRefinementConfig,
     DataConfig,
+    PhysicalBatchBandConfig,
+    AdaptiveBatchingConfig,
+    PerformanceConfig,
     TrainConfig,
     ResumeConfig,
     WandbConfig,

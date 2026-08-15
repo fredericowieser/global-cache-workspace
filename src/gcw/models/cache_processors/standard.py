@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from gcw.config import CacheProcessorConfig, DiffusionProcessorConfig, FlowProcessorConfig, ModelConfig
-from gcw.models.cache_processors.backend import (
+from gcw.performance.backends.cache_processors import (
     BTProcessorBackend,
     CacheProcessorBackend,
     bt_processor_backend_metadata,
@@ -17,19 +17,21 @@ from gcw.models.cache_processors.backend import (
     run_bgt_processor_region,
     run_prepared_bt_processor_region,
 )
+from gcw.performance.prepared_bt import (
+    PreparedBatchedCacheProcessorParameters,
+    prepare_batched_cache_processor_parameters,
+    run_batched_cache_processors,
+)
 from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
-    PreparedBatchedCacheProcessorParameters,
     gather_cache_layers,
     gather_cache_values,
     merge_global_kv,
     merge_global_values,
     merge_layer_kv,
     merge_layer_values,
-    prepare_batched_cache_processor_parameters,
     rotary_for_indices,
-    run_batched_cache_processors,
     scatter_cache_layers,
     scatter_cache_values,
     select_kv_norm_indices,

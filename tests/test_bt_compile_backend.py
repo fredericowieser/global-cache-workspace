@@ -7,10 +7,13 @@ import torch
 
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig
 from gcw.models import build_model
-from gcw.models.cache_processors import backend as backend_module
-from gcw.models.cache_processors.backend import bt_processor_backend_metadata
+from gcw.performance.backends import cache_processors as backend_module
+from gcw.performance.backends.cache_processors import bt_processor_backend_metadata
 from gcw.models.model import LanguageModel
-from gcw.training.core import _configure_native_activation_checkpointing, _training_fingerprint
+from gcw.performance.checkpointing import (
+    configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
+)
+from gcw.training.core import _training_fingerprint
 
 
 def _config() -> ModelConfig:

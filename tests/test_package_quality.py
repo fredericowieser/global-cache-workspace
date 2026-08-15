@@ -11,6 +11,7 @@ import sys
 def test_package_version_and_curated_subpackage_exports() -> None:
     import gcw
     import gcw.analysis as analysis
+    import gcw.performance as performance
 
     assert gcw.__version__ == version("gcw")
     assert gcw.__all__ == [
@@ -30,6 +31,11 @@ def test_package_version_and_curated_subpackage_exports() -> None:
         "deterministic_masks",
         "synergy_from_losses",
     )
+    assert performance.__all__ == (
+        "AdaptiveBatchingConfig",
+        "PerformanceConfig",
+        "PhysicalBatchBandConfig",
+    )
 
 
 def test_removed_compatibility_modules_are_not_packaged() -> None:
@@ -42,6 +48,10 @@ def test_removed_compatibility_modules_are_not_packaged() -> None:
         "gcw.models.gemma4",
         "gcw.models.llama",
         "gcw.models.qwen3",
+        "gcw.models.backbones.backend",
+        "gcw.models.cache_processors.backend",
+        "gcw.models.cache_processors.longshot_scores",
+        "gcw.models.losses",
     )
     for module in legacy_modules:
         try:

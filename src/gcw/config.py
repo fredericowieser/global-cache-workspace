@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 import yaml
 
+from gcw.performance.config import PerformanceConfig
+
 
 Variant = Literal["tf", "bt", "bgt", "icarus", "longshot"]
 Family = Literal["smollm", "llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"]
@@ -605,6 +607,7 @@ class TrainConfig:
     total_batch_size: int = 0
     global_batch_rows: int = 0
     logical_pair_grouping: bool = False
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     learning_rate: float = 3e-4
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
@@ -635,6 +638,10 @@ class TrainConfig:
             self.wandb = WandbConfig(**self.wandb)
         if isinstance(self.resume, dict):
             self.resume = ResumeConfig(**self.resume)
+        if isinstance(self.performance, dict):
+            self.performance = PerformanceConfig(**self.performance)
+        elif not isinstance(self.performance, PerformanceConfig):
+            raise ValueError("performance must be a mapping")
         if self.loss_backend not in {"reference", "target_only", "liger"}:
             raise ValueError("loss_backend must be 'reference', 'target_only', or 'liger'")
         if self.trainable not in {"all", "backbone", "lora", "cache_processor"}:
@@ -732,6 +739,30 @@ class TrainConfig:
             diffusion = self.model.diffusion_processor
             if diffusion is not None and diffusion.noise_scale > 0.0:
                 raise ValueError("logical_pair_grouping rejects noisy Diffusion because RNG assignment changes with batching")
+        adaptive_batching = self.performance.adaptive_batching
+        if adaptive_batching.enabled:
+            if not self.logical_pair_grouping:
+                raise ValueError("adaptive batching requires logical_pair_grouping=true")
+            if self.batch_size != 2:
+                raise ValueError("adaptive batching requires batch_size=2 as the adjacent-pair source stream")
+            if self.global_batch_rows != 64:
+                raise ValueError("adaptive batching v1 requires global_batch_rows=64")
+            if self.distributed != "none":
+                raise ValueError("adaptive batching v1 supports only single-process distributed='none' execution")
+            if self.loss_backend != "reference":
+                raise ValueError("adaptive batching requires loss_backend='reference'")
+            processor = self.model.cache_processor
+            if processor is not None and processor.attention_dropout != 0.0:
+                raise ValueError("adaptive batching requires cache_processor.attention_dropout=0")
+            if self.model.lora is not None and self.model.lora.dropout != 0.0:
+                raise ValueError("adaptive batching requires model.lora.dropout=0")
+            if self.sequence_len > 4096:
+                raise ValueError("adaptive batching v1 supports sequence_len up to 4096")
+            physical_rows = tuple(band.physical_rows for band in adaptive_batching.bands)
+            if physical_rows != (16, 8, 4, 2):
+                raise ValueError("adaptive batching v1 physical_rows must be exactly 16, 8, 4, 2")
+            if adaptive_batching.bands[-1].max_padded_tokens < self.sequence_len:
+                raise ValueError("adaptive batching fallback band must cover sequence_len")
         if not math.isfinite(self.grad_clip) or self.grad_clip <= 0.0:
             raise ValueError("grad_clip must be finite and positive")
         from gcw.architecture import require_train_config

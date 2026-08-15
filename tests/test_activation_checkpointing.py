@@ -18,12 +18,14 @@ from gcw.config import (
 )
 from gcw.models import build_model
 from gcw.models.cache_processors.standard import CacheProcessor
+from gcw.performance.checkpointing import (
+    configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
+)
+from gcw.training.objectives import logical_pair_grouped_loss as _logical_pair_grouped_loss
 from gcw.training.checkpoint import CheckpointCompatibilityError, save_training_checkpoint
 from gcw.training.core import (
     _apply_trainable_policy,
-    _configure_native_activation_checkpointing,
     _training_fingerprint,
-    _logical_pair_grouped_loss,
     train,
 )
 

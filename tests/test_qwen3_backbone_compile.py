@@ -9,17 +9,19 @@ import torch
 
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, ResumeConfig, TrainConfig
 from gcw.models import build_model
-from gcw.models.backbones.backend import (
+from gcw.performance.backends.qwen3 import (
     configure_qwen3_backbone_chunk_backend,
     qwen3_backbone_chunk_backend_metadata,
 )
-from gcw.models.cache_processors import backend as processor_backend_module
+from gcw.performance.backends import cache_processors as processor_backend_module
+from gcw.performance.checkpointing import (
+    configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
+)
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.model import LanguageModel
 from gcw.training.checkpoint import CheckpointCompatibilityError
 from gcw.training.core import (
     _apply_trainable_policy,
-    _configure_native_activation_checkpointing,
     _training_fingerprint,
     train,
 )

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import torch
 
-from gcw.runtime import maybe_compile
+from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
 from gcw.config import CacheProcessorConfig, ModelConfig, load_train_config
 from gcw.models import build_model
 from gcw.models.cache_processors.standard import _merge_kv, _split_kv
@@ -142,9 +142,9 @@ def bench_case(case: dict, args: argparse.Namespace, device: torch.device) -> di
     model.init_weights()
     if args.reference_loop and cfg.variant in {"bt", "bgt"}:
         use_reference_loop(model)
-    model = maybe_compile(model)
+    model = maybe_compile_whole_model(model)
     timer = SectionTimer(device)
-    if not compile_enabled():
+    if not whole_model_compile_requested():
         patch_timers(model, timer)
     x = torch.randint(0, cfg.vocab_size, (batch_size, seq_len), device=device)
     y = torch.roll(x, shifts=-1, dims=1)
@@ -188,9 +188,6 @@ def patch_timers(model: torch.nn.Module, timer: "SectionTimer") -> None:
         timer.patch(processor, "forward", "processor")
 
 
-def compile_enabled() -> bool:
-    return os.environ.get("GCW_COMPILE", "0").strip().lower() not in {"", "0", "false", "no", "none", "off"}
-
 
 def run_step(model: torch.nn.Module, x: torch.Tensor, y: torch.Tensor, device: torch.device) -> None:
     model.zero_grad(set_to_none=True)
@@ -209,7 +206,7 @@ def profile_case(case: dict, args: argparse.Namespace, device: torch.device) -> 
     model.init_weights()
     if args.reference_loop and cfg.variant in {"bt", "bgt"}:
         use_reference_loop(model)
-    model = maybe_compile(model)
+    model = maybe_compile_whole_model(model)
     x = torch.randint(0, cfg.vocab_size, (case["batch_size"], case["seq_len"]), device=device)
     y = torch.roll(x, shifts=-1, dims=1)
     for _ in range(max(1, args.warmup)):

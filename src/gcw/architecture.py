@@ -823,6 +823,8 @@ def _experiment_capabilities(config: TrainConfig) -> set[str]:
         capabilities.add("canonical_evidence")
     if config.logical_pair_grouping:
         capabilities.add("logical_pair_grouping")
+    if config.performance.adaptive_batching.enabled:
+        capabilities.add("adaptive_adjacent_pair_batching")
     return capabilities
 
 

@@ -13,11 +13,11 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import LossBackend, ModelConfig
 from gcw.models.backbones.base import Backbone
-from gcw.models.backbones.backend import Qwen3BackboneChunkBackend, run_qwen3_backbone_chunk_region
+from gcw.performance.backends.qwen3 import Qwen3BackboneChunkBackend, run_qwen3_backbone_chunk_region
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.models.cache_processors.base import cache_processor_recomputation, cache_processor_recomputation_id
-from gcw.models.losses import liger_fused_linear_cross_entropy, require_loss_backend
+from gcw.performance.losses import liger_fused_linear_cross_entropy, require_loss_backend
 
 CacheLike = CacheState | WindowedCache
 ProcessorFn = Callable[..., CacheLike | StaticCacheState]

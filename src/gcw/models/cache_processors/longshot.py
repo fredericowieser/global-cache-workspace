@@ -39,7 +39,7 @@ from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow, sinusoidal_time_embedding
 from gcw.models.backbones.transformer import RMSNorm, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.models.cache_processors.longshot_scores import (
+from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
     chunked_fp32_squared_l2,
 )

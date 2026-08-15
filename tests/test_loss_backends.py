@@ -12,8 +12,8 @@ from gcw.config import DataConfig, ModelConfig, TrainConfig
 from gcw.models.backbones import transformer as transformer_module
 from gcw.models.backbones.transformer import TF
 from gcw.models.backbones.gemma4 import Gemma4TF
-from gcw.models import losses as losses_module
-from gcw.models.losses import (
+from gcw.performance import losses as losses_module
+from gcw.performance.losses import (
     LIGER_KERNEL_VERSION,
     checkpoint_loss_backend,
     loss_backend_metadata,

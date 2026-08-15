@@ -63,13 +63,15 @@ On load, a broken destination may fall back to a valid `.previous`. A legacy mod
 
 ## Compatibility fingerprint
 
-Exact continuation requires equality for fields that change training dynamics: model configuration, loss, optimizer hyperparameters, schedules, BF16 mode, frozen parameters, activation-checkpointing policies (including `activation_checkpoint_windows` and `activation_checkpoint_min_padded_sequence_length`), data kind and identity, sequence length, total batch, gradient accumulation, and `max_steps`. Output paths, checkpoint/evaluation frequency, and display-only W&B metadata may change.
+Exact continuation requires equality for fields that change training dynamics: model configuration, loss, optimizer hyperparameters, schedules, BF16 mode, frozen parameters, activation-checkpointing policies (including `activation_checkpoint_windows` and `activation_checkpoint_min_padded_sequence_length`), adaptive-batching policy and ordered bands, data kind and identity, sequence length, total batch, gradient accumulation, and `max_steps`. Output paths, checkpoint/evaluation frequency, and display-only W&B metadata may change.
 
 The current data identity records paths, shard names, and sizes, not content hashes. A same-size in-place data mutation can therefore evade the fingerprint. Treat prepared datasets as immutable.
 
 ## Same-topology and elastic resume
 
 Same-topology resume restores model parameters and buffers, Adam moments and groups, schedule position, smoothed loss, the next global data location, and every rank's random state. The test target is equivalence with uninterrupted execution.
+
+Adaptive adjacent-pair execution reserves 32 source pairs only inside an optimizer step. Checkpoints remain step-boundary-only, so the saved SFT cursor is either before or after all 64 rows; no partial adaptive plan is serialized. Resume reconstructs the same reservation and grouping from the authenticated policy.
 
 Elastic DDP resume supports only version-2 FineWeb checkpoints. It keeps the global microbatch token count, total batch, accumulation, shard inventory, and next global cursor fixed while allowing world size to change. New ranks repartition the next global batch and receive deterministic seeds derived from the global seed, saved step, new rank, and new world size. This guarantees repeatable elastic resumes and no data skips or duplication. It does not claim bitwise identity with the old topology.
 

@@ -21,7 +21,6 @@ from gcw.models.cache_processors.ops import (
     merge_global_values,
     merge_layer_kv,
     merge_layer_values,
-    run_batched_cache_processors,
     scatter_cache_layers,
     scatter_cache_values,
     split_global_kv,
@@ -30,7 +29,8 @@ from gcw.models.cache_processors.ops import (
     split_layer_values,
 )
 from gcw.models.cache_processors.state import CacheState
-from gcw.models.losses import loss_backend_metadata, require_loss_backend
+from gcw.performance.prepared_bt import run_batched_cache_processors
+from gcw.performance.losses import loss_backend_metadata, require_loss_backend
 from gcw.provenance import (
     canonical_json_bytes,
     canonical_json_sha256,
@@ -39,7 +39,7 @@ from gcw.provenance import (
     repository_source_identity,
     tensor_state_sha256,
 )
-from gcw.runtime import maybe_compile
+from gcw.performance.whole_model import maybe_compile_whole_model
 from gcw.training.core import (
     _apply_trainable_policy,
     _build_optimizer,
@@ -346,7 +346,7 @@ def benchmark_optimizer_step(
     torch.manual_seed(config.seed)
     model = _build_configured_model(config, device)
     _apply_trainable_policy(model, config.trainable)
-    model = maybe_compile(model)
+    model = maybe_compile_whole_model(model)
     model.train()
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = _build_optimizer(params, config)
