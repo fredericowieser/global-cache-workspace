@@ -55,6 +55,7 @@ def _config(variant: str) -> ModelConfig:
             gate_init=0.5,
             attention_dropout=0.0,
             update_stream="kv",
+            encoder_seq_len=64,
         ),
     )
 
