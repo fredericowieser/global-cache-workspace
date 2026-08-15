@@ -19,8 +19,8 @@ def _require_gate() -> None:
 
 
 def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    numerator = torch.linalg.vector_norm((actual - expected).float())
-    denominator = torch.linalg.vector_norm(expected.float()).clamp_min(torch.finfo(torch.float32).tiny)
+    numerator = torch.linalg.vector_norm((actual.detach() - expected.detach()).float())
+    denominator = torch.linalg.vector_norm(expected.detach().float()).clamp_min(torch.finfo(torch.float32).tiny)
     return float((numerator / denominator).cpu())
 
 

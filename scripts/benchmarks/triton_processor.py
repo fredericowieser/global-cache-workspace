@@ -15,8 +15,10 @@ from scripts.benchmarks.harness import device_identity
 
 
 def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    denominator = torch.linalg.vector_norm(expected.float()).clamp_min(torch.finfo(torch.float32).tiny)
-    return float((torch.linalg.vector_norm((actual - expected).float()) / denominator).cpu())
+    expected_value = expected.detach()
+    actual_value = actual.detach()
+    denominator = torch.linalg.vector_norm(expected_value.float()).clamp_min(torch.finfo(torch.float32).tiny)
+    return float((torch.linalg.vector_norm((actual_value - expected_value).float()) / denominator).cpu())
 
 
 def _measure(operation, *, warmup: int, steps: int) -> dict[str, object]:
