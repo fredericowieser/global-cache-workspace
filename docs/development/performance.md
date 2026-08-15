@@ -75,6 +75,8 @@ A future experiment may preserve the oracle only by retaining a physical shape o
 
 `gcw.performance.ragged` validates physical two-row prefix masks and records exact per-row valid lengths, active windows, partial tails, and semantic processor boundaries. It performs no model dispatch yet. A future kernel may consume only these closed plans; removing padding work is unavailable until per-row Qwen forward/backward and cache-event parity pass on both GPUs.
 
+`gcw.performance.activation_lifetime` closes phase order, producer/consumer uses, and the exact post-phase release schedule before execution. Its runtime owns Python references and fails on missing, duplicate, reordered, or prematurely released values. It does not mutate tensors or claim allocator release; an optimized executor must still observe CUDA allocation/pool behavior in a fresh process before a lifetime plan earns a memory result.
+
 ## Exact fixed-pair wave candidate
 
 `gcw.performance.pair_waves` is a benchmark-only candidate for overlapping independent fixed-batch-two forwards without adaptive collation. It plans exactly 32 contiguous source pairs in widths 1, 2, or 4, launches one ordinary forward per lane, and then calls ordinary `Tensor.backward()` in source order. CUDA events serialize backward execution before shared `.grad` accumulation; it does not use `autograd.grad`, manual gradient merging, grouped GEMMs, repadding, or eager fallback. Each wave completes backward before its lane storage can be reused.
