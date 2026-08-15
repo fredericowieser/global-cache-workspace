@@ -112,6 +112,7 @@ class ParityVariant:
     name: str
     execution: ExecutionKind
     model_factory: ModelFactory
+    checkpoint_expected: CheckpointExpectation | None = None
 
 
 @dataclass(frozen=True)
@@ -244,7 +245,7 @@ def run_adaptive_parity(
                 adaptive_policy=adaptive_policy,
                 process_every=process_every,
                 required_event_operations=required_event_operations,
-                checkpoint_expected=checkpoint_factory,
+                checkpoint_expected=variant.checkpoint_expected or checkpoint_factory,
                 forward_context=context_factory,
                 prepare_optimizer_step=prepare_optimizer_step,
             )
@@ -802,11 +803,25 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     if args.steps <= 0 or args.steps > config.max_steps:
         raise ValueError("CUDA parity steps must be positive and no greater than train max_steps")
     variant_set = getattr(args, "variant_set", "adaptive")
-    if variant_set not in {"adaptive", "fixed_regional"}:
+    if variant_set not in {"adaptive", "fixed_regional", "checkpoint_threshold"}:
         raise ValueError(f"unsupported CUDA parity variant set: {variant_set!r}")
     policy = config.performance.adaptive_batching
     if variant_set == "adaptive" and not policy.enabled:
         raise ValueError("adaptive CUDA parity requires performance.adaptive_batching.enabled=true")
+    candidate_checkpoint_threshold = getattr(
+        args, "candidate_checkpoint_min_padded_sequence_length", None
+    )
+    if variant_set == "checkpoint_threshold":
+        if config.activation_checkpoint_windows <= 0:
+            raise ValueError("checkpoint-threshold parity requires activation_checkpoint_windows>0")
+        if (
+            isinstance(candidate_checkpoint_threshold, bool)
+            or not isinstance(candidate_checkpoint_threshold, int)
+            or candidate_checkpoint_threshold <= config.activation_checkpoint_min_padded_sequence_length
+        ):
+            raise ValueError(
+                "checkpoint-threshold parity requires a candidate threshold greater than the reference threshold"
+            )
     if config.distributed != "none":
         raise ValueError("CUDA parity CLI requires distributed='none'")
     diffusion = config.model.diffusion_processor
@@ -826,7 +841,11 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA parity requested but CUDA is unavailable")
 
-    def build(backbone_backend: Qwen3BackboneChunkBackend | None) -> torch.nn.Module:
+    def build(
+        backbone_backend: Qwen3BackboneChunkBackend | None,
+        *,
+        checkpoint_threshold: int | None = None,
+    ) -> torch.nn.Module:
         compile_regions = backbone_backend is not None
         environment = {
             "GCW_BT_PROCESSOR_BACKEND": (
@@ -846,6 +865,15 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             _apply_trainable_policy(model, config.trainable)
             if backbone_backend is not None:
                 configure_qwen3_backbone_chunk_backend(model, backbone_backend)
+            object.__setattr__(
+                model,
+                "_gcw_parity_checkpoint_threshold",
+                (
+                    config.activation_checkpoint_min_padded_sequence_length
+                    if checkpoint_threshold is None
+                    else checkpoint_threshold
+                ),
+            )
             return model
 
     initial_model = build(None)
@@ -860,8 +888,8 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             loss_backend=config.loss_backend,
             attention_mask=batch.attention_mask,
             activation_checkpoint_windows=config.activation_checkpoint_windows,
-            activation_checkpoint_min_padded_sequence_length=(
-                config.activation_checkpoint_min_padded_sequence_length
+            activation_checkpoint_min_padded_sequence_length=getattr(
+                model, "_gcw_parity_checkpoint_threshold"
             ),
         )
         return row_sums.reshape(-1, 2).sum(dim=1) / row_counts.reshape(-1, 2).sum(dim=1).clamp_min(1)
@@ -876,9 +904,14 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             enabled=config.bf16 and device.type == "cuda",
         )
 
-    def expects_checkpoint(batch: TrainingBatch) -> bool:
-        threshold = config.activation_checkpoint_min_padded_sequence_length
-        return config.activation_checkpoint_windows > 0 and (threshold == 0 or batch.x.shape[1] >= threshold)
+    def checkpoint_expectation(threshold: int) -> CheckpointExpectation:
+        return lambda batch: config.activation_checkpoint_windows > 0 and (
+            threshold == 0 or batch.x.shape[1] >= threshold
+        )
+
+    expects_checkpoint = checkpoint_expectation(
+        config.activation_checkpoint_min_padded_sequence_length
+    )
 
     def prepare_optimizer_step(
         model: torch.nn.Module,
@@ -897,6 +930,7 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             if group.get("decay", False):
                 group["weight_decay"] = weight_decay
 
+    variants: tuple[ParityVariant, ...]
     if variant_set == "adaptive":
         variants = (
             ParityVariant("fixed_batch2_eager", "fixed", lambda: build(None)),
@@ -911,6 +945,17 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
                 "fixed_batch2_compile_full_windows",
                 "fixed",
                 lambda: build("compile_full_windows"),
+            ),
+        )
+    elif variant_set == "checkpoint_threshold":
+        assert isinstance(candidate_checkpoint_threshold, int)
+        variants = (
+            ParityVariant("fixed_batch2_checkpoint_reference", "fixed", lambda: build(None)),
+            ParityVariant(
+                "fixed_batch2_checkpoint_candidate",
+                "fixed",
+                lambda: build(None, checkpoint_threshold=candidate_checkpoint_threshold),
+                checkpoint_expected=checkpoint_expectation(candidate_checkpoint_threshold),
             ),
         )
     else:
@@ -941,6 +986,10 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             "variant": config.model.variant,
             "trajectory_steps": args.steps,
             "variant_set": variant_set,
+            "reference_checkpoint_min_padded_sequence_length": (
+                config.activation_checkpoint_min_padded_sequence_length
+            ),
+            "candidate_checkpoint_min_padded_sequence_length": candidate_checkpoint_threshold,
         }
     )
     return payload
@@ -956,9 +1005,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     parser.add_argument(
         "--variant-set",
-        choices=("adaptive", "fixed_regional"),
+        choices=("adaptive", "fixed_regional", "checkpoint_threshold"),
         default="adaptive",
-        help="compare adaptive grouping or exact-shape fixed regional compilers against fixed eager",
+        help="compare adaptive grouping, fixed regional compilers, or checkpoint thresholds",
+    )
+    parser.add_argument(
+        "--candidate-checkpoint-min-padded-sequence-length",
+        type=int,
+        default=None,
+        help="candidate threshold required by --variant-set=checkpoint_threshold",
     )
     parser.add_argument(
         "--require-resume-evidence",

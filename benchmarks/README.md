@@ -21,7 +21,7 @@ Micro-operation timings are forward-only and intentionally exclude fixture const
 
 Correctness parity runs in ordinary CPU pytest. GPU performance execution is opt-in through `GCW_RUN_GPU_PERF_TESTS=1` and carries both `gpu` and `performance` markers; no latency threshold runs in CPU CI.
 
-## Formal adaptive CUDA parity
+## Formal CUDA parity
 
 `benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one pre-execution reservation of 32-pair optimizer steps. It is a correctness harness, not a timer.
 
@@ -36,6 +36,8 @@ uv run --extra gpu python -m benchmarks.adaptive_cuda_parity \
 Adaptive mode requires `performance.adaptive_batching`; fixed-regional mode does not. The CLI supports deterministic Qwen3 BT/BGT regional compiled backends. Before model allocation it rejects dirty source, resume configs, unavailable requested resume evidence, trajectories beyond `max_steps`, distributed execution, unsupported families, processor or LoRA dropout, and noisy Diffusion.
 
 Use `--variant-set fixed_regional` to compare fixed batch-2 eager against fixed batch-2 regional `compile` and `compile_full_windows` execution. This mode preserves each pair's physical batch shape and padded width; it does not treat adaptive grouping as an oracle.
+
+Use `--variant-set checkpoint_threshold --candidate-checkpoint-min-padded-sequence-length N` to compare two fixed eager segmented-checkpoint thresholds. Each variant declares its own expected replay boundaries while retaining the same reserved pairs, source order, model state, optimizer, and semantic event gate. This remains reservation-only evidence: the harness explicitly does not claim production checkpoint/resume parity.
 
 The authenticated JSON reports:
 
