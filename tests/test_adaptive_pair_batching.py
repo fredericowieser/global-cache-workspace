@@ -373,6 +373,7 @@ def test_training_integrates_adaptive_plan_and_reports_actual_groups(
                 model_loss(oracle, pair.x, pair.y, attention_mask=pair.attention_mask)
             ) / PAIRS_PER_STEP
 
+    monkeypatch.setattr(train_module, "init_distributed", lambda _kind: torch.device("cpu"))
     stream = _PairStream(widths)
     tracker = _Tracker()
     monkeypatch.setattr(train_module, "build_training_stream", lambda *_args, **_kwargs: stream)
@@ -474,6 +475,7 @@ def test_interrupted_adaptive_training_resumes_exactly(
         encoding="utf-8",
     )
     monkeypatch.setattr(training_data_module, "get_tokenizer", lambda _name: _ResumeTokenizer())
+    monkeypatch.setattr(train_module, "init_distributed", lambda _kind: torch.device("cpu"))
 
     def make_config(output_dir: str) -> TrainConfig:
         return _adaptive_config(
