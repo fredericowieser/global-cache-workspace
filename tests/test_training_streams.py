@@ -106,6 +106,11 @@ def test_indexed_jsonl_supports_random_access_and_slices(tmp_path):
     assert len(rows) == 4
     assert rows[2]["prompt"] == "2"
     assert [row["prompt"] for row in rows[1:3]] == ["1", "2"]
+    assert rows._handle is not None
+    rows.close()
+    assert rows._handle is None
+    assert rows[1]["prompt"] == "1"
+    rows.close()
 
 
 def test_sft_stream_rejects_a_global_batch_larger_than_the_dataset():

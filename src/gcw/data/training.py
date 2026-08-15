@@ -52,6 +52,8 @@ class TrainingBatchStream(Protocol):
 
     def __next__(self) -> TrainingBatch: ...
 
+    def close(self) -> None: ...
+
 
 class RandomBatchStream:
     def __init__(
@@ -75,6 +77,9 @@ class RandomBatchStream:
         else:
             state = torch.tensor(cursor.rng_state, dtype=torch.uint8)
             self.generator.set_state(state)
+
+    def close(self) -> None:
+        pass
 
     @property
     def cursor(self) -> RandomCursor:
@@ -115,6 +120,9 @@ class FineWebBatchStream:
         self.rank = rank
         self.world_size = world_size
         self._cursor = cursor or FineWebCursor()
+
+    def close(self) -> None:
+        pass
 
     @property
     def cursor(self) -> FineWebCursor:
@@ -169,6 +177,11 @@ class IndexedJSONL(Sequence[dict[str, Any]]):
     def __len__(self) -> int:
         return len(self.offsets)
 
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+
     def __getitem__(self, index: int | slice):
         if isinstance(index, slice):
             return [self[position] for position in range(*index.indices(len(self)))]
@@ -192,6 +205,11 @@ class _RowSlice(Sequence[dict[str, Any]]):
 
     def __len__(self) -> int:
         return self.stop - self.start
+
+    def close(self) -> None:
+        close = getattr(self.rows, "close", None)
+        if close is not None:
+            close()
 
     def __getitem__(self, index: int | slice):
         if isinstance(index, slice):
@@ -243,6 +261,11 @@ class SFTBatchStream:
         self._cursor = cursor or SFTCursor()
         if self._cursor.row >= len(rows):
             raise ValueError(f"SFT cursor row {self._cursor.row} exceeds dataset length {len(rows)}")
+
+    def close(self) -> None:
+        close = getattr(self.rows, "close", None)
+        if close is not None:
+            close()
 
     @property
     def cursor(self) -> SFTCursor:
@@ -313,8 +336,10 @@ def build_training_stream(
         start = config.data.sft_skip_rows
         if start >= len(source_rows):
             raise ValueError(f"data.sft_skip_rows={start} exceeds dataset length {len(source_rows)}")
-        stop = len(source_rows) if config.data.sft_take_rows is None else min(
-            len(source_rows), start + config.data.sft_take_rows
+        stop = (
+            len(source_rows)
+            if config.data.sft_take_rows is None
+            else min(len(source_rows), start + config.data.sft_take_rows)
         )
         rows = source_rows if start == 0 and stop == len(source_rows) else _RowSlice(source_rows, start, stop)
         if cursor is not None and not isinstance(cursor, SFTCursor):
@@ -390,7 +415,9 @@ def training_data_identity(config: TrainConfig) -> dict[str, Any]:
             "size": path.stat().st_size,
             "sha256": _file_sha256(path),
         }
-    data_dir = Path(config.data.data_dir).expanduser().resolve() if config.data.data_dir else default_data_dir().resolve()
+    data_dir = (
+        Path(config.data.data_dir).expanduser().resolve() if config.data.data_dir else default_data_dir().resolve()
+    )
     shards = [Path(path) for path in list_shards(data_dir, "train")]
     if not shards:
         raise FileNotFoundError(f"No train shards found in {data_dir}")

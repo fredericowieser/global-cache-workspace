@@ -308,8 +308,11 @@ def _training_fixture(
     config: TrainConfig, device: torch.device
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
     stream = build_training_stream(config, device, rank=0, world_size=1)
-    batch = next(stream)
-    return batch.x, batch.y, batch.attention_mask
+    try:
+        batch = next(stream)
+        return batch.x, batch.y, batch.attention_mask
+    finally:
+        stream.close()
 
 
 def benchmark_optimizer_step(

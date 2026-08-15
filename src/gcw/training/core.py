@@ -151,9 +151,7 @@ def train(config: TrainConfig) -> None:
         distributed_initialized=dist.is_available() and dist.is_initialized(),
         batch_size=config.batch_size,
         adaptive_batch_sizes=(
-            tuple(band.physical_rows for band in adaptive_batching.bands)
-            if adaptive_batching.enabled
-            else None
+            tuple(band.physical_rows for band in adaptive_batching.bands) if adaptive_batching.enabled else None
         ),
         device=device,
     )
@@ -202,9 +200,7 @@ def train(config: TrainConfig) -> None:
     )
     configure_qwen3_backbone_chunk_backend(model, config.backbone_chunk_backend)
     configure_reference_loss_execution(model, config.performance.reference_loss)
-    configure_longshot_full_history_execution(
-        model, config.performance.longshot_full_history
-    )
+    configure_longshot_full_history_execution(model, config.performance.longshot_full_history)
     configure_kv_score_sidecar_execution(
         model,
         config.performance.kv_score_sidecar,
@@ -298,9 +294,7 @@ def train(config: TrainConfig) -> None:
             device=device,
             bf16=config.bf16,
         )
-    icarus_execution_scope = (
-        partial(icarus_training_execution, model) if icarus_backend == "compile" else nullcontext
-    )
+    icarus_execution_scope = partial(icarus_training_execution, model) if icarus_backend == "compile" else nullcontext
 
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     opt = _build_optimizer(params, config)
@@ -322,9 +316,7 @@ def train(config: TrainConfig) -> None:
         "rows_per_step": micro_rows * grad_accum_steps,
         "logical_pair_grouping": config.logical_pair_grouping,
         "logical_pairs_per_step": config.global_batch_rows // 2 if config.logical_pair_grouping else None,
-        "adaptive_batching": adaptive_batching_metadata(
-            adaptive_batching, global_batch_rows=config.global_batch_rows
-        ),
+        "adaptive_batching": adaptive_batching_metadata(adaptive_batching, global_batch_rows=config.global_batch_rows),
         "total_training_tokens": target_tokens,
         "training_flops_per_token": flops_per_tok,
         "total_training_flops": total_training_flops(config.model, target_tokens, config.sequence_len),
@@ -342,40 +334,28 @@ def train(config: TrainConfig) -> None:
             cache_processor_backend_metadata(config.model) if config.model.variant == "bgt" else None
         ),
         "noisy_diffusion_recurrence_backend": (
-            noisy_diffusion_recurrence_backend_metadata(
-                config.model, config.performance.noisy_diffusion
-            )
+            noisy_diffusion_recurrence_backend_metadata(config.model, config.performance.noisy_diffusion)
             if config.model.diffusion_processor is not None
             else None
         ),
         "icarus_processor_backend": (
-            icarus_processor_backend_metadata(config.model)
-            if config.model.variant == "icarus"
-            else None
+            icarus_processor_backend_metadata(config.model) if config.model.variant == "icarus" else None
         ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
         **(
-            {
-                "triton_cache_movement": triton_cache_movement_metadata(
-                    config.performance.triton_cache_movement
-                )
-            }
+            {"triton_cache_movement": triton_cache_movement_metadata(config.performance.triton_cache_movement)}
             if config.performance.triton_cache_movement.enabled
             else {}
         ),
-        "activation_checkpoint_min_padded_sequence_length": (
-            config.activation_checkpoint_min_padded_sequence_length
-        ),
+        "activation_checkpoint_min_padded_sequence_length": (config.activation_checkpoint_min_padded_sequence_length),
         "longshot_gradient_checkpointing": _longshot_gradient_checkpointing_runtime(config),
         "loss_backend": loss_backend_metadata(config.loss_backend),
         **(
             {
                 "longshot_full_history_execution": longshot_full_history_execution_metadata(
                     config.performance.longshot_full_history,
-                    unrope_keys=bool(
-                        config.model.cache_processor and config.model.cache_processor.unrope_keys
-                    ),
+                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
                 )
             }
             if config.performance.longshot_full_history.enabled
@@ -385,20 +365,14 @@ def train(config: TrainConfig) -> None:
             {
                 "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(
                     config.performance.kv_score_sidecar,
-                    unrope_keys=bool(
-                        config.model.cache_processor and config.model.cache_processor.unrope_keys
-                    ),
+                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
                 )
             }
             if config.performance.kv_score_sidecar.enabled
             else {}
         ),
         **(
-            {
-                "reference_loss_execution": reference_loss_execution_metadata(
-                    config.performance.reference_loss
-                )
-            }
+            {"reference_loss_execution": reference_loss_execution_metadata(config.performance.reference_loss)}
             if config.performance.reference_loss.mode != "legacy"
             else {}
         ),
@@ -437,9 +411,7 @@ def train(config: TrainConfig) -> None:
         segmented_window_checkpointed_microbatches = 0
         adaptive_checkpointing_decisions: list[bool] = []
         adaptive_padded_sequence_lengths: list[int] = []
-        adaptive_step_plan = (
-            build_adaptive_pair_step(stream, adaptive_batching) if adaptive_batching.enabled else None
-        )
+        adaptive_step_plan = build_adaptive_pair_step(stream, adaptive_batching) if adaptive_batching.enabled else None
         adaptive_physical_batches = (
             tuple(collate_pair_group(adaptive_step_plan, group) for group in adaptive_step_plan.groups)
             if adaptive_step_plan is not None
@@ -447,11 +419,7 @@ def train(config: TrainConfig) -> None:
         )
         physical_microsteps = len(adaptive_physical_batches) if adaptive_step_plan is not None else grad_accum_steps
         for micro_step in range(physical_microsteps):
-            batch = (
-                adaptive_physical_batches[micro_step].batch
-                if adaptive_step_plan is not None
-                else next(stream)
-            )
+            batch = adaptive_physical_batches[micro_step].batch if adaptive_step_plan is not None else next(stream)
             if adaptive_step_plan is None and step == 0 and micro_step == 0:
                 _validate_train_batch(batch.x, batch.y, config)
             batch_non_padding_tokens += int(
@@ -519,9 +487,7 @@ def train(config: TrainConfig) -> None:
                             ),
                             longshot_gradient_checkpointing=longshot_checkpointing,
                         )
-                normalized_loss = (
-                    loss / PAIRS_PER_STEP if adaptive_step_plan is not None else loss / grad_accum_steps
-                )
+                normalized_loss = loss / PAIRS_PER_STEP if adaptive_step_plan is not None else loss / grad_accum_steps
                 loss_total += float(
                     normalized_loss.detach().cpu() if adaptive_step_plan is not None else loss.detach().cpu()
                 )
@@ -575,15 +541,9 @@ def train(config: TrainConfig) -> None:
             "train/micro_tokens_per_step": micro_tokens,
             "train/tokens_per_step": tokens_per_step,
             "train/rows_per_step": micro_rows * grad_accum_steps,
-            "train/logical_pairs_per_step": (
-                config.global_batch_rows // 2 if config.logical_pair_grouping else None
-            ),
-            "train/segmented_window_checkpointing_active": (
-                segmented_window_checkpointed_microbatches > 0
-            ),
-            "train/segmented_window_checkpointed_microbatches": (
-                segmented_window_checkpointed_microbatches
-            ),
+            "train/logical_pairs_per_step": (config.global_batch_rows // 2 if config.logical_pair_grouping else None),
+            "train/segmented_window_checkpointing_active": (segmented_window_checkpointed_microbatches > 0),
+            "train/segmented_window_checkpointed_microbatches": (segmented_window_checkpointed_microbatches),
             "train/segmented_window_eager_microbatches": (
                 physical_microsteps - segmented_window_checkpointed_microbatches
             ),
@@ -681,6 +641,7 @@ def train(config: TrainConfig) -> None:
             use_fsdp=use_fsdp,
             initial_processor_state=initial_processor_state,
         )
+    stream.close()
     if tracker is not None:
         tracker.finish(summary={**run_meta, "completed_step": config.max_steps})
     cleanup_distributed()
@@ -748,8 +709,6 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
     raise ValueError(f"unsupported trainable policy: {policy}")
 
 
-
-
 def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
     state = {**base, "step": step}
     if loader is not None:
@@ -794,9 +753,9 @@ def _training_fingerprint(
         **(
             {
                 "noisy_diffusion_recurrence_backend_fingerprint": (
-                    noisy_diffusion_recurrence_backend_metadata(
-                        config.model, config.performance.noisy_diffusion
-                    )["fingerprint_sha256"]
+                    noisy_diffusion_recurrence_backend_metadata(config.model, config.performance.noisy_diffusion)[
+                        "fingerprint_sha256"
+                    ]
                 )
             }
             if config.performance.noisy_diffusion.recurrence_backend == "compile"
@@ -804,14 +763,11 @@ def _training_fingerprint(
         ),
         **(
             {
-                "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(
-                    config.model
-                )["fingerprint_sha256"]
+                "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(config.model)[
+                    "fingerprint_sha256"
+                ]
             }
-            if (
-                config.model.variant == "icarus"
-                and resolve_icarus_processor_backend(config.model) == "compile"
-            )
+            if (config.model.variant == "icarus" and resolve_icarus_processor_backend(config.model) == "compile")
             else {}
         ),
         "initialization": {
@@ -821,9 +777,7 @@ def _training_fingerprint(
         "trainable": config.trainable,
         "activation_checkpointing": config.activation_checkpointing,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
-        "activation_checkpoint_min_padded_sequence_length": (
-            config.activation_checkpoint_min_padded_sequence_length
-        ),
+        "activation_checkpoint_min_padded_sequence_length": (config.activation_checkpoint_min_padded_sequence_length),
         "loss_backend": config.loss_backend,
         **(
             {
@@ -836,11 +790,7 @@ def _training_fingerprint(
             else {}
         ),
         **(
-            {
-                "reference_loss_execution": reference_loss_execution_metadata(
-                    config.performance.reference_loss
-                )
-            }
+            {"reference_loss_execution": reference_loss_execution_metadata(config.performance.reference_loss)}
             if config.performance.reference_loss.mode != "legacy"
             else {}
         ),
@@ -848,9 +798,7 @@ def _training_fingerprint(
             {
                 "longshot_full_history_execution": longshot_full_history_execution_metadata(
                     config.performance.longshot_full_history,
-                    unrope_keys=bool(
-                        config.model.cache_processor and config.model.cache_processor.unrope_keys
-                    ),
+                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
                 )
             }
             if config.performance.longshot_full_history.enabled
@@ -860,9 +808,7 @@ def _training_fingerprint(
             {
                 "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(
                     config.performance.kv_score_sidecar,
-                    unrope_keys=bool(
-                        config.model.cache_processor and config.model.cache_processor.unrope_keys
-                    ),
+                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
                 )
             }
             if config.performance.kv_score_sidecar.enabled
@@ -1048,7 +994,6 @@ def _validate_train_batch(x: torch.Tensor, y: torch.Tensor, config: TrainConfig)
         raise ValueError(f"loader sequence length {x.shape[1]} exceeds config.sequence_len {config.sequence_len}")
 
 
-
 def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> torch.optim.AdamW:
     decay = [p for p in params if p.ndim >= 2]
     nodecay = [p for p in params if p.ndim < 2]
@@ -1108,13 +1053,14 @@ def _clip_grad_norm(
 
 @torch.no_grad()
 def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device) -> dict[str, float]:
+    validation_stream: TrainingBatchStream | None = None
     if config.mode == "sft" and config.data.validation_dataset is not None:
         validation_config = deepcopy(config)
         validation_config.data.dataset = config.data.validation_dataset
         validation_config.data.sft_skip_rows = 0
         validation_config.data.sft_take_rows = config.batch_size * max(1, config.eval_batches)
-        stream = build_training_stream(validation_config, device, rank=0, world_size=1)
-        loader = _training_batch_loader(stream)
+        validation_stream = build_training_stream(validation_config, device, rank=0, world_size=1)
+        loader = _training_batch_loader(validation_stream)
     elif config.mode != "pretrain" or config.data.kind == "random":
         loader = _random_loader(config, device)
     else:
@@ -1178,6 +1124,8 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
         dist.all_reduce(total_loss, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_weight, op=dist.ReduceOp.SUM)
         dist.all_reduce(total_tokens, op=dist.ReduceOp.SUM)
+    if validation_stream is not None:
+        validation_stream.close()
     if was_training:
         model.train()
     if not config.logical_pair_grouping:
@@ -1323,7 +1271,6 @@ def _fsdp_param_init_fn(device: torch.device):
     return init_fn
 
 
-
 def _save_training_checkpoint(
     path: Path,
     model: torch.nn.Module,
@@ -1344,7 +1291,6 @@ def _save_training_checkpoint(
     if dist.is_available() and dist.is_initialized() and dist_info()[1] != 0:
         return
     save_checkpoint(path, _unwrap(model), model_config, checkpoint_state)
-
 
 
 def _compact_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
