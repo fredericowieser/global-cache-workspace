@@ -339,8 +339,13 @@ def test_cuda_fullgraph_compiles_field_callable_and_preserves_backward() -> None
     after = noisy_diffusion_compile_telemetry(compiled)
     assert after["runner_creation_count"] == 1
     assert after["runner_dispatch_count"] == 2
-    # The fake compiler creates a wrapper but performs no Dynamo compilation.
-    assert after["dynamo_process_delta_unique_graphs"] == 0
+    # Process-wide counters are diagnostics only, but this isolated CUDA test must
+    # observe a new static-shape graph without introducing a graph break.
+    assert after["dynamo_process_diagnostics_acceptance_eligible"] is False
+    assert int(after["dynamo_process_delta_unique_graphs"]) > int(
+        before["dynamo_process_delta_unique_graphs"]
+    )
+    assert after["dynamo_process_delta_graph_breaks"] == before["dynamo_process_delta_graph_breaks"]
     assert before["runner_creation_count"] == 1
 
 
