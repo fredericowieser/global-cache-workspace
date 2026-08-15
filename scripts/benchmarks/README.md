@@ -60,7 +60,7 @@ uv run --extra gpu python -m scripts.benchmarks.adaptive_cuda_parity \
 
 Adaptive mode requires `performance.adaptive_batching`; fixed-regional mode does not. The CLI supports deterministic Qwen3 BT/BGT regional compiled backends. Before model allocation it rejects dirty source, resume configs, unavailable requested resume evidence, trajectories beyond `max_steps`, distributed execution, unsupported families, processor or LoRA dropout, and noisy Diffusion.
 
-Use `--variant-set fixed_regional` to compare fixed batch-2 eager against fixed batch-2 regional `compile` and `compile_full_windows` execution. This mode preserves each pair's physical batch shape and padded width; it does not treat adaptive grouping as an oracle.
+Use `--variant-set fixed_regional` to compare fixed batch-2 eager against fixed batch-2 regional `compile` and `compile_full_windows` execution. Use `--variant-set triton_cache` for fixed eager versus the benchmark-only Triton gather/writeback candidate. Both modes preserve each pair's physical batch shape and padded width; neither treats adaptive grouping as an oracle. The Triton variant records exact semantic selection/write events plus pair losses, raw gradients, Adam moments, parameter updates, and RNG under the standard tolerances.
 
 Use `--variant-set checkpoint_threshold --candidate-checkpoint-min-padded-sequence-length N` to compare two fixed eager segmented-checkpoint thresholds. Each variant declares its own expected replay boundaries while retaining the same reserved pairs, source order, model state, optimizer, and semantic event gate. This remains reservation-only evidence: the harness explicitly does not claim production checkpoint/resume parity.
 

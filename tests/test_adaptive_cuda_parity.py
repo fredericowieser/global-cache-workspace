@@ -75,6 +75,7 @@ class _TracedPairModel(torch.nn.Module):
         row_values = (signal * batch.attention_mask).sum(dim=1)
 
         for boundary in range(2, batch.x.shape[1], 2):
+
             def cache_region(values: torch.Tensor, end: int = boundary) -> torch.Tensor:
                 prefix = values[:, :end]
                 cache_values = prefix[:, None, :, None]
@@ -82,9 +83,7 @@ class _TracedPairModel(torch.nn.Module):
                 cache = CacheState(keys=[cache_values * 0.5], values=[cache_values], scores=scores)
                 indices = cache.select_indices(process_every=2, topk=1)
                 selected = torch.gather(cache.values[0], 2, indices[:, None, :, None])
-                cache = standard_module.scatter_cache_values(
-                    cache, indices, (selected + self.scale).unsqueeze(0)
-                )
+                cache = standard_module.scatter_cache_values(cache, indices, (selected + self.scale).unsqueeze(0))
                 return cache.values[0].sum(dim=(1, 2, 3))
 
             update = checkpoint(
@@ -188,9 +187,7 @@ def test_group_shape_selection_mismatch_is_an_unconditional_parity_failure(
     """Numeric tolerances can never admit changed semantic cache decisions."""
     original_select = CacheState.select_indices
 
-    def shape_sensitive_select(
-        state: CacheState, process_every: int = 64, topk: int = 32
-    ) -> torch.Tensor:
+    def shape_sensitive_select(state: CacheState, process_every: int = 64, topk: int = 32) -> torch.Tensor:
         indices = original_select(state, process_every=process_every, topk=topk)
         if state.scores.shape[0] > 2:
             indices = indices.clone()
@@ -327,14 +324,12 @@ def _real_cli_config(variant: str) -> TrainConfig:
 
 
 @pytest.mark.parametrize("variant", ["bt", "bgt"])
-@pytest.mark.parametrize(
-    "variant_set", ["adaptive", "fixed_regional", "checkpoint_threshold"]
-)
+@pytest.mark.parametrize("variant_set", ["adaptive", "fixed_regional", "checkpoint_threshold", "triton_cache"])
 def test_real_tiny_bt_bgt_cli_integration(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, variant: str, variant_set: str
 ) -> None:
     config = _real_cli_config(variant)
-    if variant_set in {"fixed_regional", "checkpoint_threshold"}:
+    if variant_set in {"fixed_regional", "checkpoint_threshold", "triton_cache"}:
         config.performance = PerformanceConfig()
     if variant_set == "checkpoint_threshold":
         config.activation_checkpoint_windows = 2
@@ -360,6 +355,7 @@ def test_real_tiny_bt_bgt_cli_integration(
     # eager regions for CUDA compilation, which remains the opt-in GPU gate.
     monkeypatch.setattr(parity_module, "_temporary_environment", lambda _updates: nullcontext())
     monkeypatch.setattr(parity_module, "configure_qwen3_backbone_chunk_backend", lambda *_args: None)
+    monkeypatch.setattr(parity_module, "configure_triton_cache_movement", lambda *_args, **_kwargs: None)
     payload = _real_model_cli(
         argparse.Namespace(
             train_config=config_path,
@@ -368,9 +364,7 @@ def test_real_tiny_bt_bgt_cli_integration(
             device="cpu",
             require_resume_evidence=False,
             variant_set=variant_set,
-            candidate_checkpoint_min_padded_sequence_length=(
-                9 if variant_set == "checkpoint_threshold" else None
-            ),
+            candidate_checkpoint_min_padded_sequence_length=(9 if variant_set == "checkpoint_threshold" else None),
         )
     )
     assert payload["passed"] is True
@@ -380,6 +374,8 @@ def test_real_tiny_bt_bgt_cli_integration(
         expected_candidates = ["adaptive_eager", "adaptive_compiled"]
     elif variant_set == "fixed_regional":
         expected_candidates = ["fixed_batch2_compiled", "fixed_batch2_compile_full_windows"]
+    elif variant_set == "triton_cache":
+        expected_candidates = ["fixed_batch2_triton_cache"]
     else:
         expected_candidates = ["fixed_batch2_checkpoint_candidate"]
     assert [comparison["candidate"] for comparison in payload["comparisons"]] == expected_candidates

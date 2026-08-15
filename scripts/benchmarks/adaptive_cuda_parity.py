@@ -50,7 +50,11 @@ from gcw.performance.backends.qwen3 import (
     Qwen3BackboneChunkBackend,
     configure_qwen3_backbone_chunk_backend,
 )
-from gcw.performance.config import AdaptiveBatchingConfig
+from gcw.performance.config import AdaptiveBatchingConfig, TritonCacheMovementConfig
+from gcw.performance.triton.execution import (
+    TritonCacheExecutionContext,
+    configure_triton_cache_movement,
+)
 from gcw.provenance import (
     canonical_json_sha256,
     file_sha256,
@@ -169,7 +173,9 @@ def capture_rng() -> RngSnapshot:
         python=random.getstate(),
         numpy=np.random.get_state(),
         torch_cpu=torch.get_rng_state().clone(),
-        torch_cuda=tuple(state.clone() for state in torch.cuda.get_rng_state_all()) if torch.cuda.is_available() else (),
+        torch_cuda=tuple(state.clone() for state in torch.cuda.get_rng_state_all())
+        if torch.cuda.is_available()
+        else (),
     )
 
 
@@ -251,10 +257,7 @@ def run_adaptive_parity(
             )
         )
     reference = results[0]
-    comparisons = [
-        _compare_variant(reference, candidate, tolerances)
-        for candidate in results[1:]
-    ]
+    comparisons = [_compare_variant(reference, candidate, tolerances) for candidate in results[1:]]
     passed = all(comparison["passed"] for comparison in comparisons)
     payload = {
         "schema": "gcw.adaptive_cuda_parity.v2",
@@ -313,14 +316,12 @@ def _run_variant(
         with trace_cache_events(recorder):
             if variant.execution == "fixed":
                 groups: Iterator[tuple[int, int, TrainingBatch]] = (
-                    (pair_index, pair_index + 1, batch)
-                    for pair_index, batch in enumerate(reserved.reservation.pairs)
+                    (pair_index, pair_index + 1, batch) for pair_index, batch in enumerate(reserved.reservation.pairs)
                 )
             else:
                 plan = plan_contiguous_pair_groups(reserved.reservation, adaptive_policy)
                 groups = (
-                    (group.pair_start, group.pair_stop, collate_pair_group(plan, group).batch)
-                    for group in plan.groups
+                    (group.pair_start, group.pair_stop, collate_pair_group(plan, group).batch) for group in plan.groups
                 )
             for group_index, (pair_start, pair_stop, batch) in enumerate(groups):
                 scope = TraceScope(
@@ -346,9 +347,7 @@ def _run_variant(
         if any(value is None for value in pair_values):
             raise RuntimeError("parity execution did not produce every reserved pair loss")
         gradients = {
-            name: parameter.grad.detach().cpu().clone()
-            for name, parameter in parameters
-            if parameter.grad is not None
+            name: parameter.grad.detach().cpu().clone() for name, parameter in parameters if parameter.grad is not None
         }
         missing_gradients = tuple(sorted(name for name, parameter in parameters if parameter.grad is None))
         if prepare_optimizer_step is not None:
@@ -494,8 +493,7 @@ def _compare_named_tensors(
 ) -> dict[str, Any]:
     names_equal = expected.keys() == actual.keys()
     comparisons = {
-        name: _compare_tensor(expected[name], actual[name], tolerance)
-        for name in expected.keys() & actual.keys()
+        name: _compare_tensor(expected[name], actual[name], tolerance) for name in expected.keys() & actual.keys()
     }
     return {
         "names_equal": names_equal,
@@ -508,9 +506,7 @@ def _flatten_nested_tensors(
     values: Mapping[str, Mapping[str, torch.Tensor]],
 ) -> dict[str, torch.Tensor]:
     return {
-        f"{parameter}/{moment}": tensor
-        for parameter, moments in values.items()
-        for moment, tensor in moments.items()
+        f"{parameter}/{moment}": tensor for parameter, moments in values.items() for moment, tensor in moments.items()
     }
 
 
@@ -604,9 +600,7 @@ def _compare_vector(
     raw_relative_l2 = difference_norm / expected_norm if expected_norm > 0 else None
     relative_l2 = raw_relative_l2 if raw_relative_l2 is None or math.isfinite(raw_relative_l2) else None
     cosine = (
-        _finite_metric(
-            torch.dot(expected_float.reshape(-1), actual_float.reshape(-1)) / (expected_norm * actual_norm)
-        )
+        _finite_metric(torch.dot(expected_float.reshape(-1), actual_float.reshape(-1)) / (expected_norm * actual_norm))
         if expected_norm > 0 and actual_norm > 0
         else None
     )
@@ -803,14 +797,12 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     if args.steps <= 0 or args.steps > config.max_steps:
         raise ValueError("CUDA parity steps must be positive and no greater than train max_steps")
     variant_set = getattr(args, "variant_set", "adaptive")
-    if variant_set not in {"adaptive", "fixed_regional", "checkpoint_threshold"}:
+    if variant_set not in {"adaptive", "fixed_regional", "checkpoint_threshold", "triton_cache"}:
         raise ValueError(f"unsupported CUDA parity variant set: {variant_set!r}")
     policy = config.performance.adaptive_batching
     if variant_set == "adaptive" and not policy.enabled:
         raise ValueError("adaptive CUDA parity requires performance.adaptive_batching.enabled=true")
-    candidate_checkpoint_threshold = getattr(
-        args, "candidate_checkpoint_min_padded_sequence_length", None
-    )
+    candidate_checkpoint_threshold = getattr(args, "candidate_checkpoint_min_padded_sequence_length", None)
     if variant_set == "checkpoint_threshold":
         if config.activation_checkpoint_windows <= 0:
             raise ValueError("checkpoint-threshold parity requires activation_checkpoint_windows>0")
@@ -845,12 +837,11 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         backbone_backend: Qwen3BackboneChunkBackend | None,
         *,
         checkpoint_threshold: int | None = None,
+        triton_cache: bool = False,
     ) -> torch.nn.Module:
         compile_regions = backbone_backend is not None
         environment = {
-            "GCW_BT_PROCESSOR_BACKEND": (
-                "compile" if compile_regions and config.model.variant == "bt" else "eager"
-            ),
+            "GCW_BT_PROCESSOR_BACKEND": ("compile" if compile_regions and config.model.variant == "bt" else "eager"),
             "GCW_CACHE_PROCESSOR_BACKEND": (
                 "compile" if compile_regions and config.model.variant == "bgt" else "eager"
             ),
@@ -865,6 +856,23 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             _apply_trainable_policy(model, config.trainable)
             if backbone_backend is not None:
                 configure_qwen3_backbone_chunk_backend(model, backbone_backend)
+            if triton_cache:
+                with _temporary_environment({"GCW_ALLOW_UNQUALIFIED_TRITON_CACHE": "1"}):
+                    configure_triton_cache_movement(
+                        model,
+                        TritonCacheMovementConfig(enabled=True),
+                        context=TritonCacheExecutionContext(
+                            model_variant=config.model.variant,
+                            model_family=config.model.family,
+                            physical_batch_size=config.batch_size,
+                            distributed=config.distributed,
+                            trainable=config.trainable,
+                            bf16=config.bf16,
+                            backbone_chunk_backend=config.backbone_chunk_backend,
+                            adaptive_batching_enabled=False,
+                            whole_model_compile_requested=False,
+                        ),
+                    )
             object.__setattr__(
                 model,
                 "_gcw_parity_checkpoint_threshold",
@@ -888,9 +896,7 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             loss_backend=config.loss_backend,
             attention_mask=batch.attention_mask,
             activation_checkpoint_windows=config.activation_checkpoint_windows,
-            activation_checkpoint_min_padded_sequence_length=getattr(
-                model, "_gcw_parity_checkpoint_threshold"
-            ),
+            activation_checkpoint_min_padded_sequence_length=getattr(model, "_gcw_parity_checkpoint_threshold"),
         )
         return row_sums.reshape(-1, 2).sum(dim=1) / row_counts.reshape(-1, 2).sum(dim=1).clamp_min(1)
 
@@ -905,13 +911,11 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     def checkpoint_expectation(threshold: int) -> CheckpointExpectation:
-        return lambda batch: config.activation_checkpoint_windows > 0 and (
-            threshold == 0 or batch.x.shape[1] >= threshold
+        return lambda batch: (
+            config.activation_checkpoint_windows > 0 and (threshold == 0 or batch.x.shape[1] >= threshold)
         )
 
-    expects_checkpoint = checkpoint_expectation(
-        config.activation_checkpoint_min_padded_sequence_length
-    )
+    expects_checkpoint = checkpoint_expectation(config.activation_checkpoint_min_padded_sequence_length)
 
     def prepare_optimizer_step(
         model: torch.nn.Module,
@@ -921,9 +925,7 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     ) -> None:
         if config.grad_clip:
             _clip_grad_norm(model, list(parameters), config.grad_clip)
-        lr_scale = _wsd_lr(
-            step, config.max_steps, config.warmup_steps, config.warmdown_ratio, config.final_lr_frac
-        )
+        lr_scale = _wsd_lr(step, config.max_steps, config.warmup_steps, config.warmdown_ratio, config.final_lr_frac)
         weight_decay = _weight_decay(step, config.max_steps, config.weight_decay)
         for group in optimizer.param_groups:
             group["lr"] = group["initial_lr"] * lr_scale
@@ -945,6 +947,15 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
                 "fixed_batch2_compile_full_windows",
                 "fixed",
                 lambda: build("compile_full_windows"),
+            ),
+        )
+    elif variant_set == "triton_cache":
+        variants = (
+            ParityVariant("fixed_batch2_eager", "fixed", lambda: build(None)),
+            ParityVariant(
+                "fixed_batch2_triton_cache",
+                "fixed",
+                lambda: build(None, triton_cache=True),
             ),
         )
     elif variant_set == "checkpoint_threshold":
@@ -1005,7 +1016,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     parser.add_argument(
         "--variant-set",
-        choices=("adaptive", "fixed_regional", "checkpoint_threshold"),
+        choices=("adaptive", "fixed_regional", "checkpoint_threshold", "triton_cache"),
         default="adaptive",
         help="compare adaptive grouping, fixed regional compilers, or checkpoint thresholds",
     )
