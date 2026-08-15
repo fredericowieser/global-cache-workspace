@@ -1,9 +1,10 @@
 """Formal fixed/adaptive CUDA parity harness.
 
-This module never times instrumented execution.  It aligns semantic cache
-operations by stable source-pair and row identities, then compares losses,
-gradients, optimizer moments, RNG, cursor state, and a short parameter
-trajectory.  Production training remains untouched.
+This module never times instrumented execution. It aligns semantic cache
+operations by stable source-row and actual cache-boundary identities, then
+compares losses, gradients, optimizer moments, RNG, and a short parameter
+trajectory. Reservation identity is not presented as production resume evidence.
+Cache values are not captured. Production training remains untouched.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import os
+import math
 from pathlib import Path
 import random
 from typing import Any, Literal
@@ -29,6 +31,7 @@ from benchmarks.adaptive_trace import (
     active_trace_scope,
     events_to_json,
     row_keys_for_pairs,
+    row_widths_for_pairs,
     trace_cache_events,
 )
 from benchmarks.harness import device_identity, write_authenticated_json
@@ -66,6 +69,7 @@ PairLossFunction = Callable[[torch.nn.Module, TrainingBatch], torch.Tensor]
 ModelFactory = Callable[[], torch.nn.Module]
 OptimizerFactory = Callable[[torch.nn.Module], torch.optim.Optimizer]
 ForwardContext = Callable[[torch.nn.Module, TrainingBatch], AbstractContextManager[Any]]
+CheckpointExpectation = Callable[[TrainingBatch], bool]
 PrepareOptimizerStep = Callable[
     [torch.nn.Module, Sequence[torch.nn.Parameter], torch.optim.Optimizer, int],
     None,
@@ -74,18 +78,28 @@ PrepareOptimizerStep = Callable[
 
 @dataclass(frozen=True)
 class ParityTolerance:
-    """Numerical tolerances for one aligned tensor family."""
+    """Elementwise tolerance retained for losses and parameter trajectories."""
 
     atol: float
     rtol: float
 
 
 @dataclass(frozen=True)
+class VectorTolerance:
+    """Scale-aware gates for gradients and optimizer moments."""
+
+    relative_l2: float
+    minimum_cosine: float
+    near_zero_norm: float
+    near_zero_atol: float
+
+
+@dataclass(frozen=True)
 class ParityTolerances:
     pair_losses: ParityTolerance = ParityTolerance(2e-5, 2e-4)
-    gradients: ParityTolerance = ParityTolerance(2e-5, 2e-4)
+    gradients: VectorTolerance = VectorTolerance(5e-4, 0.99999, 1e-10, 1e-9)
     parameters: ParityTolerance = ParityTolerance(2e-5, 2e-4)
-    adam_moments: ParityTolerance = ParityTolerance(2e-6, 2e-4)
+    adam_moments: VectorTolerance = VectorTolerance(1e-3, 0.9999, 1e-12, 1e-12)
 
 
 @dataclass(frozen=True)
@@ -99,7 +113,7 @@ class ParityVariant:
 
 @dataclass(frozen=True)
 class ReservedParityStep:
-    """One immutable 32-pair reservation plus cursor evidence."""
+    """One immutable 32-pair reservation and its one-time reservation identity."""
 
     reservation: ReservedAdjacentPairs
     cursor_before: Mapping[str, Any]
@@ -127,19 +141,20 @@ class RngSnapshot:
 class VariantStepResult:
     pair_losses: torch.Tensor
     gradients: dict[str, torch.Tensor]
+    missing_gradients: tuple[str, ...]
     parameters: dict[str, torch.Tensor]
     adam_moments: dict[str, dict[str, torch.Tensor]]
     optimizer_steps: dict[str, float]
     rng_sha256: str
     events: list[CacheEvent]
+    event_coverage: dict[str, Any]
+    recomputation: dict[str, Any]
 
 
 @dataclass
 class VariantResult:
     name: str
     execution: ExecutionKind
-    cursor_before: Mapping[str, Any]
-    cursor_after: Mapping[str, Any]
     initial_rng_sha256: str
     steps: list[VariantStepResult]
 
@@ -183,9 +198,13 @@ def run_adaptive_parity(
     optimizer_factory: OptimizerFactory,
     *,
     adaptive_policy: AdaptiveBatchingConfig,
+    process_every: int,
+    required_event_operations: Sequence[str],
+    checkpoint_expected: CheckpointExpectation | None = None,
     forward_context: ForwardContext | None = None,
     prepare_optimizer_step: PrepareOptimizerStep | None = None,
     tolerances: ParityTolerances = ParityTolerances(),
+    resume_evidence_requested: bool = False,
 ) -> dict[str, Any]:
     """Run and compare fixed batch-2, adaptive eager, and adaptive compiled paths."""
     if len(variants) < 2:
@@ -195,9 +214,16 @@ def run_adaptive_parity(
         raise ValueError("parity variant names must be unique")
     if not reserved_steps:
         raise ValueError("formal parity requires reserved steps")
+    if process_every <= 0:
+        raise ValueError("formal parity requires a positive cache process interval")
+    if resume_evidence_requested:
+        raise ValueError(
+            "production resume evidence requested, but this benchmark does not execute production checkpoint save/reload"
+        )
     initial_state = _clone_named_tensors(initial_model.state_dict())
     initial_rng = capture_rng()
     context_factory = forward_context or (lambda _model, _batch: nullcontext())
+    checkpoint_factory = checkpoint_expected or (lambda _batch: False)
     results: list[VariantResult] = []
     for variant in variants:
         model = variant.model_factory()
@@ -213,6 +239,9 @@ def run_adaptive_parity(
                 reserved_steps,
                 pair_loss,
                 adaptive_policy=adaptive_policy,
+                process_every=process_every,
+                required_event_operations=required_event_operations,
+                checkpoint_expected=checkpoint_factory,
                 forward_context=context_factory,
                 prepare_optimizer_step=prepare_optimizer_step,
             )
@@ -224,20 +253,29 @@ def run_adaptive_parity(
     ]
     passed = all(comparison["passed"] for comparison in comparisons)
     payload = {
-        "schema": "gcw.adaptive_cuda_parity.v1",
+        "schema": "gcw.adaptive_cuda_parity.v2",
         "instrumented": True,
         "timing_policy": "forbidden_in_instrumented_runs",
         "initial_model_sha256": _tensor_mapping_sha256(initial_state),
         "initial_rng_sha256": initial_rng.digest(),
-        "reserved_steps": [
-            {
-                "step": step_index,
-                "cursor_before": dict(step.cursor_before),
-                "cursor_after": dict(step.cursor_after),
-                "padded_lengths": list(step.reservation.padded_lengths),
-            }
-            for step_index, step in enumerate(reserved_steps)
-        ],
+        "reservation_identity": {
+            "kind": "single_preexecution_reservation_not_per_variant_resume_evidence",
+            "cursor_before": dict(reserved_steps[0].cursor_before),
+            "cursor_after": dict(reserved_steps[-1].cursor_after),
+            "steps": [
+                {
+                    "step": step_index,
+                    "padded_lengths": list(step.reservation.padded_lengths),
+                }
+                for step_index, step in enumerate(reserved_steps)
+            ],
+        },
+        "production_resume_gate": {
+            "requested": False,
+            "available": False,
+            "passed": True,
+            "reason": "production checkpoint save/reload is outside this reservation-only harness",
+        },
         "variants": [_variant_to_json(result) for result in results],
         "comparisons": comparisons,
         "passed": passed,
@@ -253,6 +291,9 @@ def _run_variant(
     pair_loss: PairLossFunction,
     *,
     adaptive_policy: AdaptiveBatchingConfig,
+    process_every: int,
+    required_event_operations: Sequence[str],
+    checkpoint_expected: CheckpointExpectation,
     forward_context: ForwardContext,
     prepare_optimizer_step: PrepareOptimizerStep | None,
 ) -> VariantResult:
@@ -264,7 +305,7 @@ def _run_variant(
     for step_index, reserved in enumerate(reserved_steps):
         optimizer.zero_grad(set_to_none=True)
         pair_values: list[torch.Tensor | None] = [None] * PAIRS_PER_STEP
-        recorder = CacheEventRecorder()
+        recorder = CacheEventRecorder(required_event_operations)
         with trace_cache_events(recorder):
             if variant.execution == "fixed":
                 groups: Iterator[tuple[int, int, TrainingBatch]] = (
@@ -282,7 +323,13 @@ def _run_variant(
                     step=step_index,
                     group=group_index,
                     row_keys=row_keys_for_pairs(step_index, pair_start, pair_stop),
+                    source_padded_widths=row_widths_for_pairs(
+                        reserved.reservation.padded_lengths, pair_start, pair_stop
+                    ),
+                    process_every=process_every,
+                    checkpoint_expected=checkpoint_expected(batch),
                 )
+                recorder.expect_scope(scope)
                 with active_trace_scope(scope), forward_context(model, batch):
                     losses = pair_loss(model, batch)
                     if losses.shape != (pair_stop - pair_start,):
@@ -299,9 +346,7 @@ def _run_variant(
             for name, parameter in parameters
             if parameter.grad is not None
         }
-        if len(gradients) != len(parameters):
-            missing = sorted(name for name, parameter in parameters if parameter.grad is None)
-            raise RuntimeError(f"parity execution has missing named gradients: {missing}")
+        missing_gradients = tuple(sorted(name for name, parameter in parameters if parameter.grad is None))
         if prepare_optimizer_step is not None:
             prepare_optimizer_step(model, [parameter for _, parameter in parameters], optimizer, step_index)
         optimizer.step()
@@ -310,18 +355,19 @@ def _run_variant(
             VariantStepResult(
                 pair_losses=torch.stack([value for value in pair_values if value is not None]),
                 gradients=gradients,
+                missing_gradients=missing_gradients,
                 parameters={name: parameter.detach().cpu().clone() for name, parameter in parameters},
                 adam_moments=moments,
                 optimizer_steps=optimizer_steps,
                 rng_sha256=capture_rng().digest(),
                 events=list(recorder.events),
+                event_coverage=recorder.coverage(),
+                recomputation=recorder.recomputation_report(),
             )
         )
     return VariantResult(
         name=variant.name,
         execution=variant.execution,
-        cursor_before=reserved_steps[0].cursor_before,
-        cursor_after=reserved_steps[-1].cursor_after,
         initial_rng_sha256=initial_rng_sha256,
         steps=step_results,
     )
@@ -356,16 +402,23 @@ def _compare_variant(
     step_comparisons: list[dict[str, Any]] = []
     for step_index, (expected, actual) in enumerate(zip(reference.steps, candidate.steps, strict=True)):
         pair_comparison = _compare_tensor(expected.pair_losses, actual.pair_losses, tolerances.pair_losses)
-        gradient_comparison = _compare_named_tensors(expected.gradients, actual.gradients, tolerances.gradients)
+        gradient_comparison = _compare_vector_family(expected.gradients, actual.gradients, tolerances.gradients)
+        missing_gradients_equal = expected.missing_gradients == actual.missing_gradients
         parameter_comparison = _compare_named_tensors(expected.parameters, actual.parameters, tolerances.parameters)
-        moment_comparison = _compare_nested_tensors(expected.adam_moments, actual.adam_moments, tolerances.adam_moments)
-        event_comparison = _compare_events(expected.events, actual.events)
-        optimizer_steps_equal = expected.optimizer_steps == actual.optimizer_steps
+        expected_moments = _flatten_nested_tensors(expected.adam_moments)
+        actual_moments = _flatten_nested_tensors(actual.adam_moments)
+        moment_comparison = _compare_vector_family(expected_moments, actual_moments, tolerances.adam_moments)
+        event_comparison = _compare_events(expected, actual)
+        optimizer_steps_finite = all(
+            math.isfinite(value) for value in (*expected.optimizer_steps.values(), *actual.optimizer_steps.values())
+        )
+        optimizer_steps_equal = optimizer_steps_finite and expected.optimizer_steps == actual.optimizer_steps
         rng_equal = expected.rng_sha256 == actual.rng_sha256
         passed = all(
             (
                 pair_comparison["passed"],
                 gradient_comparison["passed"],
+                missing_gradients_equal,
                 parameter_comparison["passed"],
                 moment_comparison["passed"],
                 event_comparison["passed"],
@@ -378,77 +431,56 @@ def _compare_variant(
                 "step": step_index,
                 "pair_losses": pair_comparison,
                 "gradients": gradient_comparison,
+                "missing_gradients_equal": missing_gradients_equal,
+                "reference_missing_gradients": list(expected.missing_gradients),
+                "candidate_missing_gradients": list(actual.missing_gradients),
                 "parameters": parameter_comparison,
                 "adam_moments": moment_comparison,
+                "optimizer_steps_finite": optimizer_steps_finite,
                 "optimizer_steps_equal": optimizer_steps_equal,
                 "rng_equal": rng_equal,
                 "cache_events": event_comparison,
                 "passed": passed,
             }
         )
-    cursor_equal = (
-        dict(reference.cursor_before) == dict(candidate.cursor_before)
-        and dict(reference.cursor_after) == dict(candidate.cursor_after)
-    )
     initial_rng_equal = reference.initial_rng_sha256 == candidate.initial_rng_sha256
     return {
         "reference": reference.name,
         "candidate": candidate.name,
-        "cursor_equal": cursor_equal,
         "initial_rng_equal": initial_rng_equal,
         "steps": step_comparisons,
-        "passed": cursor_equal and initial_rng_equal and all(step["passed"] for step in step_comparisons),
+        "passed": initial_rng_equal and all(step["passed"] for step in step_comparisons),
     }
 
 
-def _compare_events(expected: Sequence[CacheEvent], actual: Sequence[CacheEvent]) -> dict[str, Any]:
-    expected_primary = {
-        event.event_key: event.destinations for event in expected if event.phase == "primary"
-    }
-    actual_primary = {
-        event.event_key: event.destinations for event in actual if event.phase == "primary"
-    }
-    expected_recompute = _recomputation_status(expected)
-    actual_recompute = _recomputation_status(actual)
-    expected_coverage = _trace_coverage(expected)
-    actual_coverage = _trace_coverage(actual)
+def _compare_events(expected: VariantStepResult, actual: VariantStepResult) -> dict[str, Any]:
+    expected_primary = _semantic_primary_events(expected.events)
+    actual_primary = _semantic_primary_events(actual.events)
+    primary_equal = expected_primary == actual_primary
     return {
-        "primary_equal": expected_primary == actual_primary,
-        "reference_primary_count": len(expected_primary),
-        "candidate_primary_count": len(actual_primary),
-        "reference_recomputation": expected_recompute,
-        "candidate_recomputation": actual_recompute,
-        "reference_coverage": expected_coverage,
-        "candidate_coverage": actual_coverage,
+        "semantic_primary_equal": primary_equal,
+        "reference_semantic_primary_count": len(expected_primary),
+        "candidate_semantic_primary_count": len(actual_primary),
+        "reference_coverage": expected.event_coverage,
+        "candidate_coverage": actual.event_coverage,
+        "reference_recomputation": expected.recomputation,
+        "candidate_recomputation": actual.recomputation,
         "passed": (
-            expected_primary == actual_primary
-            and expected_coverage["complete"]
-            and actual_coverage["complete"]
-            and all(expected_recompute.values())
-            and all(actual_recompute.values())
+            primary_equal
+            and expected.event_coverage["complete"]
+            and actual.event_coverage["complete"]
+            and expected.recomputation["passed"]
+            and actual.recomputation["passed"]
         ),
     }
 
 
-def _trace_coverage(events: Sequence[CacheEvent]) -> dict[str, Any]:
-    primary_operations = {event.operation for event in events if event.phase == "primary"}
-    has_selection = "select" in primary_operations
-    has_write = any(operation.startswith("write") for operation in primary_operations)
-    return {
-        "primary_operations": sorted(primary_operations),
-        "has_selection": has_selection,
-        "has_write": has_write,
-        "complete": has_selection and has_write,
-    }
-
-
-def _recomputation_status(events: Sequence[CacheEvent]) -> dict[str, bool]:
-    primary = {event.event_key: event.destinations for event in events if event.phase == "primary"}
-    return {
-        event.event_key: primary.get(event.recomputation_of or "") == event.destinations
-        for event in events
-        if event.phase == "recomputation"
-    }
+def _semantic_primary_events(events: Sequence[CacheEvent]) -> dict[str, tuple[int, ...]]:
+    selected = [event for event in events if event.semantic and event.phase == "primary"]
+    identities = [event.stable_event_id for event in selected]
+    if len(identities) != len(set(identities)):
+        return {}
+    return {event.stable_event_id: event.destinations for event in selected}
 
 
 def _compare_named_tensors(
@@ -468,20 +500,132 @@ def _compare_named_tensors(
     }
 
 
-def _compare_nested_tensors(
-    expected: Mapping[str, Mapping[str, torch.Tensor]],
-    actual: Mapping[str, Mapping[str, torch.Tensor]],
-    tolerance: ParityTolerance,
+def _flatten_nested_tensors(
+    values: Mapping[str, Mapping[str, torch.Tensor]],
+) -> dict[str, torch.Tensor]:
+    return {
+        f"{parameter}/{moment}": tensor
+        for parameter, moments in values.items()
+        for moment, tensor in moments.items()
+    }
+
+
+def _compare_vector_family(
+    expected: Mapping[str, torch.Tensor],
+    actual: Mapping[str, torch.Tensor],
+    tolerance: VectorTolerance,
 ) -> dict[str, Any]:
     names_equal = expected.keys() == actual.keys()
-    comparisons = {
-        name: _compare_named_tensors(expected[name], actual[name], tolerance)
-        for name in expected.keys() & actual.keys()
-    }
+    common = sorted(expected.keys() & actual.keys())
+    tensors = {name: _compare_vector(expected[name], actual[name], tolerance) for name in common}
+    shape_compatible = all(expected[name].shape == actual[name].shape for name in common)
+    if common and shape_compatible:
+        expected_global = torch.cat([expected[name].detach().reshape(-1).to(torch.float64) for name in common])
+        actual_global = torch.cat([actual[name].detach().reshape(-1).to(torch.float64) for name in common])
+        global_comparison = _compare_vector(expected_global, actual_global, tolerance)
+    else:
+        global_comparison = {"available": False, "passed": False}
     return {
         "names_equal": names_equal,
-        "parameters": comparisons,
-        "passed": names_equal and all(result["passed"] for result in comparisons.values()),
+        "tolerance": {
+            "relative_l2": tolerance.relative_l2,
+            "minimum_cosine": tolerance.minimum_cosine,
+            "near_zero_norm": tolerance.near_zero_norm,
+            "near_zero_atol": tolerance.near_zero_atol,
+        },
+        "global": global_comparison,
+        "tensors": tensors,
+        "passed": (
+            names_equal
+            and bool(common)
+            and global_comparison["passed"]
+            and all(result["passed"] for result in tensors.values())
+        ),
+    }
+
+
+def _compare_vector(
+    expected: torch.Tensor,
+    actual: torch.Tensor,
+    tolerance: VectorTolerance,
+) -> dict[str, Any]:
+    if expected.shape != actual.shape:
+        return {"shape_equal": False, "passed": False}
+    expected_float = expected.detach().to(torch.float64)
+    actual_float = actual.detach().to(torch.float64)
+    expected_nonfinite = int((~torch.isfinite(expected_float)).sum())
+    actual_nonfinite = int((~torch.isfinite(actual_float)).sum())
+    finite = expected_nonfinite == 0 and actual_nonfinite == 0
+    base: dict[str, Any] = {
+        "shape_equal": True,
+        "shape": list(expected.shape),
+        "expected_nonfinite_count": expected_nonfinite,
+        "actual_nonfinite_count": actual_nonfinite,
+        "finite": finite,
+    }
+    if not finite:
+        return {
+            **base,
+            "expected_l2": None,
+            "actual_l2": None,
+            "difference_l2": None,
+            "relative_l2": None,
+            "cosine": None,
+            "near_zero": None,
+            "max_abs": None,
+            "passed": False,
+        }
+    difference = actual_float - expected_float
+    expected_norm = _finite_metric(torch.linalg.vector_norm(expected_float))
+    actual_norm = _finite_metric(torch.linalg.vector_norm(actual_float))
+    difference_norm = _finite_metric(torch.linalg.vector_norm(difference))
+    max_abs = _finite_metric(difference.abs().max()) if difference.numel() else 0.0
+    metrics_finite = all(value is not None for value in (expected_norm, actual_norm, difference_norm, max_abs))
+    if not metrics_finite:
+        return {
+            **base,
+            "metric_overflow": True,
+            "expected_l2": expected_norm,
+            "actual_l2": actual_norm,
+            "difference_l2": difference_norm,
+            "relative_l2": None,
+            "cosine": None,
+            "near_zero": None,
+            "max_abs": max_abs,
+            "passed": False,
+        }
+    assert expected_norm is not None and actual_norm is not None
+    assert difference_norm is not None and max_abs is not None
+    near_zero = expected_norm <= tolerance.near_zero_norm
+    raw_relative_l2 = difference_norm / expected_norm if expected_norm > 0 else None
+    relative_l2 = raw_relative_l2 if raw_relative_l2 is None or math.isfinite(raw_relative_l2) else None
+    cosine = (
+        _finite_metric(
+            torch.dot(expected_float.reshape(-1), actual_float.reshape(-1)) / (expected_norm * actual_norm)
+        )
+        if expected_norm > 0 and actual_norm > 0
+        else None
+    )
+    if near_zero:
+        passed = max_abs <= tolerance.near_zero_atol
+    else:
+        passed = (
+            relative_l2 is not None
+            and relative_l2 <= tolerance.relative_l2
+            and cosine is not None
+            and cosine >= tolerance.minimum_cosine
+        )
+    return {
+        **base,
+        "metric_overflow": False,
+        "expected_l2": expected_norm,
+        "actual_l2": actual_norm,
+        "difference_l2": difference_norm,
+        "relative_l2": relative_l2,
+        "cosine": cosine,
+        "near_zero": near_zero,
+        "max_abs": max_abs,
+        "passed": passed,
     }
 
 
@@ -495,28 +639,58 @@ def _compare_tensor(
         return {"shape_equal": False, "passed": False}
     expected_float = expected.detach().to(dtype=torch.float64)
     actual_float = actual.detach().to(dtype=torch.float64)
+    expected_nonfinite = int((~torch.isfinite(expected_float)).sum())
+    actual_nonfinite = int((~torch.isfinite(actual_float)).sum())
+    finite = expected_nonfinite == 0 and actual_nonfinite == 0
+    if not finite:
+        return {
+            "shape_equal": True,
+            "shape": list(expected.shape),
+            "expected_nonfinite_count": expected_nonfinite,
+            "actual_nonfinite_count": actual_nonfinite,
+            "max_abs": None,
+            "max_rel": None,
+            "close_fraction": None,
+            "atol": tolerance.atol,
+            "rtol": tolerance.rtol,
+            "passed": False,
+        }
     difference = (actual_float - expected_float).abs()
     denominator = expected_float.abs().clamp_min(torch.finfo(torch.float64).eps)
     close = torch.isclose(actual_float, expected_float, atol=tolerance.atol, rtol=tolerance.rtol)
+    max_abs = _finite_metric(difference.max()) if difference.numel() else 0.0
+    max_rel = _finite_metric((difference / denominator).max()) if difference.numel() else 0.0
+    metrics_finite = max_abs is not None and max_rel is not None
     return {
         "shape_equal": True,
         "shape": list(expected.shape),
-        "max_abs": float(difference.max()) if difference.numel() else 0.0,
-        "max_rel": float((difference / denominator).max()) if difference.numel() else 0.0,
+        "expected_nonfinite_count": 0,
+        "actual_nonfinite_count": 0,
+        "metric_overflow": not metrics_finite,
+        "max_abs": max_abs,
+        "max_rel": max_rel,
         "close_fraction": float(close.float().mean()) if close.numel() else 1.0,
         "atol": tolerance.atol,
         "rtol": tolerance.rtol,
-        "passed": bool(close.all()),
+        "passed": metrics_finite and bool(close.all()),
     }
+
+
+def _finite_metric(value: torch.Tensor) -> float | None:
+    return float(value) if bool(torch.isfinite(value)) else None
 
 
 def _tensor_summary(tensor: torch.Tensor) -> dict[str, Any]:
     cpu = tensor.detach().cpu().contiguous()
+    float_value = cpu.float()
+    nonfinite_count = int((~torch.isfinite(float_value)).sum())
+    norm = _finite_metric(torch.linalg.vector_norm(float_value)) if cpu.numel() and not nonfinite_count else None
     return {
         "shape": list(cpu.shape),
         "dtype": str(cpu.dtype),
         "sha256": _tensor_mapping_sha256({"value": cpu}),
-        "l2_norm": float(torch.linalg.vector_norm(cpu.float())) if cpu.numel() else 0.0,
+        "nonfinite_count": nonfinite_count,
+        "l2_norm": norm,
     }
 
 
@@ -524,30 +698,47 @@ def _variant_to_json(result: VariantResult) -> dict[str, Any]:
     return {
         "name": result.name,
         "execution": result.execution,
-        "cursor_before": dict(result.cursor_before),
-        "cursor_after": dict(result.cursor_after),
         "initial_rng_sha256": result.initial_rng_sha256,
         "steps": [
             {
                 "step": step_index,
-                "pair_losses": step.pair_losses.tolist(),
+                "pair_losses": [_json_scalar(value) for value in step.pair_losses],
                 "pair_losses_by_key": {
-                    f"step-{step_index:04d}/pair-{pair_index:02d}": float(value)
+                    f"step-{step_index:04d}/pair-{pair_index:02d}": _json_scalar(value)
                     for pair_index, value in enumerate(step.pair_losses)
                 },
                 "gradients": {name: _tensor_summary(value) for name, value in step.gradients.items()},
+                "missing_gradients": list(step.missing_gradients),
                 "parameters": {name: _tensor_summary(value) for name, value in step.parameters.items()},
                 "adam_moments": {
                     name: {moment: _tensor_summary(value) for moment, value in moments.items()}
                     for name, moments in step.adam_moments.items()
                 },
-                "optimizer_steps": step.optimizer_steps,
+                "optimizer_steps": {name: _json_float(value) for name, value in step.optimizer_steps.items()},
                 "rng_sha256": step.rng_sha256,
+                "event_coverage": step.event_coverage,
+                "recomputation": step.recomputation,
                 "events": events_to_json(step.events),
             }
             for step_index, step in enumerate(result.steps)
         ],
     }
+
+
+def _json_float(number: float) -> float | dict[str, str]:
+    if math.isfinite(number):
+        return number
+    if math.isnan(number):
+        classification = "nan"
+    elif number > 0:
+        classification = "positive_infinity"
+    else:
+        classification = "negative_infinity"
+    return {"nonfinite": classification}
+
+
+def _json_scalar(value: torch.Tensor) -> float | dict[str, str]:
+    return _json_float(float(value))
 
 
 def _clone_named_tensors(state: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -591,6 +782,22 @@ def _temporary_environment(updates: Mapping[str, str | None]) -> Iterator[None]:
 
 def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     config = load_train_config(args.train_config)
+    repository = find_repository_root(Path(__file__))
+    source = repository_source_identity(
+        repository,
+        executed_files=(Path(__file__), Path(__file__).with_name("adaptive_trace.py")),
+        require_git=True,
+    )
+    if source["git_dirty"]:
+        raise ValueError("CUDA parity evidence requires a clean source tree")
+    if config.resume is not None:
+        raise ValueError("CUDA parity CLI rejects training resume configs")
+    if getattr(args, "require_resume_evidence", False):
+        raise ValueError(
+            "production resume evidence is unavailable: this benchmark does not save/reload production checkpoints"
+        )
+    if args.steps <= 0 or args.steps > config.max_steps:
+        raise ValueError("CUDA parity steps must be positive and no greater than train max_steps")
     policy = config.performance.adaptive_batching
     if not policy.enabled:
         raise ValueError("CUDA parity CLI requires performance.adaptive_batching.enabled=true")
@@ -606,6 +813,9 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("CUDA parity CLI rejects processor dropout")
     if config.model.lora is not None and config.model.lora.dropout != 0:
         raise ValueError("CUDA parity CLI rejects LoRA dropout")
+    if processor is None:
+        raise ValueError("CUDA parity CLI requires a standard BT/BGT cache processor")
+    required_operations = ("select", "write_v" if processor.update_stream == "v" else "write_kv")
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA parity requested but CUDA is unavailable")
@@ -657,6 +867,10 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             enabled=config.bf16 and device.type == "cuda",
         )
 
+    def expects_checkpoint(batch: TrainingBatch) -> bool:
+        threshold = config.activation_checkpoint_min_padded_sequence_length
+        return config.activation_checkpoint_windows > 0 and (threshold == 0 or batch.x.shape[1] >= threshold)
+
     def prepare_optimizer_step(
         model: torch.nn.Module,
         parameters: Sequence[torch.nn.Parameter],
@@ -686,14 +900,11 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         pair_losses,
         optimizer_factory,
         adaptive_policy=policy,
+        process_every=processor.process_every,
+        required_event_operations=required_operations,
+        checkpoint_expected=expects_checkpoint,
         forward_context=autocast_context,
         prepare_optimizer_step=prepare_optimizer_step,
-    )
-    repository = find_repository_root(Path(__file__))
-    source = repository_source_identity(
-        repository,
-        executed_files=(Path(__file__), Path(__file__).with_name("adaptive_trace.py")),
-        require_git=True,
     )
     payload.update(
         {
@@ -720,6 +931,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    parser.add_argument(
+        "--require-resume-evidence",
+        action="store_true",
+        help="fail closed because production checkpoint save/reload evidence is not implemented here",
+    )
     return parser
 
 

@@ -23,7 +23,7 @@ Correctness parity runs in ordinary CPU pytest. GPU performance execution is opt
 
 ## Formal adaptive CUDA parity
 
-`benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one reserved sequence of 32-pair optimizer steps. It is a correctness harness, not a timer. Instrumented runs record no latency measurements.
+`benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one pre-execution reservation of 32-pair optimizer steps. It is a correctness harness, not a timer.
 
 ```bash
 uv run --extra gpu python -m benchmarks.adaptive_cuda_parity \
@@ -33,14 +33,19 @@ uv run --extra gpu python -m benchmarks.adaptive_cuda_parity \
   --output artifacts/benchmarks/adaptive-bt-parity.json
 ```
 
-The train config must enable `performance.adaptive_batching`. The executable compiled CLI currently supports deterministic Qwen3 BT/BGT because those are the maintained regional compiled backends. It rejects other families, distributed execution, processor or LoRA dropout, and noisy Diffusion before model allocation. It loads all variants from one state, restores one RNG snapshot, and emits authenticated JSON containing:
+The train config must enable `performance.adaptive_batching`. The CLI supports deterministic Qwen3 BT/BGT regional compiled backends. Before model allocation it rejects dirty source, resume configs, unavailable requested resume evidence, trajectories beyond `max_steps`, distributed execution, unsupported families, processor or LoRA dropout, and noisy Diffusion.
 
-- stable step, pair, row, selection, and write-destination keys;
-- primary cache events and checkpoint-recomputation linkage;
+The authenticated JSON reports:
+
+- one-time reservation identity, explicitly not per-variant loader-resume evidence;
+- stable source pair/row and actual cache-boundary/window identities;
+- semantic selected indices and write destinations after classifying and trimming grouped padding-only events;
+- expected and actual checkpoint replay counts aligned by stable boundary identity, including reverse-order replay;
 - all 32 pair losses in source order;
-- named trainable gradients and parameter trajectory;
-- named AdamW moments and optimizer step counters;
-- loader cursor and CPU/CUDA RNG digests;
-- operation-specific all-close statistics and an overall fail-closed verdict.
+- global and per-tensor relative-L2/cosine gradient and Adam-moment metrics, with strict near-zero and structural nonfinite gates;
+- parameter trajectories, optimizer step counters, and CPU/CUDA RNG digests;
+- exact BT/BGT operation coverage and an overall fail-closed verdict.
 
-The restoring trace context covers standard BT/BGT selection and writeback plus maintained Icarus/Longshot latest-cache writes. New cache processor families must extend this instrumentation before their adaptive result can be admitted. Run performance timing separately with `benchmarks.harness`; instrumentation intentionally introduces Python hooks and device-to-host copies.
+The harness observes cache indices and write destinations only; it does **not** claim cache-value parity. Production checkpoint save/reload is not implemented here, so `--require-resume-evidence` deliberately fails rather than presenting reservation cursors as resume evidence.
+
+Instrumentation is restoring and limited to standard BT/BGT selection and writeback boundaries. Every event copies indices from the device to CPU; that synchronization, Python hooks, and report construction make instrumented execution invalid for timing. Run performance measurements separately with `benchmarks.harness`.
