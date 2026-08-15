@@ -813,6 +813,22 @@ class TrainConfig:
                     "performance.longshot_full_history.max_temp_bytes must cover at least "
                     f"one FP32 K/V row ({minimum_temp_bytes} bytes)"
                 )
+        noisy_diffusion_backend = self.performance.noisy_diffusion.recurrence_backend
+        if noisy_diffusion_backend == "compile":
+            diffusion = self.model.diffusion_processor
+            if self.model.variant != "bgt" or diffusion is None or diffusion.noise_scale <= 0.0:
+                raise ValueError(
+                    "compiled noisy-Diffusion recurrence requires BGT with "
+                    "diffusion_processor.noise_scale>0"
+                )
+            if self.distributed != "none":
+                raise ValueError(
+                    "compiled noisy-Diffusion recurrence currently supports distributed='none'"
+                )
+            if self.performance.adaptive_batching.enabled:
+                raise ValueError(
+                    "compiled noisy-Diffusion recurrence does not enable adaptive batching"
+                )
         reference_loss = self.performance.reference_loss
         if reference_loss.mode != "legacy" and self.loss_backend != "reference":
             raise ValueError("bounded reference-loss execution requires loss_backend='reference'")

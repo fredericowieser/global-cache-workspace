@@ -25,6 +25,8 @@ class TaskDirectedDiffusion(nn.Module):
             raise ValueError("diffusion hidden_size must be positive")
         self.hidden_size = hidden_size
         self.config = config
+        # Execution-only policy. It is intentionally absent from state_dict.
+        self.recurrence_backend: str = "eager"
         self.refinement_gate = nn.Parameter(torch.full((1,), config.refinement_gate_init))
 
     def forward(
@@ -48,6 +50,24 @@ class TaskDirectedDiffusion(nn.Module):
         elif noise is not None:
             raise ValueError("explicit diffusion noise requires noisy training or stochastic inference")
 
+        # Noise sampling remains eager so compiled recurrence cannot alter RNG order.
+        from gcw.performance.backends.diffusion import run_noisy_diffusion_recurrence
+
+        return run_noisy_diffusion_recurrence(
+            self.recurrence_backend,
+            self,
+            state,
+            bottleneck,
+            field,
+        )
+
+    def deterministic_recurrence(
+        self,
+        state: torch.Tensor,
+        bottleneck: torch.Tensor,
+        field: DiffusionField,
+    ) -> torch.Tensor:
+        """Run the task-directed recurrence from an already-noised state."""
         initial = state
         step_size = self.scale(state.dtype) / self.config.num_steps
         for step in range(self.config.num_steps):
@@ -58,7 +78,8 @@ class TaskDirectedDiffusion(nn.Module):
             velocity = field(field_input, time)
             if velocity.shape != state.shape:
                 raise ValueError(
-                    f"diffusion field changed state shape from {tuple(state.shape)} to {tuple(velocity.shape)}"
+                    f"diffusion field changed state shape from {tuple(state.shape)} "
+                    f"to {tuple(velocity.shape)}"
                 )
             state = state + step_size * velocity
         return state - initial

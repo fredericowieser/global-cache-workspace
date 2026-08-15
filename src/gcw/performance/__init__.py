@@ -8,6 +8,7 @@ regions remain in dedicated modules rather than a generic backend registry.
 
 from gcw.performance.config import (
     AdaptiveBatchingConfig,
+    NoisyDiffusionBackendConfig,
     PhysicalBatchBandConfig,
     PerformanceConfig,
     ReferenceLossConfig,
@@ -15,6 +16,7 @@ from gcw.performance.config import (
 
 __all__ = (
     "AdaptiveBatchingConfig",
+    "NoisyDiffusionBackendConfig",
     "PerformanceConfig",
     "PhysicalBatchBandConfig",
     "ReferenceLossConfig",

@@ -16,7 +16,8 @@ The package is intentionally divided by responsibility:
 - `whole_model.py`: legacy whole-model compile policy;
 - `telemetry.py`: read-only optimized-region metrics;
 - `backends/qwen3.py`: Qwen3 backbone chunk compilation;
-- `backends/cache_processors.py`: BT and deterministic BGT-family regional compilation.
+- `backends/cache_processors.py`: BT and deterministic BGT-family regional compilation;
+- `backends/diffusion.py`: noisy Diffusion-BGT recurrence compilation after eager noise sampling.
 
 There is no backend registry. Every compiled region owns narrow admission checks, fixed compiler options, provenance, and fatal failure behavior. Requested optimized paths never silently retry eagerly.
 
@@ -94,6 +95,19 @@ Real-CUDA BF16 cache-write, selected-index, checkpointed-gradient, per-pair traj
 ```bash
 GCW_RUN_LONGSHOT_CUDA_PARITY=1 pytest -q tests/test_longshot_full_history_cuda.py
 ```
+## Noisy Diffusion-BGT recurrence compilation
+
+Noisy Diffusion-BGT remains eager unless training explicitly requests:
+
+```yaml
+performance:
+  noisy_diffusion:
+    recurrence_backend: compile
+```
+
+The model samples `torch.randn_like` eagerly at the existing boundary before dispatch. The compiled full-graph region receives that concrete noisy state and runs only the task-directed recurrence and field evaluations. Thus compilation cannot capture, move, repeat, or fuse the random draw. The policy preserves the configured recurrence count, time conditioning, cache update equations, state dictionary, and writeback path.
+
+This backend is independent from `GCW_CACHE_PROCESSOR_BACKEND`. The latter continues to reject noisy Diffusion-BGT. The narrow backend requires a noisy BGT model and single-process training, rejects adaptive grouping, records its noise boundary and compiler options in provenance, and enters the exact-resume fingerprint only when enabled. Any compiler creation or runtime failure is fatal; the run never retries the recurrence eagerly.
 
 
 ## Change control

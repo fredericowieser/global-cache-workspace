@@ -119,12 +119,26 @@ class LongshotFullHistoryConfig:
 
 
 @dataclass(frozen=True)
+class NoisyDiffusionBackendConfig:
+    """Execution policy for noisy Diffusion-BGT's deterministic recurrence."""
+
+    recurrence_backend: Literal["eager", "compile"] = "eager"
+
+    def __post_init__(self) -> None:
+        if self.recurrence_backend not in {"eager", "compile"}:
+            raise ValueError(
+                "performance.noisy_diffusion.recurrence_backend must be 'eager' or 'compile'"
+            )
+
+
+@dataclass(frozen=True)
 class PerformanceConfig:
     """Training performance policies whose defaults preserve reference execution."""
 
     adaptive_batching: AdaptiveBatchingConfig = field(default_factory=AdaptiveBatchingConfig)
     reference_loss: ReferenceLossConfig = field(default_factory=ReferenceLossConfig)
     longshot_full_history: LongshotFullHistoryConfig = field(default_factory=LongshotFullHistoryConfig)
+    noisy_diffusion: NoisyDiffusionBackendConfig = field(default_factory=NoisyDiffusionBackendConfig)
 
     def __post_init__(self) -> None:
         value: Any = self.adaptive_batching
@@ -146,3 +160,12 @@ class PerformanceConfig:
             )
         elif not isinstance(longshot_full_history, LongshotFullHistoryConfig):
             raise ValueError("performance.longshot_full_history must be a mapping")
+        noisy_diffusion: Any = self.noisy_diffusion
+        if isinstance(noisy_diffusion, dict):
+            object.__setattr__(
+                self,
+                "noisy_diffusion",
+                NoisyDiffusionBackendConfig(**noisy_diffusion),
+            )
+        elif not isinstance(noisy_diffusion, NoisyDiffusionBackendConfig):
+            raise ValueError("performance.noisy_diffusion must be a mapping")

@@ -52,6 +52,10 @@ from gcw.performance.backends.cache_processors import (
     cache_processor_backend_metadata,
     resolve_cache_processor_backend,
 )
+from gcw.performance.backends.diffusion import (
+    configure_noisy_diffusion_recurrence_backend,
+    noisy_diffusion_recurrence_backend_metadata,
+)
 from gcw.performance.longshot_cache import (
     configure_longshot_full_history_execution,
     longshot_full_history_execution_metadata,
@@ -167,6 +171,11 @@ def train(config: TrainConfig) -> None:
     configure_longshot_full_history_execution(
         model, config.performance.longshot_full_history
     )
+    noisy_diffusion_backend = configure_noisy_diffusion_recurrence_backend(
+        model,
+        config.model,
+        config.performance.noisy_diffusion,
+    )
     if use_fsdp:
         _apply_fsdp_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
@@ -180,16 +189,19 @@ def train(config: TrainConfig) -> None:
             config.model.variant == "bt"
             or config.backbone_chunk_backend != "eager"
             or regional_backend == "compile"
+            or noisy_diffusion_backend == "compile"
         ):
             raise RuntimeError(
                 "GCW_COMPILE cannot wrap a regionally compiled language model; disable it and use "
                 "backbone_chunk_backend=compile or compile_full_windows, "
-                "GCW_BT_PROCESSOR_BACKEND=compile, and/or GCW_CACHE_PROCESSOR_BACKEND=compile"
+                "GCW_BT_PROCESSOR_BACKEND=compile, GCW_CACHE_PROCESSOR_BACKEND=compile, "
+                "and/or performance.noisy_diffusion.recurrence_backend=compile"
             )
         if (
             config.model.variant != "bt"
             and config.backbone_chunk_backend == "eager"
             and regional_backend == "eager"
+            and noisy_diffusion_backend == "eager"
         ):
             model = maybe_compile_whole_model(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
@@ -233,6 +245,13 @@ def train(config: TrainConfig) -> None:
         "qwen3_backbone_chunk_backend": qwen3_backbone_chunk_backend_metadata(config.backbone_chunk_backend),
         "cache_processor_backend": (
             cache_processor_backend_metadata(config.model) if config.model.variant == "bgt" else None
+        ),
+        "noisy_diffusion_recurrence_backend": (
+            noisy_diffusion_recurrence_backend_metadata(
+                config.model, config.performance.noisy_diffusion
+            )
+            if config.model.diffusion_processor is not None
+            else None
         ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
@@ -638,6 +657,17 @@ def _training_fingerprint(
             cache_processor_backend_metadata(config.model)["fingerprint_sha256"]
             if config.model.variant == "bgt"
             else None
+        ),
+        **(
+            {
+                "noisy_diffusion_recurrence_backend_fingerprint": (
+                    noisy_diffusion_recurrence_backend_metadata(
+                        config.model, config.performance.noisy_diffusion
+                    )["fingerprint_sha256"]
+                )
+            }
+            if config.performance.noisy_diffusion.recurrence_backend == "compile"
+            else {}
         ),
         "initialization": {
             "backbone_checkpoint": config.backbone_checkpoint,
