@@ -38,6 +38,21 @@ The externally anchored rejection report is `/home/fred/gcw-performance/evidence
 
 **[PERF INCREASE][PROCESSOR][PRELIMINARY]** A source-bound H200 diagnostic measured the complete fixed-batch-two input path for 32 adjacent row-0 pairs: JSONL access, tokenization, collation, and 96 blocking `x`/`y`/mask transfers. The median CPU-only path was `0.06080` seconds and the CUDA path was `0.06397` seconds for `783,054` payload bytes, leaving only `0.00317` seconds attributable to blocking H2D transfer. Relative to the matched `17.3395`-second BT step, eliminating all input preparation has a ceiling near `1.004x`; eliminating only transfer has a ceiling below `1.001x`. This misses the predeclared 5% implementation gate by more than an order of magnitude, so pinned-memory, copy-stream, and cursor-prefetch changes were not implemented. The diagnostic is `/home/fred/gcw-performance/evidence/input-staging-row0-diagnostic-85ad623.json`, SHA-256 `359f8e87edf0581ad36a7a6560d985677cb3d905b14d7cc2d3af1d65c4805f63`.
 
+## Fixed-batch-two launch and kernel budget
+
+**[PERF INCREASE][PROCESSOR][PRELIMINARY]** Source-bound Nsight Systems profiles on one H200 show that the fixed batch-two processors share the same execution ceiling. The BGT, noisy Diffusion-BGT, and Longshot profiles each cover one 32-pair optimizer step; the earlier BT profile covered two steps, so its per-step kernel values below are approximate. Profiled process initialization makes these conservative kernel-work estimates, not accepted timing results.
+
+| Processor | Warm eager step | Approx. kernels/step | Aggregate kernel time | Ideal unchanged-kernel graph ceiling | Active critical-path reduction needed for 10x without overlap |
+|---|---:|---:|---:|---:|---:|
+| BT | `17.3395 s` | `~1.273M` | `~5.156 s` | `~3.36x` | `~66.4%` |
+| BGT | `16.3437 s` | `1.218M` | `4.846 s` | `3.37x` | `66.3%` |
+| Noisy Diffusion-BGT | `17.7236 s` | `1.374M` | `5.110 s` | `3.47x` | `65.3%` |
+| Longshot | `17.4127 s` | `1.252M` | `5.412 s` | `3.22x` | `67.8%` |
+
+Every observed kernel used one CUDA stream. BGT, Diffusion, and Longshot were kernel-active for only `14.5-15.9%` of their process kernel timelines, while their six largest BF16 add/multiply/fill/copy categories consumed `49.7-51.2%` of aggregate kernel time. CUDA Graph replay can remove host gaps but cannot approach 10x while preserving all current kernels. A viable route must also overlap independent fixed-shape pairs and remove roughly two thirds of the active critical path through exact fusion or equivalent kernel reduction.
+
+This corrects an earlier planning interpretation of the BT trace: its roughly `63 s` process/profile wall interval was not one warm optimizer step. Dividing that process wall by aggregate kernel time overstates the graph-only ceiling. The campaign target must use matched warm-step timing. The profile summary is `/home/fred/gcw-performance/evidence/processor-nsys-row0-summary-2706c88.json`, SHA-256 `15f3aa525fef3cc6afe98f32375a6ee9da8e148b9d31dcd256f2de2119d534cc`. No profile changes the admitted multiplier of `1.00x`.
+
 ## Adaptive adjacent-pair batching
 
 Adaptive batching is default-off, training-only, and single-process in version 1. The source stream remains physical batch two. Each optimizer step reserves exactly 32 consecutive source pairs, preserving all 64 rows and the original cursor transition. The planner greedily chooses only contiguous groups from the configured 16/8/4/2-row bands. It never sorts, buckets, moves rows, or splits pairs.
