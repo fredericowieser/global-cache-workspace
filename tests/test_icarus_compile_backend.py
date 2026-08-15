@@ -30,6 +30,11 @@ from gcw.performance.backends.icarus import (
 from gcw.training.core import _training_fingerprint
 
 
+@pytest.fixture(autouse=True)
+def _allow_rejected_icarus_benchmark(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GCW_ALLOW_REJECTED_ICARUS_COMPILE", "1")
+
+
 def _config(
     *,
     score: str = "kv_norm",
@@ -268,6 +273,13 @@ def test_icarus_backend_is_eager_by_default_and_preserves_training_fingerprint(
     assert processor.execution_backend_metadata()["effective_backend"] == "eager"
 
 
+def test_compiled_icarus_is_not_campaign_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
+    monkeypatch.delenv("GCW_ALLOW_REJECTED_ICARUS_COMPILE", raising=False)
+    with pytest.raises(RuntimeError, match="not campaign-admitted"):
+        _processor(_config())
+
+
 def test_compiled_icarus_is_state_neutral_fingerprinted_and_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -289,6 +301,8 @@ def test_compiled_icarus_is_state_neutral_fingerprinted_and_fail_closed(
     assert metadata == icarus_processor_backend_metadata(config, "compile")
     assert metadata["selection_policy"] == "eager_fp32_exact_topk"
     assert metadata["writeback_policy"] == "eager_exact"
+    assert metadata["campaign_admitted"] is False
+    assert metadata["rejection"] == "fixed_batch_2_adam_parameter_tolerance"
     assert len(str(metadata["fingerprint_sha256"])) == 64
     fingerprint = _training_fingerprint(TrainConfig(model=config, data=DataConfig(kind="random")), 1, 128, 128, 1)
     assert fingerprint["icarus_processor_backend_fingerprint"] == metadata["fingerprint_sha256"]

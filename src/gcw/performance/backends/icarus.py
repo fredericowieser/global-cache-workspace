@@ -23,6 +23,7 @@ IcarusProcessorBackend = Literal["eager", "compile"]
 IcarusProcessorRunner = Callable[[nn.Module, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 
 _ICARUS_BACKEND_ENV = "GCW_ICARUS_PROCESSOR_BACKEND"
+_ICARUS_REJECTED_BENCHMARK_ENV = "GCW_ALLOW_REJECTED_ICARUS_COMPILE"
 _COMPILE_OPTIONS = {
     "backend": "inductor",
     "dynamic": True,
@@ -55,6 +56,11 @@ def resolve_icarus_processor_backend(model_config: ModelConfig) -> IcarusProcess
         raise RuntimeError(
             f"{_ICARUS_BACKEND_ENV}=compile supports the ordinary Icarus transform only; "
             "Flow and Diffusion refinements are explicitly unsupported"
+        )
+    if os.environ.get(_ICARUS_REJECTED_BENCHMARK_ENV) != "1":
+        raise RuntimeError(
+            "Icarus compilation is not campaign-admitted after fixed batch-2 Adam parameter parity failed; "
+            f"set {_ICARUS_REJECTED_BENCHMARK_ENV}=1 only in an isolated benchmark"
         )
     require_torch_compile(f"{_ICARUS_BACKEND_ENV}=compile")
     return "compile"
@@ -97,7 +103,7 @@ def icarus_processor_backend_metadata(
 ) -> dict[str, object]:
     """Return provenance and an exact-resume fingerprint for Icarus execution."""
     selected = resolve_icarus_processor_backend(model_config) if backend is None else backend
-    execution = {
+    execution: dict[str, object] = {
         "schema": "gcw.icarus_processor_backend.v2",
         "effective_backend": selected,
         "architecture": "icarus",
@@ -111,10 +117,21 @@ def icarus_processor_backend_metadata(
         "generation": "eager",
         "torch_version": str(torch.__version__),
     }
+    if selected == "compile":
+        execution.update(
+            {
+                "schema": "gcw.icarus_processor_backend.v3",
+                "scope": "rejected_benchmark_training_forward_and_backward_only",
+                "campaign_admitted": False,
+                "benchmark_override": _ICARUS_REJECTED_BENCHMARK_ENV,
+                "rejection": "fixed_batch_2_adam_parameter_tolerance",
+            }
+        )
     return {
         **execution,
         "requested_via": _ICARUS_BACKEND_ENV,
         "requested_value": os.environ.get(_ICARUS_BACKEND_ENV, "eager"),
+        "benchmark_override_value": os.environ.get(_ICARUS_REJECTED_BENCHMARK_ENV),
         "implementation_module": "gcw.performance.backends.icarus",
         "implementation_symbols": [
             "gcw.performance.backends.icarus.run_icarus_post_selection_region",
