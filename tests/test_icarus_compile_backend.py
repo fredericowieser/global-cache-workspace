@@ -398,6 +398,7 @@ def test_compile_warmup_is_rng_gradient_and_serialized_state_neutral(
     assert len(compile_calls) == 2
     assert len(region_inputs) == 3
     assert {positions.shape[-1] for positions, _heads in region_inputs} == {64}
+    assert all(positions.is_contiguous() and heads.is_contiguous() for positions, heads in region_inputs)
     assert first.block in backend_module._COMPILED_RUNNERS
     assert second.block in backend_module._COMPILED_RUNNERS
     assert backend_module._COMPILED_RUNNERS[first.block] is not backend_module._COMPILED_RUNNERS[second.block]

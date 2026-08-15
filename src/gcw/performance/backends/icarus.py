@@ -199,11 +199,20 @@ def warmup_icarus_training_execution(
                         dtype=input_dtype,
                         requires_grad=True,
                     )
+                    # Match the contiguous gathered layouts used by production selection.
+                    # Expanded stride-zero warmups would compile different guards and make
+                    # the first real step specialize again after checkpoint RNG restore.
                     positions = (
-                        torch.arange(selected_length, device=device).view(1, 1, -1).expand(batch_size, cache_heads, -1)
+                        torch.arange(selected_length, device=device)
+                        .view(1, 1, -1)
+                        .expand(batch_size, cache_heads, -1)
+                        .clone()
                     )
                     selected_heads = (
-                        torch.arange(selected_count, device=device, dtype=torch.long).view(1, -1).expand(batch_size, -1)
+                        torch.arange(selected_count, device=device, dtype=torch.long)
+                        .view(1, -1)
+                        .expand(batch_size, -1)
+                        .clone()
                     )
                     with icarus_training_execution(processor, batch_size):
                         with torch.autocast(
