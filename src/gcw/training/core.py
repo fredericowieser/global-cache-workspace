@@ -80,6 +80,12 @@ from gcw.performance.losses import (
     reference_loss_execution_metadata,
     require_loss_backend,
 )
+from gcw.performance.triton.execution import (
+    TritonCacheExecutionContext,
+    configure_triton_cache_movement,
+    triton_cache_movement_metadata,
+    validate_triton_cache_movement_request,
+)
 from gcw.performance.telemetry import (
     cache_processor_metrics as _cache_processor_metrics,
     model_runtime_backends as _model_runtime_backends,
@@ -106,6 +112,7 @@ def train(config: TrainConfig) -> None:
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
     require_loss_backend(config.loss_backend, device)
+    validate_triton_cache_movement_request(config.performance.triton_cache_movement, device)
     _, rank, _, world_size = dist_info()
     adaptive_batching = config.performance.adaptive_batching
     if adaptive_batching.enabled and (
@@ -221,6 +228,21 @@ def train(config: TrainConfig) -> None:
             ),
         ),
     )
+    configure_triton_cache_movement(
+        model,
+        config.performance.triton_cache_movement,
+        context=TritonCacheExecutionContext(
+            model_variant=config.model.variant,
+            model_family=config.model.family,
+            physical_batch_size=config.batch_size,
+            distributed=config.distributed,
+            trainable=config.trainable,
+            bf16=config.bf16,
+            backbone_chunk_backend=config.backbone_chunk_backend,
+            adaptive_batching_enabled=config.performance.adaptive_batching.enabled,
+            whole_model_compile_requested=whole_model_compile_requested(),
+        ),
+    )
     noisy_diffusion_backend = configure_noisy_diffusion_recurrence_backend(
         model,
         config.model,
@@ -333,6 +355,15 @@ def train(config: TrainConfig) -> None:
         ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
+        **(
+            {
+                "triton_cache_movement": triton_cache_movement_metadata(
+                    config.performance.triton_cache_movement
+                )
+            }
+            if config.performance.triton_cache_movement.enabled
+            else {}
+        ),
         "activation_checkpoint_min_padded_sequence_length": (
             config.activation_checkpoint_min_padded_sequence_length
         ),
@@ -746,6 +777,15 @@ def _training_fingerprint(
         "qwen3_backbone_chunk_backend_fingerprint": qwen3_backbone_chunk_backend_metadata(
             config.backbone_chunk_backend
         )["fingerprint_sha256"],
+        **(
+            {
+                "triton_cache_movement_fingerprint": triton_cache_movement_metadata(
+                    config.performance.triton_cache_movement
+                )["fingerprint_sha256"]
+            }
+            if config.performance.triton_cache_movement.enabled
+            else {}
+        ),
         "cache_processor_backend_fingerprint": (
             cache_processor_backend_metadata(config.model)["fingerprint_sha256"]
             if config.model.variant == "bgt"

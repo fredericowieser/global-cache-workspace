@@ -130,6 +130,17 @@ class KVScoreSidecarConfig:
 
 
 @dataclass(frozen=True)
+class TritonCacheMovementConfig:
+    """Default-off raw-bit cache gather/layout backend."""
+
+    enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("performance.triton_cache_movement.enabled must be a boolean")
+
+
+@dataclass(frozen=True)
 class NoisyDiffusionBackendConfig:
     """Execution policy for noisy Diffusion-BGT's deterministic recurrence."""
 
@@ -148,6 +159,7 @@ class PerformanceConfig:
     reference_loss: ReferenceLossConfig = field(default_factory=ReferenceLossConfig)
     longshot_full_history: LongshotFullHistoryConfig = field(default_factory=LongshotFullHistoryConfig)
     kv_score_sidecar: KVScoreSidecarConfig = field(default_factory=KVScoreSidecarConfig)
+    triton_cache_movement: TritonCacheMovementConfig = field(default_factory=TritonCacheMovementConfig)
     noisy_diffusion: NoisyDiffusionBackendConfig = field(default_factory=NoisyDiffusionBackendConfig)
 
     def __post_init__(self) -> None:
@@ -179,6 +191,15 @@ class PerformanceConfig:
             )
         elif not isinstance(kv_score_sidecar, KVScoreSidecarConfig):
             raise ValueError("performance.kv_score_sidecar must be a mapping")
+        triton_cache_movement: Any = self.triton_cache_movement
+        if isinstance(triton_cache_movement, dict):
+            object.__setattr__(
+                self,
+                "triton_cache_movement",
+                TritonCacheMovementConfig(**triton_cache_movement),
+            )
+        elif not isinstance(triton_cache_movement, TritonCacheMovementConfig):
+            raise ValueError("performance.triton_cache_movement must be a mapping")
         noisy_diffusion: Any = self.noisy_diffusion
         if isinstance(noisy_diffusion, dict):
             object.__setattr__(

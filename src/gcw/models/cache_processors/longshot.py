@@ -44,6 +44,7 @@ from gcw.performance.longshot_cache import (
     longshot_full_history_execution,
     record_longshot_full_history_event,
 )
+from gcw.performance.triton.execution import triton_cache_movement_enabled
 from gcw.performance.longshot_scores import (
     chunked_fp32_concatenated_kv_squared_l2,
     chunked_fp32_unroped_concatenated_kv_squared_l2,
@@ -809,6 +810,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
+                backend=self._cache_movement_backend(),
             )
             head_scores = chunked_fp32_l2_norm(merged)
         if select_all:
@@ -951,6 +953,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
+                backend=self._cache_movement_backend(),
             )
             scores = state.scores
             indices = select_per_cache_head_kv_norm_indices_from_scores(
@@ -969,6 +972,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
+                backend=self._cache_movement_backend(),
             )
             scores = chunked_fp32_squared_l2(merged_all)
             indices = select_per_cache_head_kv_norm_indices_from_scores(
@@ -1047,6 +1051,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
+                backend=self._cache_movement_backend(),
             )
             kv_head_scores = chunked_fp32_l2_norm(merged)
         latest = latest_shared_indices(indices)
@@ -1107,6 +1112,9 @@ class GlobalCacheProcessor(CacheProcessorBase):
             cache.kv_score_sidecar, cache.keys, cache.values, positions, spec
         )
         return cache
+
+    def _cache_movement_backend(self) -> str:
+        return "triton" if triton_cache_movement_enabled(self) else "eager"
 
     def _select_combined_heads(
         self,

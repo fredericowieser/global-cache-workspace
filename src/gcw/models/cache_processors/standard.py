@@ -23,6 +23,8 @@ from gcw.performance.prepared_bt import (
     run_batched_cache_processors,
 )
 from gcw.models.cache_processors.base import CacheProcessorBase
+from gcw.performance.triton import gather_shared_kv as triton_gather_shared_kv
+from gcw.performance.triton.execution import triton_cache_movement_enabled
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.cache_processors.ops import (
     gather_cache_layers,
@@ -237,6 +239,8 @@ class PerLayerCacheProcessor(CacheProcessorBase):
         if self.config.score != "attn_l2":
             raise ValueError("cache_processor.score='kv_norm' is currently BGT-only")
         num_kv_heads, head_dim = model_config.stored_cache_shape
+        self.num_kv_heads = num_kv_heads
+        self.head_dim = head_dim
         layer_dim = self.config.stream_factor * num_kv_heads * head_dim
         self.blocks = nn.ModuleList(CacheProcessor(layer_dim, self.config) for _ in range(model_config.cache_num_layers))
         self.execution_backend: BTProcessorBackend = resolve_bt_processor_backend()
@@ -266,14 +270,25 @@ class PerLayerCacheProcessor(CacheProcessorBase):
             )
             new_values = split_layer_values(updated, values.shape[2], values.shape[4])
             return scatter_cache_values(cache, indices, new_values)
-        keys, values = gather_cache_layers(cache, indices)
-        merged = merge_layer_kv(keys, values)
+        if triton_cache_movement_enabled(self):
+            if not isinstance(cache, WindowedCache):
+                raise RuntimeError("enabled Triton BT movement requires WindowedCache")
+            merged = triton_gather_shared_kv(
+                cache.keys,
+                cache.values,
+                indices,
+                layout="layer",
+                validate_indices=False,
+            )
+        else:
+            keys, values = gather_cache_layers(cache, indices)
+            merged = merge_layer_kv(keys, values)
         updated = (
             run_batched_cache_processors(self.blocks, merged, indices)
             if _prepared is None
             else run_prepared_bt_processor_region(_prepared_backend, _prepared, merged, indices)
         )
-        new_keys, new_values = split_layer_kv(updated, keys.shape[2], keys.shape[4])
+        new_keys, new_values = split_layer_kv(updated, self.num_kv_heads, self.head_dim)
         return scatter_cache_layers(cache, indices, new_keys, new_values)
 
 
@@ -329,11 +344,23 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
             new_values = split_global_values(updated, self.num_layers, self.num_kv_heads, self.head_dim)
             return scatter_cache_values(cache, indices, new_values)
-        keys, values = gather_cache_layers(cache, indices)
+        if triton_cache_movement_enabled(self):
+            if not isinstance(cache, WindowedCache):
+                raise RuntimeError("enabled Triton BGT movement requires WindowedCache")
+            merged = triton_gather_shared_kv(
+                cache.keys,
+                cache.values,
+                indices,
+                layout="global",
+                validate_indices=False,
+            )
+        else:
+            keys, values = gather_cache_layers(cache, indices)
+            merged = merge_global_kv(keys, values)
         updated = run_bgt_processor_region(
             self.execution_backend,
             self.block,
-            merge_global_kv(keys, values),
+            merged,
             indices,
         )
         new_keys, new_values = split_global_kv(updated, self.num_layers, self.num_kv_heads, self.head_dim)

@@ -32,6 +32,7 @@ from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.backbones.transformer import RMSNorm, apply_rotary, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.performance.triton.execution import triton_cache_movement_enabled
 
 CacheLike = CacheState | StaticCacheState | WindowedCache
 
@@ -304,6 +305,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
+                backend=self._cache_movement_backend(),
             )
             indices, selected_heads = self._select_indices_and_heads(cache, merged, select_all)
             if indices.shape[-1] == 0:
@@ -321,6 +323,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
+                backend=self._cache_movement_backend(),
             )
         if indices.shape[-1] == 0:
             return cache
@@ -348,6 +351,9 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_dim=self.rotary_dim,
             )
         return _scatter_latest(cache, latest, keys, values)
+
+    def _cache_movement_backend(self) -> str:
+        return "triton" if triton_cache_movement_enabled(self) else "eager"
 
     def _select_indices_and_heads(
         self,

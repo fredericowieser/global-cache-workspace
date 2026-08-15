@@ -13,6 +13,7 @@ from gcw.performance.config import (
     PhysicalBatchBandConfig,
     PerformanceConfig,
     ReferenceLossConfig,
+    TritonCacheMovementConfig,
 )
 
 __all__ = (
@@ -22,4 +23,5 @@ __all__ = (
     "PerformanceConfig",
     "PhysicalBatchBandConfig",
     "ReferenceLossConfig",
+    "TritonCacheMovementConfig",
 )

@@ -863,6 +863,39 @@ class TrainConfig:
                 raise ValueError(
                     "performance.kv_score_sidecar requires a dense WindowedCache-compatible family"
                 )
+        triton_cache = self.performance.triton_cache_movement
+        if triton_cache.enabled:
+            processor = self.model.cache_processor
+            if self.model.variant not in {"bt", "bgt", "longshot", "icarus"} or processor is None:
+                raise ValueError("performance.triton_cache_movement requires a cache processor")
+            if self.model.family != "qwen3":
+                raise ValueError("performance.triton_cache_movement currently supports only Qwen3")
+            if self.batch_size != 2 or self.distributed != "none":
+                raise ValueError(
+                    "performance.triton_cache_movement requires fixed batch two and distributed='none'"
+                )
+            if self.trainable != "cache_processor" or not self.bf16:
+                raise ValueError(
+                    "performance.triton_cache_movement requires BF16 cache-processor-only training"
+                )
+            if self.backbone_chunk_backend != "eager":
+                raise ValueError(
+                    "performance.triton_cache_movement does not compose with compiled backbone execution"
+                )
+            if self.performance.adaptive_batching.enabled:
+                raise ValueError(
+                    "performance.triton_cache_movement does not compose with adaptive batching"
+                )
+            if processor.processor_mode != "standard" or processor.update_stream != "kv":
+                raise ValueError(
+                    "performance.triton_cache_movement v1 requires standard K/V cache updates"
+                )
+            if processor.attention_dropout != 0.0:
+                raise ValueError("performance.triton_cache_movement requires zero processor dropout")
+            if self.performance.longshot_full_history.enabled:
+                raise ValueError(
+                    "performance.triton_cache_movement does not compose with Longshot selected-history"
+                )
         noisy_diffusion_backend = self.performance.noisy_diffusion.recurrence_backend
         if noisy_diffusion_backend == "compile":
             diffusion = self.model.diffusion_processor
@@ -975,6 +1008,8 @@ def to_dict(value: Any) -> Any:
             payload.pop("longshot_full_history")
         if not value.kv_score_sidecar.enabled:
             payload.pop("kv_score_sidecar")
+        if not value.triton_cache_movement.enabled:
+            payload.pop("triton_cache_movement")
         return payload
     if is_dataclass(value):
         return {f.name: to_dict(getattr(value, f.name)) for f in fields(value)}

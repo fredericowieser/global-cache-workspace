@@ -109,12 +109,38 @@ def gather_per_cache_head_kv(
     rope_theta: float = 10000.0,
     rotary_style: str = "llama",
     rotary_dim: int | None = None,
+    backend: str = "eager",
 ) -> torch.Tensor:
+    if indices.ndim != 3:
+        raise ValueError("indices must have shape (batch, cache_heads, selected)")
+    if backend == "triton":
+        if not isinstance(cache, WindowedCache):
+            raise RuntimeError("enabled Triton per-head movement requires WindowedCache")
+        from gcw.performance.triton import gather_per_cache_head_kv as triton_gather
+
+        gathered = triton_gather(
+            cache.keys,
+            cache.values,
+            indices,
+            validate_indices=False,
+        )
+        if unrope_keys:
+            gathered_keys, gathered_values = gathered.chunk(2, dim=-1)
+            gathered_keys = rotate_cache_keys(
+                gathered_keys,
+                indices,
+                theta=rope_theta,
+                rotary_style=rotary_style,
+                inverse=True,
+                rotary_dim=rotary_dim,
+            )
+            return torch.cat([gathered_keys, gathered_values], dim=-1)
+        return gathered
+    if backend != "eager":
+        raise ValueError(f"unsupported per-head cache movement backend: {backend}")
     keys, values = _cache_tensors(cache)
     keys = _flatten_cache_heads(keys)
     values = _flatten_cache_heads(values)
-    if indices.ndim != 3:
-        raise ValueError("indices must have shape (batch, cache_heads, selected)")
     index = indices[..., None].expand(-1, -1, -1, keys.shape[-1])
     keys = torch.gather(keys, dim=2, index=index)
     values = torch.gather(values, dim=2, index=index)

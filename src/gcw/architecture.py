@@ -35,6 +35,9 @@ def _config_payload(value: object) -> object:
         if not value.kv_score_sidecar.enabled:
             # Preserve receipts created before this default-off execution policy existed.
             payload.pop("kv_score_sidecar")
+        if not value.triton_cache_movement.enabled:
+            # Preserve receipts created before this default-off execution policy existed.
+            payload.pop("triton_cache_movement")
         if value.noisy_diffusion.recurrence_backend == "eager":
             # Preserve receipts created before this default-off execution policy existed.
             payload.pop("noisy_diffusion")

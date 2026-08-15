@@ -38,6 +38,7 @@ def test_package_version_and_curated_subpackage_exports() -> None:
         "PerformanceConfig",
         "PhysicalBatchBandConfig",
         "ReferenceLossConfig",
+        "TritonCacheMovementConfig",
     )
 
 
