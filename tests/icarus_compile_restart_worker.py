@@ -15,6 +15,7 @@ from gcw.performance.backends.icarus import (
     configure_icarus_training_execution,
     icarus_processor_backend_metadata,
     icarus_training_execution,
+    warmup_icarus_training_execution,
 )
 from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
 from test_icarus_compile_backend import _config
@@ -39,6 +40,13 @@ def _new_training() -> tuple[LanguageModel, torch.optim.Optimizer]:
     assert isinstance(model, LanguageModel)
     model.init_weights()
     configure_icarus_training_execution(model, (2,))
+    warmup_icarus_training_execution(
+        model,
+        (2,),
+        sequence_length=config.sequence_len,
+        device=torch.device("cuda"),
+        bf16=True,
+    )
     return model, torch.optim.AdamW(model.parameters(), lr=3e-4)
 
 
@@ -134,12 +142,12 @@ def main() -> None:
         checkpoint.restore_model(model)
         checkpoint.restore_optimizer(optimizer, device="cuda")
         checkpoint.restore_rng(rank=0)
-        cursor = checkpoint.loader_cursor(rank=0)
-        assert cursor == _advance_cursor(_initial_cursor())
-        assert isinstance(cursor, RandomCursor)
+        resumed_cursor = checkpoint.loader_cursor(rank=0)
+        assert isinstance(resumed_cursor, RandomCursor)
+        assert resumed_cursor == _advance_cursor(_initial_cursor())
         assert checkpoint.resume_state.metadata == {"acceptance": "icarus_compile"}
         _step(model, optimizer)
-        _save_result(model, optimizer, _advance_cursor(cursor), Path(sys.argv[3]))
+        _save_result(model, optimizer, _advance_cursor(resumed_cursor), Path(sys.argv[3]))
         return
     raise ValueError(f"unknown mode: {mode}")
 

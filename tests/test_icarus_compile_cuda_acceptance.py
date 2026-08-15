@@ -27,6 +27,7 @@ from gcw.performance.backends.icarus import (
     IcarusProcessorBackend,
     configure_icarus_training_execution,
     icarus_training_execution,
+    warmup_icarus_training_execution,
 )
 from tests.test_icarus_compile_backend import _cache, _config, _processor
 
@@ -147,6 +148,13 @@ def test_real_inductor_all_adaptive_bands_have_exact_multievent_trajectory(
     config.sequence_len = 192
     eager, compiled = _paired_models(config, device=device)
     configure_icarus_training_execution(compiled, _ADAPTIVE_BANDS)
+    warmup_icarus_training_execution(
+        compiled,
+        _ADAPTIVE_BANDS,
+        sequence_length=config.sequence_len,
+        device=device,
+        bf16=True,
+    )
     eager_optimizer = torch.optim.AdamW(eager.parameters(), lr=3e-4)
     compiled_optimizer = torch.optim.AdamW(compiled.parameters(), lr=3e-4)
     traces = _install_exact_trace(monkeypatch, eager, compiled)
