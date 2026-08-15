@@ -36,7 +36,7 @@ The microbenchmark compares the complete eager and candidate gather/backward ope
 
 ## Fused structured row loss
 
-`scripts.benchmarks.fused_row_loss` compares production-shaped bounded-reference and Liger `row_sum` forward/backward boundaries, including projection-head and hidden gradients. It reports raw CUDA-event samples and peak allocator state. Run it only in an exact `liger-kernel==0.8.1` environment; isolated loss results do not establish complete-step admission.
+`scripts.benchmarks.fused_row_loss` reproduces the rejected production-shaped bounded-reference versus per-row Liger `row_sum` forward/backward boundary. It reports raw CUDA-event samples and peak allocator state. Run it only in an exact `liger-kernel==0.8.1` environment. The measured candidate was about 34–37x slower on H100/H200 and is not dispatched by model training.
 
 ```bash
 python -m scripts.benchmarks.fused_row_loss --tokens 1024 --hidden 1024 --vocab 151936

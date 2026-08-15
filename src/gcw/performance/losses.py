@@ -76,9 +76,8 @@ def loss_backend_metadata(backend: LossBackend) -> dict[str, Any]:
                     "reason": "liger-kernel 0.8.1 fused linear CE has no per-token reduction",
                 },
                 "reduction_row_sum": {
-                    "effective_backend": "liger_per_row_sum_v1",
-                    "physical_calls_per_row": 1,
-                    "reason": "one fused sum reduction per physical row preserves row structure without logits",
+                    "effective_backend": "target_only",
+                    "reason": "liger-kernel 0.8.1 per-row sum candidate failed the performance retention gate",
                 },
             }
         )

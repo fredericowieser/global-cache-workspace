@@ -81,11 +81,11 @@ A future experiment may preserve the oracle only by retaining a physical shape o
 
 The initial implementation has CPU planning/failure gates and opt-in H100/H200 BF16 forward/gradient tests. It is not connected to production training, does not yet admit checkpointed or noisy-Diffusion execution, and has no speed claim. Promotion requires complete processor trajectories, explicit noise plumbing, state-neutral runtime ownership, fresh-process resume, resource-release evidence, and matched full-step timing.
 
-## Fused structured row loss
+## Rejected fused structured row loss
 
-For `loss_backend: liger`, `row_sum` now invokes Liger `0.8.1` once per physical row with sum reduction. This preserves the two row sums required by the adjacent-pair objective without materializing full-vocabulary logits or falling back to the target-only implementation. The per-token `none` reduction still uses the documented target-only fallback. All-ignored rows use Liger's well-defined sum reduction and require no host synchronization.
+A benchmark-only helper invokes Liger `0.8.1` once per physical row with sum reduction, preserving the two adjacent-pair row sums without materializing full logits. BF16 row-loss and hidden/head-gradient smoke gates passed separately on H100 and H200, but the production-shaped `[2,1024,1024]` hidden / `[151936,1024]` head boundary failed performance decisively. H100 measured `5.9948 ms` bounded reference versus `222.3242 ms` fused (`0.02696x`); H200 measured `5.0907 ms` versus `174.1845 ms` (`0.02923x`). Peak allocation was effectively unchanged (`0.99989` candidate/reference) on both devices.
 
-This is an explicit numerical candidate rather than the reference oracle. H100/H200 BF16 row losses, hidden/head gradients, complete processor gradients, Adam trajectories, difficult-row memory, resume, and full-step timing remain admission gates. A row-loss speed or memory result cannot override changed cache events or optimizer state.
+The helper remains only in `scripts.benchmarks.fused_row_loss` for reproduction. Model `loss_backend: liger` continues to route structured `row_sum` and per-token `none` through the documented target-only fallback. The rejected helper has no production selector and cannot enter `combined_v1`.
 
 ## Bounded reference-loss execution
 
@@ -201,7 +201,7 @@ The smoke covers production field closures, concurrent first dispatch, copy and 
 
 The combined speed project has explicit approval to investigate narrow handwritten Triton kernels. Contiguous layer-major BF16 K/V can be gathered directly into Longshot/Icarus per-cache-head layout, BT per-layer layout, or BGT global layout using raw 16-bit loads and stores. BT/BGT additionally fuse processor-output splitting with functional cache scatter; their backwards preserve untouched-cache gradients, zero replaced positions, and gather update gradients exactly. When prepared BT emits FP32, the finishing scatter performs the oracle FP32-to-BF16 conversion at its final store rather than materializing a cast tensor, and backward returns the selected update gradient in its original FP32 dtype. Selection, top-k, RoPE, gating, and all other floating-point processor mathematics remain eager.
 
-The package imports Triton lazily and currently admits only compute capability 9.0 with Triton `3.6.0`, fixed physical batch two, contiguous BF16 K/V, and sorted unique in-range indices. Runtime/package admission and private kernel-module loading are cached after their first successful device check; explicit launch failures remain fatal. The candidates have no production training selector and no campaign-admitted multiplier until both H100 and H200 forward/backward, trajectory, resume, memory, and matched full-step gates pass. `scripts.benchmarks.triton_cache_movement` measures isolated per-head, layer, and global gather/backward boundaries.
+The package imports Triton lazily and currently admits only compute capability 9.0 with Triton `3.6.0`, fixed physical batch two, contiguous BF16 K/V, and sorted unique in-range indices. `gcw.performance.kernel_manifest` is the closed launch authority: feature block 128, copy block 256, four warps, and no runtime autotuning. The manifest digest must enter any future signed qualification receipt. Runtime/package admission and private kernel-module loading are cached after their first successful device check; explicit launch failures remain fatal. The candidates have no production training selector and no campaign-admitted multiplier until both H100 and H200 forward/backward, trajectory, resume, memory, and matched full-step gates pass. `scripts.benchmarks.triton_cache_movement` measures isolated per-head, layer, and global gather/backward boundaries.
 
 ## Change control
 

@@ -11,6 +11,8 @@ import torch
 import triton
 import triton.language as tl
 
+from gcw.performance.kernel_manifest import CACHE_COPY_BLOCK, CACHE_FEATURE_BLOCK, CACHE_NUM_WARPS
+
 
 @triton.jit
 def _gather_per_cache_head_bits_kernel(
@@ -301,7 +303,7 @@ def gather_per_cache_head_bits(
         dtype=torch.int16,
         device=keys.device,
     )
-    block = 128
+    block = CACHE_FEATURE_BLOCK
     grid = (triton.cdiv(2 * head_dim, block), batch * layers * heads * selected)
     _gather_per_cache_head_bits_kernel[grid](
         keys,
@@ -318,7 +320,7 @@ def gather_per_cache_head_bits(
         SELECTED=selected,
         HEAD_DIM=head_dim,
         BLOCK=block,
-        num_warps=4,
+        num_warps=CACHE_NUM_WARPS,
     )
     return output
 
@@ -330,7 +332,7 @@ def copy_kv_bits(
     """Copy complete raw K/V payloads into functional outputs."""
     target_keys = torch.empty_like(source_keys)
     target_values = torch.empty_like(source_values)
-    block = 256
+    block = CACHE_COPY_BLOCK
     grid = (triton.cdiv(source_keys.numel(), block),)
     _copy_kv_bits_kernel[grid](
         source_keys,
@@ -339,7 +341,7 @@ def copy_kv_bits(
         target_values,
         source_keys.numel(),
         BLOCK=block,
-        num_warps=4,
+        num_warps=CACHE_NUM_WARPS,
     )
     return target_keys, target_values
 
@@ -356,7 +358,7 @@ def scatter_shared_update_bits(
     """Scatter merged updates, or zeros, into selected cache positions."""
     layers, batch, heads, history, head_dim = target_keys.shape
     selected = indices.shape[1]
-    block = 128
+    block = CACHE_FEATURE_BLOCK
     features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
@@ -374,7 +376,7 @@ def scatter_shared_update_bits(
         GLOBAL_LAYOUT=global_layout,
         ZERO=zero,
         BLOCK=block,
-        num_warps=4,
+        num_warps=CACHE_NUM_WARPS,
     )
 
 
@@ -389,7 +391,7 @@ def scatter_shared_update(
     """Convert FP32 updates while scattering directly into BF16 cache outputs."""
     layers, batch, heads, history, head_dim = target_keys.shape
     selected = indices.shape[1]
-    block = 128
+    block = CACHE_FEATURE_BLOCK
     features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
@@ -406,7 +408,7 @@ def scatter_shared_update(
         HEAD_DIM=head_dim,
         GLOBAL_LAYOUT=global_layout,
         BLOCK=block,
-        num_warps=4,
+        num_warps=CACHE_NUM_WARPS,
     )
 
 
@@ -426,7 +428,7 @@ def gather_shared_kv_bits(
         else (layers, batch, selected, 2 * heads * head_dim)
     )
     output = torch.empty(shape, dtype=torch.int16, device=keys.device)
-    block = 128
+    block = CACHE_FEATURE_BLOCK
     features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
@@ -443,7 +445,7 @@ def gather_shared_kv_bits(
         HEAD_DIM=head_dim,
         GLOBAL_LAYOUT=global_layout,
         BLOCK=block,
-        num_warps=4,
+        num_warps=CACHE_NUM_WARPS,
     )
     return output
 
@@ -460,7 +462,7 @@ def scatter_shared_kv_grad_bits(
     selected = indices.shape[1]
     grad_keys = torch.zeros(cache_shape, dtype=torch.int16, device=grad_output.device)
     grad_values = torch.zeros_like(grad_keys)
-    block = 128
+    block = CACHE_FEATURE_BLOCK
     features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
@@ -477,7 +479,7 @@ def scatter_shared_kv_grad_bits(
         HEAD_DIM=head_dim,
         GLOBAL_LAYOUT=global_layout,
         BLOCK=block,
-        num_warps=4,
+        num_warps=CACHE_NUM_WARPS,
     )
     return grad_keys, grad_values
 
@@ -492,7 +494,7 @@ def scatter_per_cache_head_grad_bits(
     selected = indices.shape[2]
     grad_keys = torch.zeros(cache_shape, dtype=torch.int16, device=grad_output.device)
     grad_values = torch.zeros_like(grad_keys)
-    block = 128
+    block = CACHE_FEATURE_BLOCK
     grid = (triton.cdiv(head_dim, block), batch * layers * heads * selected)
     _scatter_per_cache_head_grad_bits_kernel[grid](
         grad_output,
@@ -509,6 +511,6 @@ def scatter_per_cache_head_grad_bits(
         SELECTED=selected,
         HEAD_DIM=head_dim,
         BLOCK=block,
-        num_warps=4,
+        num_warps=CACHE_NUM_WARPS,
     )
     return grad_keys, grad_values

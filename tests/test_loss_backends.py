@@ -20,6 +20,7 @@ from gcw.performance.losses import (
     bounded_reference_loss,
     checkpoint_loss_backend,
     configure_reference_loss_execution,
+    liger_fused_linear_cross_entropy_row_sum,
     loss_backend_metadata,
     reference_loss_execution_metadata,
     require_loss_backend,
@@ -171,7 +172,9 @@ def test_fake_liger_receives_gemma_logit_softcap(monkeypatch: pytest.MonkeyPatch
     assert calls[0]["kwargs"]["softcap"] == 2.0
 
 
-def test_liger_row_sum_uses_one_fused_sum_per_row(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_benchmark_only_liger_row_sum_helper_uses_one_fused_sum_per_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, Any]] = []
     _install_fake_liger(monkeypatch, calls)
     model = _model(tied=True)
@@ -180,7 +183,11 @@ def test_liger_row_sum_uses_one_fused_sum_per_row(monkeypatch: pytest.MonkeyPatc
     reference_hidden = hidden.detach().clone().requires_grad_(True)
     actual_hidden = hidden.detach().clone().requires_grad_(True)
     reference = model.loss_from_hidden(reference_hidden, targets, "row_sum", "reference")
-    actual = model.loss_from_hidden(actual_hidden, targets, "row_sum", "liger")
+    actual = liger_fused_linear_cross_entropy_row_sum(
+        model.output_weight(),
+        actual_hidden,
+        targets,
+    )
     upstream = torch.tensor([0.25, 1.75])
     reference.backward(upstream)
     reference_weight_grad = _head_weight(model).grad.detach().clone()
@@ -194,7 +201,8 @@ def test_liger_row_sum_uses_one_fused_sum_per_row(monkeypatch: pytest.MonkeyPatc
     assert all(call["kwargs"]["reduction"] == "sum" for call in calls)
     assert all(call["hidden_shape"] == (5, model.config.hidden_size) for call in calls)
     provenance = loss_backend_metadata("liger")
-    assert provenance["reduction_row_sum"]["effective_backend"] == "liger_per_row_sum_v1"
+    assert provenance["reduction_row_sum"]["effective_backend"] == "target_only"
+    assert "failed the performance retention gate" in provenance["reduction_row_sum"]["reason"]
 
 
 def test_liger_none_uses_explicit_target_only_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,7 +241,7 @@ def test_fake_liger_all_ignored_is_zero_and_differentiable(
     assert model.lm_head is not None
     assert model.lm_head.weight.grad is not None
     assert torch.count_nonzero(model.lm_head.weight.grad) == 0
-    assert len(calls) == (2 if reduction == "row_sum" else 0)
+    assert calls == []
 
 
 def test_liger_fails_closed_for_cpu_missing_and_wrong_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -522,7 +530,7 @@ def test_liger_cuda_bfloat16_forward_backward_parity_smoke() -> None:
 
     model.zero_grad(set_to_none=True)
     liger_hidden = hidden.detach().clone().requires_grad_(True)
-    liger_rows = model.loss_from_hidden(liger_hidden, targets, "row_sum", "liger")
+    liger_rows = liger_fused_linear_cross_entropy_row_sum(model.output_weight(), liger_hidden, targets)
     liger_rows.backward(upstream)
     torch.testing.assert_close(liger_rows, reference_rows, atol=3e-2, rtol=3e-2)
     torch.testing.assert_close(liger_hidden.grad, reference_hidden_grad, atol=3e-2, rtol=3e-2)
