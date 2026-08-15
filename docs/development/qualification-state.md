@@ -1,12 +1,13 @@
 # Qualification state substrate
 
-**Status:** Q1 implemented; private and not integrated with production training
+**Status:** Q1 state plus initial Q2–Q4 input/process/resource primitives implemented; private and not integrated with production training
 
-`gcw.qualification.state` is the narrow shared representation used to capture and
-compare complete training state in qualification work. Capture is an explicit
-operation outside timed regions. It does not install hooks, own a mutable registry,
-or change model, optimizer, gradient, module-mode, or random-number-generator
-state. Production training does not import it.
+`gcw.qualification` contains narrow shared primitives for complete state, captured
+inputs, fresh-process orchestration, resource identity, and uninstrumented timing.
+All capture is explicit and outside timed regions. The package does not install
+hooks, own a mutable model registry, or change model, optimizer, gradient,
+module-mode, or random-number-generator state. Production training does not import
+it.
 
 ## Q1 scope
 
@@ -54,6 +55,39 @@ that could otherwise encode the same represented state more than once. Blob dige
 are content-integrity checks, not authentication. Comparison reports field paths and
 classifies structural, metadata, alias, byte, and ordinary value differences.
 
+## Q2 single-read inputs and integrity
+
+`inputs.py` captures regular files through one descriptor, verifies their identity
+did not change during the read, and retains the authoritative bytes in memory.
+Configuration snapshots bind both the exact authored YAML and canonical resolved
+`TrainConfig`. Source snapshots use a sorted closed member set, reject traversal or
+symlink components, and materialize only captured bytes into an exclusive directory.
+Callers must use the captured bytes rather than reopen the original path.
+
+`integrity.py` provides strict canonical JSON envelopes, exclusive atomic writes,
+and SHA-256 consistency checks. The API deliberately says integrity rather than
+authentication. An unkeyed digest becomes authoritative only when its expected value
+is independently anchored.
+
+## Q3 fresh-process boundary
+
+`process.py` launches workers without a shell, with explicit arguments,
+environment, working directory, timeout, and exclusive output. The producer must
+exit completely before a distinct resumer process starts. The parent captures each
+worker output once and records its identity. Model-specific producer/resumer workers
+must still use production checkpoint save/open/restore and Q1 state comparison; the
+generic process primitive does not claim that merely spawning two processes proves
+resume parity.
+
+## Q4 device and timing primitives
+
+`resources.py` separates semantic accelerator identity from authority-local PID,
+host, Slurm, CUDA visibility, UUID, PCI, and driver fields. Its closed GPU admission
+recognizes H100 and H200 separately and can require exactly one visible CUDA device
+and complete UUID/PCI authority. `timing.py` rejects instrumented execution, excludes
+warmup, synchronizes complete operation boundaries, retains every raw sample, and
+reports allocator peaks. H100 and H200 remain distinct lineages.
+
 ## Threat boundary
 
 This substrate detects accidental or adversarial modification of captured content
@@ -69,8 +103,10 @@ CI records CUDA as unavailable or explicitly omitted and runs no GPU workloads.
 
 ## Deferred milestones
 
-Q2 remains responsible for sealed artifact envelopes, durable artifact policy,
-and any trusted-key or external-authority design. Q3 remains responsible for
-fresh-process qualification and orchestration. Graph and wave qualification
-backends remain blocked until those later milestones define and validate their
-execution boundary; Q1 deliberately does not port them.
+Trusted-key authentication, external authority, and OS-enforced immutable execution
+remain deferred; read-only modes and unkeyed digests are not substitutes. The generic
+fresh-process primitive still needs model-specific production checkpoint workers and
+full Q1 comparison before it can qualify graph or wave execution. Private-pool,
+stream/event, process-lifetime, and parent-observed GPU release evidence must be
+attached to each executor. CUDA Graph and pair-wave candidates therefore remain
+benchmark-only until those complete hardware protocols pass.

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import platform
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +28,12 @@ from gcw.models.cache_processors.ops import (
 from gcw.models.cache_processors.state import CacheState
 from gcw.performance.prepared_bt import run_batched_cache_processors
 from gcw.performance.losses import loss_backend_metadata, require_loss_backend
+from gcw.qualification.integrity import (
+    integrity_document as _integrity_document,
+    load_integrity_document,
+    verify_integrity_document as _verify_integrity_document,
+    write_integrity_document,
+)
 from gcw.provenance import (
     canonical_json_bytes,
     canonical_json_sha256,
@@ -50,7 +53,7 @@ from gcw.training.core import (
     _wsd_lr,
 )
 
-SCHEMA_VERSION = 1
+INTEGRITY_SCHEMA = "gcw.cache_processor_benchmark.integrity.v2"
 EVIDENCE_KIND = "gcw.cache_processor_benchmark"
 
 
@@ -76,54 +79,29 @@ def timing_summary(raw_step_seconds: list[float]) -> dict[str, float]:
 
 
 def integrity_document(payload: dict[str, Any]) -> dict[str, Any]:
-    safe = json.loads(json.dumps(payload, allow_nan=False, sort_keys=True))
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "kind": EVIDENCE_KIND,
-        "payload": safe,
-        "payload_sha256": canonical_json_sha256(safe),
-    }
+    return _integrity_document(payload, schema=INTEGRITY_SCHEMA, kind=EVIDENCE_KIND)
 
 
 def verify_integrity_document(document: dict[str, Any]) -> dict[str, Any]:
-    if set(document) != {"schema_version", "kind", "payload", "payload_sha256"}:
-        raise ValueError("benchmark evidence schema differs")
-    payload = document.get("payload")
-    if (
-        document.get("schema_version") != SCHEMA_VERSION
-        or document.get("kind") != EVIDENCE_KIND
-        or not isinstance(payload, dict)
-        or document.get("payload_sha256") != canonical_json_sha256(payload)
-    ):
-        raise ValueError("benchmark evidence integrity check failed")
-    return payload
+    return _verify_integrity_document(
+        document,
+        expected_schema=INTEGRITY_SCHEMA,
+        expected_kind=EVIDENCE_KIND,
+    )
 
 
 def write_integrity_json(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     document = integrity_document(payload)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(json.dumps(document, indent=2, sort_keys=True, allow_nan=False).encode("utf-8"))
-            handle.write(b"\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    write_integrity_document(path, document, exclusive=True)
     return document
 
 
 def load_integrity_json(path: Path) -> dict[str, Any]:
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("benchmark evidence is unreadable") from exc
-    if not isinstance(document, dict):
-        raise ValueError("benchmark evidence must be a JSON object")
-    return verify_integrity_document(document)
+    return load_integrity_document(
+        path,
+        expected_schema=INTEGRITY_SCHEMA,
+        expected_kind=EVIDENCE_KIND,
+    )
 
 
 def device_identity(device: torch.device) -> dict[str, Any]:
