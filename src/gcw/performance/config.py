@@ -101,11 +101,30 @@ class ReferenceLossConfig:
 
 
 @dataclass(frozen=True)
+class LongshotFullHistoryConfig:
+    """Default-off selected-history execution for Longshot KV-norm selection."""
+
+    enabled: bool = False
+    max_temp_bytes: int = 32 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            raise ValueError("performance.longshot_full_history.enabled must be a boolean")
+        if (
+            isinstance(self.max_temp_bytes, bool)
+            or not isinstance(self.max_temp_bytes, int)
+            or self.max_temp_bytes <= 0
+        ):
+            raise ValueError("performance.longshot_full_history.max_temp_bytes must be a positive integer")
+
+
+@dataclass(frozen=True)
 class PerformanceConfig:
     """Training performance policies whose defaults preserve reference execution."""
 
     adaptive_batching: AdaptiveBatchingConfig = field(default_factory=AdaptiveBatchingConfig)
     reference_loss: ReferenceLossConfig = field(default_factory=ReferenceLossConfig)
+    longshot_full_history: LongshotFullHistoryConfig = field(default_factory=LongshotFullHistoryConfig)
 
     def __post_init__(self) -> None:
         value: Any = self.adaptive_batching
@@ -118,3 +137,12 @@ class PerformanceConfig:
             object.__setattr__(self, "reference_loss", ReferenceLossConfig(**reference_loss))
         elif not isinstance(reference_loss, ReferenceLossConfig):
             raise ValueError("performance.reference_loss must be a mapping")
+        longshot_full_history: Any = self.longshot_full_history
+        if isinstance(longshot_full_history, dict):
+            object.__setattr__(
+                self,
+                "longshot_full_history",
+                LongshotFullHistoryConfig(**longshot_full_history),
+            )
+        elif not isinstance(longshot_full_history, LongshotFullHistoryConfig):
+            raise ValueError("performance.longshot_full_history must be a mapping")

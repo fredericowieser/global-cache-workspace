@@ -16,7 +16,12 @@ from gcw.models.cache_processors.ops import (
     select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.performance.longshot_cache import gather_windowed_per_cache_head_kv
+from gcw.performance.config import LongshotFullHistoryConfig
+from gcw.performance.longshot_cache import (
+    configure_longshot_full_history_execution,
+    gather_windowed_per_cache_head_kv,
+    pop_longshot_full_history_metrics,
+)
 from gcw.performance.longshot_scores import (
     chunked_fp32_concatenated_kv_squared_l2,
     chunked_fp32_squared_l2,
@@ -89,6 +94,9 @@ def test_windowed_kv_norm_scores_indices_and_selected_history_match_reference(
         update_stream="kv",
         unrope_keys=unrope_keys,
     )
+    configure_longshot_full_history_execution(
+        processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
+    )
     cache, _, _ = _cache(requires_grad=True)
     reference_cache, _, _ = _cache(requires_grad=True)
 
@@ -120,6 +128,9 @@ def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
         iterations=iterations,
         update_stream=update_stream,
         unrope_keys=unrope_keys,
+    )
+    configure_longshot_full_history_execution(
+        optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
     reference = copy.deepcopy(optimized)
     object.__setattr__(reference, "_select_kv_norm_history", MethodType(_reference_kv_norm_history, reference))
@@ -154,8 +165,23 @@ def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
     assert optimized.state_dict().keys() == reference.state_dict().keys()
 
 
+def test_default_windowed_kv_norm_path_remains_eager() -> None:
+    processor = _processor(
+        iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=False
+    )
+    cache, _, _ = _cache(requires_grad=False)
+
+    with patch.object(longshot_module, "gather_per_cache_head_kv", wraps=gather_per_cache_head_kv) as gather:
+        processor.encode_source(cache)
+
+    gather.assert_called_once()
+
+
 def test_windowed_kv_norm_path_does_not_call_full_history_gather() -> None:
     processor = _processor(iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=True)
+    configure_longshot_full_history_execution(
+        processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
+    )
     cache, _, _ = _cache(requires_grad=False)
 
     with patch.object(
@@ -167,6 +193,19 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather() -> None:
         processor(cache)
 
     assert source.indices.shape[-1] > 0
+    metrics = pop_longshot_full_history_metrics(processor)
+    assert metrics["performance/longshot_full_history_events"] == 2.0
+    assert (
+        metrics["performance/longshot_full_history_selected_history_gather_bytes"]
+        < metrics["performance/longshot_full_history_reference_full_history_gather_bytes"]
+    )
+    assert (
+        metrics["performance/longshot_full_history_optimized_score_fp32_temporary_bound_bytes"]
+        < metrics["performance/longshot_full_history_reference_score_fp32_temporary_bound_bytes"]
+    )
+
+    with pytest.raises(TypeError, match="WindowedCache"):
+        processor._select_kv_norm_history(cache.to_cache_state())
 
 
 class _RunResult:
@@ -214,6 +253,37 @@ def _run_processor(processor: GlobalCacheProcessor) -> _RunResult:
         value_grad=input_values.grad,
         iteration_metrics=processor.block.pop_iteration_metrics(),
     )
+
+
+def test_selected_history_matches_native_checkpoint_recomputation() -> None:
+    torch.manual_seed(97)
+    optimized = _processor(
+        iteration_mode="internal", iterations=2, update_stream="kv", unrope_keys=False
+    )
+    optimized.config.gradient_checkpointing = True
+    optimized.train()
+    configure_longshot_full_history_execution(
+        optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
+    )
+    reference = copy.deepcopy(optimized)
+    object.__setattr__(
+        reference, "_select_kv_norm_history", MethodType(_reference_kv_norm_history, reference)
+    )
+
+    actual = _run_processor(optimized)
+    expected = _run_processor(reference)
+
+    assert torch.equal(actual.source.indices, expected.source.indices)
+    assert torch.equal(actual.output.keys, expected.output.keys)
+    assert torch.equal(actual.output.values, expected.output.values)
+    assert torch.equal(actual.key_grad, expected.key_grad)
+    assert torch.equal(actual.value_grad, expected.value_grad)
+    for actual_parameter, expected_parameter in zip(
+        optimized.parameters(), reference.parameters(), strict=True
+    ):
+        if actual_parameter.grad is not None:
+            assert expected_parameter.grad is not None
+            assert torch.equal(actual_parameter.grad, expected_parameter.grad)
 
 
 def _reference_kv_norm_history(

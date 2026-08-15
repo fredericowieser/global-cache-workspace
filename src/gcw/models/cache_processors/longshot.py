@@ -39,7 +39,11 @@ from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow, sinusoidal_time_embedding
 from gcw.models.backbones.transformer import RMSNorm, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.performance.longshot_cache import gather_windowed_per_cache_head_kv
+from gcw.performance.longshot_cache import (
+    gather_windowed_per_cache_head_kv,
+    longshot_full_history_execution,
+    record_longshot_full_history_event,
+)
 from gcw.performance.longshot_scores import (
     chunked_fp32_concatenated_kv_squared_l2,
     chunked_fp32_l2_norm,
@@ -895,7 +899,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
         self,
         cache: CacheLike,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if not isinstance(cache, WindowedCache):
+        policy = longshot_full_history_execution(self)
+        if not policy.enabled:
             all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
             merged_all = gather_per_cache_head_kv(
                 cache,
@@ -912,8 +917,11 @@ class GlobalCacheProcessor(CacheProcessorBase):
             index = indices[..., None].expand(-1, -1, -1, merged_all.shape[-1])
             return torch.gather(merged_all, dim=2, index=index), scores, indices
 
-        # Selection is discrete. Score it without retaining a full-history
-        # autograd graph, then gather only positions that enter the processor.
+        if not isinstance(cache, WindowedCache):
+            raise TypeError(
+                "enabled Longshot selected-history execution requires contiguous WindowedCache storage"
+            )
+        # The eager per-row FP32 expression and existing top-k remain the oracle.
         with torch.no_grad():
             score_keys = cache.keys
             if self.config.unrope_keys:
@@ -925,12 +933,22 @@ class GlobalCacheProcessor(CacheProcessorBase):
                     inverse=True,
                     rotary_dim=self.rotary_dim,
                 )
-            scores = chunked_fp32_concatenated_kv_squared_l2(score_keys, cache.values)
+            scores = chunked_fp32_concatenated_kv_squared_l2(
+                score_keys,
+                cache.values,
+                max_temp_bytes=policy.max_temp_bytes,
+            )
             indices = select_per_cache_head_kv_norm_indices_from_scores(
                 scores, self.config.process_every, self.config.topk
             )
 
         keys, values = gather_windowed_per_cache_head_kv(cache.keys, cache.values, indices)
+        record_longshot_full_history_event(
+            self,
+            keys=cache.keys,
+            selected_positions=indices.shape[-1],
+            max_temp_bytes=policy.max_temp_bytes,
+        )
         if self.config.unrope_keys:
             keys = rotate_cache_keys(
                 keys,

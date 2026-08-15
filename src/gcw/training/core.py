@@ -52,6 +52,10 @@ from gcw.performance.backends.cache_processors import (
     cache_processor_backend_metadata,
     resolve_cache_processor_backend,
 )
+from gcw.performance.longshot_cache import (
+    configure_longshot_full_history_execution,
+    longshot_full_history_execution_metadata,
+)
 from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
 from gcw.performance.losses import (
     configure_reference_loss_execution,
@@ -160,10 +164,15 @@ def train(config: TrainConfig) -> None:
     )
     configure_qwen3_backbone_chunk_backend(model, config.backbone_chunk_backend)
     configure_reference_loss_execution(model, config.performance.reference_loss)
+    configure_longshot_full_history_execution(
+        model, config.performance.longshot_full_history
+    )
     if use_fsdp:
         _apply_fsdp_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
+        if whole_model_compile_requested() and config.performance.longshot_full_history.enabled:
+            raise RuntimeError("Longshot selected-history execution cannot be combined with GCW_COMPILE")
         if whole_model_compile_requested() and config.performance.reference_loss.mode != "legacy":
             raise RuntimeError("bounded reference-loss execution cannot be combined with GCW_COMPILE")
         regional_backend = resolve_cache_processor_backend(config.model)
@@ -232,6 +241,15 @@ def train(config: TrainConfig) -> None:
         ),
         "longshot_gradient_checkpointing": _longshot_gradient_checkpointing_runtime(config),
         "loss_backend": loss_backend_metadata(config.loss_backend),
+        **(
+            {
+                "longshot_full_history_execution": longshot_full_history_execution_metadata(
+                    config.performance.longshot_full_history
+                )
+            }
+            if config.performance.longshot_full_history.enabled
+            else {}
+        ),
         **(
             {
                 "reference_loss_execution": reference_loss_execution_metadata(
@@ -649,6 +667,15 @@ def _training_fingerprint(
                 )
             }
             if config.performance.reference_loss.mode != "legacy"
+            else {}
+        ),
+        **(
+            {
+                "longshot_full_history_execution": longshot_full_history_execution_metadata(
+                    config.performance.longshot_full_history
+                )
+            }
+            if config.performance.longshot_full_history.enabled
             else {}
         ),
         **(

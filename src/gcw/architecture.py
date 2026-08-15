@@ -30,6 +30,8 @@ def _config_payload(value: object) -> object:
         payload = {field.name: _config_payload(getattr(value, field.name)) for field in fields(value)}
         if value.reference_loss.mode == "legacy":
             payload.pop("reference_loss")
+        if not value.longshot_full_history.enabled:
+            payload.pop("longshot_full_history")
         return payload
     if is_dataclass(value) and not isinstance(value, type):
         return {field.name: _config_payload(getattr(value, field.name)) for field in fields(value)}

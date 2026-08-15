@@ -746,6 +746,68 @@ class TrainConfig:
             diffusion = self.model.diffusion_processor
             if diffusion is not None and diffusion.noise_scale > 0.0:
                 raise ValueError("logical_pair_grouping rejects noisy Diffusion because RNG assignment changes with batching")
+        longshot_history = self.performance.longshot_full_history
+        if longshot_history.enabled:
+            processor = self.model.cache_processor
+            if self.model.variant != "longshot" or processor is None:
+                raise ValueError(
+                    "performance.longshot_full_history requires a Longshot cache processor"
+                )
+            if self.trainable != "cache_processor":
+                raise ValueError(
+                    "performance.longshot_full_history requires trainable='cache_processor'"
+                )
+            if self.distributed != "none":
+                raise ValueError(
+                    "performance.longshot_full_history supports only single-process distributed='none'"
+                )
+            if self.backbone_chunk_backend != "eager":
+                raise ValueError(
+                    "performance.longshot_full_history requires backbone_chunk_backend='eager'"
+                )
+            if self.performance.adaptive_batching.enabled:
+                raise ValueError(
+                    "performance.longshot_full_history does not compose with adaptive batching"
+                )
+            if processor.score != "kv_norm":
+                raise ValueError(
+                    "performance.longshot_full_history requires cache_processor.score='kv_norm'"
+                )
+            if processor.attention_dropout != 0.0:
+                raise ValueError(
+                    "performance.longshot_full_history requires cache_processor.attention_dropout=0"
+                )
+            if processor.linear_state_cache:
+                raise ValueError(
+                    "performance.longshot_full_history does not support linear recurrent cache state"
+                )
+            if self.model.flow_processor is not None or self.model.workspace_flow_refinement is not None:
+                raise ValueError(
+                    "performance.longshot_full_history does not support Flow or workspace refinement"
+                )
+            if self.activation_checkpointing != "none":
+                raise ValueError(
+                    "performance.longshot_full_history supports Longshot and segmented checkpointing only"
+                )
+            if (
+                processor.iterations > 1
+                and processor.iteration_mode == "internal"
+                and processor.internal_iteration_score != "kv_norm"
+            ):
+                raise ValueError(
+                    "performance.longshot_full_history internal recurrence requires "
+                    "cache_processor.internal_iteration_score='kv_norm'"
+                )
+            if self.model.family not in {"smollm", "llama", "qwen3"}:
+                raise ValueError(
+                    "performance.longshot_full_history requires a dense WindowedCache backbone family"
+                )
+            minimum_temp_bytes = 2 * self.model.stored_cache_shape[1] * 4
+            if longshot_history.max_temp_bytes < minimum_temp_bytes:
+                raise ValueError(
+                    "performance.longshot_full_history.max_temp_bytes must cover at least "
+                    f"one FP32 K/V row ({minimum_temp_bytes} bytes)"
+                )
         reference_loss = self.performance.reference_loss
         if reference_loss.mode != "legacy" and self.loss_backend != "reference":
             raise ValueError("bounded reference-loss execution requires loss_backend='reference'")
@@ -830,6 +892,11 @@ def load_train_config(path: str | Path) -> TrainConfig:
 
 
 def to_dict(value: Any) -> Any:
+    if isinstance(value, PerformanceConfig):
+        payload = {field.name: to_dict(getattr(value, field.name)) for field in fields(value)}
+        if not value.longshot_full_history.enabled:
+            payload.pop("longshot_full_history")
+        return payload
     if is_dataclass(value):
         return {f.name: to_dict(getattr(value, f.name)) for f in fields(value)}
     if isinstance(value, (list, tuple)):

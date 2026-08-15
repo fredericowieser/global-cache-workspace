@@ -70,6 +70,29 @@ GCW_STRICT_FLASH=1 GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1 \
 
 Running that command on a live H200 (or another BF16 Flash-capable CUDA host) remains the hardware acceptance gate; CPU CI validates only the hook and skips execution.
 
+## Longshot selected-history gather
+
+Longshot KV-norm full-history optimization is explicit and default-off:
+
+```yaml
+performance:
+  longshot_full_history:
+    enabled: true
+    max_temp_bytes: 33554432
+```
+
+The eager layer/head flatten, full-history gather, per-row FP32 scoring expression, and existing top-k are the semantic oracle. The opt-in path computes the same FP32 score rows from contiguous layer-major `WindowedCache` tensors, then gathers only selected positions. Its chunk budget bounds FP32 scoring temporaries; runtime telemetry reports reference full-history gather bytes, selected-history gather bytes, avoided bytes, and FP32 temporary bounds.
+
+The policy, budget, implementation, checkpoint and recurrence contracts, and admission restrictions are authenticated in run metadata and the exact-resume fingerprint. Disabled configurations are omitted from serialized performance payloads, composition receipts, run metadata, and training fingerprints, preserving pre-feature identities.
+
+This first admission supports single-process dense SmolLM/Llama/Qwen3 Longshot training with zero processor dropout, KV-norm scoring, native non-reentrant Longshot layer checkpointing, segmented recomputation, and exact internal or external reselection. It rejects unsupported distributed, whole-model compile, Flow/refinement, linear-state, internal non-KV recurrence, cache type, layout, and shape configurations rather than falling back eagerly.
+
+Real-CUDA BF16 cache-write, selected-index, checkpointed-gradient, per-pair trajectory, resume, and peak-memory evidence is opt-in:
+
+```bash
+GCW_RUN_LONGSHOT_CUDA_PARITY=1 pytest -q tests/test_longshot_full_history_cuda.py
+```
+
 
 ## Change control
 
