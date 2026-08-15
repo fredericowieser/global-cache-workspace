@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 
 from gcw.performance._compile import require_torch_compile
+from gcw.performance.compile_telemetry import compile_acceptance_recorder
 from gcw.provenance import canonical_json_sha256
 
 
@@ -90,9 +91,7 @@ def qwen3_backbone_chunk_backend_metadata(
             "requested_via": "TrainConfig.backbone_chunk_backend",
             "requested_value": backend,
             "implementation_module": "gcw.performance.backends.qwen3",
-            "implementation_symbol": (
-                "gcw.performance.backends.qwen3._qwen3_backbone_chunk_tensor_region"
-            ),
+            "implementation_symbol": ("gcw.performance.backends.qwen3._qwen3_backbone_chunk_tensor_region"),
             "fingerprint_sha256": canonical_json_sha256(execution),
         }
 
@@ -150,14 +149,22 @@ def run_qwen3_backbone_chunk_region(
     if backend not in {"compile", "compile_full_windows"}:
         raise ValueError(f"unsupported Qwen3 backbone chunk backend: {backend}")
     runner = _get_qwen3_compiled_runner(backbone)
+    recorder = compile_acceptance_recorder(backbone)
     try:
-        return runner(inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
+        operation = partial(runner, inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
+        if recorder is None:
+            return operation()
+        return recorder.record_call(
+            "full_window_with_past",
+            (inputs_embeds.shape[0], inputs_embeds.shape[1], past_keys.shape[3]),
+            inputs_embeds.device,
+            operation,
+        )
     except Exception as error:
         if _is_non_reentrant_checkpoint_early_stop(error):
             raise
         raise RuntimeError(
-            f"compiled Qwen3 backbone chunk failed; eager fallback is disabled when "
-            f"backbone_chunk_backend={backend}"
+            f"compiled Qwen3 backbone chunk failed; eager fallback is disabled when backbone_chunk_backend={backend}"
         ) from error
 
 
@@ -174,8 +181,17 @@ def run_qwen3_initial_backbone_chunk_region(
     if backend != "compile_full_windows":
         raise ValueError(f"backend {backend!r} does not compile the initial Qwen3 window")
     runner = _get_qwen3_compiled_initial_runner(backbone)
+    recorder = compile_acceptance_recorder(backbone)
     try:
-        return runner(inputs_embeds, cos, sin)
+        operation = partial(runner, inputs_embeds, cos, sin)
+        if recorder is None:
+            return operation()
+        return recorder.record_call(
+            "initial_full_window",
+            (inputs_embeds.shape[0], inputs_embeds.shape[1]),
+            inputs_embeds.device,
+            operation,
+        )
     except Exception as error:
         if _is_non_reentrant_checkpoint_early_stop(error):
             raise
@@ -188,10 +204,7 @@ def run_qwen3_initial_backbone_chunk_region(
 def _is_non_reentrant_checkpoint_early_stop(error: Exception) -> bool:
     """Preserve checkpoint's private control flow without weakening fail-closed execution."""
     error_type = type(error)
-    return (
-        error_type.__module__ == "torch.utils.checkpoint"
-        and error_type.__name__ == "_StopRecomputationError"
-    )
+    return error_type.__module__ == "torch.utils.checkpoint" and error_type.__name__ == "_StopRecomputationError"
 
 
 def _qwen3_initial_chunk_tensor_region(

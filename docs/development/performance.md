@@ -43,13 +43,23 @@ Evaluation and configurations that omit the policy remain on the legacy referenc
 
 The initial region accepts tensors only, closes over the frozen Qwen3 layers without registering state, preserves Flash SDPA with `is_causal=True`, and returns hidden states plus stacked K/V and scores. Its requested compiler failure is fatal. Partial windows remain eager. The backend selection, both region identities, compiler options, causal boundaries, and Torch version enter provenance and the exact-resume fingerprint. Version-1 payloads and fingerprints remain unchanged.
 
-The CUDA smoke is opt-in because ordinary CPU CI must not initialize Inductor CUDA state:
+The CUDA smoke is opt-in because ordinary CPU CI must not initialize Inductor CUDA state.
+
+Adaptive 16/8/4/2 execution has four expected initial-window specializations. The first observed shape creates the initial graph; the other three batch shapes cause three shape recompiles. The later-window region keeps past-cache length dynamic, but the current compiler still creates one specialization for each physical batch shape. It therefore also has four expected graphs and three batch-shape recompiles. Acceptance tests exercise all four row counts through one model-local runner, vary past-cache lengths within a batch specialization, compare each result with eager execution, and record graph and recompile counts. A changed count is a performance regression even when tensor parity passes.
+
+Compile acceptance telemetry is opt-in and state-neutral. It records observed region signatures and the first synchronized call cost for each shape. That cold cost includes lazy compilation and must be reported separately from steady-state step timing. Runtime shape observations do not estimate Dynamo graph counts; acceptance canaries attach explicit compiler counters. The telemetry object is not a parameter or buffer and does not enter version-1 fingerprints.
+
+Segmented-checkpoint acceptance covers both `compile` and `compile_full_windows`. Backward must preserve processor gradients and allow PyTorch's non-reentrant `_StopRecomputationError` control signal to escape the fail-closed wrapper unchanged.
+
+The CUDA smoke requires strict Flash SDPA and records profiler event names as backend evidence:
 
 ```bash
-GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1 \
+GCW_STRICT_FLASH=1 GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1 \
   uv run --extra gpu --group dev pytest -q \
   tests/test_qwen3_backbone_compile.py::test_compiled_initial_full_window_cuda_forward_backward_smoke
 ```
+
+Running that command on a live H200 (or another BF16 Flash-capable CUDA host) remains the hardware acceptance gate; CPU CI validates only the hook and skips execution.
 
 
 ## Change control

@@ -10,6 +10,7 @@ import torch
 
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, ResumeConfig, TrainConfig
 from gcw.models import build_model
+import gcw.performance.backends.qwen3 as qwen3_backend_module
 from gcw.performance.backends.qwen3 import (
     Qwen3BackboneChunkBackend,
     configure_qwen3_backbone_chunk_backend,
@@ -19,6 +20,7 @@ from gcw.performance.backends import cache_processors as processor_backend_modul
 from gcw.performance.checkpointing import (
     configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
 )
+from gcw.performance.compile_telemetry import install_compile_acceptance_recorder
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.model import LanguageModel
 from gcw.provenance import canonical_json_sha256
@@ -85,9 +87,7 @@ def _install_fake_compiler(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict[s
     return compile_calls, qwen_past_lengths
 
 
-def _freeze_and_compile(
-    model: LanguageModel, backend: Qwen3BackboneChunkBackend = "compile"
-) -> None:
+def _freeze_and_compile(model: LanguageModel, backend: Qwen3BackboneChunkBackend = "compile") -> None:
     _apply_trainable_policy(model, "cache_processor")
     configure_qwen3_backbone_chunk_backend(model, backend)
 
@@ -170,6 +170,7 @@ def test_dynamic_past_lengths_reuse_one_dynamo_graph(monkeypatch: pytest.MonkeyP
         from torch._dynamo.testing import CompileCounterWithBackend
     except ImportError:  # pragma: no cover - version-dependent test support
         pytest.skip("Torch Dynamo compile counter is unavailable")
+    torch._dynamo.reset()
     real_compile = torch.compile
     counter = CompileCounterWithBackend("eager")
 
@@ -200,6 +201,7 @@ def test_initial_full_window_is_one_dynamo_fullgraph(monkeypatch: pytest.MonkeyP
         from torch._dynamo.testing import CompileCounterWithBackend
     except ImportError:  # pragma: no cover - version-dependent test support
         pytest.skip("Torch Dynamo compile counter is unavailable")
+    torch._dynamo.reset()
     real_compile = torch.compile
     counter = CompileCounterWithBackend("eager")
 
@@ -219,6 +221,133 @@ def test_initial_full_window_is_one_dynamo_fullgraph(monkeypatch: pytest.MonkeyP
     model.backbone.forward_chunk(torch.randint(0, model.config.vocab_size, (1, 64)), 0)
 
     assert counter.frame_count == 1
+
+
+def test_variable_batches_record_expected_graphs_and_reuse_model_local_runners(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    try:
+        from torch._dynamo.testing import CompileCounterWithBackend
+    except ImportError:  # pragma: no cover - version-dependent test support
+        pytest.skip("Torch Dynamo compile counter is unavailable")
+    torch._dynamo.reset()
+    real_compile = torch.compile
+    initial_counter = CompileCounterWithBackend("eager")
+    past_counter = CompileCounterWithBackend("eager")
+
+    def counting_compile(function, **kwargs):
+        counter = initial_counter if kwargs.get("dynamic") is False else past_counter
+        return real_compile(
+            function,
+            backend=counter,
+            dynamic=kwargs.get("dynamic"),
+            fullgraph=kwargs.get("fullgraph", False),
+        )
+
+    monkeypatch.setattr(torch, "compile", counting_compile)
+    torch.manual_seed(211)
+    compiled_model = _model()
+    eager_model = copy.deepcopy(compiled_model)
+    _apply_trainable_policy(eager_model, "cache_processor")
+    _apply_trainable_policy(compiled_model, "cache_processor")
+    configure_qwen3_backbone_chunk_backend(compiled_model, "compile_full_windows")
+    recorder = install_compile_acceptance_recorder(compiled_model)
+
+    for batch_rows in (16, 8, 4, 2, 8):
+        first_ids = torch.randint(0, compiled_model.config.vocab_size, (batch_rows, 64))
+        second_ids = torch.randint(0, compiled_model.config.vocab_size, (batch_rows, 64))
+        eager_first, eager_cache = eager_model.backbone.forward_chunk(first_ids, 0)
+        compiled_first, compiled_cache = compiled_model.backbone.forward_chunk(first_ids, 0)
+        eager_second, eager_cache = eager_model.backbone.forward_chunk(second_ids, 64, eager_cache)
+        compiled_second, compiled_cache = compiled_model.backbone.forward_chunk(
+            second_ids,
+            64,
+            compiled_cache,
+        )
+
+        torch.testing.assert_close(compiled_first, eager_first, atol=2e-6, rtol=2e-5)
+        torch.testing.assert_close(compiled_second, eager_second, atol=2e-6, rtol=2e-5)
+        torch.testing.assert_close(compiled_cache.keys, eager_cache.keys, atol=2e-6, rtol=2e-5)
+        torch.testing.assert_close(compiled_cache.values, eager_cache.values, atol=2e-6, rtol=2e-5)
+        torch.testing.assert_close(compiled_cache.scores, eager_cache.scores, atol=2e-6, rtol=2e-5)
+
+    recorder.record_graph_counts(
+        "initial_full_window",
+        graph_count=initial_counter.frame_count,
+        recompile_count=max(0, initial_counter.frame_count - 1),
+    )
+    recorder.record_graph_counts(
+        "full_window_with_past",
+        graph_count=past_counter.frame_count,
+        recompile_count=max(0, past_counter.frame_count - 1),
+    )
+    evidence = recorder.snapshot()
+    regions = evidence["regions"]
+    assert isinstance(regions, dict)
+    initial = regions["initial_full_window"]
+    past = regions["full_window_with_past"]
+    assert isinstance(initial, dict)
+    assert isinstance(past, dict)
+
+    assert initial_counter.frame_count == 4
+    assert past_counter.frame_count == 4
+    assert initial["calls"] == 5
+    assert initial["graph_count"] == 4
+    assert initial["recompile_count"] == 3
+    assert initial["observed_signatures"] == [[2, 64], [4, 64], [8, 64], [16, 64]]
+    assert past["calls"] == 5
+    assert past["graph_count"] == 4
+    assert past["recompile_count"] == 3
+    assert past["observed_signatures"] == [
+        [2, 64, 64],
+        [4, 64, 64],
+        [8, 64, 64],
+        [16, 64, 64],
+    ]
+    expected_cold_signatures = {
+        "initial_full_window": {"2,64", "4,64", "8,64", "16,64"},
+        "full_window_with_past": {"2,64,64", "4,64,64", "8,64,64", "16,64,64"},
+    }
+    for name, region in (("initial_full_window", initial), ("full_window_with_past", past)):
+        cold_costs = region["cold_call_seconds"]
+        assert isinstance(cold_costs, dict)
+        assert set(cold_costs) == expected_cold_signatures[name]
+        assert all(isinstance(seconds, float) and seconds > 0 for seconds in cold_costs.values())
+    assert evidence["expected_initial_static_graphs"] == 4
+    assert evidence["expected_initial_shape_recompiles"] == 3
+    assert evidence["expected_past_batch_specializations"] == 4
+    assert evidence["expected_past_shape_recompiles"] == 3
+    assert evidence["dynamic_past_length_within_batch_specialization"] is True
+
+
+def test_compiled_runners_remain_bound_to_their_own_backbone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_compiler(monkeypatch)
+    torch.manual_seed(223)
+    first = _model()
+    second = copy.deepcopy(first)
+    with torch.no_grad():
+        second.backbone.embed_tokens.weight.add_(0.25)
+    first_eager = copy.deepcopy(first)
+    second_eager = copy.deepcopy(second)
+    for model in (first, second):
+        _apply_trainable_policy(model, "cache_processor")
+        configure_qwen3_backbone_chunk_backend(model, "compile_full_windows")
+    input_ids = torch.randint(0, first.config.vocab_size, (4, 64))
+
+    first_output, _ = first.backbone.forward_chunk(input_ids, 0)
+    second_output, _ = second.backbone.forward_chunk(input_ids, 0)
+    first_expected, _ = first_eager.backbone.forward_chunk(input_ids, 0)
+    second_expected, _ = second_eager.backbone.forward_chunk(input_ids, 0)
+
+    torch.testing.assert_close(first_output, first_expected, atol=2e-6, rtol=2e-5)
+    torch.testing.assert_close(second_output, second_expected, atol=2e-6, rtol=2e-5)
+    assert not torch.equal(first_output, second_output)
+    assert (
+        first.backbone.__dict__["_gcw_qwen3_compiled_initial_chunk_runner"]
+        is not second.backbone.__dict__["_gcw_qwen3_compiled_initial_chunk_runner"]
+    )
 
 
 def test_compile_is_fail_closed_and_requires_a_frozen_backbone(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -292,15 +421,31 @@ def test_qwen_compile_composes_with_bt_compile_and_activation_checkpointing(
     assert any(parameter.grad is not None for parameter in model.cache_processor.parameters())
 
 
-def test_qwen_compile_preserves_segmented_checkpoint_early_stop(
+@pytest.mark.parametrize("backend", ["compile", "compile_full_windows"])
+def test_qwen_compile_preserves_segmented_checkpoint_early_stop_and_processor_gradients(
     monkeypatch: pytest.MonkeyPatch,
+    backend: Qwen3BackboneChunkBackend,
 ) -> None:
     torch.manual_seed(47)
     eager = _model()
     segmented = copy.deepcopy(eager)
     _apply_trainable_policy(eager, "cache_processor")
     _install_fake_compiler(monkeypatch)
-    _freeze_and_compile(segmented)
+    early_stop_types: list[str] = []
+    original_early_stop_check = qwen3_backend_module._is_non_reentrant_checkpoint_early_stop
+
+    def record_early_stop(error: Exception) -> bool:
+        is_early_stop = original_early_stop_check(error)
+        if is_early_stop:
+            early_stop_types.append(type(error).__name__)
+        return is_early_stop
+
+    monkeypatch.setattr(
+        qwen3_backend_module,
+        "_is_non_reentrant_checkpoint_early_stop",
+        record_early_stop,
+    )
+    _freeze_and_compile(segmented, backend)
     inputs = torch.randint(0, eager.config.vocab_size, (2, 192))
     targets = torch.randint(0, eager.config.vocab_size, (2, 192))
 
@@ -323,6 +468,8 @@ def test_qwen_compile_preserves_segmented_checkpoint_early_stop(
             atol=2e-5,
             rtol=2e-4,
         )
+    assert early_stop_types
+    assert set(early_stop_types) == {"_StopRecomputationError"}
 
 
 def test_config_is_explicit_and_rejects_unsupported_combinations() -> None:
@@ -412,9 +559,11 @@ def test_compiled_initial_region_preserves_outputs_cache_scores_and_input_gradie
     _apply_trainable_policy(compiled_model, "cache_processor")
     configure_qwen3_backbone_chunk_backend(compiled_model, "compile_full_windows")
 
-    eager_inputs = eager_model.backbone.embed_tokens(
-        torch.randint(0, eager_model.config.vocab_size, (2, 64))
-    ).detach().requires_grad_(True)
+    eager_inputs = (
+        eager_model.backbone.embed_tokens(torch.randint(0, eager_model.config.vocab_size, (2, 64)))
+        .detach()
+        .requires_grad_(True)
+    )
     compiled_inputs = eager_inputs.detach().clone().requires_grad_(True)
     eager_out, eager_cache = eager_model.backbone.forward_embedding_chunk(
         eager_inputs, 0, logits=False, cache_format="windowed"
@@ -479,9 +628,7 @@ def test_compile_full_windows_is_state_neutral_versioned_and_preserves_v1_finger
             "chunk_steps": 64,
             "dynamic_past_length": backend == "compile",
             "compile_options": (
-                {"backend": "inductor", "dynamic": True, "fullgraph": True}
-                if backend == "compile"
-                else None
+                {"backend": "inductor", "dynamic": True, "fullgraph": True} if backend == "compile" else None
             ),
             "attention_bias_boundary": "causal_lower_right",
             "initial_chunk": "eager",
@@ -540,7 +687,10 @@ def test_compile_full_windows_fails_closed_on_initial_runner_error(monkeypatch: 
     or not torch.cuda.is_bf16_supported(),
     reason="set GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1 on a BF16 CUDA host",
 )
-def test_compiled_initial_full_window_cuda_forward_backward_smoke() -> None:
+def test_compiled_initial_full_window_cuda_forward_backward_smoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GCW_STRICT_FLASH", "1")
     torch.manual_seed(61)
     eager = _model().cuda()
     compiled = copy.deepcopy(eager)
@@ -550,16 +700,40 @@ def test_compiled_initial_full_window_cuda_forward_backward_smoke() -> None:
     inputs = torch.randint(0, eager.config.vocab_size, (2, 128), device="cuda")
     targets = torch.randint(0, eager.config.vocab_size, (2, 128), device="cuda")
 
-    with torch.autocast("cuda", dtype=torch.bfloat16):
-        eager_loss = eager(inputs, targets)
-        compiled_loss = compiled(inputs, targets)
-    eager_loss.backward()
-    compiled_loss.backward()
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        record_shapes=True,
+    ) as profile:
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            eager_loss = eager(inputs, targets)
+            compiled_loss = compiled(inputs, targets)
+        eager_loss.backward()
+        compiled_loss.backward()
+        torch.cuda.synchronize()
 
     torch.testing.assert_close(compiled_loss, eager_loss, atol=3e-3, rtol=3e-3)
     for eager_parameter, compiled_parameter in zip(
-        eager.cache_processor.parameters(), compiled.cache_processor.parameters(), strict=True
+        eager.cache_processor.parameters(),
+        compiled.cache_processor.parameters(),
+        strict=True,
     ):
         assert eager_parameter.grad is not None
         assert compiled_parameter.grad is not None
-        torch.testing.assert_close(compiled_parameter.grad, eager_parameter.grad, atol=3e-3, rtol=3e-3)
+        torch.testing.assert_close(
+            compiled_parameter.grad,
+            eager_parameter.grad,
+            atol=3e-3,
+            rtol=3e-3,
+        )
+
+    sdpa_events = sorted(
+        event.key
+        for event in profile.key_averages()
+        if "scaled_dot_product" in event.key or "flash_attention" in event.key
+    )
+    assert os.environ["GCW_STRICT_FLASH"] == "1"
+    assert any("flash_attention" in event for event in sdpa_events), sdpa_events
+    print({"strict_flash": True, "sdpa_profiler_events": sdpa_events})
