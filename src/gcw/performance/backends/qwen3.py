@@ -151,9 +151,9 @@ def run_qwen3_backbone_chunk_region(
     runner = _get_qwen3_compiled_runner(backbone)
     recorder = compile_acceptance_recorder(backbone)
     try:
-        operation = partial(runner, inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
         if recorder is None:
-            return operation()
+            return runner(inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
+        operation = partial(runner, inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
         return recorder.record_call(
             "full_window_with_past",
             (inputs_embeds.shape[0], inputs_embeds.shape[1], past_keys.shape[3]),
@@ -183,9 +183,9 @@ def run_qwen3_initial_backbone_chunk_region(
     runner = _get_qwen3_compiled_initial_runner(backbone)
     recorder = compile_acceptance_recorder(backbone)
     try:
-        operation = partial(runner, inputs_embeds, cos, sin)
         if recorder is None:
-            return operation()
+            return runner(inputs_embeds, cos, sin)
+        operation = partial(runner, inputs_embeds, cos, sin)
         return recorder.record_call(
             "initial_full_window",
             (inputs_embeds.shape[0], inputs_embeds.shape[1]),

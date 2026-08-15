@@ -6,10 +6,6 @@ Its public surface is intentionally small; architecture-specific compiled
 regions remain in dedicated modules rather than a generic backend registry.
 """
 
-from gcw.performance.compile_telemetry import (
-    CompileAcceptanceRecorder,
-    install_compile_acceptance_recorder,
-)
 from gcw.performance.config import (
     AdaptiveBatchingConfig,
     PhysicalBatchBandConfig,
@@ -19,9 +15,7 @@ from gcw.performance.config import (
 
 __all__ = (
     "AdaptiveBatchingConfig",
-    "CompileAcceptanceRecorder",
     "PerformanceConfig",
     "PhysicalBatchBandConfig",
     "ReferenceLossConfig",
-    "install_compile_acceptance_recorder",
 )
