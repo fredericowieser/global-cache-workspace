@@ -149,7 +149,7 @@ def test_trace_context_restores_symbols_and_aligns_checkpoint_recomputation() ->
     )
     recorder.expect_scope(scope)
 
-    with trace_cache_events(recorder), active_trace_scope(scope):
+    with trace_cache_events(recorder), recorder.bind_scope(scope), active_trace_scope(scope):
         model(batch).sum().backward()
 
     assert CacheState.select_indices is original_select
@@ -158,6 +158,28 @@ def test_trace_context_restores_symbols_and_aligns_checkpoint_recomputation() ->
     replay = recorder.recomputation_report()
     assert replay["passed"] is True
     assert replay["expected_replay_count"] == replay["actual_replay_count"] == 4
+
+
+def test_recorder_local_scope_is_independent_of_contextvar_propagation() -> None:
+    recorder = CacheEventRecorder(("select", "write_v"))
+    scope = TraceScope(
+        step=0,
+        group=0,
+        row_keys=("step-0000/pair-00/row-0", "step-0000/pair-00/row-1"),
+        source_padded_widths=(4, 4),
+        process_every=2,
+        checkpoint_expected=False,
+    )
+    recorder.expect_scope(scope)
+    cache_values = torch.ones(2, 1, 2, 1)
+    cache = CacheState([cache_values], [cache_values], torch.ones(2, 2))
+    destinations = torch.ones(2, 1, dtype=torch.long)
+    with recorder.bind_scope(scope):
+        recorder.record("select", cache, destinations)
+        recorder.record("write_v", cache, destinations)
+    assert recorder.coverage()["complete"] is True
+    with pytest.raises(RuntimeError, match="outside an active parity trace scope"):
+        recorder.record("select", cache, destinations)
 
 
 def test_group_shape_selection_mismatch_is_an_unconditional_parity_failure(

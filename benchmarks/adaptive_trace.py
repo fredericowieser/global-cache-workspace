@@ -120,6 +120,18 @@ class CacheEventRecorder:
         self._phase_counts: defaultdict[tuple[str, str], int] = defaultdict(int)
         self._expected_checkpoint: dict[str, bool] = {}
         self._checkpoint_expected_scope_count = 0
+        self._active_scope: TraceScope | None = None
+
+    @contextmanager
+    def bind_scope(self, scope: TraceScope) -> Iterator[None]:
+        """Bind recorder-local scope across autograd-engine context boundaries."""
+        if self._active_scope is not None:
+            raise RuntimeError("parity trace recorder scope is already active")
+        self._active_scope = scope
+        try:
+            yield
+        finally:
+            self._active_scope = None
 
     def expect_scope(self, scope: TraceScope) -> None:
         """Register every semantic operation expected from this source scope."""
@@ -134,7 +146,7 @@ class CacheEventRecorder:
                         raise RuntimeError(f"conflicting checkpoint expectation for {identity}")
 
     def record(self, operation: str, cache: object, destinations: torch.Tensor) -> None:
-        scope = _ACTIVE_SCOPE.get()
+        scope = self._active_scope or _ACTIVE_SCOPE.get()
         if scope is None:
             raise RuntimeError("cache event occurred outside an active parity trace scope")
         if operation not in self.required_operations:

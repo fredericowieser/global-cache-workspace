@@ -334,7 +334,7 @@ def _run_variant(
                     checkpoint_expected=checkpoint_expected(batch),
                 )
                 recorder.expect_scope(scope)
-                with active_trace_scope(scope), forward_context(model, batch):
+                with recorder.bind_scope(scope), active_trace_scope(scope), forward_context(model, batch):
                     losses = pair_loss(model, batch)
                     if losses.shape != (pair_stop - pair_start,):
                         raise RuntimeError(
