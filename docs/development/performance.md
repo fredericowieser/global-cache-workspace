@@ -69,6 +69,12 @@ The CUDA parity harness is the admission gate. Semantic cache selection/write ev
 
 A future experiment may preserve the oracle only by retaining a physical shape of two for every model invocation. Candidate mechanisms include independently dispatched pair kernels or CUDA streams followed by a merge in source-pair order. Such an experiment must demonstrate that each pair uses the same kernels and algorithm choices as fixed eager execution, and that gradients are accumulated into each parameter in exactly the reference order. A batched/vmapped forward, concurrent backward into shared `.grad` tensors, unordered reductions, padding to a common width, and grouped GEMMs with changed algorithms are not admissible assumptions. Concurrency also requires proof that model state, compiled runners, checkpoint recomputation, allocator lifetimes, and RNG are stream-safe. Sequential batch-two execution is the only currently established exact design, and it offers no batching speedup.
 
+## Static workspace and ragged planning primitives
+
+`gcw.performance.workspaces` provides closed signature/lane arenas with explicit leases spanning staging through backward completion. An arena cannot be restaged while any forward/backward owns it, stale or double releases fail, and unseen signatures or tensor metadata fail closed. The arenas are runtime objects rather than model state. They are infrastructure for graph inputs and pair lanes; allocation alone is not a speed claim.
+
+`gcw.performance.ragged` validates physical two-row prefix masks and records exact per-row valid lengths, active windows, partial tails, and semantic processor boundaries. It performs no model dispatch yet. A future kernel may consume only these closed plans; removing padding work is unavailable until per-row Qwen forward/backward and cache-event parity pass on both GPUs.
+
 ## Exact fixed-pair wave candidate
 
 `gcw.performance.pair_waves` is a benchmark-only candidate for overlapping independent fixed-batch-two forwards without adaptive collation. It plans exactly 32 contiguous source pairs in widths 1, 2, or 4, launches one ordinary forward per lane, and then calls ordinary `Tensor.backward()` in source order. CUDA events serialize backward execution before shared `.grad` accumulation; it does not use `autograd.grad`, manual gradient merging, grouped GEMMs, repadding, or eager fallback. Each wave completes backward before its lane storage can be reused.
