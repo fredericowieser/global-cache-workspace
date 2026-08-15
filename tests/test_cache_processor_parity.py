@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from benchmarks.parity import (
+from scripts.benchmarks.parity import (
     assert_cache_close,
     assert_parameter_gradients_close,
     assert_tensor_gradients_close,

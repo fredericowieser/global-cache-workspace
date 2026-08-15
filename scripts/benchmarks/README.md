@@ -1,11 +1,11 @@
 # Cache-processor benchmarks
 
-`benchmarks.harness` measures maintained BT/BGT cache-processor operations and a complete optimizer step. The optimizer path loads a normal `TrainConfig`, initializes its configured checkpoint, and follows its trainable policy, AdamW schedule, gradient clipping, gradient accumulation, compile policy, and BF16 setting. It loads one real training batch through the configured stream and reuses it so data-loader and network time stay outside the measurement.
+`scripts.benchmarks.harness` measures maintained BT/BGT cache-processor operations and a complete optimizer step. The optimizer path loads a normal `TrainConfig`, initializes its configured checkpoint, and follows its trainable policy, AdamW schedule, gradient clipping, gradient accumulation, compile policy, and BF16 setting. It loads one real training batch through the configured stream and reuses it so data-loader and network time stay outside the measurement.
 
 The harness honors `loss_backend`. Keep `reference` for baseline evidence; set `target_only` or `liger` in the benchmark's training config for an explicit backend comparison. The output binds backend provenance.
 
 ```bash
-uv run --extra gpu python -m benchmarks.harness \
+uv run --extra gpu python -m scripts.benchmarks.harness \
   --train-config configs/train/smoke_bgt.yaml \
   --device cuda \
   --warmup 5 \
@@ -15,18 +15,31 @@ uv run --extra gpu python -m benchmarks.harness \
 
 Use `--suite processor` or `--suite train-step` to isolate one part. The default `all` suite records index selection, gather, processor transform, scatter, end-to-end processor forward, and the full training optimizer step.
 
-The output is atomic authenticated JSON under the repository's existing SHA-256 convention. Its payload binds the resolved config and hash, authored config-file hash, source commit and source-tree hash, processor variant, device/Torch/CUDA identity, warmup count, every measured step, interpolated median/p10/p90, peak allocated CUDA memory, and actual non-padding and supervised token counts. `source_dirty` must be false before treating a run as canonical evidence.
+The output is atomic integrity-enveloped JSON under the repository's existing SHA-256 convention. Its payload binds the resolved config and hash, authored config-file hash, source commit and source-tree hash, processor variant, device/Torch/CUDA identity, warmup count, every measured step, interpolated median/p10/p90, peak allocated CUDA memory, and actual non-padding and supervised token counts. `source_dirty` must be false before treating a run as canonical evidence. The embedded unkeyed digest detects corruption but is not evidence authentication.
 
 Micro-operation timings are forward-only and intentionally exclude fixture construction. The optimizer-step timing includes zeroing gradients, all configured accumulation microsteps, forward, backward, clipping, schedule updates, and AdamW update. It excludes data loading, evaluation, checkpoint writing, and distributed communication. `GCW_COMPILE` retains its normal effect; use warmup iterations to keep compilation outside measured steps. CPU reports zero peak memory because Torch exposes no equivalent CPU allocator peak.
 
 Correctness parity runs in ordinary CPU pytest. GPU performance execution is opt-in through `GCW_RUN_GPU_PERF_TESTS=1` and carries both `gpu` and `performance` markers; no latency threshold runs in CPU CI.
 
-## Formal CUDA parity
+## Triton cache movement
 
-`benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one pre-execution reservation of 32-pair optimizer steps. It is a correctness harness, not a timer.
+The initial handwritten-kernel candidate gathers contiguous layer-major BF16 K/V directly into Longshot/Icarus per-cache-head layout. It is lazy, default-off, and benchmark-only until complete H100/H200 trajectory gates pass. Forward and backward move raw 16-bit payloads without floating-point arithmetic.
 
 ```bash
-uv run --extra gpu python -m benchmarks.adaptive_cuda_parity \
+GCW_RUN_TRITON_CACHE_CUDA_TESTS=1 pytest -q tests/test_triton_cache_movement_cuda.py
+python -m scripts.benchmarks.triton_cache_movement \
+  --expected-accelerator h200 \
+  --output artifacts/benchmarks/triton-cache-h200.json
+```
+
+The microbenchmark compares the complete eager and candidate gather/backward operation. Its timing does not establish optimizer-step or campaign admission.
+
+## Formal CUDA parity
+
+`scripts.benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one pre-execution reservation of 32-pair optimizer steps. It is a correctness harness, not a timer.
+
+```bash
+uv run --extra gpu python -m scripts.benchmarks.adaptive_cuda_parity \
   --train-config /path/to/adaptive-bt.yaml \
   --device cuda \
   --steps 3 \
@@ -39,7 +52,7 @@ Use `--variant-set fixed_regional` to compare fixed batch-2 eager against fixed 
 
 Use `--variant-set checkpoint_threshold --candidate-checkpoint-min-padded-sequence-length N` to compare two fixed eager segmented-checkpoint thresholds. Each variant declares its own expected replay boundaries while retaining the same reserved pairs, source order, model state, optimizer, and semantic event gate. This remains reservation-only evidence: the harness explicitly does not claim production checkpoint/resume parity.
 
-The authenticated JSON reports:
+The integrity-enveloped JSON reports:
 
 - one-time reservation identity, explicitly not per-variant loader-resume evidence;
 - stable source pair/row and actual cache-boundary/window identities;
@@ -52,6 +65,6 @@ The authenticated JSON reports:
 
 The harness observes cache indices and write destinations only; it does **not** claim cache-value parity. Production checkpoint save/reload is not implemented here, so `--require-resume-evidence` deliberately fails rather than presenting reservation cursors as resume evidence.
 
-Instrumentation is restoring and limited to standard BT/BGT selection and writeback boundaries. Every event copies indices from the device to CPU; that synchronization, Python hooks, and report construction make instrumented execution invalid for timing. Run performance measurements separately with `benchmarks.harness`.
+Instrumentation is restoring and limited to standard BT/BGT selection and writeback boundaries. Every event copies indices from the device to CPU; that synchronization, Python hooks, and report construction make instrumented execution invalid for timing. Run performance measurements separately with `scripts.benchmarks.harness`.
 
 Qwen3 compile acceptance uses `CompileAcceptanceRecorder` rather than hiding compilation in warmup. Adaptive 16/8/4/2 execution should produce four initial-window graphs and four later-window graphs: one per physical batch shape in each region. Each region therefore records three batch-shape recompiles; past-cache length remains dynamic within each later-window batch specialization. The recorder retains synchronized first-call cost per observed signature; Dynamo acceptance counters supply graph and recompile counts. Report cold costs separately from steady-state timings. The recorder attaches only to the tested backbone instance, so a runner cannot reuse bindings from another model.

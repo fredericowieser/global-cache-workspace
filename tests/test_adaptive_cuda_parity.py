@@ -9,8 +9,8 @@ import pytest
 import torch
 from torch.utils.checkpoint import checkpoint
 
-import benchmarks.adaptive_cuda_parity as parity_module
-from benchmarks.adaptive_cuda_parity import (
+import scripts.benchmarks.adaptive_cuda_parity as parity_module
+from scripts.benchmarks.adaptive_cuda_parity import (
     ParityVariant,
     VectorTolerance,
     _compare_vector_family,
@@ -18,7 +18,7 @@ from benchmarks.adaptive_cuda_parity import (
     reserve_parity_steps,
     run_adaptive_parity,
 )
-from benchmarks.adaptive_trace import (
+from scripts.benchmarks.adaptive_trace import (
     CacheEventRecorder,
     TraceScope,
     active_trace_scope,

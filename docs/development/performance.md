@@ -173,6 +173,12 @@ The smoke covers production field closures, concurrent first dispatch, copy and 
 **[PERF INCREASE][PROCESSOR][PRELIMINARY]** On commit `6abe117`, fixed eager batch-2 row-0 screening reduced the warm median from `18.0686` to `17.2364` seconds/step on H200 (`1.048x`) and from `13.2356` to `12.3699` seconds/step on H100 (`1.070x`). Peak allocated memory was unchanged at approximately `31,778` MiB. Both real-Inductor CUDA smoke suites passed (`19/19` on each hardware lineage), but the production BF16 trajectories are not campaign-admitted: the final gradient norm changed by `+2.74%` on H200 and `+2.70%` on H100. The H200 final loss changed from `0.74052975` to `0.74048124`; the H100 final loss changed from `0.74041273` to `0.74025877`. Eager recurrence remains authoritative pending formal production-shape raw-gradient, cache-event, optimizer-state, RNG, and resume parity.
 
 
+## Handwritten Triton cache movement
+
+The combined speed project has explicit approval to investigate narrow handwritten Triton kernels. The first candidate is intentionally movement-only: contiguous layer-major BF16 K/V is gathered directly into Longshot/Icarus per-cache-head layout using raw 16-bit loads and stores, and its custom backward scatters raw gradient payloads into zero-initialized cache-gradient tensors. It performs no floating-point arithmetic, scoring, top-k, RoPE, gating, or cache writeback.
+
+The package imports Triton lazily and currently admits only compute capability 9.0 with Triton `3.6.0`, fixed physical batch two, contiguous BF16 K/V, and sorted unique in-range indices. Explicit launch failures are fatal. The candidate has no production training selector and no campaign-admitted multiplier until both H100 and H200 forward/backward, trajectory, resume, memory, and matched full-step gates pass. `scripts.benchmarks.triton_cache_movement` measures only the isolated gather/backward boundary.
+
 ## Change control
 
-Moving code into this package must not change parameter names, buffers, checkpoint payloads, selected indices, or eager defaults. Changes to compiler regions, batching, checkpointing, or loss execution require targeted parity tests and CUDA acceptance canaries. Handwritten kernels remain separately approval-gated.
+Moving code into this package must not change parameter names, buffers, checkpoint payloads, selected indices, or eager defaults. Changes to compiler regions, batching, checkpointing, loss execution, or handwritten kernels require targeted parity tests and CUDA acceptance canaries. A handwritten kernel may enter production dispatch only after its own scoped approval and hardware gates; the current Triton investigation does not waive those kernel-by-kernel gates.

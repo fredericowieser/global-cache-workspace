@@ -6,16 +6,16 @@ import os
 import pytest
 import torch
 
-from benchmarks.harness import (
-    authenticated_document,
+from scripts.benchmarks.harness import (
+    integrity_document,
     benchmark_optimizer_step,
     benchmark_processor_operations,
-    load_authenticated_json,
+    load_integrity_json,
     timing_summary,
-    verify_authenticated_document,
-    write_authenticated_json,
+    verify_integrity_document,
+    write_integrity_json,
 )
-from benchmarks.parity import small_cpu_config
+from scripts.benchmarks.parity import small_cpu_config
 from gcw.config import DataConfig, TrainConfig
 
 
@@ -41,19 +41,19 @@ def test_authenticated_benchmark_json_round_trips_and_rejects_tampering(tmp_path
     path = tmp_path / "benchmark.json"
     payload = {"processor_variant": "bt", "raw_step_seconds": [0.1, 0.2]}
 
-    document = write_authenticated_json(path, payload)
+    document = write_integrity_json(path, payload)
 
-    assert load_authenticated_json(path) == payload
-    assert verify_authenticated_document(document) == payload
+    assert load_integrity_json(path) == payload
+    assert verify_integrity_document(document) == payload
     altered = json.loads(path.read_text())
     altered["payload"]["processor_variant"] = "bgt"
     with pytest.raises(ValueError, match="integrity"):
-        verify_authenticated_document(altered)
+        verify_integrity_document(altered)
 
 
-def test_authenticated_document_rejects_non_finite_measurements():
+def test_integrity_document_rejects_non_finite_measurements():
     with pytest.raises(ValueError):
-        authenticated_document({"raw_step_seconds": [float("nan")]})
+        integrity_document({"raw_step_seconds": [float("nan")]})
 
 
 def test_cpu_optimizer_step_reports_raw_timings_memory_and_real_token_counts():

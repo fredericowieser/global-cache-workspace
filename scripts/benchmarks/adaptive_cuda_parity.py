@@ -24,7 +24,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 
-from benchmarks.adaptive_trace import (
+from scripts.benchmarks.adaptive_trace import (
     CacheEvent,
     CacheEventRecorder,
     TraceScope,
@@ -34,7 +34,7 @@ from benchmarks.adaptive_trace import (
     row_widths_for_pairs,
     trace_cache_events,
 )
-from benchmarks.harness import device_identity, write_authenticated_json
+from scripts.benchmarks.harness import device_identity, write_integrity_json
 from gcw.checkpoint import load_backbone_checkpoint
 from gcw.config import load_train_config, to_dict
 from gcw.data.training import TrainingBatch, TrainingBatchStream, build_training_stream, cursor_to_dict
@@ -1026,7 +1026,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     payload = _real_model_cli(args)
-    document = write_authenticated_json(args.output, payload)
+    document = write_integrity_json(args.output, payload)
     print(json.dumps(document, sort_keys=True, allow_nan=False))
     if not payload["passed"]:
         raise SystemExit(2)

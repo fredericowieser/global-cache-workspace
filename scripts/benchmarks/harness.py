@@ -75,7 +75,7 @@ def timing_summary(raw_step_seconds: list[float]) -> dict[str, float]:
     }
 
 
-def authenticated_document(payload: dict[str, Any]) -> dict[str, Any]:
+def integrity_document(payload: dict[str, Any]) -> dict[str, Any]:
     safe = json.loads(json.dumps(payload, allow_nan=False, sort_keys=True))
     return {
         "schema_version": SCHEMA_VERSION,
@@ -85,7 +85,7 @@ def authenticated_document(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def verify_authenticated_document(document: dict[str, Any]) -> dict[str, Any]:
+def verify_integrity_document(document: dict[str, Any]) -> dict[str, Any]:
     if set(document) != {"schema_version", "kind", "payload", "payload_sha256"}:
         raise ValueError("benchmark evidence schema differs")
     payload = document.get("payload")
@@ -99,8 +99,8 @@ def verify_authenticated_document(document: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def write_authenticated_json(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    document = authenticated_document(payload)
+def write_integrity_json(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    document = integrity_document(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(temporary_name)
@@ -116,14 +116,14 @@ def write_authenticated_json(path: Path, payload: dict[str, Any]) -> dict[str, A
     return document
 
 
-def load_authenticated_json(path: Path) -> dict[str, Any]:
+def load_integrity_json(path: Path) -> dict[str, Any]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("benchmark evidence is unreadable") from exc
     if not isinstance(document, dict):
         raise ValueError("benchmark evidence must be a JSON object")
-    return verify_authenticated_document(document)
+    return verify_integrity_document(document)
 
 
 def device_identity(device: torch.device) -> dict[str, Any]:
@@ -481,7 +481,7 @@ def main() -> None:
         warmup=args.warmup,
         steps=args.steps,
     )
-    document = write_authenticated_json(args.output, payload)
+    document = write_integrity_json(args.output, payload)
     print(canonical_json_bytes(document).decode("utf-8"))
 
 
