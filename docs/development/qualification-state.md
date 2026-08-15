@@ -94,7 +94,10 @@ primitive does not claim that merely spawning two processes proves resume parity
 `resources.py` separates semantic accelerator identity from authority-local PID,
 host, Slurm, CUDA visibility, UUID, PCI, and driver fields. Its closed GPU admission
 recognizes H100 and H200 separately and can require exactly one visible CUDA device
-and complete UUID/PCI authority. `timing.py` rejects instrumented execution, excludes
+and complete UUID/PCI authority. After a worker exits, `observe_cuda_release` records
+every parent-side NVIDIA process poll and succeeds only when the bound GPU UUID has
+an observed empty compute-process set; a derived boolean cannot substitute for this
+trace. `timing.py` rejects instrumented execution, excludes
 warmup, synchronizes complete operation boundaries, retains every raw sample, and
 reports allocator peaks. H100 and H200 remain distinct lineages.
 

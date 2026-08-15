@@ -3,12 +3,14 @@ from __future__ import annotations
 import pytest
 import torch
 
+from gcw.qualification import resources as resources_module
 from gcw.qualification.resources import (
     QualificationResourceError,
     _NvidiaSMIRow,
     _classify_accelerator,
     _match_gpu_row,
     capture_resource_identity,
+    observe_cuda_release,
 )
 
 
@@ -37,6 +39,26 @@ def test_gpu_row_matching_requires_unambiguous_uuid_or_single_visibility() -> No
     assert _match_gpu_row((h100,), None, 0, 1) == h100
     assert _match_gpu_row((h100, h200), None, 0, 1) is None
     assert _match_gpu_row((h100, h100), "GPU-one", 0, 1) is None
+
+
+def test_parent_observes_cuda_process_rows_reach_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [((101, 4096),), ((101, 1024),), ()]
+    sleeps: list[float] = []
+
+    def query(gpu_uuid: str) -> tuple[tuple[int, int], ...]:
+        assert gpu_uuid == "GPU-authority"
+        return rows.pop(0)
+
+    monkeypatch.setattr(resources_module, "_query_compute_processes", query)
+    monkeypatch.setattr(resources_module.time, "sleep", sleeps.append)
+    observation = observe_cuda_release(
+        "GPU-authority",
+        timeout_seconds=10,
+        poll_interval_seconds=0.25,
+    )
+    assert observation.polls == (((101, 4096),), ((101, 1024),), ())
+    assert sleeps == [0.25, 0.25]
+    assert observation.cleared_monotonic_ns >= observation.started_monotonic_ns
 
 
 def test_expected_gpu_fails_when_cuda_is_unavailable() -> None:
