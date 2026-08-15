@@ -46,6 +46,18 @@ The 697,744-row split leaves a 16-row remainder at global batch 64. The series u
 
 Every non-processor target gets full canonical-likelihood coverage plus thinking off/on numeric-generation cells. Every processor target gets the same evidence with processor off and on. Multiple-choice chat generation is not scheduled. Training metrics and FLOP estimates remain in local run records and mirror to W&B. Evaluation results remain in local evaluation records and publish scalar metrics plus authenticated result artifacts to W&B.
 
+### Completed H100 full-SFT numeric result
+
+Protocol V3 numeric generation for the completed 10,902-step full-SFT checkpoint is complete on the `lrc-h100-v1` lineage. Thinking modes remain separate metrics:
+
+| task | thinking off | thinking on | on − off | truncation off / on |
+| --- | ---: | ---: | ---: | ---: |
+| GSM8K OpenMath | 890/1,319 (67.48%) | 862/1,319 (65.35%) | −2.12 pp | 1.06% / 29.26% |
+| SVAMP | 239/300 (79.67%) | 239/300 (79.67%) | 0.00 pp | 2.33% / 21.00% |
+| GSM8K Hard | 427/1,319 (32.37%) | 303/1,319 (22.97%) | −9.40 pp | 6.14% / 72.78% |
+
+Thinking-on generation does not improve this full-SFT checkpoint under the fixed 2,048-token protocol; GSM8K Hard is dominated by truncation. H100 and H200 lineages are not averaged. Result-file SHA-256 values (off/on) are: GSM8K OpenMath `2be8e334f5b9e6edc3ca211d2dd2cada7d74c411277d777d06a3647f492b076e` / `3867ee6cc4f1ace5de48fa7317663f2d9c8acc90df8bd5ae7f9f2e9ca7384302`; SVAMP `69fa3ed0e3f0aa07b29a55304d551d38c633f8bb7aedd4ab3ae26b7a6425fbb0` / `f8498c01d66978dbcf923c74f36e2b1ecd0f6af5c74f96955d2f78d50110e5b0`; GSM8K Hard `6de6257fb5e74bce4c4a91fc463af9a6e0ef8d4f2f7fef9f80fbaa05d304e725` / `ed9e3e41d95a151b9b606ec4fba891c0fb77a7add9b3d8d335e828c8d63afbf9`.
+
 ```bash
 uv run --extra gpu --extra eval --extra convert python \
   scripts/run_math_experiments_full_single_seed.py \
