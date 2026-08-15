@@ -67,6 +67,9 @@ def test_cpu_optimizer_step_reports_raw_timings_memory_and_real_token_counts():
     assert result["real_non_padding_tokens_per_step"] == 14
     assert result["real_supervised_tokens_per_step"] == 14
     assert len(result["training_batch_sha256"]) == 64
+    assert len(result["final_trainable_parameters_sha256"]) == 64
+    assert len(result["final_gradients_sha256"]) == 64
+    assert len(result["final_optimizer_tensors_sha256"]) == 64
 
 
 def test_cpu_processor_suite_exposes_maintained_micro_operations():

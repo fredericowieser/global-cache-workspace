@@ -81,6 +81,9 @@ def test_prompt_and_tensor_hashes_preserve_v1_encodings() -> None:
     assert prompt_text_sha256("a  b\n") != normalized_prompt_text_sha256("a  b\n")
     assert normalized_prompt_text_sha256("a  b\n") == prompt_text_sha256("a b")
     assert tensor_state_sha256(state) == "da6d60be6a8dd647865cbd8f1ab93d7347f1bb4e9e4a6d9ed4f1686d4a88d943"
+    scalar_hash = tensor_state_sha256({"step": torch.tensor(1.0)})
+    assert len(scalar_hash) == 64
+    assert scalar_hash != tensor_state_sha256({"step": torch.tensor([1.0])})
 
 
 def test_repository_state_distinguishes_clean_dirty_and_unavailable(tmp_path: Path) -> None:

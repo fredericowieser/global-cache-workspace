@@ -75,7 +75,8 @@ def tensor_state_sha256(state: dict[str, torch.Tensor]) -> str:
         ).encode("utf-8")
         digest.update(len(metadata).to_bytes(8, "big"))
         digest.update(metadata)
-        digest.update(value.view(torch.uint8).numpy().tobytes())
+        byte_view = value.reshape(1).view(torch.uint8) if value.ndim == 0 else value.view(torch.uint8)
+        digest.update(byte_view.numpy().tobytes())
     return digest.hexdigest()
 
 

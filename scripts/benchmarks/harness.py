@@ -315,6 +315,22 @@ def _training_fixture(
         stream.close()
 
 
+def _optimizer_tensor_state(optimizer: torch.optim.Optimizer) -> dict[str, torch.Tensor]:
+    tensors: dict[str, torch.Tensor] = {}
+    parameter_indices = {
+        id(parameter): index
+        for index, parameter in enumerate(
+            parameter for group in optimizer.param_groups for parameter in group["params"]
+        )
+    }
+    for parameter, state in optimizer.state.items():
+        index = parameter_indices[id(parameter)]
+        for name, value in sorted(state.items()):
+            if isinstance(value, torch.Tensor):
+                tensors[f"parameter.{index}.{name}"] = value
+    return tensors
+
+
 def benchmark_optimizer_step(
     config: TrainConfig,
     device: torch.device,
@@ -382,6 +398,13 @@ def benchmark_optimizer_step(
     batch_state = {"input_ids": x, "targets": y}
     if attention_mask is not None:
         batch_state["attention_mask"] = attention_mask
+    trainable_state = {name: parameter for name, parameter in model.named_parameters() if parameter.requires_grad}
+    gradient_state = {
+        name: parameter.grad
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad and parameter.grad is not None
+    }
+    optimizer_tensors = _optimizer_tensor_state(optimizer)
     return {
         "name": "optimizer_step",
         "kind": "complete_training_optimizer_step",
@@ -390,6 +413,9 @@ def benchmark_optimizer_step(
         "measured_steps": steps,
         "gradient_accumulation_steps": accumulation,
         "training_batch_sha256": tensor_state_sha256(batch_state),
+        "final_trainable_parameters_sha256": tensor_state_sha256(trainable_state),
+        "final_gradients_sha256": tensor_state_sha256(gradient_state),
+        "final_optimizer_tensors_sha256": tensor_state_sha256(optimizer_tensors),
         "raw_step_seconds": raw,
         **timing_summary(raw),
         "peak_memory_bytes": _peak_memory(device),
