@@ -176,8 +176,10 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
 def build_cache_processor(config: ModelConfig) -> CacheProcessorBase:
     """Construct one cache processor without constructing a backbone."""
     from gcw.performance.backends.cache_processors import resolve_cache_processor_backend
+    from gcw.performance.backends.icarus import resolve_icarus_processor_backend
 
     resolve_cache_processor_backend(config)
+    resolve_icarus_processor_backend(config)
     if config.variant == "bt":
         from gcw.models.cache_processors.standard import PerLayerCacheProcessor
 

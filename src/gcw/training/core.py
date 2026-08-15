@@ -56,6 +56,14 @@ from gcw.performance.backends.diffusion import (
     configure_noisy_diffusion_recurrence_backend,
     noisy_diffusion_recurrence_backend_metadata,
 )
+from gcw.performance.backends.icarus import (
+    configure_icarus_training_execution,
+    icarus_processor_backend_metadata,
+    icarus_training_execution,
+    resolve_icarus_processor_backend,
+    validate_icarus_training_admission,
+    warmup_icarus_training_execution,
+)
 from gcw.performance.longshot_cache import (
     configure_longshot_full_history_execution,
     longshot_full_history_execution_metadata,
@@ -123,6 +131,19 @@ def train(config: TrainConfig) -> None:
         raise ValueError("training audit currently requires the approved one-GPU topology")
     audit_gradients: dict[str, Any] | None = None
     use_fsdp = _fsdp_active(config)
+    icarus_backend = resolve_icarus_processor_backend(config.model)
+    validate_icarus_training_admission(
+        icarus_backend,
+        distributed=config.distributed,
+        world_size=max(world_size, int(os.environ.get("WORLD_SIZE", "1"))),
+        distributed_initialized=dist.is_available() and dist.is_initialized(),
+        adaptive_batch_sizes=(
+            tuple(band.physical_rows for band in adaptive_batching.bands)
+            if adaptive_batching.enabled
+            else None
+        ),
+        device=device,
+    )
     if use_fsdp and config.resume is not None:
         raise ValueError("exact training resume is not supported with FSDP")
 
@@ -190,22 +211,43 @@ def train(config: TrainConfig) -> None:
             or config.backbone_chunk_backend != "eager"
             or regional_backend == "compile"
             or noisy_diffusion_backend == "compile"
+            or icarus_backend == "compile"
         ):
             raise RuntimeError(
                 "GCW_COMPILE cannot wrap a regionally compiled language model; disable it and use "
                 "backbone_chunk_backend=compile or compile_full_windows, "
                 "GCW_BT_PROCESSOR_BACKEND=compile, GCW_CACHE_PROCESSOR_BACKEND=compile, "
-                "and/or performance.noisy_diffusion.recurrence_backend=compile"
+                "performance.noisy_diffusion.recurrence_backend=compile, and/or "
+                "GCW_ICARUS_PROCESSOR_BACKEND=compile"
             )
         if (
             config.model.variant != "bt"
             and config.backbone_chunk_backend == "eager"
             and regional_backend == "eager"
             and noisy_diffusion_backend == "eager"
+            and icarus_backend == "eager"
         ):
             model = maybe_compile_whole_model(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
             model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
+
+    icarus_admitted_batches = (
+        tuple(band.physical_rows for band in adaptive_batching.bands)
+        if adaptive_batching.enabled
+        else (config.batch_size,)
+    )
+    if icarus_backend == "compile":
+        configure_icarus_training_execution(model, icarus_admitted_batches)
+        warmup_icarus_training_execution(
+            model,
+            icarus_admitted_batches,
+            sequence_length=config.sequence_len,
+            device=device,
+            bf16=config.bf16,
+        )
+    icarus_execution_scope = (
+        partial(icarus_training_execution, model) if icarus_backend == "compile" else nullcontext
+    )
 
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     opt = _build_optimizer(params, config)
@@ -251,6 +293,11 @@ def train(config: TrainConfig) -> None:
                 config.model, config.performance.noisy_diffusion
             )
             if config.model.diffusion_processor is not None
+            else None
+        ),
+        "icarus_processor_backend": (
+            icarus_processor_backend_metadata(config.model)
+            if config.model.variant == "icarus"
             else None
         ),
         "activation_checkpointing": activation_checkpointing_runtime,
@@ -350,7 +397,7 @@ def train(config: TrainConfig) -> None:
                 enabled=micro_step < physical_microsteps - 1,
                 use_fsdp=use_fsdp,
             )
-            with sync_context:
+            with sync_context, icarus_execution_scope(batch.x.shape[0]):
                 with torch.autocast(
                     device_type=device.type,
                     dtype=torch.bfloat16,
@@ -667,6 +714,18 @@ def _training_fingerprint(
                 )
             }
             if config.performance.noisy_diffusion.recurrence_backend == "compile"
+            else {}
+        ),
+        **(
+            {
+                "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(
+                    config.model
+                )["fingerprint_sha256"]
+            }
+            if (
+                config.model.variant == "icarus"
+                and resolve_icarus_processor_backend(config.model) == "compile"
+            )
             else {}
         ),
         "initialization": {

@@ -17,11 +17,14 @@ The package is intentionally divided by responsibility:
 - `telemetry.py`: read-only optimized-region metrics;
 - `backends/qwen3.py`: Qwen3 backbone chunk compilation;
 - `backends/cache_processors.py`: BT and deterministic BGT-family regional compilation;
-- `backends/diffusion.py`: noisy Diffusion-BGT recurrence compilation after eager noise sampling.
+- `backends/diffusion.py`: noisy Diffusion-BGT recurrence compilation after eager noise sampling;
+- `backends/icarus.py`: deterministic Icarus post-selection regional compilation.
 
 There is no backend registry. Every compiled region owns narrow admission checks, fixed compiler options, provenance, and fatal failure behavior. Requested optimized paths never silently retry eagerly.
 
 Model modules retain cache selection, gather/writeback semantics, recurrent scheduling, and state dictionaries. `training/objectives.py` retains the adjacent-pair mathematical objective. The performance package may choose physical execution groups, but it cannot redefine the objective or optimizer step.
+
+The Icarus backend illustrates this boundary. Its eager caller computes FP32 scores, exact top-k token/cache-head selection, gather indices, latest write positions, and cache scatter. Before allocation, admission validates the requested API and topology; it does not generate kernels. After allocation, synthetic zero-valued warmup generates kernels for admitted row counts without data or RNG consumption. A weak runtime table keys each dynamic compiled callable to its processor module without placing compiler closures in module, `deepcopy`, pickle, state-dict, or checkpoint state. Copied and deserialized modules therefore compile independently. The callable receives only selected tensors and executes the deterministic RoPE/attention/transform region. It is active only inside an admitted training forward/backward scope; direct calls, evaluation, and generation remain eager. Admission rejects distributed execution, unqualified adaptive shapes, stochastic dropout, and Flow/Diffusion refinements.
 
 ## Adaptive adjacent-pair batching
 

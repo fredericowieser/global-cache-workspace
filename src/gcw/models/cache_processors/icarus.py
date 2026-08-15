@@ -22,6 +22,12 @@ from gcw.models.cache_processors.ops import (
     select_heads_from_per_cache_head_scores,
     select_per_cache_head_kv_norm_indices_from_scores,
 )
+from gcw.performance.backends.icarus import (
+    IcarusProcessorBackend,
+    icarus_processor_backend_metadata,
+    resolve_icarus_processor_backend,
+    run_icarus_post_selection_region,
+)
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.backbones.transformer import RMSNorm, apply_rotary, flash_sdpa
@@ -262,6 +268,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if model_config.cache_processor is None:
             raise ValueError("Icarus requires cache_processor config")
         self.config = model_config.cache_processor
+        self._model_config = model_config
         if self.config.processor_mode != "standard":
             raise ValueError("Icarus supports only cache_processor.processor_mode='standard'")
         if self.config.update_stream not in {"kv", "v"}:
@@ -282,6 +289,10 @@ class GlobalCacheProcessor(CacheProcessorBase):
             output_dim=output_dim,
             flow_config=model_config.flow_processor,
         )
+        self.execution_backend: IcarusProcessorBackend = resolve_icarus_processor_backend(model_config)
+
+    def execution_backend_metadata(self) -> dict[str, object]:
+        return icarus_processor_backend_metadata(self._model_config, self.execution_backend)
 
     def forward(self, cache: CacheLike, *, select_all: bool = False) -> CacheLike:
         if self.config.score == "kv_norm" and not select_all:
@@ -315,7 +326,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
             return cache
         if selected_heads is None:
             selected_heads = _select_heads_from_merged(merged, self.config.topk_heads)
-        updated = self.block(merged, indices, selected_heads)
+        updated = run_icarus_post_selection_region(
+            self.execution_backend,
+            self.block,
+            merged,
+            indices,
+            selected_heads,
+        )
         latest = latest_shared_indices(indices)
         latest_update = updated[:, :, -1:].contiguous()
         if self.config.update_stream == "v":
