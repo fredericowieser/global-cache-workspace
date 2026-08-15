@@ -886,7 +886,12 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
 
     initial_model = build(None)
     stream = build_training_stream(config, device, rank=0, world_size=1)
-    reserved = reserve_parity_steps(stream, args.steps)
+    try:
+        reserved = reserve_parity_steps(stream, args.steps)
+    finally:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
 
     def pair_losses(model: torch.nn.Module, batch: TrainingBatch) -> torch.Tensor:
         row_sums, row_counts = row_loss_sums_and_counts(
