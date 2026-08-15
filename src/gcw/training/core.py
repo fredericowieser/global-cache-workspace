@@ -311,7 +311,10 @@ def train(config: TrainConfig) -> None:
         **(
             {
                 "longshot_full_history_execution": longshot_full_history_execution_metadata(
-                    config.performance.longshot_full_history
+                    config.performance.longshot_full_history,
+                    unrope_keys=bool(
+                        config.model.cache_processor and config.model.cache_processor.unrope_keys
+                    ),
                 )
             }
             if config.performance.longshot_full_history.enabled
@@ -762,7 +765,10 @@ def _training_fingerprint(
         **(
             {
                 "longshot_full_history_execution": longshot_full_history_execution_metadata(
-                    config.performance.longshot_full_history
+                    config.performance.longshot_full_history,
+                    unrope_keys=bool(
+                        config.model.cache_processor and config.model.cache_processor.unrope_keys
+                    ),
                 )
             }
             if config.performance.longshot_full_history.enabled

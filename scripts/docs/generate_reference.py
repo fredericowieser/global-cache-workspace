@@ -22,6 +22,7 @@ from gcw.config import (
 )
 from gcw.performance.config import (
     AdaptiveBatchingConfig,
+    LongshotFullHistoryConfig,
     NoisyDiffusionBackendConfig,
     PerformanceConfig,
     PhysicalBatchBandConfig,
@@ -37,6 +38,7 @@ CONFIG_TYPES = (
     DataConfig,
     PhysicalBatchBandConfig,
     AdaptiveBatchingConfig,
+    LongshotFullHistoryConfig,
     NoisyDiffusionBackendConfig,
     PerformanceConfig,
     TrainConfig,

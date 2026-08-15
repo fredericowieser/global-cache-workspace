@@ -777,11 +777,6 @@ class TrainConfig:
                 raise ValueError(
                     "performance.longshot_full_history requires cache_processor.attention_dropout=0"
                 )
-            if processor.unrope_keys:
-                raise ValueError(
-                    "performance.longshot_full_history rejects cache_processor.unrope_keys=true "
-                    "because rotating the full history violates its bounded-memory contract"
-                )
             if processor.linear_state_cache:
                 raise ValueError(
                     "performance.longshot_full_history does not support linear recurrent cache state"
@@ -807,8 +802,18 @@ class TrainConfig:
                 raise ValueError(
                     "performance.longshot_full_history requires a dense WindowedCache backbone family"
                 )
-            minimum_temp_bytes = 2 * self.model.stored_cache_shape[1] * 4
+            head_dim = self.model.stored_cache_shape[1]
+            if processor.unrope_keys:
+                rotary_dim = int(head_dim * self.model.partial_rotary_factor)
+                minimum_temp_bytes = (7 * head_dim + 8 * rotary_dim) * 4 + 8
+            else:
+                minimum_temp_bytes = 2 * head_dim * 4
             if longshot_history.max_temp_bytes < minimum_temp_bytes:
+                if processor.unrope_keys:
+                    raise ValueError(
+                        "performance.longshot_full_history.max_temp_bytes must cover at least "
+                        f"one complete un-RoPE rotation and score row ({minimum_temp_bytes} bytes)"
+                    )
                 raise ValueError(
                     "performance.longshot_full_history.max_temp_bytes must cover at least "
                     f"one FP32 K/V row ({minimum_temp_bytes} bytes)"

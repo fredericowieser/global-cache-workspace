@@ -151,6 +151,13 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `enabled` | `bool` | `False` |
 | `bands` | `tuple[gcw.performance.config.PhysicalBatchBandConfig, ...]` | `(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2))` |
 
+## `LongshotFullHistoryConfig`
+
+| Field | Type | Default |
+|---|---|---|
+| `enabled` | `bool` | `False` |
+| `max_temp_bytes` | `int` | `33554432` |
+
 ## `NoisyDiffusionBackendConfig`
 
 | Field | Type | Default |
