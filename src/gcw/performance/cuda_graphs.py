@@ -167,6 +167,14 @@ def _capture_entry(
     )
     allocated_before = torch.cuda.memory_allocated(device)
     reserved_before = torch.cuda.memory_reserved(device)
+    # Capture from isolated leaf tensors. Passing live nonleaf cache tensors
+    # would make capture-time autograd traverse into the preceding processor on
+    # the legacy stream, invalidating CUDA stream capture. The graphed callable
+    # later reconnects its input gradients to each real nonleaf argument.
+    sample_args = tuple(
+        tensor.detach().clone(memory_format=torch.preserve_format).requires_grad_(tensor.requires_grad)
+        for tensor in args
+    )
     autocast_enabled = torch.is_autocast_enabled("cuda")
     autocast_dtype = torch.get_autocast_dtype("cuda")
     try:
@@ -190,7 +198,7 @@ def _capture_entry(
             )
             runner = torch.cuda.make_graphed_callables(
                 operation,
-                args,
+                sample_args,
                 num_warmup_iters=warmup_iterations,
                 allow_unused_input=True,
             )
