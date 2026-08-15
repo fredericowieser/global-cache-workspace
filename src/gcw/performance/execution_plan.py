@@ -27,7 +27,6 @@ COMBINED_V1_COMPONENTS = (
     OptimizedComponent("triton_cache_movement", "v1", "candidate"),
     OptimizedComponent("triton_cache_finishing", "v1", "candidate"),
     OptimizedComponent("static_workspaces", "v1", "infrastructure"),
-    OptimizedComponent("pair_waves", "v1", "candidate"),
     OptimizedComponent("ragged_pair_plans", "v1", "infrastructure"),
     OptimizedComponent("activation_lifetime", "v1", "infrastructure"),
 )
@@ -78,6 +77,7 @@ def combined_v1_plan_payload() -> dict[str, object]:
             "adaptive_pair_batching",
             "regional_inductor",
             "regional_cuda_graphs",
+            "pair_waves",
             "fused_liger_row_sum",
             "evaluation_or_generation_dispatch",
         ],

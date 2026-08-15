@@ -83,11 +83,11 @@ Promotion requires changing the source-bound admission bit only after H100 and H
 
 `gcw.performance.activation_lifetime` closes phase order, producer/consumer uses, and the exact post-phase release schedule before execution. Its runtime owns Python references and fails on missing, duplicate, reordered, or prematurely released values. It does not mutate tensors or claim allocator release; an optimized executor must still observe CUDA allocation/pool behavior in a fresh process before a lifetime plan earns a memory result.
 
-## Exact fixed-pair wave candidate
+## Rejected exact fixed-pair wave candidate
 
-`gcw.performance.pair_waves` is a benchmark-only candidate for overlapping independent fixed-batch-two forwards without adaptive collation. It plans exactly 32 contiguous source pairs in widths 1, 2, or 4, launches one ordinary forward per lane, and then calls ordinary `Tensor.backward()` in source order. CUDA events serialize backward execution before shared `.grad` accumulation; it does not use `autograd.grad`, manual gradient merging, grouped GEMMs, repadding, or eager fallback. Each wave completes backward before its lane storage can be reused.
+`gcw.performance.pair_waves` remains a benchmark-only reproduction of overlapping independent fixed-batch-two forwards without adaptive collation. It plans exactly 32 contiguous source pairs in widths 1, 2, or 4, launches one ordinary forward per lane, and then calls ordinary `Tensor.backward()` in source order. CUDA events order the authority stream before shared `.grad` accumulation; it does not use `autograd.grad`, manual gradient merging, grouped GEMMs, repadding, or eager fallback.
 
-The initial implementation has CPU planning/failure gates and opt-in H100/H200 BF16 forward/gradient tests. It is not connected to production training, does not yet admit checkpointed or noisy-Diffusion execution, and has no speed claim. Promotion requires complete processor trajectories, explicit noise plumbing, state-neutral runtime ownership, fresh-process resume, resource-release evidence, and matched full-step timing.
+Synthetic H100/H200 pair-loss and gradient parity passed, but the strict real H200 32-distinct-pair BT gate immediately raised PyTorch's `AccumulateGrad` stream-mismatch warning. Shared parameter nodes are created by one forward lane and receive gradients produced from another lane; PyTorch warns that this incurs synchronization and can break graph capture. GCW does not suppress that process-global diagnostic or present warning-contaminated timing as evidence. Pair waves therefore fail closed before performance measurement, have no production selector, and are excluded from `combined_v1`.
 
 ## Rejected fused structured row loss
 
