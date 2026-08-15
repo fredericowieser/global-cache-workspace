@@ -27,7 +27,7 @@ CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
 ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
-BackboneChunkBackend = Literal["eager", "compile", "compile_full_windows"]
+BackboneChunkBackend = Literal["eager", "compile", "compile_full_windows", "cuda_graph"]
 LossBackend = Literal["reference", "target_only", "liger"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
@@ -657,9 +657,9 @@ class TrainConfig:
             raise ValueError(
                 "activation_checkpointing='standard_processor_layers' requires a BT or BGT cache processor"
             )
-        if self.backbone_chunk_backend not in {"eager", "compile", "compile_full_windows"}:
+        if self.backbone_chunk_backend not in {"eager", "compile", "compile_full_windows", "cuda_graph"}:
             raise ValueError(
-                "backbone_chunk_backend must be 'eager', 'compile', or 'compile_full_windows'"
+                "backbone_chunk_backend must be 'eager', 'compile', 'compile_full_windows', or 'cuda_graph'"
             )
         if self.backbone_chunk_backend != "eager":
             selected_backend = self.backbone_chunk_backend

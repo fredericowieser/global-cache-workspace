@@ -13,10 +13,11 @@ from gcw.performance._compile import (
     require_torch_compile,
 )
 from gcw.performance.compile_telemetry import compile_acceptance_recorder
+from gcw.performance.cuda_graphs import run_graphed_callable
 from gcw.provenance import canonical_json_sha256
 
 
-Qwen3BackboneChunkBackend = Literal["eager", "compile", "compile_full_windows"]
+Qwen3BackboneChunkBackend = Literal["eager", "compile", "compile_full_windows", "cuda_graph"]
 Qwen3ChunkRunner = Callable[
     [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
@@ -45,6 +46,10 @@ _qwen3_compiled_runners_lock = Lock()
 def validate_qwen3_backbone_chunk_backend(backend: Qwen3BackboneChunkBackend) -> None:
     """Reject unavailable or fallback-enabled compile execution before dispatch."""
     if backend == "eager":
+        return
+    if backend == "cuda_graph":
+        if not torch.cuda.is_available():
+            raise RuntimeError("backbone_chunk_backend=cuda_graph requires CUDA")
         return
     if backend not in {"compile", "compile_full_windows"}:
         raise ValueError(f"unsupported Qwen3 backbone chunk backend: {backend}")
@@ -77,7 +82,7 @@ def qwen3_backbone_chunk_backend_metadata(
     """Return stable provenance for the explicitly selected Qwen3 chunk region."""
     if backend in {"eager", "compile"}:
         # Keep the complete v1 payload stable so old exact-resume fingerprints remain valid.
-        execution = {
+        execution: dict[str, object] = {
             "schema": "gcw.qwen3_backbone_chunk_backend.v1",
             "effective_backend": backend,
             "region": "gcw.models.backbones.backend._qwen3_backbone_chunk_tensor_region",
@@ -98,6 +103,28 @@ def qwen3_backbone_chunk_backend_metadata(
             "fingerprint_sha256": canonical_json_sha256(execution),
         }
 
+    if backend == "cuda_graph":
+        execution = {
+            "schema": "gcw.qwen3_backbone_chunk_backend.v3",
+            "effective_backend": backend,
+            "regions": ["initial_full_window", "full_window_with_exact_past"],
+            "chunk_steps": _QWEN3_CHUNK_STEPS,
+            "shape_policy": "closed_static_tensor_signature",
+            "initial_and_partial_policy": "initial_full_graph_partial_eager",
+            "backward": "torch_cuda_make_graphed_callables",
+            "runtime_ownership": "external_weak_model_identity",
+            "capture_rng": "saved_and_restored",
+            "fallback": "disabled",
+            "campaign_admitted": False,
+            "torch_version": str(torch.__version__),
+        }
+        return {
+            **execution,
+            "requested_via": "TrainConfig.backbone_chunk_backend",
+            "requested_value": backend,
+            "implementation_module": "gcw.performance.cuda_graphs",
+            "fingerprint_sha256": canonical_json_sha256(execution),
+        }
     if backend != "compile_full_windows":
         raise ValueError(f"unsupported Qwen3 backbone chunk backend: {backend}")
     execution = {
@@ -149,6 +176,14 @@ def run_qwen3_backbone_chunk_region(
         return _qwen3_backbone_chunk_tensor_region(
             backbone, inputs_embeds, cos, sin, past_keys, past_values, attention_bias
         )
+    if backend == "cuda_graph":
+        operation = partial(_qwen3_backbone_chunk_tensor_region, backbone)
+        return run_graphed_callable(
+            backbone,
+            region="qwen3_full_window_with_past",
+            operation=operation,
+            args=(inputs_embeds, cos, sin, past_keys, past_values, attention_bias),
+        )
     if backend not in {"compile", "compile_full_windows"}:
         raise ValueError(f"unsupported Qwen3 backbone chunk backend: {backend}")
     runner = _get_qwen3_compiled_runner(backbone)
@@ -181,6 +216,14 @@ def run_qwen3_initial_backbone_chunk_region(
     """Run the initial full causal window; compilation is explicit and fail closed."""
     if backend == "eager":
         return _qwen3_initial_chunk_tensor_region(backbone, inputs_embeds, cos, sin)
+    if backend == "cuda_graph":
+        operation = partial(_qwen3_initial_chunk_tensor_region, backbone)
+        return run_graphed_callable(
+            backbone,
+            region="qwen3_initial_full_window",
+            operation=operation,
+            args=(inputs_embeds, cos, sin),
+        )
     if backend != "compile_full_windows":
         raise ValueError(f"backend {backend!r} does not compile the initial Qwen3 window")
     runner = _get_qwen3_compiled_initial_runner(backbone)
@@ -207,6 +250,7 @@ def run_qwen3_initial_backbone_chunk_region(
 def _is_non_reentrant_checkpoint_early_stop(error: BaseException) -> bool:
     """Preserve checkpoint control flow through the shared exact predicate."""
     return is_non_reentrant_checkpoint_early_stop(error)
+
 
 def _qwen3_initial_chunk_tensor_region(
     backbone: nn.Module,

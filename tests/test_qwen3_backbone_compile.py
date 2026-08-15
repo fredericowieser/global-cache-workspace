@@ -483,8 +483,9 @@ def test_config_is_explicit_and_rejects_unsupported_combinations() -> None:
         sequence_len=128,
     )
     assert accepted.backbone_chunk_backend == "compile"
+    assert replace(accepted, backbone_chunk_backend="cuda_graph").backbone_chunk_backend == "cuda_graph"
 
-    with pytest.raises(ValueError, match="must be 'eager', 'compile', or 'compile_full_windows'"):
+    with pytest.raises(ValueError, match="must be 'eager', 'compile', 'compile_full_windows', or 'cuda_graph'"):
         replace(accepted, backbone_chunk_backend="invalid")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="family='qwen3'"):
         replace(accepted, model=replace(accepted.model, family="smollm"))

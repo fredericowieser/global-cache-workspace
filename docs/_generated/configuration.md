@@ -185,7 +185,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
 | `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor']` | `'all'` |
 | `activation_checkpointing` | `Literal['none', 'standard_processor_layers']` | `'none'` |
-| `backbone_chunk_backend` | `Literal['eager', 'compile', 'compile_full_windows']` | `'eager'` |
+| `backbone_chunk_backend` | `Literal['eager', 'compile', 'compile_full_windows', 'cuda_graph']` | `'eager'` |
 | `loss_backend` | `Literal['reference', 'target_only', 'liger']` | `'reference'` |
 | `longshot_gradient_checkpointing_seq_len_threshold` | `int \| None` | `None` |
 | `backbone_checkpoint` | `str \| None` | `None` |

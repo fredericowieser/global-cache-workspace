@@ -791,7 +791,7 @@ class TF(Backbone):
         has_past = cache is not None and cache.scores.numel() > 0
         full_qwen3_window = self.config.family == "qwen3" and inputs_embeds.shape[1] == 64
         if (
-            self.backbone_chunk_backend == "compile_full_windows"
+            self.backbone_chunk_backend in {"compile_full_windows", "cuda_graph"}
             and full_qwen3_window
             and not has_past
             and start_pos == 0
@@ -803,7 +803,11 @@ class TF(Backbone):
                 logits=logits,
                 cache_format=cache_format,
             )
-        if self.backbone_chunk_backend in {"compile", "compile_full_windows"} and full_qwen3_window and has_past:
+        if (
+            self.backbone_chunk_backend in {"compile", "compile_full_windows", "cuda_graph"}
+            and full_qwen3_window
+            and has_past
+        ):
             return self._forward_compiled_embedding_chunk(
                 inputs_embeds, start_pos, cache, logits=logits, cache_format=cache_format
             )

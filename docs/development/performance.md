@@ -83,6 +83,12 @@ The default `performance.reference_loss.mode: legacy` preserves the existing 256
 
 Evaluation and configurations that omit the policy remain on the legacy reference path.
 
+## Qwen3 CUDA Graph window candidate
+
+`backbone_chunk_backend: cuda_graph` is a default-off, benchmark-only backend for complete Qwen3 64-token windows. It uses an external weak model-identity runtime and `torch.cuda.make_graphed_callables` with a closed tensor signature covering shape, stride, dtype, device, and gradient requirement. Initial full windows and each exact past-cache length receive separate captures; partial tails remain eager. Capture saves and restores CPU/CUDA RNG and existing backbone gradients, and replay failures are fatal without eager fallback. Captured objects never enter model state or checkpoints and are rebuilt after a fresh-process resume.
+
+This first implementation intentionally exposes capture count, replay count, and allocator growth for qualification. It does not claim private-pool release or production admission yet. Complete-window graph memory scales with retained backward activations and exact past-length signatures, so difficult rows may reject the backend on memory even when tensor parity passes. It must pass H100/H200 processor-gradient, Adam, cache-event, restart, distinct-input, pool-accounting, and full-step timing gates before composing with Triton movement or pair waves.
+
 ## Compiled Qwen3 full windows
 
 `backbone_chunk_backend: compile` retains the version-1 behavior: the initial and partial windows stay eager, while complete 64-token windows with past cache use one dynamic full-graph region. `compile_full_windows` is a separate version-2 policy. It adds one static full-graph region for the initial complete window and retains the existing dynamic region for later complete windows.
