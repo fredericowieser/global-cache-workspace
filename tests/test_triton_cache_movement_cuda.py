@@ -70,7 +70,10 @@ def test_triton_per_cache_head_gather_supports_shared_stride_zero_indices() -> N
     keys = torch.randn(3, 2, 2, 19, 16, device="cuda", dtype=torch.bfloat16)
     values = torch.randn_like(keys)
     shared = torch.tensor([[0, 3, 11, 18], [1, 4, 12, 17]], device="cuda")
-    eager = eager_gather(WindowedCache(keys, values, torch.empty(2, 0, device="cuda")), shared)
+    eager_indices = shared[:, None, :].expand(-1, keys.shape[0] * keys.shape[2], -1)
+    eager = eager_gather(
+        WindowedCache(keys, values, torch.empty(2, 0, device="cuda")), eager_indices
+    )
     candidate = gather_per_cache_head_kv(keys, values, shared)
     assert torch.equal(eager.view(torch.int16), candidate.view(torch.int16))
 
