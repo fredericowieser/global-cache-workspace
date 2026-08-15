@@ -46,7 +46,10 @@ from gcw.performance.adjacent_pairs import (
     plan_contiguous_pair_groups,
     reserve_adjacent_pairs,
 )
-from gcw.performance.backends.qwen3 import configure_qwen3_backbone_chunk_backend
+from gcw.performance.backends.qwen3 import (
+    Qwen3BackboneChunkBackend,
+    configure_qwen3_backbone_chunk_backend,
+)
 from gcw.performance.config import AdaptiveBatchingConfig
 from gcw.provenance import (
     canonical_json_sha256,
@@ -798,9 +801,12 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.steps <= 0 or args.steps > config.max_steps:
         raise ValueError("CUDA parity steps must be positive and no greater than train max_steps")
+    variant_set = getattr(args, "variant_set", "adaptive")
+    if variant_set not in {"adaptive", "fixed_regional"}:
+        raise ValueError(f"unsupported CUDA parity variant set: {variant_set!r}")
     policy = config.performance.adaptive_batching
-    if not policy.enabled:
-        raise ValueError("CUDA parity CLI requires performance.adaptive_batching.enabled=true")
+    if variant_set == "adaptive" and not policy.enabled:
+        raise ValueError("adaptive CUDA parity requires performance.adaptive_batching.enabled=true")
     if config.distributed != "none":
         raise ValueError("CUDA parity CLI requires distributed='none'")
     diffusion = config.model.diffusion_processor
@@ -820,9 +826,12 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA parity requested but CUDA is unavailable")
 
-    def build(compile_regions: bool) -> torch.nn.Module:
+    def build(backbone_backend: Qwen3BackboneChunkBackend | None) -> torch.nn.Module:
+        compile_regions = backbone_backend is not None
         environment = {
-            "GCW_BT_PROCESSOR_BACKEND": "compile" if compile_regions and config.model.variant == "bt" else "eager",
+            "GCW_BT_PROCESSOR_BACKEND": (
+                "compile" if compile_regions and config.model.variant == "bt" else "eager"
+            ),
             "GCW_CACHE_PROCESSOR_BACKEND": (
                 "compile" if compile_regions and config.model.variant == "bgt" else "eager"
             ),
@@ -835,11 +844,11 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             elif config.backbone_checkpoint:
                 load_backbone_checkpoint(model, config.backbone_checkpoint)
             _apply_trainable_policy(model, config.trainable)
-            if compile_regions:
-                configure_qwen3_backbone_chunk_backend(model, "compile")
+            if backbone_backend is not None:
+                configure_qwen3_backbone_chunk_backend(model, backbone_backend)
             return model
 
-    initial_model = build(False)
+    initial_model = build(None)
     stream = build_training_stream(config, device, rank=0, world_size=1)
     reserved = reserve_parity_steps(stream, args.steps)
 
@@ -888,11 +897,24 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             if group.get("decay", False):
                 group["weight_decay"] = weight_decay
 
-    variants = (
-        ParityVariant("fixed_batch2_eager", "fixed", lambda: build(False)),
-        ParityVariant("adaptive_eager", "adaptive", lambda: build(False)),
-        ParityVariant("adaptive_compiled", "adaptive", lambda: build(True)),
-    )
+    if variant_set == "adaptive":
+        variants = (
+            ParityVariant("fixed_batch2_eager", "fixed", lambda: build(None)),
+            ParityVariant("adaptive_eager", "adaptive", lambda: build(None)),
+            ParityVariant("adaptive_compiled", "adaptive", lambda: build("compile")),
+        )
+    elif variant_set == "fixed_regional":
+        variants = (
+            ParityVariant("fixed_batch2_eager", "fixed", lambda: build(None)),
+            ParityVariant("fixed_batch2_compiled", "fixed", lambda: build("compile")),
+            ParityVariant(
+                "fixed_batch2_compile_full_windows",
+                "fixed",
+                lambda: build("compile_full_windows"),
+            ),
+        )
+    else:
+        raise ValueError(f"unsupported CUDA parity variant set: {variant_set!r}")
     payload = run_adaptive_parity(
         initial_model,
         variants,
@@ -918,6 +940,7 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             "device": str(device),
             "variant": config.model.variant,
             "trajectory_steps": args.steps,
+            "variant_set": variant_set,
         }
     )
     return payload
@@ -931,6 +954,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=1)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    parser.add_argument(
+        "--variant-set",
+        choices=("adaptive", "fixed_regional"),
+        default="adaptive",
+        help="compare adaptive grouping or exact-shape fixed regional compilers against fixed eager",
+    )
     parser.add_argument(
         "--require-resume-evidence",
         action="store_true",

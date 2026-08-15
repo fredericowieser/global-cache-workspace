@@ -33,7 +33,9 @@ uv run --extra gpu python -m benchmarks.adaptive_cuda_parity \
   --output artifacts/benchmarks/adaptive-bt-parity.json
 ```
 
-The train config must enable `performance.adaptive_batching`. The CLI supports deterministic Qwen3 BT/BGT regional compiled backends. Before model allocation it rejects dirty source, resume configs, unavailable requested resume evidence, trajectories beyond `max_steps`, distributed execution, unsupported families, processor or LoRA dropout, and noisy Diffusion.
+Adaptive mode requires `performance.adaptive_batching`; fixed-regional mode does not. The CLI supports deterministic Qwen3 BT/BGT regional compiled backends. Before model allocation it rejects dirty source, resume configs, unavailable requested resume evidence, trajectories beyond `max_steps`, distributed execution, unsupported families, processor or LoRA dropout, and noisy Diffusion.
+
+Use `--variant-set fixed_regional` to compare fixed batch-2 eager against fixed batch-2 regional `compile` and `compile_full_windows` execution. This mode preserves each pair's physical batch shape and padded width; it does not treat adaptive grouping as an oracle.
 
 The authenticated JSON reports:
 

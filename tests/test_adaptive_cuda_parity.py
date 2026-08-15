@@ -279,11 +279,14 @@ def _real_cli_config(variant: str) -> TrainConfig:
 
 
 @pytest.mark.parametrize("variant", ["bt", "bgt"])
+@pytest.mark.parametrize("variant_set", ["adaptive", "fixed_regional"])
 def test_real_tiny_bt_bgt_cli_integration(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, variant: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, variant: str, variant_set: str
 ) -> None:
     config = _real_cli_config(variant)
-    config_path = tmp_path / f"{variant}.yaml"
+    if variant_set == "fixed_regional":
+        config.performance = PerformanceConfig()
+    config_path = tmp_path / f"{variant}-{variant_set}.yaml"
     config_path.write_text("test: integration\n", encoding="utf-8")
     monkeypatch.setattr(parity_module, "load_train_config", lambda _path: config)
     monkeypatch.setattr(
@@ -311,10 +314,18 @@ def test_real_tiny_bt_bgt_cli_integration(
             steps=1,
             device="cpu",
             require_resume_evidence=False,
+            variant_set=variant_set,
         )
     )
     assert payload["passed"] is True
     assert payload["variant"] == variant
+    assert payload["variant_set"] == variant_set
+    expected_candidates = (
+        ["adaptive_eager", "adaptive_compiled"]
+        if variant_set == "adaptive"
+        else ["fixed_batch2_compiled", "fixed_batch2_compile_full_windows"]
+    )
+    assert [comparison["candidate"] for comparison in payload["comparisons"]] == expected_candidates
     assert payload["production_resume_gate"]["available"] is False
     assert payload["comparisons"][0]["steps"][0]["cache_events"]["reference_coverage"]["complete"]
 
