@@ -347,6 +347,13 @@ def benchmark_optimizer_step(
     model.train()
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     optimizer = _build_optimizer(params, config)
+    initial_trainable_parameters_sha256 = tensor_state_sha256(
+        {
+            name: parameter
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        }
+    )
     x, y, attention_mask = _training_fixture(config, device)
     accumulation = _gradient_accumulation_steps(config)
     benchmark_step = 0
@@ -413,6 +420,7 @@ def benchmark_optimizer_step(
         "measured_steps": steps,
         "gradient_accumulation_steps": accumulation,
         "training_batch_sha256": tensor_state_sha256(batch_state),
+        "initial_trainable_parameters_sha256": initial_trainable_parameters_sha256,
         "final_trainable_parameters_sha256": tensor_state_sha256(trainable_state),
         "final_gradients_sha256": tensor_state_sha256(gradient_state),
         "final_optimizer_tensors_sha256": tensor_state_sha256(optimizer_tensors),
