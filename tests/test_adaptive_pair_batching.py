@@ -20,6 +20,7 @@ from gcw.config import (
     ModelConfig,
     ResumeConfig,
     TrainConfig,
+    to_dict,
 )
 from gcw.data.training import SFTBatchStream, SFTCursor, TrainingBatch
 from gcw.models import build_model
@@ -64,6 +65,13 @@ class _PairStream:
 
 def _enabled_policy(**kwargs: Any) -> AdaptiveBatchingConfig:
     return AdaptiveBatchingConfig(enabled=True, **kwargs)
+
+
+def test_adaptive_v2_has_no_admissible_production_config_until_exact_cuda_parity() -> None:
+    """A grouped V2 must not become configurable before the H200 parity blocker is resolved."""
+    assert "adaptive_batching_v2" not in to_dict(PerformanceConfig())
+    with pytest.raises(TypeError, match="adaptive_batching_v2"):
+        PerformanceConfig(adaptive_batching_v2={})  # type: ignore[call-arg]
 
 
 def test_reservation_consumes_exactly_32_source_pairs() -> None:

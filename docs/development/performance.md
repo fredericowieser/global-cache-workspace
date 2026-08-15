@@ -29,6 +29,14 @@ For every physical group, training computes each original pair's combined-token 
 
 The policy schema, ordered bands, ordering rule, weighting rule, and single-process restriction enter run metadata and the exact-resume fingerprint. Noisy Diffusion, nonzero processor/LoRA dropout, and distributed execution fail before reservation or model execution.
 
+## Adaptive V2 admission blocker
+
+There is no configurable or admissible adaptive batching V2. H200 evidence showed that ordinary contiguous grouping changes BT cache decisions at the first optimizer step: 258 of 690 semantic `select` events differed from the fixed batch-two eager oracle. Pair losses differed by 0.35–0.56% and gradient relative L2 by 3.5–6.0%. Row order, pair boundaries, and objective weighting are therefore insufficient parity conditions. Changing the physical batch shape can change BF16 kernels and rounding before discontinuous top-k cache selection.
+
+The CUDA parity harness is the admission gate. Semantic cache selection/write events must be exactly equal; all existing pair-loss, gradient, parameter, optimizer-state, RNG, checkpoint-replay, and trajectory gates remain unchanged. Numerical tolerances cannot override an event mismatch. Until an H200 receipt passes those gates, `adaptive_batching_v2` is intentionally absent from `PerformanceConfig`, so attempted V2 configuration fails closed during parsing.
+
+A future experiment may preserve the oracle only by retaining a physical shape of two for every model invocation. Candidate mechanisms include independently dispatched pair kernels or CUDA streams followed by a merge in source-pair order. Such an experiment must demonstrate that each pair uses the same kernels and algorithm choices as fixed eager execution, and that gradients are accumulated into each parameter in exactly the reference order. A batched/vmapped forward, concurrent backward into shared `.grad` tensors, unordered reductions, padding to a common width, and grouped GEMMs with changed algorithms are not admissible assumptions. Concurrency also requires proof that model state, compiled runners, checkpoint recomputation, allocator lifetimes, and RNG are stream-safe. Sequential batch-two execution is the only currently established exact design, and it offers no batching speedup.
+
 ## Bounded reference-loss execution
 
 The default `performance.reference_loss.mode: legacy` preserves the existing 256-position CUDA projection chunks and does not enter the training fingerprint. Opt-in `mode: bounded` still projects every prompt, answer, and padding position through the full vocabulary and still uses the `reference` loss backend. It changes only the physical subchunk width by limiting `batch_rows * projected_positions`; losses are reassembled into the legacy logical chunks before FP32 row reduction.

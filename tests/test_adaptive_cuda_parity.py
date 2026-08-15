@@ -160,6 +160,32 @@ def test_trace_context_restores_symbols_and_aligns_checkpoint_recomputation() ->
     assert replay["expected_replay_count"] == replay["actual_replay_count"] == 4
 
 
+def test_group_shape_selection_mismatch_is_an_unconditional_parity_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Numeric tolerances can never admit changed semantic cache decisions."""
+    original_select = CacheState.select_indices
+
+    def shape_sensitive_select(
+        state: CacheState, process_every: int = 64, topk: int = 32
+    ) -> torch.Tensor:
+        indices = original_select(state, process_every=process_every, topk=topk)
+        if state.scores.shape[0] > 2:
+            indices = indices.clone()
+            indices[:, 0] = (indices[:, 0] + 1).remainder(state.scores.shape[1])
+        return indices
+
+    monkeypatch.setattr(CacheState, "select_indices", shape_sensitive_select)
+    report = _run_tiny([8] * 32)
+
+    assert report["passed"] is False
+    for comparison in report["comparisons"]:
+        cache_events = comparison["steps"][0]["cache_events"]
+        assert cache_events["semantic_primary_equal"] is False
+        assert cache_events["passed"] is False
+        assert comparison["passed"] is False
+
+
 def test_variable_width_group_padding_is_classified_trimmed_and_semantically_aligned() -> None:
     torch.manual_seed(92)
     widths = [4, 8] * 16
