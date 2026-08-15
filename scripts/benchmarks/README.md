@@ -34,6 +34,14 @@ python -m scripts.benchmarks.triton_cache_movement \
 
 The microbenchmark compares the complete eager and candidate gather/backward operation. Its timing does not establish optimizer-step or campaign admission.
 
+## Fused structured row loss
+
+`scripts.benchmarks.fused_row_loss` compares production-shaped bounded-reference and Liger `row_sum` forward/backward boundaries, including projection-head and hidden gradients. It reports raw CUDA-event samples and peak allocator state. Run it only in an exact `liger-kernel==0.8.1` environment; isolated loss results do not establish complete-step admission.
+
+```bash
+python -m scripts.benchmarks.fused_row_loss --tokens 1024 --hidden 1024 --vocab 151936
+```
+
 ## Formal CUDA parity
 
 `scripts.benchmarks.adaptive_cuda_parity` compares fixed batch-2, adaptive eager, and adaptive compiled execution from one model state and one pre-execution reservation of 32-pair optimizer steps. It is a correctness harness, not a timer.
