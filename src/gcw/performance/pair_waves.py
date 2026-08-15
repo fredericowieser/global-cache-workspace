@@ -186,18 +186,19 @@ class PairWaveRuntime:
         for lane in range(len(wave.pair_indices)):
             authority.wait_event(self._forward_done[lane])
 
-        previous: torch.cuda.Event | None = None
+        # All root backwards and AccumulateGrad nodes are launched from the one
+        # authority stream. Autograd inserts waits for each lane's forward
+        # stream, while shared gradient accumulation remains source ordered and
+        # never changes its owning stream between pairs.
+        final_backward: torch.cuda.Event | None = None
         for lane, loss in enumerate(live_losses):
-            stream = self._streams[lane]
-            if previous is not None:
-                stream.wait_event(previous)
             pair_index = wave.pair_indices[lane]
-            with torch.cuda.stream(stream), context_factory(pair_index, pairs[pair_index]):
+            with torch.cuda.stream(authority), context_factory(pair_index, pairs[pair_index]):
                 (loss / normalizer).backward()
-                self._backward_done[lane].record(stream)
-            previous = self._backward_done[lane]
-        assert previous is not None
-        previous.synchronize()
+                self._backward_done[lane].record(authority)
+            final_backward = self._backward_done[lane]
+        assert final_backward is not None
+        final_backward.synchronize()
 
     def _quiesce(self) -> None:
         if self.device.type != "cuda":
