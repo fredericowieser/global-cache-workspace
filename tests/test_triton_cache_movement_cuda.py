@@ -128,8 +128,12 @@ def test_triton_shared_gather_layout_and_backward_match_eager(
     assert torch.equal(eager_values.grad.view(torch.int16), candidate_values.grad.view(torch.int16))
 
 
+@pytest.mark.parametrize("update_dtype", (torch.bfloat16, torch.float32), ids=("bf16", "fp32"))
 @pytest.mark.parametrize("layout", ("layer", "global"))
-def test_triton_functional_split_scatter_and_backward_match_eager(layout: str) -> None:
+def test_triton_functional_split_scatter_and_backward_match_eager(
+    layout: str,
+    update_dtype: torch.dtype,
+) -> None:
     _require_cuda_gate()
     layers, heads, history, head_dim, selected = 4, 2, 23, 16, 7
     shape = (layers, 2, heads, history, head_dim)
@@ -143,7 +147,7 @@ def test_triton_functional_split_scatter_and_backward_match_eager(layout: str) -
         if layout == "layer"
         else (2, selected, layers * 2 * heads * head_dim)
     )
-    eager_update = torch.randn(update_shape, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    eager_update = torch.randn(update_shape, device="cuda", dtype=update_dtype, requires_grad=True)
     candidate_update = eager_update.detach().clone().requires_grad_(True)
     if layout == "layer":
         update_keys, update_values = split_layer_kv(eager_update, heads, head_dim)
@@ -175,7 +179,7 @@ def test_triton_functional_split_scatter_and_backward_match_eager(layout: str) -
     assert eager_update.grad is not None and candidate_update.grad is not None
     assert torch.equal(eager_keys.grad.view(torch.int16), candidate_keys.grad.view(torch.int16))
     assert torch.equal(eager_values.grad.view(torch.int16), candidate_values.grad.view(torch.int16))
-    assert torch.equal(eager_update.grad.view(torch.int16), candidate_update.grad.view(torch.int16))
+    assert torch.equal(eager_update.grad, candidate_update.grad)
 
 
 def test_triton_cache_runtime_records_hopper_identity() -> None:

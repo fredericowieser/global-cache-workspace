@@ -23,6 +23,7 @@ class _ScatterSharedKV(torch.autograd.Function):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         ctx.global_layout = global_layout
         ctx.cache_shape = tuple(old_keys.shape)
+        ctx.update_dtype = update.dtype
         ctx.save_for_backward(indices)
         kernels = load_kernel_module(_KERNEL_MODULE, old_keys.device)
         new_key_bits, new_value_bits = kernels.copy_kv_bits(
@@ -30,13 +31,22 @@ class _ScatterSharedKV(torch.autograd.Function):
             old_values.view(torch.int16),
         )
         if indices.shape[1] > 0:
-            kernels.scatter_shared_update_bits(
-                update.view(torch.int16),
-                indices,
-                new_key_bits,
-                new_value_bits,
-                global_layout=global_layout,
-            )
+            if update.dtype == old_keys.dtype:
+                kernels.scatter_shared_update_bits(
+                    update.view(torch.int16),
+                    indices,
+                    new_key_bits,
+                    new_value_bits,
+                    global_layout=global_layout,
+                )
+            else:
+                kernels.scatter_shared_update(
+                    update,
+                    indices,
+                    new_key_bits.view(old_keys.dtype),
+                    new_value_bits.view(old_values.dtype),
+                    global_layout=global_layout,
+                )
         return new_key_bits.view(old_keys.dtype), new_value_bits.view(old_values.dtype)
 
     @staticmethod
@@ -85,6 +95,8 @@ class _ScatterSharedKV(torch.autograd.Function):
                 global_layout=ctx.global_layout,
                 zero=True,
             )
+        if update_gradient.dtype != ctx.update_dtype:
+            update_gradient = update_gradient.to(ctx.update_dtype)
         return (
             old_key_bits.view(reference.dtype),
             old_value_bits.view(reference.dtype),
@@ -217,8 +229,14 @@ def scatter_shared_kv(
         if layout == "global"
         else (layers, batch, indices.shape[1], 2 * heads * head_dim)
     )
-    if update.shape != expected or update.dtype != old_keys.dtype or update.device != old_keys.device:
-        raise ValueError(f"Triton shared cache update must have shape {expected} and match K/V")
+    if (
+        update.shape != expected
+        or update.dtype not in {old_keys.dtype, torch.float32}
+        or update.device != old_keys.device
+    ):
+        raise ValueError(
+            f"Triton shared cache update must have shape {expected}, use K/V or FP32 dtype, and share device"
+        )
     if not update.is_contiguous():
         raise ValueError("Triton shared cache update must be contiguous")
     if validate_indices:

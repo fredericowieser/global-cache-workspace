@@ -299,7 +299,7 @@ class PerLayerCacheProcessor(CacheProcessorBase):
                 cache.keys,
                 cache.values,
                 indices,
-                updated.to(cache.keys.dtype),
+                updated,
                 layout="layer",
                 validate_indices=False,
             )
@@ -385,7 +385,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 cache.keys,
                 cache.values,
                 indices,
-                updated.to(cache.keys.dtype),
+                updated,
                 layout="global",
                 validate_indices=False,
             )

@@ -154,6 +154,51 @@ def _scatter_shared_update_bits_kernel(
 
 
 @triton.jit
+def _scatter_shared_update_kernel(
+    update,
+    indices,
+    target_keys,
+    target_values,
+    history,
+    LAYERS: tl.constexpr,
+    BATCH: tl.constexpr,
+    HEADS: tl.constexpr,
+    SELECTED: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    GLOBAL_LAYOUT: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    feature_block = tl.program_id(0)
+    row = tl.program_id(1)
+    if GLOBAL_LAYOUT:
+        selected_index = row % SELECTED
+        batch = row // SELECTED
+        features = feature_block * BLOCK + tl.arange(0, BLOCK)
+        valid = features < LAYERS * 2 * HEADS * HEAD_DIM
+        layer_width = 2 * HEADS * HEAD_DIM
+        layer = features // layer_width
+        within_layer = features % layer_width
+        update_offset = row * (LAYERS * 2 * HEADS * HEAD_DIM) + features
+    else:
+        selected_index = row % SELECTED
+        batch = (row // SELECTED) % BATCH
+        layer = row // (SELECTED * BATCH)
+        features = feature_block * BLOCK + tl.arange(0, BLOCK)
+        valid = features < 2 * HEADS * HEAD_DIM
+        within_layer = features
+        update_offset = row * (2 * HEADS * HEAD_DIM) + features
+    stream = within_layer // (HEADS * HEAD_DIM)
+    within_stream = within_layer % (HEADS * HEAD_DIM)
+    head = within_stream // HEAD_DIM
+    dimension = within_stream % HEAD_DIM
+    target_position = tl.load(indices + batch * SELECTED + selected_index)
+    cache_offset = (((layer * BATCH + batch) * HEADS + head) * history + target_position) * HEAD_DIM + dimension
+    value = tl.load(update + update_offset, mask=valid, other=0.0)
+    tl.store(target_keys + cache_offset, value, mask=valid & (stream == 0))
+    tl.store(target_values + cache_offset, value, mask=valid & (stream == 1))
+
+
+@triton.jit
 def _scatter_shared_kv_grad_bits_kernel(
     grad_output,
     indices,
@@ -328,6 +373,38 @@ def scatter_shared_update_bits(
         HEAD_DIM=head_dim,
         GLOBAL_LAYOUT=global_layout,
         ZERO=zero,
+        BLOCK=block,
+        num_warps=4,
+    )
+
+
+def scatter_shared_update(
+    update: torch.Tensor,
+    indices: torch.Tensor,
+    target_keys: torch.Tensor,
+    target_values: torch.Tensor,
+    *,
+    global_layout: bool,
+) -> None:
+    """Convert FP32 updates while scattering directly into BF16 cache outputs."""
+    layers, batch, heads, history, head_dim = target_keys.shape
+    selected = indices.shape[1]
+    block = 128
+    features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    rows = batch * selected if global_layout else layers * batch * selected
+    grid = (triton.cdiv(features, block), rows)
+    _scatter_shared_update_kernel[grid](
+        update,
+        indices,
+        target_keys,
+        target_values,
+        history,
+        LAYERS=layers,
+        BATCH=batch,
+        HEADS=heads,
+        SELECTED=selected,
+        HEAD_DIM=head_dim,
+        GLOBAL_LAYOUT=global_layout,
         BLOCK=block,
         num_warps=4,
     )
