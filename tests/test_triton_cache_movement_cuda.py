@@ -5,9 +5,18 @@ import os
 import pytest
 import torch
 
-from gcw.models.cache_processors.ops import gather_per_cache_head_kv as eager_gather
+from gcw.models.cache_processors.ops import (
+    gather_cache_layers,
+    gather_per_cache_head_kv as eager_gather,
+    merge_global_kv,
+    merge_layer_kv,
+)
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.performance.triton import gather_per_cache_head_kv, require_triton_runtime
+from gcw.performance.triton import (
+    gather_per_cache_head_kv,
+    gather_shared_kv,
+    require_triton_runtime,
+)
 
 pytestmark = [pytest.mark.gpu, pytest.mark.performance]
 
@@ -71,11 +80,48 @@ def test_triton_per_cache_head_gather_supports_shared_stride_zero_indices() -> N
     values = torch.randn_like(keys)
     shared = torch.tensor([[0, 3, 11, 18], [1, 4, 12, 17]], device="cuda")
     eager_indices = shared[:, None, :].expand(-1, keys.shape[0] * keys.shape[2], -1)
-    eager = eager_gather(
-        WindowedCache(keys, values, torch.empty(2, 0, device="cuda")), eager_indices
-    )
+    eager = eager_gather(WindowedCache(keys, values, torch.empty(2, 0, device="cuda")), eager_indices)
     candidate = gather_per_cache_head_kv(keys, values, shared)
     assert torch.equal(eager.view(torch.int16), candidate.view(torch.int16))
+
+
+@pytest.mark.parametrize("layout", ("layer", "global"))
+@pytest.mark.parametrize(
+    ("layers", "heads", "history", "head_dim", "selected"),
+    ((3, 2, 19, 16, 4), (28, 2, 192, 128, 96)),
+)
+def test_triton_shared_gather_layout_and_backward_match_eager(
+    layout: str,
+    layers: int,
+    heads: int,
+    history: int,
+    head_dim: int,
+    selected: int,
+) -> None:
+    _require_cuda_gate()
+    shape = (layers, 2, heads, history, head_dim)
+    eager_keys = torch.randn(shape, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    eager_values = torch.randn(shape, device="cuda", dtype=torch.bfloat16, requires_grad=True)
+    candidate_keys = eager_keys.detach().clone().requires_grad_(True)
+    candidate_values = eager_values.detach().clone().requires_grad_(True)
+    indices = _indices(2, 1, selected, history)[:, 0].contiguous()
+    cache = WindowedCache(eager_keys, eager_values, torch.empty(2, 0, device="cuda"))
+    selected_keys, selected_values = gather_cache_layers(cache, indices)
+    eager = (
+        merge_layer_kv(selected_keys, selected_values)
+        if layout == "layer"
+        else merge_global_kv(selected_keys, selected_values)
+    )
+    candidate = gather_shared_kv(candidate_keys, candidate_values, indices, layout=layout)
+    assert torch.equal(eager.view(torch.int16), candidate.view(torch.int16))
+
+    upstream = torch.randn_like(eager)
+    eager.backward(upstream)
+    candidate.backward(upstream)
+    assert eager_keys.grad is not None and candidate_keys.grad is not None
+    assert eager_values.grad is not None and candidate_values.grad is not None
+    assert torch.equal(eager_keys.grad.view(torch.int16), candidate_keys.grad.view(torch.int16))
+    assert torch.equal(eager_values.grad.view(torch.int16), candidate_values.grad.view(torch.int16))
 
 
 def test_triton_cache_runtime_records_hopper_identity() -> None:

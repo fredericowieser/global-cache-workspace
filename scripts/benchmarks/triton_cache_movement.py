@@ -10,9 +10,18 @@ from typing import Callable
 
 import torch
 
-from gcw.models.cache_processors.ops import gather_per_cache_head_kv as eager_gather
+from gcw.models.cache_processors.ops import (
+    gather_cache_layers,
+    gather_per_cache_head_kv as eager_gather,
+    merge_global_kv,
+    merge_layer_kv,
+)
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.performance.triton import gather_per_cache_head_kv, require_triton_runtime
+from gcw.performance.triton import (
+    gather_per_cache_head_kv,
+    gather_shared_kv,
+    require_triton_runtime,
+)
 from scripts.benchmarks.harness import device_identity, timing_summary
 
 
@@ -66,11 +75,44 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     reference_values = torch.randn(shape, device=device, dtype=torch.bfloat16, requires_grad=True)
     candidate_keys = reference_keys.detach().clone().requires_grad_(True)
     candidate_values = reference_values.detach().clone().requires_grad_(True)
-    indices = _indices(2, args.layers * args.heads, args.selected, args.history, device)
+    per_head_indices = _indices(2, args.layers * args.heads, args.selected, args.history, device)
+    indices = per_head_indices if args.layout == "per_head" else per_head_indices[:, 0].contiguous()
     scores = torch.empty(2, 0, device=device)
 
-    reference_output = eager_gather(WindowedCache(reference_keys, reference_values, scores), indices)
-    candidate_output = gather_per_cache_head_kv(candidate_keys, candidate_values, indices, validate_indices=True)
+    def reference_gather(keys: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
+        cache = WindowedCache(keys, values, scores)
+        if args.layout == "per_head":
+            return eager_gather(cache, indices)
+        selected_keys, selected_values = gather_cache_layers(cache, indices)
+        return (
+            merge_layer_kv(selected_keys, selected_values)
+            if args.layout == "layer"
+            else merge_global_kv(selected_keys, selected_values)
+        )
+
+    def candidate_gather(
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        *,
+        validate_indices: bool,
+    ) -> torch.Tensor:
+        if args.layout == "per_head":
+            return gather_per_cache_head_kv(
+                keys,
+                values,
+                indices,
+                validate_indices=validate_indices,
+            )
+        return gather_shared_kv(
+            keys,
+            values,
+            indices,
+            layout=args.layout,
+            validate_indices=validate_indices,
+        )
+
+    reference_output = reference_gather(reference_keys, reference_values)
+    candidate_output = candidate_gather(candidate_keys, candidate_values, validate_indices=True)
     if not torch.equal(reference_output.view(torch.int16), candidate_output.view(torch.int16)):
         raise RuntimeError("Triton gather output differs from the eager raw payload")
     upstream = torch.randn_like(reference_output)
@@ -88,18 +130,13 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     def reference_step() -> None:
         reference_keys.grad = None
         reference_values.grad = None
-        output = eager_gather(WindowedCache(reference_keys, reference_values, scores), indices)
+        output = reference_gather(reference_keys, reference_values)
         output.backward(upstream)
 
     def candidate_step() -> None:
         candidate_keys.grad = None
         candidate_values.grad = None
-        output = gather_per_cache_head_kv(
-            candidate_keys,
-            candidate_values,
-            indices,
-            validate_indices=False,
-        )
+        output = candidate_gather(candidate_keys, candidate_values, validate_indices=False)
         output.backward(upstream)
 
     reference = _time_operation(reference_step, warmup=args.warmup, steps=args.steps)
@@ -122,6 +159,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
             "history": args.history,
             "head_dim": args.head_dim,
             "selected": args.selected,
+            "layout": args.layout,
         },
         "correctness": "bitwise_forward_and_backward",
         "reference": reference,
@@ -138,6 +176,7 @@ def main() -> None:
     parser.add_argument("--history", type=int, default=4096)
     parser.add_argument("--head-dim", type=int, default=128)
     parser.add_argument("--selected", type=int, default=96)
+    parser.add_argument("--layout", choices=("per_head", "layer", "global"), default="per_head")
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--seed", type=int, default=24)

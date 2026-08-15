@@ -23,7 +23,7 @@ Correctness parity runs in ordinary CPU pytest. GPU performance execution is opt
 
 ## Triton cache movement
 
-The initial handwritten-kernel candidate gathers contiguous layer-major BF16 K/V directly into Longshot/Icarus per-cache-head layout. It is lazy, default-off, and benchmark-only until complete H100/H200 trajectory gates pass. Forward and backward move raw 16-bit payloads without floating-point arithmetic.
+The initial handwritten-kernel candidates gather contiguous layer-major BF16 K/V directly into Longshot/Icarus per-cache-head, BT per-layer, or BGT global layout. They are lazy, default-off, and benchmark-only until complete H100/H200 trajectory gates pass. Forward and backward move raw 16-bit payloads without floating-point arithmetic. Select the microbenchmark boundary with `--layout per_head|layer|global`.
 
 ```bash
 GCW_RUN_TRITON_CACHE_CUDA_TESTS=1 pytest -q tests/test_triton_cache_movement_cuda.py

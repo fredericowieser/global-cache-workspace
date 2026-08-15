@@ -181,9 +181,9 @@ The smoke covers production field closures, concurrent first dispatch, copy and 
 
 ## Handwritten Triton cache movement
 
-The combined speed project has explicit approval to investigate narrow handwritten Triton kernels. The first candidate is intentionally movement-only: contiguous layer-major BF16 K/V is gathered directly into Longshot/Icarus per-cache-head layout using raw 16-bit loads and stores, and its custom backward scatters raw gradient payloads into zero-initialized cache-gradient tensors. It performs no floating-point arithmetic, scoring, top-k, RoPE, gating, or cache writeback.
+The combined speed project has explicit approval to investigate narrow handwritten Triton kernels. The initial candidates are intentionally movement-only. Contiguous layer-major BF16 K/V can be gathered directly into Longshot/Icarus per-cache-head layout, BT per-layer layout, or BGT global layout using raw 16-bit loads and stores; matching custom backwards scatter raw gradient payloads into zero-initialized cache-gradient tensors. They perform no floating-point arithmetic, scoring, top-k, RoPE, gating, or cache writeback.
 
-The package imports Triton lazily and currently admits only compute capability 9.0 with Triton `3.6.0`, fixed physical batch two, contiguous BF16 K/V, and sorted unique in-range indices. Explicit launch failures are fatal. The candidate has no production training selector and no campaign-admitted multiplier until both H100 and H200 forward/backward, trajectory, resume, memory, and matched full-step gates pass. `scripts.benchmarks.triton_cache_movement` measures only the isolated gather/backward boundary.
+The package imports Triton lazily and currently admits only compute capability 9.0 with Triton `3.6.0`, fixed physical batch two, contiguous BF16 K/V, and sorted unique in-range indices. Runtime/package admission and private kernel-module loading are cached after their first successful device check; explicit launch failures remain fatal. The candidates have no production training selector and no campaign-admitted multiplier until both H100 and H200 forward/backward, trajectory, resume, memory, and matched full-step gates pass. `scripts.benchmarks.triton_cache_movement` measures isolated per-head, layer, and global gather/backward boundaries.
 
 ## Change control
 

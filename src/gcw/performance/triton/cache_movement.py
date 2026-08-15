@@ -11,6 +11,62 @@ from gcw.performance.triton.runtime import load_kernel_module
 _KERNEL_MODULE = "gcw.performance.triton._cache_kernels"
 
 
+class _GatherSharedKV(torch.autograd.Function):
+    @staticmethod
+    def forward(  # type: ignore[override]
+        ctx: Any,
+        keys: torch.Tensor,
+        values: torch.Tensor,
+        indices: torch.Tensor,
+        global_layout: bool,
+    ) -> torch.Tensor:
+        ctx.cache_shape = tuple(keys.shape)
+        ctx.global_layout = global_layout
+        ctx.save_for_backward(indices)
+        layers, batch, heads, _history, head_dim = keys.shape
+        if indices.shape[1] == 0:
+            shape = (
+                (batch, 0, layers * 2 * heads * head_dim) if global_layout else (layers, batch, 0, 2 * heads * head_dim)
+            )
+            return keys.new_empty(shape)
+        kernels = load_kernel_module(_KERNEL_MODULE, keys.device)
+        output_bits = kernels.gather_shared_kv_bits(
+            keys.view(torch.int16),
+            values.view(torch.int16),
+            indices,
+            global_layout=global_layout,
+        )
+        return output_bits.view(keys.dtype)
+
+    @staticmethod
+    def backward(  # type: ignore[override]
+        ctx: Any,
+        grad_output: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, None, None]:
+        (indices,) = ctx.saved_tensors
+        cache_shape = ctx.cache_shape
+        if indices.shape[1] == 0:
+            return (
+                grad_output.new_zeros(cache_shape),
+                grad_output.new_zeros(cache_shape),
+                None,
+                None,
+            )
+        kernels = load_kernel_module(_KERNEL_MODULE, grad_output.device)
+        grad_key_bits, grad_value_bits = kernels.scatter_shared_kv_grad_bits(
+            grad_output.contiguous().view(torch.int16),
+            indices,
+            cache_shape,
+            global_layout=ctx.global_layout,
+        )
+        return (
+            grad_key_bits.view(grad_output.dtype),
+            grad_value_bits.view(grad_output.dtype),
+            None,
+            None,
+        )
+
+
 class _GatherPerCacheHeadKV(torch.autograd.Function):
     @staticmethod
     def forward(  # type: ignore[override]
@@ -53,6 +109,31 @@ class _GatherPerCacheHeadKV(torch.autograd.Function):
             cache_shape,
         )
         return grad_key_bits.view(grad_output.dtype), grad_value_bits.view(grad_output.dtype), None
+
+
+def gather_shared_kv(
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    indices: torch.Tensor,
+    *,
+    layout: str,
+    validate_indices: bool = True,
+) -> torch.Tensor:
+    """Gather shared selected positions directly into BT or BGT K/V layout.
+
+    ``layout='layer'`` returns ``[layers, 2, selected, 2 * heads * dim]``.
+    ``layout='global'`` returns ``[2, selected, layers * 2 * heads * dim]``.
+    """
+    _validate_cache_inputs(keys, values)
+    if layout not in {"layer", "global"}:
+        raise ValueError("Triton shared cache layout must be 'layer' or 'global'")
+    if indices.device != keys.device or indices.dtype != torch.long:
+        raise ValueError("Triton shared cache indices must be torch.long on the K/V device")
+    if indices.ndim != 2 or indices.shape[0] != keys.shape[1] or not indices.is_contiguous():
+        raise ValueError("Triton shared cache indices must be contiguous (2, selected)")
+    if validate_indices:
+        _validate_index_values(indices, keys.shape[3])
+    return _GatherSharedKV.apply(keys, values, indices, layout == "global")
 
 
 def gather_per_cache_head_kv(

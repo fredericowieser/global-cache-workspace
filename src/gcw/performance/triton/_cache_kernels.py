@@ -52,6 +52,99 @@ def _gather_per_cache_head_bits_kernel(
 
 
 @triton.jit
+def _gather_shared_kv_bits_kernel(
+    keys,
+    values,
+    indices,
+    output,
+    history,
+    LAYERS: tl.constexpr,
+    BATCH: tl.constexpr,
+    HEADS: tl.constexpr,
+    SELECTED: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    GLOBAL_LAYOUT: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    feature_block = tl.program_id(0)
+    row = tl.program_id(1)
+    if GLOBAL_LAYOUT:
+        selected_index = row % SELECTED
+        batch = row // SELECTED
+        features = feature_block * BLOCK + tl.arange(0, BLOCK)
+        valid = features < LAYERS * 2 * HEADS * HEAD_DIM
+        layer_width = 2 * HEADS * HEAD_DIM
+        layer = features // layer_width
+        within_layer = features % layer_width
+    else:
+        selected_index = row % SELECTED
+        batch = (row // SELECTED) % BATCH
+        layer = row // (SELECTED * BATCH)
+        features = feature_block * BLOCK + tl.arange(0, BLOCK)
+        valid = features < 2 * HEADS * HEAD_DIM
+        within_layer = features
+    stream = within_layer // (HEADS * HEAD_DIM)
+    within_stream = within_layer % (HEADS * HEAD_DIM)
+    head = within_stream // HEAD_DIM
+    dimension = within_stream % HEAD_DIM
+    source_position = tl.load(indices + batch * SELECTED + selected_index)
+    source_offset = (((layer * BATCH + batch) * HEADS + head) * history + source_position) * HEAD_DIM + dimension
+    key_bits = tl.load(keys + source_offset, mask=valid & (stream == 0), other=0)
+    value_bits = tl.load(values + source_offset, mask=valid & (stream == 1), other=0)
+    bits = tl.where(stream == 0, key_bits, value_bits)
+    if GLOBAL_LAYOUT:
+        output_offset = row * (LAYERS * 2 * HEADS * HEAD_DIM) + features
+    else:
+        output_offset = row * (2 * HEADS * HEAD_DIM) + features
+    tl.store(output + output_offset, bits, mask=valid)
+
+
+@triton.jit
+def _scatter_shared_kv_grad_bits_kernel(
+    grad_output,
+    indices,
+    grad_keys,
+    grad_values,
+    history,
+    LAYERS: tl.constexpr,
+    BATCH: tl.constexpr,
+    HEADS: tl.constexpr,
+    SELECTED: tl.constexpr,
+    HEAD_DIM: tl.constexpr,
+    GLOBAL_LAYOUT: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    feature_block = tl.program_id(0)
+    row = tl.program_id(1)
+    if GLOBAL_LAYOUT:
+        selected_index = row % SELECTED
+        batch = row // SELECTED
+        features = feature_block * BLOCK + tl.arange(0, BLOCK)
+        valid = features < LAYERS * 2 * HEADS * HEAD_DIM
+        layer_width = 2 * HEADS * HEAD_DIM
+        layer = features // layer_width
+        within_layer = features % layer_width
+        output_offset = row * (LAYERS * 2 * HEADS * HEAD_DIM) + features
+    else:
+        selected_index = row % SELECTED
+        batch = (row // SELECTED) % BATCH
+        layer = row // (SELECTED * BATCH)
+        features = feature_block * BLOCK + tl.arange(0, BLOCK)
+        valid = features < 2 * HEADS * HEAD_DIM
+        within_layer = features
+        output_offset = row * (2 * HEADS * HEAD_DIM) + features
+    stream = within_layer // (HEADS * HEAD_DIM)
+    within_stream = within_layer % (HEADS * HEAD_DIM)
+    head = within_stream // HEAD_DIM
+    dimension = within_stream % HEAD_DIM
+    source_position = tl.load(indices + batch * SELECTED + selected_index)
+    cache_offset = (((layer * BATCH + batch) * HEADS + head) * history + source_position) * HEAD_DIM + dimension
+    bits = tl.load(grad_output + output_offset, mask=valid, other=0)
+    tl.store(grad_keys + cache_offset, bits, mask=valid & (stream == 0))
+    tl.store(grad_values + cache_offset, bits, mask=valid & (stream == 1))
+
+
+@triton.jit
 def _scatter_per_cache_head_grad_bits_kernel(
     grad_output,
     indices,
@@ -129,6 +222,78 @@ def gather_per_cache_head_bits(
         num_warps=4,
     )
     return output
+
+
+def gather_shared_kv_bits(
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    indices: torch.Tensor,
+    *,
+    global_layout: bool,
+) -> torch.Tensor:
+    """Launch raw-bit shared-index gather into BT or BGT layout."""
+    layers, batch, heads, _history, head_dim = keys.shape
+    selected = indices.shape[1]
+    shape = (
+        (batch, selected, layers * 2 * heads * head_dim)
+        if global_layout
+        else (layers, batch, selected, 2 * heads * head_dim)
+    )
+    output = torch.empty(shape, dtype=torch.int16, device=keys.device)
+    block = 128
+    features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    rows = batch * selected if global_layout else layers * batch * selected
+    grid = (triton.cdiv(features, block), rows)
+    _gather_shared_kv_bits_kernel[grid](
+        keys,
+        values,
+        indices,
+        output,
+        keys.shape[3],
+        LAYERS=layers,
+        BATCH=batch,
+        HEADS=heads,
+        SELECTED=selected,
+        HEAD_DIM=head_dim,
+        GLOBAL_LAYOUT=global_layout,
+        BLOCK=block,
+        num_warps=4,
+    )
+    return output
+
+
+def scatter_shared_kv_grad_bits(
+    grad_output: torch.Tensor,
+    indices: torch.Tensor,
+    cache_shape: tuple[int, int, int, int, int],
+    *,
+    global_layout: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Launch inverse raw-bit movement for BT/BGT gather backward."""
+    layers, batch, heads, history, head_dim = cache_shape
+    selected = indices.shape[1]
+    grad_keys = torch.zeros(cache_shape, dtype=torch.int16, device=grad_output.device)
+    grad_values = torch.zeros_like(grad_keys)
+    block = 128
+    features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    rows = batch * selected if global_layout else layers * batch * selected
+    grid = (triton.cdiv(features, block), rows)
+    _scatter_shared_kv_grad_bits_kernel[grid](
+        grad_output,
+        indices,
+        grad_keys,
+        grad_values,
+        history,
+        LAYERS=layers,
+        BATCH=batch,
+        HEADS=heads,
+        SELECTED=selected,
+        HEAD_DIM=head_dim,
+        GLOBAL_LAYOUT=global_layout,
+        BLOCK=block,
+        num_warps=4,
+    )
+    return grad_keys, grad_values
 
 
 def scatter_per_cache_head_grad_bits(
