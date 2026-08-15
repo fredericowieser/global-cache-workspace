@@ -105,7 +105,7 @@ performance:
     recurrence_backend: compile
 ```
 
-The model samples `torch.randn_like` eagerly at the existing boundary before dispatch. The compiled full-graph region receives that concrete noisy state and runs only the task-directed recurrence and field evaluations. Thus compilation cannot capture, move, repeat, or fuse the random draw. Runner state lives in an external weak module-identity registry and the compiled function receives the owning diffusion module and field as explicit inputs. Deep copies and serialized models therefore cannot retain stale parameter or field bindings. The policy preserves the configured recurrence count, time conditioning, cache update equations, state dictionary, and writeback path.
+The model samples `torch.randn_like` eagerly at the existing boundary before dispatch. The compiled full-graph region receives that concrete noisy state and runs only the task-directed recurrence and field evaluations. Thus compilation cannot capture, move, repeat, or fuse the random draw. Runner state lives in an external weak module-identity registry and the compiled function receives the owning diffusion module and field as explicit inputs. Deep copies and serialized models therefore cannot retain stale parameter or field bindings. Each weak execution state also owns a lock that serializes lazy runner creation and shape specialization for that module. Unrelated diffusion modules retain independent locks. The policy preserves the configured recurrence count, time conditioning, cache update equations, state dictionary, and writeback path.
 
 This backend is independent from `GCW_CACHE_PROCESSOR_BACKEND`. The latter continues to reject noisy Diffusion-BGT. The narrow backend requires a noisy BGT model, zero cache-processor attention dropout, and single-process training. It rejects adaptive grouping, records its noise boundary and compiler options in provenance, and enters the exact-resume fingerprint only when enabled. PyTorch non-reentrant checkpoint replay's private early-stop signal passes through unchanged; every other compiler creation or runtime failure is fatal and never retries eagerly.
 
@@ -116,7 +116,7 @@ GCW_RUN_CUDA_DIFFUSION_COMPILE_TESTS=1 \
   uv run --extra gpu pytest -q tests/test_noisy_diffusion_compile_backend.py
 ```
 
-The smoke covers production field closures, copy and serialization isolation, refinement and field gradients, repeated noise/RNG events, multi-step eager/compiled AdamW trajectories, uninterrupted/resumed optimizer slots, alternating shapes, and graph/recompile telemetry. Telemetry reports lazy wrapper creation separately from positive Dynamo graph deltas, graph breaks, and bounded recompiles.
+The smoke covers production field closures, concurrent first dispatch, copy and serialization isolation, refinement and field gradients, repeated noise/RNG events, multi-step eager/compiled AdamW trajectories, uninterrupted/resumed optimizer slots, and alternating shapes. Runner creation and dispatch counts are module-local. PyTorch exposes Dynamo counters process-wide, so their absolute values and since-materialization deltas use the `gcw.noisy_diffusion_compile_telemetry.v2` diagnostic schema and are explicitly excluded from acceptance decisions. Scoped compiler backends or profiler traces provide acceptance evidence instead.
 
 
 ## Change control

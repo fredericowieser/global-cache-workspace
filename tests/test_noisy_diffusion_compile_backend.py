@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import copy
-import pickle
-import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+import os
+import pickle
+from threading import Barrier, Lock
+import time
 
 import pytest
 import torch
@@ -337,7 +340,7 @@ def test_cuda_fullgraph_compiles_field_callable_and_preserves_backward() -> None
     assert after["runner_creation_count"] == 1
     assert after["runner_dispatch_count"] == 2
     # The fake compiler creates a wrapper but performs no Dynamo compilation.
-    assert after["dynamo_new_unique_graphs"] == 0
+    assert after["dynamo_process_delta_unique_graphs"] == 0
     assert before["runner_creation_count"] == 1
 
 
@@ -451,7 +454,7 @@ def test_materialized_runner_is_not_serialized(
     assert len(compile_calls) == 2
 
 
-def test_dynamo_telemetry_counts_graphs_not_lazy_wrapper_creation(
+def test_dynamo_telemetry_labels_process_wide_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     try:
@@ -482,7 +485,7 @@ def test_dynamo_telemetry_counts_graphs_not_lazy_wrapper_creation(
     )
     before = noisy_diffusion_compile_telemetry(diffusion)
     assert before["runner_creation_count"] == 0
-    assert before["dynamo_new_unique_graphs"] == 0
+    assert before["dynamo_process_delta_unique_graphs"] == 0
 
     field = _Field(4)
     for width in (3, 3, 5, 3, 5):
@@ -493,9 +496,88 @@ def test_dynamo_telemetry_counts_graphs_not_lazy_wrapper_creation(
     assert after["runner_creation_count"] == 1
     assert after["runner_dispatch_count"] == 5
     assert compile_counter.frame_count == 2
-    assert int(after["dynamo_new_unique_graphs"]) > 0
-    assert after["dynamo_new_graph_breaks"] == 0
-    assert int(after["dynamo_new_recompiles"]) <= 1
+    assert after["telemetry_schema"] == "gcw.noisy_diffusion_compile_telemetry.v2"
+    assert after["dynamo_process_diagnostics_acceptance_eligible"] is False
+    # CompileCounterWithBackend is scoped to this runner; process counters are not.
+    assert int(after["dynamo_process_delta_unique_graphs"]) >= 0
+    assert int(after["dynamo_process_delta_graph_breaks"]) >= 0
+    assert int(after["dynamo_process_delta_recompiles"]) >= 0
+
+
+def test_concurrent_first_dispatch_serializes_lazy_shape_specialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compile_calls: list[dict[str, object]] = []
+    call_guard = Lock()
+    active_calls = 0
+    maximum_active_calls = 0
+
+    def fake_compile(function: Callable[..., torch.Tensor], **kwargs: object):
+        nonlocal active_calls, maximum_active_calls
+        compile_calls.append(dict(kwargs))
+
+        def compiled(*args: object, **inner_kwargs: object) -> torch.Tensor:
+            nonlocal active_calls, maximum_active_calls
+            with call_guard:
+                active_calls += 1
+                maximum_active_calls = max(maximum_active_calls, active_calls)
+            try:
+                # An unsafe backend would overlap here. Avoid invoking real Dynamo
+                # concurrently because that failure can terminate the test process.
+                time.sleep(0.02)
+                return function(*args, **inner_kwargs)
+            finally:
+                with call_guard:
+                    active_calls -= 1
+
+        return compiled
+
+    monkeypatch.setattr(torch, "compile", fake_compile)
+    torch.manual_seed(227)
+    config = tiny_diffusion_config()
+    assert config.diffusion_processor is not None
+    diffusion = TaskDirectedDiffusion(4, config.diffusion_processor)
+    eager = copy.deepcopy(diffusion)
+    field = _Field(4)
+    eager_field = copy.deepcopy(field)
+    configure_noisy_diffusion_recurrence_backend(
+        _DiffusionHolder(diffusion), config, _compiled_policy()
+    )
+    values = [torch.randn(1, width, 4, requires_grad=True) for width in (3, 5)]
+    eager_values = [value.detach().clone().requires_grad_(True) for value in values]
+    start = Barrier(3)
+
+    def dispatch(index: int) -> torch.Tensor:
+        start.wait()
+        value = values[index]
+        return diffusion(value, field, noise=torch.zeros_like(value))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(dispatch, index) for index in range(2)]
+        start.wait()
+        outputs = [future.result(timeout=5) for future in futures]
+
+    expected_outputs = [
+        eager(value, eager_field, noise=torch.zeros_like(value))
+        for value in eager_values
+    ]
+    for output, expected in zip(outputs, expected_outputs, strict=True):
+        torch.testing.assert_close(output, expected, atol=0, rtol=0)
+    sum(output.square().mean() for output in outputs).backward()
+
+    assert compile_calls == [{"backend": "inductor", "dynamic": False, "fullgraph": True}]
+    assert maximum_active_calls == 1
+    assert active_calls == 0
+    assert all(value.grad is not None for value in values)
+    assert diffusion.refinement_gate.grad is not None
+    assert torch.count_nonzero(diffusion.refinement_gate.grad) > 0
+    assert field.projection.weight.grad is not None
+    assert torch.count_nonzero(field.projection.weight.grad) > 0
+    assert eager.refinement_gate.grad is None
+    assert eager_field.projection.weight.grad is None
+    telemetry = noisy_diffusion_compile_telemetry(diffusion)
+    assert telemetry["runner_creation_count"] == 1
+    assert telemetry["runner_dispatch_count"] == 2
 
 
 def test_compiled_boundary_preserves_checkpoint_early_stop_exactly(
@@ -760,7 +842,6 @@ def test_cuda_production_closure_optimizer_resume_and_graph_telemetry() -> None:
     eager_cuda_rng = torch.cuda.get_rng_state().clone()
     torch.set_rng_state(initial_cpu_rng)
     torch.cuda.set_rng_state(initial_cuda_rng)
-    telemetry_before = noisy_diffusion_compile_telemetry(compiled.diffusion)  # type: ignore[arg-type]
     compiled_losses = [
         _cuda_cache_processor_step(compiled, compiled_optimizer, value, positions)
         for _ in range(4)
@@ -781,11 +862,12 @@ def test_cuda_production_closure_optimizer_resume_and_graph_telemetry() -> None:
     assert torch.count_nonzero(compiled.layers[0].down_proj.weight.grad) > 0
     assert telemetry_after["runner_creation_count"] == 1
     assert telemetry_after["runner_dispatch_count"] == 4
-    assert int(telemetry_after["dynamo_new_unique_graphs"]) > int(
-        telemetry_before["dynamo_new_unique_graphs"]
-    )
-    assert telemetry_after["dynamo_new_graph_breaks"] == 0
-    assert int(telemetry_after["dynamo_new_recompiles"]) <= 1
+    assert telemetry_after["telemetry_schema"] == "gcw.noisy_diffusion_compile_telemetry.v2"
+    assert telemetry_after["dynamo_process_diagnostics_acceptance_eligible"] is False
+    # Process-global Dynamo diagnostics are informational, never acceptance gates.
+    assert int(telemetry_after["dynamo_process_delta_unique_graphs"]) >= 0
+    assert int(telemetry_after["dynamo_process_delta_graph_breaks"]) >= 0
+    assert int(telemetry_after["dynamo_process_delta_recompiles"]) >= 0
 
     first = copy.deepcopy(template)
     configure_noisy_diffusion_recurrence_backend(first, config, _compiled_policy())

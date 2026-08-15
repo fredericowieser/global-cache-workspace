@@ -8,7 +8,8 @@ recurrence and its field evaluations.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
+from _thread import LockType
 from threading import Lock
 from typing import Any, Literal, cast
 from weakref import WeakKeyDictionary
@@ -52,9 +53,10 @@ class _DynamoCounters:
 
 @dataclass
 class _CompiledRunnerState:
-    runner: UnboundDiffusionRecurrenceRunner
-    baseline: _DynamoCounters
+    runner: UnboundDiffusionRecurrenceRunner | None = None
+    process_counter_baseline: _DynamoCounters | None = None
     dispatch_count: int = 0
+    execution_lock: LockType = dataclass_field(default_factory=Lock, repr=False)
 
 
 _compiled_runner_states: WeakKeyDictionary[TaskDirectedDiffusion, _CompiledRunnerState] = (
@@ -130,36 +132,45 @@ def noisy_diffusion_recurrence_backend_metadata(
     }
 
 
-def noisy_diffusion_compile_telemetry(diffusion: TaskDirectedDiffusion) -> dict[str, int | bool]:
-    """Return module-local wrapper and Dynamo graph evidence.
+def noisy_diffusion_compile_telemetry(
+    diffusion: TaskDirectedDiffusion,
+) -> dict[str, int | bool | str]:
+    """Return module-local dispatch evidence and process-wide Dynamo diagnostics.
 
-    ``runner_creation_count`` records only creation of the lazy ``torch.compile``
-    wrapper. ``dynamo_new_*`` records actual graph work after wrapper creation.
-    Process-wide absolute counters are included only as supporting diagnostics.
+    Runner ownership, creation, and dispatch counts belong to ``diffusion``. Dynamo
+    exposes only process-global counters, so both their absolute values and deltas
+    since this runner materialized may include unrelated compilations. Those fields
+    are diagnostics only and must not participate in acceptance decisions.
     """
-    current = _dynamo_counters()
     with _compiled_recurrence_lock:
         runner_state = _compiled_runner_states.get(diffusion)
-        if runner_state is None:
-            baseline = current
-            dispatch_count = 0
-            runner_owned = False
-            runner_creation_count = 0
-        else:
-            baseline = runner_state.baseline
+    if runner_state is None:
+        current = _dynamo_counters()
+        baseline = current
+        dispatch_count = 0
+        runner_owned = False
+        runner_creation_count = 0
+    else:
+        with runner_state.execution_lock:
+            # Sample after any in-flight specialization finishes. The counters remain
+            # process-wide and may still include unrelated compilation activity.
+            current = _dynamo_counters()
+            baseline = runner_state.process_counter_baseline or current
             dispatch_count = runner_state.dispatch_count
-            runner_owned = True
-            runner_creation_count = 1
+            runner_owned = runner_state.runner is not None
+            runner_creation_count = int(runner_owned)
     unique_graph_delta = max(0, current.unique_graphs - baseline.unique_graphs)
     graph_break_delta = max(0, current.graph_breaks - baseline.graph_breaks)
     recompile_delta = max(0, current.recompiles - baseline.recompiles)
     return {
+        "telemetry_schema": "gcw.noisy_diffusion_compile_telemetry.v2",
         "runner_owned": runner_owned,
         "runner_creation_count": runner_creation_count,
         "runner_dispatch_count": dispatch_count,
-        "dynamo_new_unique_graphs": unique_graph_delta,
-        "dynamo_new_graph_breaks": graph_break_delta,
-        "dynamo_new_recompiles": recompile_delta,
+        "dynamo_process_diagnostics_acceptance_eligible": False,
+        "dynamo_process_delta_unique_graphs": unique_graph_delta,
+        "dynamo_process_delta_graph_breaks": graph_break_delta,
+        "dynamo_process_delta_recompiles": recompile_delta,
         "dynamo_process_unique_graphs": current.unique_graphs,
         "dynamo_process_graph_breaks": current.graph_breaks,
         "dynamo_process_recompiles": current.recompiles,
@@ -198,17 +209,21 @@ def run_noisy_diffusion_recurrence(
         return diffusion.deterministic_recurrence(state, bottleneck, field)
     if backend != "compile":
         raise ValueError(f"unsupported noisy-Diffusion recurrence backend: {backend}")
-    runner_state = _get_compiled_recurrence_runner(diffusion)
-    with _compiled_recurrence_lock:
+    runner_state = _get_or_create_compiled_recurrence_state(diffusion)
+    # Dynamo/Inductor lazy specialization is not safe under concurrent first calls.
+    # Serialize materialization and dispatch per diffusion module, while unrelated
+    # modules retain independent execution locks.
+    with runner_state.execution_lock:
+        runner = _materialize_compiled_recurrence_runner(runner_state)
         runner_state.dispatch_count += 1
-    try:
-        return runner_state.runner(diffusion, state, bottleneck, field)
-    except Exception as error:
-        if is_non_reentrant_checkpoint_early_stop(error):
-            raise
-        raise RuntimeError(
-            "compiled noisy-Diffusion recurrence failed; eager fallback is disabled"
-        ) from error
+        try:
+            return runner(diffusion, state, bottleneck, field)
+        except Exception as error:
+            if is_non_reentrant_checkpoint_early_stop(error):
+                raise
+            raise RuntimeError(
+                "compiled noisy-Diffusion recurrence failed; eager fallback is disabled"
+            ) from error
 
 
 def _run_unbound_deterministic_recurrence(
@@ -221,31 +236,39 @@ def _run_unbound_deterministic_recurrence(
     return diffusion.deterministic_recurrence(state, bottleneck, field)
 
 
-def _get_compiled_recurrence_runner(
+def _get_or_create_compiled_recurrence_state(
     diffusion: TaskDirectedDiffusion,
 ) -> _CompiledRunnerState:
+    """Return weak execution state without binding it to model serialization."""
     with _compiled_recurrence_lock:
         runner_state = _compiled_runner_states.get(diffusion)
-        if runner_state is not None:
-            return runner_state
-        compiler = require_torch_compile(
-            "performance.noisy_diffusion.recurrence_backend=compile"
-        )
-        try:
-            runner = cast(
-                UnboundDiffusionRecurrenceRunner,
-                compiler(_run_unbound_deterministic_recurrence, **_COMPILE_OPTIONS),
-            )
-        except Exception as error:
-            raise RuntimeError(
-                "failed to create compiled noisy-Diffusion recurrence; "
-                "eager fallback is disabled"
-            ) from error
-        # torch.compile creates a lazy wrapper. Capture counters afterward so
-        # telemetry distinguishes wrapper construction from real graph compilation.
-        runner_state = _CompiledRunnerState(
-            runner=runner,
-            baseline=_dynamo_counters(),
-        )
-        _compiled_runner_states[diffusion] = runner_state
+        if runner_state is None:
+            runner_state = _CompiledRunnerState()
+            _compiled_runner_states[diffusion] = runner_state
         return runner_state
+
+
+def _materialize_compiled_recurrence_runner(
+    runner_state: _CompiledRunnerState,
+) -> UnboundDiffusionRecurrenceRunner:
+    """Create one lazy compile wrapper while holding the state's execution lock."""
+    if runner_state.runner is not None:
+        return runner_state.runner
+    compiler = require_torch_compile(
+        "performance.noisy_diffusion.recurrence_backend=compile"
+    )
+    try:
+        runner = cast(
+            UnboundDiffusionRecurrenceRunner,
+            compiler(_run_unbound_deterministic_recurrence, **_COMPILE_OPTIONS),
+        )
+    except Exception as error:
+        raise RuntimeError(
+            "failed to create compiled noisy-Diffusion recurrence; "
+            "eager fallback is disabled"
+        ) from error
+    # torch.compile returns a lazy wrapper. Process-global diagnostics begin after
+    # wrapper creation, while the execution lock also protects first specialization.
+    runner_state.runner = runner
+    runner_state.process_counter_baseline = _dynamo_counters()
+    return runner
