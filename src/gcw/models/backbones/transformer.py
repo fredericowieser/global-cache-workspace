@@ -13,10 +13,14 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import LossBackend, ModelConfig
 from gcw.models.backbones.base import Backbone
-from gcw.performance.backends.qwen3 import Qwen3BackboneChunkBackend, run_qwen3_backbone_chunk_region
+from gcw.models.cache_processors.base import cache_processor_recomputation, cache_processor_recomputation_id
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.models.cache_processors.base import cache_processor_recomputation, cache_processor_recomputation_id
+from gcw.performance.backends.qwen3 import (
+    Qwen3BackboneChunkBackend,
+    run_qwen3_backbone_chunk_region,
+    run_qwen3_initial_backbone_chunk_region,
+)
 from gcw.performance.losses import (
     bounded_reference_loss,
     liger_fused_linear_cross_entropy,
@@ -763,10 +767,23 @@ class TF(Backbone):
             raise ValueError("inputs_embeds and cache batch sizes must match")
 
         has_past = cache is not None and cache.scores.numel() > 0
+        full_qwen3_window = self.config.family == "qwen3" and inputs_embeds.shape[1] == 64
         if (
-            self.backbone_chunk_backend == "compile"
-            and self.config.family == "qwen3"
-            and inputs_embeds.shape[1] == 64
+            self.backbone_chunk_backend == "compile_full_windows"
+            and full_qwen3_window
+            and not has_past
+            and start_pos == 0
+        ):
+            return self._forward_compiled_initial_embedding_chunk(
+                inputs_embeds,
+                start_pos,
+                cache,
+                logits=logits,
+                cache_format=cache_format,
+            )
+        if (
+            self.backbone_chunk_backend in {"compile", "compile_full_windows"}
+            and full_qwen3_window
             and has_past
         ):
             return self._forward_compiled_embedding_chunk(
@@ -800,6 +817,32 @@ class TF(Backbone):
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
             return out, WindowedCache.from_lists(keys, values, new_scores)
         return out, CacheState(keys, values, new_scores)
+
+    def _forward_compiled_initial_embedding_chunk(
+        self,
+        inputs_embeds: torch.Tensor,
+        start_pos: int,
+        cache: CacheLike | None,
+        *,
+        logits: bool,
+        cache_format: str,
+    ) -> tuple[torch.Tensor, CacheLike]:
+        if start_pos != 0:
+            raise RuntimeError("compiled initial Qwen3 chunks require start_pos=0")
+        cos, sin = self.rotary.get_range(
+            start_pos,
+            inputs_embeds.shape[1],
+            inputs_embeds.device,
+            _autocast_dtype(inputs_embeds.device) or inputs_embeds.dtype,
+        )
+        hidden, keys, values, chunk_scores = run_qwen3_initial_backbone_chunk_region(
+            self, self.backbone_chunk_backend, inputs_embeds, cos, sin
+        )
+        out = self.logits_from_hidden(hidden) if logits else hidden
+        if cache_format == "windowed" or isinstance(cache, WindowedCache):
+            return out, WindowedCache(keys, values, chunk_scores)
+        return out, CacheState(list(keys.unbind(0)), list(values.unbind(0)), chunk_scores)
+
 
     def _forward_compiled_embedding_chunk(
         self,

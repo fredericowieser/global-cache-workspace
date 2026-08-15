@@ -135,6 +135,14 @@ BT processor compilation is independent: `GCW_BT_PROCESSOR_BACKEND=compile` may 
 
 The compiled callable registers no parameters or buffers, so state-dict keys remain unchanged. Run metadata records the selected backend, region, dynamic-shape policy, compile options, Torch version, and fingerprint. Exact resume rejects a changed backend fingerprint.
 
+To compile the initial complete 64-token window as a separate static full graph, use:
+
+```yaml
+backbone_chunk_backend: compile_full_windows
+```
+
+This version compiles two pure tensor regions. The initial region receives embeddings and rotary tensors, uses Flash SDPA's native causal boundary, and returns stacked K/V and scores. Later full windows retain the dynamic-past compiled region described above. Partial windows remain eager. The older `compile` value and its version-1 fingerprint remain unchanged; `compile_full_windows` uses a distinct version-2 fingerprint. The option is state-dict neutral, frozen-Qwen3-only, fail closed, and incompatible with FSDP and whole-model compilation. Run the opt-in CUDA smoke with `GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1` before using a new Torch/CUDA stack.
+
 ### Native activation checkpointing
 
 Two independent policies reduce different activation classes. Standard BT and BGT processors can checkpoint each processor transformer layer:

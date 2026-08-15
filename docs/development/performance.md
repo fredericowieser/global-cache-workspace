@@ -37,6 +37,21 @@ The default `performance.reference_loss.mode: legacy` preserves the existing 256
 
 Evaluation and configurations that omit the policy remain on the legacy reference path.
 
+## Compiled Qwen3 full windows
+
+`backbone_chunk_backend: compile` retains the version-1 behavior: the initial and partial windows stay eager, while complete 64-token windows with past cache use one dynamic full-graph region. `compile_full_windows` is a separate version-2 policy. It adds one static full-graph region for the initial complete window and retains the existing dynamic region for later complete windows.
+
+The initial region accepts tensors only, closes over the frozen Qwen3 layers without registering state, preserves Flash SDPA with `is_causal=True`, and returns hidden states plus stacked K/V and scores. Its requested compiler failure is fatal. Partial windows remain eager. The backend selection, both region identities, compiler options, causal boundaries, and Torch version enter provenance and the exact-resume fingerprint. Version-1 payloads and fingerprints remain unchanged.
+
+The CUDA smoke is opt-in because ordinary CPU CI must not initialize Inductor CUDA state:
+
+```bash
+GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1 \
+  uv run --extra gpu --group dev pytest -q \
+  tests/test_qwen3_backbone_compile.py::test_compiled_initial_full_window_cuda_forward_backward_smoke
+```
+
+
 ## Change control
 
 Moving code into this package must not change parameter names, buffers, checkpoint payloads, selected indices, or eager defaults. Changes to compiler regions, batching, checkpointing, or loss execution require targeted parity tests and CUDA acceptance canaries. Handwritten kernels remain separately approval-gated.

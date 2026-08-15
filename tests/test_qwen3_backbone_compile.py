@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 import json
+import os
 
 import pytest
 import torch
@@ -10,6 +11,7 @@ import torch
 from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, ResumeConfig, TrainConfig
 from gcw.models import build_model
 from gcw.performance.backends.qwen3 import (
+    Qwen3BackboneChunkBackend,
     configure_qwen3_backbone_chunk_backend,
     qwen3_backbone_chunk_backend_metadata,
 )
@@ -19,6 +21,7 @@ from gcw.performance.checkpointing import (
 )
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.model import LanguageModel
+from gcw.provenance import canonical_json_sha256
 from gcw.training.checkpoint import CheckpointCompatibilityError
 from gcw.training.core import (
     _apply_trainable_policy,
@@ -82,9 +85,11 @@ def _install_fake_compiler(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict[s
     return compile_calls, qwen_past_lengths
 
 
-def _freeze_and_compile(model: LanguageModel) -> None:
+def _freeze_and_compile(
+    model: LanguageModel, backend: Qwen3BackboneChunkBackend = "compile"
+) -> None:
     _apply_trainable_policy(model, "cache_processor")
-    configure_qwen3_backbone_chunk_backend(model, "compile")
+    configure_qwen3_backbone_chunk_backend(model, backend)
 
 
 def test_fake_compiler_dispatches_one_dynamic_region_not_the_window_loop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,15 +104,17 @@ def test_fake_compiler_dispatches_one_dynamic_region_not_the_window_loop(monkeyp
     assert model.cache_processor.pop_call_count() == 2
 
 
+@pytest.mark.parametrize("backend", ["compile", "compile_full_windows"])
 def test_compiled_region_preserves_forward_backward_and_processor_gradients(
     monkeypatch: pytest.MonkeyPatch,
+    backend: Qwen3BackboneChunkBackend,
 ) -> None:
     torch.manual_seed(17)
     eager = _model()
     compiled = copy.deepcopy(eager)
     _apply_trainable_policy(eager, "cache_processor")
     _install_fake_compiler(monkeypatch)
-    _freeze_and_compile(compiled)
+    _freeze_and_compile(compiled, backend)
     inputs = torch.randint(0, eager.config.vocab_size, (2, 128))
     targets = torch.randint(0, eager.config.vocab_size, (2, 128))
 
@@ -184,6 +191,32 @@ def test_dynamic_past_lengths_reuse_one_dynamo_graph(monkeypatch: pytest.MonkeyP
             past_len,
             cache,
         )
+
+    assert counter.frame_count == 1
+
+
+def test_initial_full_window_is_one_dynamo_fullgraph(monkeypatch: pytest.MonkeyPatch) -> None:
+    try:
+        from torch._dynamo.testing import CompileCounterWithBackend
+    except ImportError:  # pragma: no cover - version-dependent test support
+        pytest.skip("Torch Dynamo compile counter is unavailable")
+    real_compile = torch.compile
+    counter = CompileCounterWithBackend("eager")
+
+    def counting_compile(function, **kwargs):
+        backend = counter if kwargs.get("dynamic") is False else "eager"
+        return real_compile(
+            function,
+            backend=backend,
+            dynamic=kwargs.get("dynamic"),
+            fullgraph=kwargs.get("fullgraph", False),
+        )
+
+    monkeypatch.setattr(torch, "compile", counting_compile)
+    model = _model()
+    _apply_trainable_policy(model, "cache_processor")
+    configure_qwen3_backbone_chunk_backend(model, "compile_full_windows")
+    model.backbone.forward_chunk(torch.randint(0, model.config.vocab_size, (1, 64)), 0)
 
     assert counter.frame_count == 1
 
@@ -304,7 +337,7 @@ def test_config_is_explicit_and_rejects_unsupported_combinations() -> None:
     )
     assert accepted.backbone_chunk_backend == "compile"
 
-    with pytest.raises(ValueError, match="must be 'eager' or 'compile'"):
+    with pytest.raises(ValueError, match="must be 'eager', 'compile', or 'compile_full_windows'"):
         replace(accepted, backbone_chunk_backend="invalid")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="family='qwen3'"):
         replace(accepted, model=replace(accepted.model, family="smollm"))
@@ -350,3 +383,183 @@ def test_backend_fingerprint_blocks_resume(tmp_path) -> None:
     )
     with pytest.raises(CheckpointCompatibilityError, match="qwen3_backbone_chunk_backend_fingerprint"):
         train(compiled)
+
+
+def test_compile_full_windows_dispatches_initial_and_past_regions(monkeypatch: pytest.MonkeyPatch) -> None:
+    compile_calls, past_lengths = _install_fake_compiler(monkeypatch)
+    model = _model()
+    _apply_trainable_policy(model, "cache_processor")
+    configure_qwen3_backbone_chunk_backend(model, "compile_full_windows")
+
+    model(torch.randint(0, model.config.vocab_size, (1, 141)))
+
+    assert compile_calls == [
+        {"backend": "inductor", "dynamic": False, "fullgraph": True},
+        {"backend": "inductor", "dynamic": True, "fullgraph": True},
+    ]
+    assert past_lengths == [64]
+    assert model.cache_processor.pop_call_count() == 2
+
+
+def test_compiled_initial_region_preserves_outputs_cache_scores_and_input_gradients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch.manual_seed(53)
+    eager_model = _model()
+    compiled_model = copy.deepcopy(eager_model)
+    _apply_trainable_policy(eager_model, "cache_processor")
+    _install_fake_compiler(monkeypatch)
+    _apply_trainable_policy(compiled_model, "cache_processor")
+    configure_qwen3_backbone_chunk_backend(compiled_model, "compile_full_windows")
+
+    eager_inputs = eager_model.backbone.embed_tokens(
+        torch.randint(0, eager_model.config.vocab_size, (2, 64))
+    ).detach().requires_grad_(True)
+    compiled_inputs = eager_inputs.detach().clone().requires_grad_(True)
+    eager_out, eager_cache = eager_model.backbone.forward_embedding_chunk(
+        eager_inputs, 0, logits=False, cache_format="windowed"
+    )
+    compiled_out, compiled_cache = compiled_model.backbone.forward_embedding_chunk(
+        compiled_inputs, 0, logits=False, cache_format="windowed"
+    )
+
+    torch.testing.assert_close(compiled_out, eager_out, atol=2e-6, rtol=2e-5)
+    torch.testing.assert_close(compiled_cache.keys, eager_cache.keys, atol=2e-6, rtol=2e-5)
+    torch.testing.assert_close(compiled_cache.values, eager_cache.values, atol=2e-6, rtol=2e-5)
+    torch.testing.assert_close(compiled_cache.scores, eager_cache.scores, atol=2e-6, rtol=2e-5)
+    eager_objective = eager_out.square().mean() + eager_cache.keys.square().mean()
+    compiled_objective = compiled_out.square().mean() + compiled_cache.keys.square().mean()
+    eager_objective.backward()
+    compiled_objective.backward()
+    assert eager_inputs.grad is not None
+    assert compiled_inputs.grad is not None
+    torch.testing.assert_close(compiled_inputs.grad, eager_inputs.grad, atol=2e-5, rtol=2e-4)
+
+
+def test_compiled_initial_region_preserves_flash_causal_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gcw.models.backbones import transformer as transformer_module
+
+    calls: list[tuple[torch.Tensor | None, bool]] = []
+    original = transformer_module.flash_sdpa
+
+    def recording_flash_sdpa(q, k, v, **kwargs):
+        calls.append((kwargs.get("attn_mask"), bool(kwargs.get("is_causal", False))))
+        return original(q, k, v, **kwargs)
+
+    _install_fake_compiler(monkeypatch)
+    monkeypatch.setattr(transformer_module, "flash_sdpa", recording_flash_sdpa)
+    model = _model()
+    _apply_trainable_policy(model, "cache_processor")
+    configure_qwen3_backbone_chunk_backend(model, "compile_full_windows")
+    model.backbone.forward_chunk(torch.randint(0, model.config.vocab_size, (1, 64)), 0)
+
+    assert calls
+    assert all(mask is None and is_causal for mask, is_causal in calls)
+
+
+def test_compile_full_windows_is_state_neutral_versioned_and_preserves_v1_fingerprints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_compiler(monkeypatch)
+    model = _model()
+    before = {name: tensor.clone() for name, tensor in model.state_dict().items()}
+    _apply_trainable_policy(model, "cache_processor")
+    configure_qwen3_backbone_chunk_backend(model, "compile_full_windows")
+    model(torch.randint(0, model.config.vocab_size, (1, 128)))
+
+    assert tuple(model.state_dict()) == tuple(before)
+    assert all(torch.equal(value, model.state_dict()[name]) for name, value in before.items())
+    for backend in ("eager", "compile"):
+        expected_v1 = {
+            "schema": "gcw.qwen3_backbone_chunk_backend.v1",
+            "effective_backend": backend,
+            "region": "gcw.models.backbones.backend._qwen3_backbone_chunk_tensor_region",
+            "chunk_steps": 64,
+            "dynamic_past_length": backend == "compile",
+            "compile_options": (
+                {"backend": "inductor", "dynamic": True, "fullgraph": True}
+                if backend == "compile"
+                else None
+            ),
+            "attention_bias_boundary": "causal_lower_right",
+            "initial_chunk": "eager",
+            "partial_chunks": "eager",
+            "torch_version": str(torch.__version__),
+        }
+        legacy_metadata = qwen3_backbone_chunk_backend_metadata(backend)
+        assert {key: legacy_metadata[key] for key in expected_v1} == expected_v1
+        assert legacy_metadata["fingerprint_sha256"] == canonical_json_sha256(expected_v1)
+    metadata = qwen3_backbone_chunk_backend_metadata("compile_full_windows")
+    assert metadata["schema"] == "gcw.qwen3_backbone_chunk_backend.v2"
+    assert metadata["initial_chunk"] == "compile_fullgraph"
+    assert metadata["partial_chunks"] == "eager"
+    assert metadata["effective_backend"] == "compile_full_windows"
+    assert metadata["fingerprint_sha256"] not in {
+        qwen3_backbone_chunk_backend_metadata("eager")["fingerprint_sha256"],
+        qwen3_backbone_chunk_backend_metadata("compile")["fingerprint_sha256"],
+    }
+
+
+def test_compile_full_windows_config_is_explicit_and_rejects_fsdp() -> None:
+    accepted = TrainConfig(
+        model=_model_config(),
+        data=DataConfig(kind="random"),
+        trainable="cache_processor",
+        backbone_chunk_backend="compile_full_windows",
+        sequence_len=128,
+    )
+    assert accepted.backbone_chunk_backend == "compile_full_windows"
+    with pytest.raises(ValueError, match="not supported with FSDP"):
+        replace(accepted, distributed="fsdp")
+
+
+def test_compile_full_windows_fails_closed_on_initial_runner_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = _model()
+    _apply_trainable_policy(model, "cache_processor")
+
+    def fake_compile(_function, **_kwargs):
+        def fail(*_args, **_inner_kwargs):
+            raise RuntimeError("initial inductor failed")
+
+        return fail
+
+    monkeypatch.setattr(torch, "compile", fake_compile)
+    configure_qwen3_backbone_chunk_backend(model, "compile_full_windows")
+    with pytest.raises(RuntimeError, match="compiled initial Qwen3") as error:
+        model(torch.randint(0, model.config.vocab_size, (1, 128)))
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert str(error.value.__cause__) == "initial inductor failed"
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(
+    os.environ.get("GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE") != "1"
+    or not torch.cuda.is_available()
+    or not torch.cuda.is_bf16_supported(),
+    reason="set GCW_RUN_QWEN3_INITIAL_COMPILE_CUDA_SMOKE=1 on a BF16 CUDA host",
+)
+def test_compiled_initial_full_window_cuda_forward_backward_smoke() -> None:
+    torch.manual_seed(61)
+    eager = _model().cuda()
+    compiled = copy.deepcopy(eager)
+    _apply_trainable_policy(eager, "cache_processor")
+    _apply_trainable_policy(compiled, "cache_processor")
+    configure_qwen3_backbone_chunk_backend(compiled, "compile_full_windows")
+    inputs = torch.randint(0, eager.config.vocab_size, (2, 128), device="cuda")
+    targets = torch.randint(0, eager.config.vocab_size, (2, 128), device="cuda")
+
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        eager_loss = eager(inputs, targets)
+        compiled_loss = compiled(inputs, targets)
+    eager_loss.backward()
+    compiled_loss.backward()
+
+    torch.testing.assert_close(compiled_loss, eager_loss, atol=3e-3, rtol=3e-3)
+    for eager_parameter, compiled_parameter in zip(
+        eager.cache_processor.parameters(), compiled.cache_processor.parameters(), strict=True
+    ):
+        assert eager_parameter.grad is not None
+        assert compiled_parameter.grad is not None
+        torch.testing.assert_close(compiled_parameter.grad, eager_parameter.grad, atol=3e-3, rtol=3e-3)

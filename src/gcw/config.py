@@ -27,7 +27,7 @@ CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
 ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
-BackboneChunkBackend = Literal["eager", "compile"]
+BackboneChunkBackend = Literal["eager", "compile", "compile_full_windows"]
 LossBackend = Literal["reference", "target_only", "liger"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
@@ -657,21 +657,28 @@ class TrainConfig:
             raise ValueError(
                 "activation_checkpointing='standard_processor_layers' requires a BT or BGT cache processor"
             )
-        if self.backbone_chunk_backend not in {"eager", "compile"}:
-            raise ValueError("backbone_chunk_backend must be 'eager' or 'compile'")
-        if self.backbone_chunk_backend == "compile":
+        if self.backbone_chunk_backend not in {"eager", "compile", "compile_full_windows"}:
+            raise ValueError(
+                "backbone_chunk_backend must be 'eager', 'compile', or 'compile_full_windows'"
+            )
+        if self.backbone_chunk_backend != "eager":
+            selected_backend = self.backbone_chunk_backend
             if self.model.family != "qwen3":
-                raise ValueError("backbone_chunk_backend=compile requires model.family='qwen3'")
+                raise ValueError(f"backbone_chunk_backend={selected_backend} requires model.family='qwen3'")
             if self.model.variant == "tf" or self.model.cache_processor is None:
-                raise ValueError("backbone_chunk_backend=compile requires a windowed cache processor")
+                raise ValueError(
+                    f"backbone_chunk_backend={selected_backend} requires a windowed cache processor"
+                )
             if self.trainable != "cache_processor":
-                raise ValueError("backbone_chunk_backend=compile requires trainable='cache_processor'")
+                raise ValueError(f"backbone_chunk_backend={selected_backend} requires trainable='cache_processor'")
             if self.model.cache_processor.process_every != 64:
-                raise ValueError("backbone_chunk_backend=compile requires cache_processor.process_every=64")
+                raise ValueError(
+                    f"backbone_chunk_backend={selected_backend} requires cache_processor.process_every=64"
+                )
             if self.sequence_len < 128:
-                raise ValueError("backbone_chunk_backend=compile requires sequence_len >= 128")
+                raise ValueError(f"backbone_chunk_backend={selected_backend} requires sequence_len >= 128")
             if self.distributed == "fsdp":
-                raise ValueError("backbone_chunk_backend=compile is not supported with FSDP")
+                raise ValueError(f"backbone_chunk_backend={selected_backend} is not supported with FSDP")
         threshold = self.longshot_gradient_checkpointing_seq_len_threshold
         if threshold is not None:
             if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:

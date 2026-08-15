@@ -169,13 +169,13 @@ def train(config: TrainConfig) -> None:
         regional_backend = resolve_cache_processor_backend(config.model)
         if whole_model_compile_requested() and (
             config.model.variant == "bt"
-            or config.backbone_chunk_backend == "compile"
+            or config.backbone_chunk_backend != "eager"
             or regional_backend == "compile"
         ):
             raise RuntimeError(
                 "GCW_COMPILE cannot wrap a regionally compiled language model; disable it and use "
-                "backbone_chunk_backend=compile, GCW_BT_PROCESSOR_BACKEND=compile, and/or "
-                "GCW_CACHE_PROCESSOR_BACKEND=compile"
+                "backbone_chunk_backend=compile or compile_full_windows, "
+                "GCW_BT_PROCESSOR_BACKEND=compile, and/or GCW_CACHE_PROCESSOR_BACKEND=compile"
             )
         if (
             config.model.variant != "bt"
