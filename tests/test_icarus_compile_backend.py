@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import pickle
 from collections.abc import Callable
 
 import pytest
@@ -139,11 +140,10 @@ def _install_fake_compiler(
     region_inputs: list[tuple[torch.Tensor, torch.Tensor]] = []
 
     def fake_compile(function: Callable[..., torch.Tensor], **kwargs: object):
-        original = getattr(function, "func", function)
-        compile_calls.append((original.__name__, dict(kwargs)))
+        compile_calls.append((function.__name__, dict(kwargs)))
 
         def compiled(*args: object, **inner_kwargs: object) -> torch.Tensor:
-            positions, selected_heads = args[1], args[2]
+            positions, selected_heads = args[2], args[3]
             assert isinstance(positions, torch.Tensor)
             assert isinstance(selected_heads, torch.Tensor)
             region_inputs.append((positions.detach().clone(), selected_heads.detach().clone()))
@@ -375,7 +375,7 @@ def test_compiled_icarus_cuda_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     assert torch.isfinite(actual_loss)
 
 
-def test_compile_warmup_is_rng_and_gradient_neutral_and_module_owned(
+def test_compile_warmup_is_rng_gradient_and_serialized_state_neutral(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
@@ -398,12 +398,87 @@ def test_compile_warmup_is_rng_and_gradient_neutral_and_module_owned(
     assert len(compile_calls) == 2
     assert len(region_inputs) == 3
     assert {positions.shape[-1] for positions, _heads in region_inputs} == {64}
-    assert first.block.__dict__[backend_module._RUNNER_ATTRIBUTE] is not (
-        second.block.__dict__[backend_module._RUNNER_ATTRIBUTE]
-    )
+    assert first.block in backend_module._COMPILED_RUNNERS
+    assert second.block in backend_module._COMPILED_RUNNERS
+    assert backend_module._COMPILED_RUNNERS[first.block] is not backend_module._COMPILED_RUNNERS[second.block]
+    assert not any("compiled_runner" in name for name in first.block.__dict__)
     calls_after_warmup = len(region_inputs)
     first(_cache(_config(), batch=2))
     assert len(region_inputs) == calls_after_warmup
+
+
+def test_materialized_runner_is_deepcopy_neutral_and_copy_compiles_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch.manual_seed(4101)
+    monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
+    compile_calls, _ = _install_fake_compiler(monkeypatch)
+    original = _processor(_config())
+    original.execution_backend = "compile"
+    configure_icarus_training_execution(original, (2,))
+    with icarus_training_execution(original, 2):
+        original(_cache(_config(), batch=2))
+    assert len(compile_calls) == 1
+
+    copied = copy.deepcopy(original)
+    eager = copy.deepcopy(copied)
+    eager.execution_backend = "eager"
+    assert copied.block not in backend_module._COMPILED_RUNNERS
+    with torch.no_grad():
+        next(original.parameters()).add_(7.0)
+    assert not torch.equal(next(original.parameters()), next(copied.parameters()))
+
+    source = _cache(_config(), batch=2)
+    eager_cache = clone_cache(source, requires_grad=True)
+    copied_cache = clone_cache(source, requires_grad=True)
+    configure_icarus_training_execution(copied, (2,))
+    expected = eager(eager_cache)
+    with icarus_training_execution(copied, 2):
+        actual = copied(copied_cache)
+        cache_objective(actual).backward()
+    cache_objective(expected).backward()
+
+    assert len(compile_calls) == 2
+    assert copied.block in backend_module._COMPILED_RUNNERS
+    assert_cache_close(actual, expected)
+    assert_parameter_gradients_close(copied, eager)
+
+
+def test_materialized_runner_is_whole_module_pickle_neutral_and_restored_copy_is_lazy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    torch.manual_seed(4102)
+    monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
+    compile_calls, _ = _install_fake_compiler(monkeypatch)
+    model = build_model(_config())
+    assert isinstance(model, LanguageModel)
+    model.init_weights()
+    model.cache_processor.execution_backend = "compile"
+    configure_icarus_training_execution(model, (2,))
+    with icarus_training_execution(model, 2):
+        model.cache_processor(_cache(_config(), batch=2))
+    assert len(compile_calls) == 1
+
+    payload = pickle.dumps(model)
+    restored = pickle.loads(payload)
+    assert isinstance(restored, LanguageModel)
+    assert restored.cache_processor.block not in backend_module._COMPILED_RUNNERS
+    assert tuple(restored.state_dict()) == tuple(model.state_dict())
+    assert all(torch.equal(restored.state_dict()[name], tensor) for name, tensor in model.state_dict().items())
+
+    eager = copy.deepcopy(restored)
+    eager.cache_processor.execution_backend = "eager"
+    source = _cache(_config(), batch=2)
+    configure_icarus_training_execution(restored, (2,))
+    expected = eager.cache_processor(clone_cache(source, requires_grad=True))
+    with icarus_training_execution(restored, 2):
+        actual = restored.cache_processor(clone_cache(source, requires_grad=True))
+        cache_objective(actual).backward()
+    cache_objective(expected).backward()
+
+    assert len(compile_calls) == 2
+    assert_cache_close(actual, expected)
+    assert_parameter_gradients_close(restored.cache_processor, eager.cache_processor)
 
 
 def test_compile_scope_rejects_unadmitted_shapes_and_preserves_checkpoint_control_flow(

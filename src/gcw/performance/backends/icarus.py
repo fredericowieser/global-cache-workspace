@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from functools import partial
 import os
+from threading import RLock
 from typing import TYPE_CHECKING, Any, Literal, cast
+from weakref import WeakKeyDictionary
 
 import torch
 import torch.nn as nn
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 
 
 IcarusProcessorBackend = Literal["eager", "compile"]
-IcarusProcessorRunner = Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
+IcarusProcessorRunner = Callable[[nn.Module, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 
 _ICARUS_BACKEND_ENV = "GCW_ICARUS_PROCESSOR_BACKEND"
 _COMPILE_OPTIONS = {
@@ -27,7 +28,8 @@ _COMPILE_OPTIONS = {
     "dynamic": True,
     "fullgraph": True,
 }
-_RUNNER_ATTRIBUTE = "_gcw_icarus_compiled_runner"
+_COMPILED_RUNNERS: WeakKeyDictionary[nn.Module, IcarusProcessorRunner] = WeakKeyDictionary()
+_COMPILED_RUNNERS_LOCK = RLock()
 _ADMITTED_BATCHES_ATTRIBUTE = "_gcw_icarus_admitted_training_batches"
 _ACTIVE_BATCH_ATTRIBUTE = "_gcw_icarus_active_training_batch"
 
@@ -67,7 +69,7 @@ def validate_icarus_training_admission(
     adaptive_batch_sizes: Sequence[int] | None,
     device: torch.device,
 ) -> None:
-    """Fail before model execution for topologies and shapes lacking CUDA evidence."""
+    """Admit the requested API and topology before model allocation."""
     if backend == "eager":
         return
     if backend != "compile":
@@ -77,12 +79,8 @@ def validate_icarus_training_admission(
             "GCW_ICARUS_PROCESSOR_BACKEND=compile is not supported with DDP or FSDP; "
             "distributed execution has not been CUDA-qualified"
         )
-    if adaptive_batch_sizes is not None and (
-        device.type != "cuda" or set(adaptive_batch_sizes) != {2, 4, 8, 16}
-    ):
-        raise RuntimeError(
-            "compiled Icarus adaptive batching is qualified only on CUDA with the 16/8/4/2 row bands"
-        )
+    if adaptive_batch_sizes is not None and (device.type != "cuda" or set(adaptive_batch_sizes) != {2, 4, 8, 16}):
+        raise RuntimeError("compiled Icarus adaptive batching is qualified only on CUDA with the 16/8/4/2 row bands")
 
 
 def icarus_processor_backend_metadata(
@@ -119,17 +117,18 @@ def icarus_processor_backend_metadata(
 
 
 def configure_icarus_training_execution(model: nn.Module, admitted_batch_sizes: Sequence[int]) -> None:
-    """Attach admitted training shapes to each Icarus block after model allocation.
+    """Configure admitted row counts on an already allocated Icarus model.
 
-    This is an allocation-time preflight, not a claim that Inductor kernels have
-    been generated. Kernels are generated only by :func:`warmup_icarus_training_execution`.
+    API and topology admission happens before allocation. This function stores only
+    plain shape metadata. Inductor kernels are generated later by
+    :func:`warmup_icarus_training_execution`.
     """
     batches = tuple(sorted(set(int(size) for size in admitted_batch_sizes)))
     if not batches or any(size <= 0 for size in batches):
         raise ValueError("compiled Icarus training requires positive admitted batch sizes")
     processors = _compiled_icarus_processors(model)
     if not processors:
-        raise RuntimeError("compiled Icarus allocation preflight found no allocated Icarus processor")
+        raise RuntimeError("compiled Icarus post-allocation configuration found no Icarus processor")
     for processor in processors:
         object.__setattr__(processor.block, _ADMITTED_BATCHES_ATTRIBUTE, batches)
 
@@ -143,7 +142,7 @@ def icarus_training_execution(model: nn.Module, batch_size: int) -> Iterator[Non
         admitted = block.__dict__.get(_ADMITTED_BATCHES_ATTRIBUTE)
         if admitted is None:
             raise RuntimeError(
-                "compiled Icarus execution was entered before allocation preflight; "
+                "compiled Icarus execution was entered before post-allocation configuration; "
                 "configure_icarus_training_execution must run first"
             )
         if batch_size not in admitted:
@@ -173,19 +172,19 @@ def warmup_icarus_training_execution(
     device: torch.device,
     bf16: bool,
 ) -> None:
-    """Generate admitted forward/backward kernels without data or RNG consumption."""
+    """Generate admitted kernels after allocation without data or RNG consumption."""
     processors = _compiled_icarus_processors(model)
     if not processors:
         return
-    cuda_devices = [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
+    cuda_devices = (
+        [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
+    )
     with torch.random.fork_rng(devices=cuda_devices):
         for processor in processors:
             block = processor.block
             config: Any = processor.config
             cache_heads = int(processor.num_cache_heads)
-            selected_lengths = _training_selected_lengths(
-                sequence_length, int(config.process_every), int(config.topk)
-            )
+            selected_lengths = _training_selected_lengths(sequence_length, int(config.process_every), int(config.topk))
             selected_count = min(int(config.topk_heads), cache_heads)
             parameter = next(block.parameters())
             input_dtype = torch.bfloat16 if bf16 and device.type == "cuda" else parameter.dtype
@@ -200,21 +199,19 @@ def warmup_icarus_training_execution(
                         dtype=input_dtype,
                         requires_grad=True,
                     )
-                    positions = torch.arange(selected_length, device=device).view(1, 1, -1).expand(
-                        batch_size, cache_heads, -1
+                    positions = (
+                        torch.arange(selected_length, device=device).view(1, 1, -1).expand(batch_size, cache_heads, -1)
                     )
-                    selected_heads = torch.arange(
-                        selected_count, device=device, dtype=torch.long
-                    ).view(1, -1).expand(batch_size, -1)
+                    selected_heads = (
+                        torch.arange(selected_count, device=device, dtype=torch.long).view(1, -1).expand(batch_size, -1)
+                    )
                     with icarus_training_execution(processor, batch_size):
                         with torch.autocast(
                             device_type=device.type,
                             dtype=torch.bfloat16,
                             enabled=bf16 and device.type == "cuda",
                         ):
-                            output = run_icarus_post_selection_region(
-                                "compile", block, x, positions, selected_heads
-                            )
+                            output = run_icarus_post_selection_region("compile", block, x, positions, selected_heads)
                         trainable = tuple(parameter for parameter in block.parameters() if parameter.requires_grad)
                         torch.autograd.grad(output.float().sum(), (x, *trainable), allow_unused=True)
         if device.type == "cuda":
@@ -250,7 +247,7 @@ def run_icarus_post_selection_region(
         )
     runner = _get_compiled_icarus_runner(block)
     try:
-        return runner(x, positions, selected_heads)
+        return runner(block, x, positions, selected_heads)
     except Exception as error:
         if _is_non_reentrant_checkpoint_early_stop(error):
             raise
@@ -272,22 +269,27 @@ def _run_icarus_post_selection(
 
 
 def _get_compiled_icarus_runner(block: nn.Module) -> IcarusProcessorRunner:
-    runner: IcarusProcessorRunner | None = block.__dict__.get(_RUNNER_ATTRIBUTE)
-    if runner is not None:
+    """Return per-module compiled runtime state without storing it on the module.
+
+    The weak external table keeps model deepcopy and pickle payloads free of compiler
+    closures. A copied or deserialized block therefore compiles lazily and independently.
+    """
+    with _COMPILED_RUNNERS_LOCK:
+        runner = _COMPILED_RUNNERS.get(block)
+        if runner is not None:
+            return runner
+        compiler = require_torch_compile(f"{_ICARUS_BACKEND_ENV}=compile")
+        try:
+            runner = cast(
+                IcarusProcessorRunner,
+                compiler(_run_icarus_post_selection, **_COMPILE_OPTIONS),
+            )
+        except Exception as error:
+            raise RuntimeError(
+                "failed to create the compiled Icarus processor region after allocation; eager fallback is disabled"
+            ) from error
+        _COMPILED_RUNNERS[block] = runner
         return runner
-    compiler = require_torch_compile(f"{_ICARUS_BACKEND_ENV}=compile")
-    try:
-        runner = cast(
-            IcarusProcessorRunner,
-            compiler(partial(_run_icarus_post_selection, block), **_COMPILE_OPTIONS),
-        )
-    except Exception as error:
-        raise RuntimeError(
-            "failed to create the module-owned compiled Icarus processor region after allocation; "
-            "eager fallback is disabled"
-        ) from error
-    object.__setattr__(block, _RUNNER_ATTRIBUTE, runner)
-    return runner
 
 
 def _compiled_icarus_processors(model: nn.Module) -> list[Any]:
