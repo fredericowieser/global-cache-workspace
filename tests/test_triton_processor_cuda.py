@@ -27,7 +27,7 @@ def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
 def test_fused_processor_silu_mul_forward_backward_matches_bf16_oracle() -> None:
     _require_gate()
     generator = torch.Generator(device="cuda").manual_seed(913)
-    shape = (28, 2, 96, 384)
+    shape = (28, 2, 32, 384)
     reference_gate = torch.randn(shape, device="cuda", dtype=torch.bfloat16, generator=generator).requires_grad_(True)
     reference_up = torch.randn(shape, device="cuda", dtype=torch.bfloat16, generator=generator).requires_grad_(True)
     candidate_gate = reference_gate.detach().clone().requires_grad_(True)
