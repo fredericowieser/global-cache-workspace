@@ -23,12 +23,16 @@ from gcw.qualification.state import (
     DataclassValue,
     EnumValue,
     FloatValue,
+    IntValue,
     MappingEntry,
     MappingValue,
     NamedTupleValue,
+    NumpyArrayValue,
     NumpyScalarValue,
     QualificationStateError,
     StringValue,
+    SequenceValue,
+    TensorValue,
     capture_gradient_snapshot,
     capture_training_state,
     compare_authority_local,
@@ -195,7 +199,9 @@ def test_capture_is_deterministic_round_trips_and_does_not_mutate_live_state() -
     model_modes = tuple(module.training for module in model.modules())
     parameter_versions = tuple(parameter._version for parameter in model.parameters())
     parameter_bytes = tuple(parameter.detach().clone() for parameter in model.parameters())
-    gradient_bytes = tuple(None if parameter.grad is None else parameter.grad.clone() for parameter in model.parameters())
+    gradient_bytes = tuple(
+        None if parameter.grad is None else parameter.grad.clone() for parameter in model.parameters()
+    )
     optimizer_groups = tuple(tuple(group["params"]) for group in optimizer.param_groups)
     python_rng = random.getstate()
     numpy_rng = np.random.get_state()
@@ -236,24 +242,14 @@ def test_deserialization_revalidates_scalars_and_requires_canonical_archive_byte
 
     malformed = dict(manifest)
     malformed["step_ordinal"] = True
-    malformed_bytes = json.dumps(
-        malformed, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode()
-    malformed_archive = (
-        magic
-        + struct.pack(">Q", len(malformed_bytes))
-        + malformed_bytes
-        + archive[manifest_stop:]
-    )
+    malformed_bytes = json.dumps(malformed, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    malformed_archive = magic + struct.pack(">Q", len(malformed_bytes)) + malformed_bytes + archive[manifest_stop:]
     with pytest.raises(QualificationStateError, match="step_ordinal"):
         deserialize_training_state(malformed_archive)
 
     noncanonical_bytes = json.dumps(manifest, sort_keys=True, indent=1, ensure_ascii=False).encode()
     noncanonical_archive = (
-        magic
-        + struct.pack(">Q", len(noncanonical_bytes))
-        + noncanonical_bytes
-        + archive[manifest_stop:]
+        magic + struct.pack(">Q", len(noncanonical_bytes)) + noncanonical_bytes + archive[manifest_stop:]
     )
     with pytest.raises(QualificationStateError, match="canonical serialized form"):
         deserialize_training_state(noncanonical_archive)
@@ -288,11 +284,21 @@ def test_comparison_reports_precise_paths_for_important_field_classes() -> None:
             content_sha256=__import__("hashlib").sha256(changed_content).hexdigest(),
         ),
     )
-    _assert_path(state, replace(state, parameters=tuple(parameters)), f"state.parameters[{len(parameters) - 1}].tensor.content", "bytes")
+    _assert_path(
+        state,
+        replace(state, parameters=tuple(parameters)),
+        f"state.parameters[{len(parameters) - 1}].tensor.content",
+        "bytes",
+    )
 
     parameters = list(state.parameters)
     parameters[-1] = replace(parameters[-1], storage_alias="different")
-    _assert_path(state, replace(state, parameters=tuple(parameters)), f"state.parameters[{len(parameters) - 1}].storage_alias", "alias")
+    _assert_path(
+        state,
+        replace(state, parameters=tuple(parameters)),
+        f"state.parameters[{len(parameters) - 1}].storage_alias",
+        "alias",
+    )
 
     buffers = list(state.buffers)
     buffers[0] = replace(buffers[0], persistent=not buffers[0].persistent)
@@ -301,17 +307,26 @@ def test_comparison_reports_precise_paths_for_important_field_classes() -> None:
     raw_records = list(state.raw_gradients.gradients)
     raw_records[0] = replace(raw_records[0], tensor=None)
     changed_raw = replace(state.raw_gradients, gradients=tuple(raw_records))
-    _assert_path(state, replace(state, raw_gradients=changed_raw), "state.raw_gradients.gradients[0].tensor", "structural")
+    _assert_path(
+        state, replace(state, raw_gradients=changed_raw), "state.raw_gradients.gradients[0].tensor", "structural"
+    )
 
     post_records = list(state.post_clip_gradients.gradients)
     post_records[0] = replace(post_records[0], parameter_alias="other")
     changed_post = replace(state.post_clip_gradients, gradients=tuple(post_records))
-    _assert_path(state, replace(state, post_clip_gradients=changed_post), "state.post_clip_gradients.gradients[0].parameter_alias", "alias")
+    _assert_path(
+        state,
+        replace(state, post_clip_gradients=changed_post),
+        "state.post_clip_gradients.gradients[0].parameter_alias",
+        "alias",
+    )
 
     groups = list(state.optimizer.groups)
     groups[0] = replace(groups[0], parameter_aliases=tuple(reversed(groups[0].parameter_aliases)))
     changed_optimizer = replace(state.optimizer, groups=tuple(groups))
-    _assert_path(state, replace(state, optimizer=changed_optimizer), "state.optimizer.groups[0].parameter_aliases[0]", "alias")
+    _assert_path(
+        state, replace(state, optimizer=changed_optimizer), "state.optimizer.groups[0].parameter_aliases[0]", "alias"
+    )
 
     _assert_path(state, replace(state, step_ordinal=8), "state.step_ordinal", "value")
     _assert_path(state, replace(state, cursor_after=StringValue("different")), "state.cursor_after", "structural")
@@ -464,9 +479,7 @@ def test_production_dataclasses_namedtuples_and_enums_preserve_exact_types() -> 
         padded_lengths=tuple(2 for _ in range(32)),
     )
     band = PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=16)
-    groups = tuple(
-        PairGroupPlan(start, start + 8, 16, 2, band) for start in range(0, 32, 8)
-    )
+    groups = tuple(PairGroupPlan(start, start + 8, 16, 2, band) for start in range(0, 32, 8))
     plan = AdaptivePairStepPlan(reservation, groups)
     for value in (
         RandomCursor((1, 2, 3)),
@@ -533,6 +546,205 @@ def test_extra_state_frozen_gradients_and_deserialized_scalars_fail_closed() -> 
         )
     with pytest.raises(QualificationStateError, match="module extra state"):
         validate_training_state(replace(state, module_extra_states=()))
+
+
+def test_recursive_values_preserve_object_and_storage_alias_graphs() -> None:
+    shared: list[object] = []
+    shared_graph = encode_value({"left": shared, "right": shared})
+    distinct_graph = encode_value({"left": [], "right": []})
+    assert isinstance(shared_graph, MappingValue)
+    assert isinstance(distinct_graph, MappingValue)
+    shared_items = {entry.key: entry.value for entry in shared_graph.entries}
+    distinct_items = {entry.key: entry.value for entry in distinct_graph.entries}
+    assert isinstance(shared_items["left"], SequenceValue)
+    assert isinstance(shared_items["right"], SequenceValue)
+    assert shared_items["left"].object_alias == shared_items["right"].object_alias
+    assert isinstance(distinct_items["left"], SequenceValue)
+    assert isinstance(distinct_items["right"], SequenceValue)
+    assert distinct_items["left"].object_alias != distinct_items["right"].object_alias
+    assert shared_graph != distinct_graph
+
+    tensor = torch.arange(8.0)
+    tensor_view = tensor[2:6]
+    tensor_graph = encode_value({"base": tensor, "same": tensor, "view": tensor_view})
+    assert isinstance(tensor_graph, MappingValue)
+    tensor_items = {entry.key: entry.value for entry in tensor_graph.entries}
+    base_tensor = tensor_items["base"]
+    same_tensor = tensor_items["same"]
+    view_tensor = tensor_items["view"]
+    assert isinstance(base_tensor, TensorValue)
+    assert isinstance(same_tensor, TensorValue)
+    assert isinstance(view_tensor, TensorValue)
+    assert base_tensor.object_alias == same_tensor.object_alias
+    assert base_tensor.object_alias != view_tensor.object_alias
+    assert base_tensor.storage_alias == same_tensor.storage_alias == view_tensor.storage_alias
+    assert view_tensor.tensor.metadata.storage_offset == 2
+    assert view_tensor.tensor.metadata.storage_nbytes == tensor.untyped_storage().nbytes()
+
+    numpy_base = np.arange(8, dtype=np.int32)
+    numpy_view = numpy_base[::-2]
+    numpy_graph = encode_value({"base": numpy_base, "same": numpy_base, "view": numpy_view})
+    assert isinstance(numpy_graph, MappingValue)
+    numpy_items = {entry.key: entry.value for entry in numpy_graph.entries}
+    base_array = numpy_items["base"]
+    same_array = numpy_items["same"]
+    view_array = numpy_items["view"]
+    assert isinstance(base_array, NumpyArrayValue)
+    assert isinstance(same_array, NumpyArrayValue)
+    assert isinstance(view_array, NumpyArrayValue)
+    assert base_array.object_alias == same_array.object_alias
+    assert base_array.object_alias != view_array.object_alias
+    assert base_array.storage_alias == same_array.storage_alias == view_array.storage_alias
+    assert view_array.strides == (-8,)
+    assert view_array.storage_offset == 28
+    assert view_array.storage_nbytes == numpy_base.nbytes
+
+    owner = bytearray(range(32))
+    first_buffer_view = np.frombuffer(owner, dtype=np.uint8)[2:14]
+    second_buffer_view = np.frombuffer(owner, dtype=np.uint8)[4:20]
+    buffer_graph = encode_value({"first": first_buffer_view, "second": second_buffer_view})
+    assert isinstance(buffer_graph, MappingValue)
+    buffer_items = {entry.key: entry.value for entry in buffer_graph.entries}
+    first_array = buffer_items["first"]
+    second_array = buffer_items["second"]
+    assert isinstance(first_array, NumpyArrayValue)
+    assert isinstance(second_array, NumpyArrayValue)
+    assert first_array.storage_alias == second_array.storage_alias
+    assert (first_array.storage_offset, second_array.storage_offset) == (2, 4)
+    assert first_array.storage_nbytes == second_array.storage_nbytes == len(owner)
+
+
+def test_aliases_span_complete_training_values_and_fail_closed_when_forged() -> None:
+    model, optimizer, raw, post = _fixture()
+    shared = [1, 2]
+    state = _capture(
+        model,
+        optimizer,
+        raw,
+        post,
+        cursor_before=shared,
+        cursor_after=shared,
+        runtime_semantic={"parameter": model.weight},
+    )
+    assert isinstance(state.cursor_before, SequenceValue)
+    assert isinstance(state.cursor_after, SequenceValue)
+    assert state.cursor_before.object_alias == state.cursor_after.object_alias
+    assert isinstance(state.runtime.semantic, MappingValue)
+    runtime_tensor = state.runtime.semantic.entries[0].value
+    assert isinstance(runtime_tensor, TensorValue)
+    parameter = next(slot for slot in state.parameters if slot.name == "weight")
+    assert runtime_tensor.object_alias == parameter.object_alias
+    assert runtime_tensor.storage_alias == parameter.storage_alias
+
+    forged_after = replace(state.cursor_after, items=(IntValue(99),))
+    with pytest.raises(QualificationStateError, match="inconsistent repeated object alias"):
+        validate_training_state(replace(state, cursor_after=forged_after))
+
+    forged_before = replace(state.cursor_before, object_alias="value-object:99999999")
+    with pytest.raises(QualificationStateError, match="object alias"):
+        validate_training_state(replace(state, cursor_before=forged_before))
+
+
+def test_canonical_inventory_order_prefixes_and_structured_fields_are_enforced() -> None:
+    root = nn.Module()
+    weight = nn.Parameter(torch.tensor([1.0]))
+    root.register_parameter("weight", weight)
+    child_a = nn.Module()
+    child_a.add_module("z", nn.Module())
+    root.add_module("a", child_a)
+    root.add_module("a!", nn.Module())
+    optimizer = torch.optim.SGD([weight], lr=0.1)
+    raw = capture_gradient_snapshot(root)
+    state = capture_training_state(
+        root,
+        optimizer,
+        raw_gradients=raw,
+        post_clip_gradients=raw,
+        cursor_before={},
+        cursor_after={},
+        step_ordinal=0,
+        lr_schedule_values=(0.1,),
+        weight_decay_schedule_values=(0.0,),
+        reservation_manifest={},
+        runtime_semantic={},
+        runtime_authority_local={},
+        capture_cuda_rng=False,
+    )
+    assert [record.name for record in state.modules] == ["", "a", "a.z", "a!"]
+    assert [record.name for record in state.modules] != sorted(record.name for record in state.modules)
+
+    reordered_modules = (state.modules[0], state.modules[1], state.modules[3], state.modules[2])
+    with pytest.raises(QualificationStateError, match="depth-first"):
+        validate_training_state(replace(state, modules=reordered_modules))
+
+    ghost_modules = list(state.modules)
+    ghost_modules[2] = replace(ghost_modules[2], name="ghost.child", object_alias="ghost.child")
+    with pytest.raises(QualificationStateError, match="prefix-closed"):
+        validate_training_state(replace(state, modules=tuple(ghost_modules)))
+
+    model, toy_optimizer, toy_raw, toy_post = _fixture()
+    toy_state = _capture(
+        model,
+        toy_optimizer,
+        toy_raw,
+        toy_post,
+        cursor_before=SFTCursor(epoch=1, row=2),
+    )
+    with pytest.raises(QualificationStateError, match="parameter slots"):
+        validate_training_state(replace(toy_state, parameters=tuple(reversed(toy_state.parameters))))
+    with pytest.raises(QualificationStateError, match="buffer slots"):
+        validate_training_state(replace(toy_state, buffers=tuple(reversed(toy_state.buffers))))
+    assert isinstance(toy_state.cursor_before, DataclassValue)
+    noncanonical_cursor = replace(toy_state.cursor_before, fields=tuple(reversed(toy_state.cursor_before.fields)))
+    with pytest.raises(QualificationStateError, match="noncanonical structured fields"):
+        validate_training_state(replace(toy_state, cursor_before=noncanonical_cursor))
+
+
+def test_deserialization_rejects_semantically_equivalent_blob_permutations() -> None:
+    model, optimizer, raw, post = _fixture()
+    archive = serialize_training_state(_capture(model, optimizer, raw, post))
+    magic = b"GCWQSTATE\x00\x01"
+    position = len(magic)
+    manifest_length = struct.unpack(">Q", archive[position : position + 8])[0]
+    position += 8
+    manifest = json.loads(archive[position : position + manifest_length])
+    position += manifest_length
+    blob_count = struct.unpack(">Q", archive[position : position + 8])[0]
+    position += 8
+    blobs: list[bytes] = []
+    for _ in range(blob_count):
+        length = struct.unpack(">Q", archive[position : position + 8])[0]
+        position += 8
+        blobs.append(archive[position : position + length])
+        position += length
+    assert len(blobs) >= 2 and position == len(archive)
+
+    def swap_blob_references(value: object) -> None:
+        if isinstance(value, dict):
+            index = value.get("$blob")
+            if index == 0:
+                value["$blob"] = 1
+            elif index == 1:
+                value["$blob"] = 0
+            for child in value.values():
+                swap_blob_references(child)
+        elif isinstance(value, list):
+            for child in value:
+                swap_blob_references(child)
+
+    swap_blob_references(manifest)
+    blobs[0], blobs[1] = blobs[1], blobs[0]
+    manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    permuted = bytearray(magic)
+    permuted.extend(struct.pack(">Q", len(manifest_bytes)))
+    permuted.extend(manifest_bytes)
+    permuted.extend(struct.pack(">Q", len(blobs)))
+    for blob in blobs:
+        permuted.extend(struct.pack(">Q", len(blob)))
+        permuted.extend(blob)
+
+    with pytest.raises(QualificationStateError, match="canonical serialized form"):
+        deserialize_training_state(bytes(permuted))
 
 
 def test_sparse_quantized_and_meta_tensors_fail_closed() -> None:

@@ -42,6 +42,7 @@ class TensorMetadata:
     shape: tuple[int, ...]
     stride: tuple[int, ...]
     storage_offset: int
+    storage_nbytes: int
     layout: str
     requires_grad: bool
     is_conj: bool
@@ -107,6 +108,7 @@ class TorchDeviceValue:
 class SequenceValue:
     sequence_type: Literal["list", "tuple"]
     items: tuple[CanonicalValue, ...]
+    object_alias: str = ""
     tag: Literal["sequence"] = "sequence"
 
 
@@ -119,6 +121,7 @@ class MappingEntry:
 @dataclass(frozen=True)
 class MappingValue:
     entries: tuple[MappingEntry, ...]
+    object_alias: str = ""
     tag: Literal["mapping"] = "mapping"
 
 
@@ -127,6 +130,7 @@ class EnumValue:
     class_identity: ClassIdentity
     member_name: str
     value: CanonicalValue
+    object_alias: str = ""
     tag: Literal["enum"] = "enum"
 
 
@@ -134,6 +138,7 @@ class EnumValue:
 class NamedTupleValue:
     class_identity: ClassIdentity
     fields: tuple[MappingEntry, ...]
+    object_alias: str = ""
     tag: Literal["namedtuple"] = "namedtuple"
 
 
@@ -141,12 +146,15 @@ class NamedTupleValue:
 class DataclassValue:
     class_identity: ClassIdentity
     fields: tuple[MappingEntry, ...]
+    object_alias: str = ""
     tag: Literal["dataclass"] = "dataclass"
 
 
 @dataclass(frozen=True)
 class TensorValue:
     tensor: TensorRecord
+    object_alias: str = ""
+    storage_alias: str = ""
     tag: Literal["tensor"] = "tensor"
 
 
@@ -164,6 +172,12 @@ class NumpyArrayValue:
     shape: tuple[int, ...]
     content: bytes
     content_sha256: str
+    strides: tuple[int, ...] = ()
+    storage_offset: int = 0
+    storage_nbytes: int = 0
+    writeable: bool = True
+    object_alias: str = ""
+    storage_alias: str = ""
     tag: Literal["numpy_array"] = "numpy_array"
 
 
@@ -346,6 +360,88 @@ class _BufferInventory:
     slots: tuple[tuple[str, torch.Tensor | None, bool], ...]
 
 
+_TensorStorageKey: TypeAlias = tuple[str, int | None, int]
+
+
+@dataclass
+class _ValueEncodingContext:
+    active: set[int]
+    object_alias_by_id: dict[int, str]
+    object_references: dict[int, object]
+    tensor_storage_aliases: dict[_TensorStorageKey, str]
+    tensor_storage_references: dict[_TensorStorageKey, torch.Tensor]
+    numpy_storage_aliases: dict[int, str]
+    numpy_storage_references: dict[int, object]
+    next_object_alias: int = 0
+    next_storage_alias: int = 0
+
+    def object_alias(self, value: object, path: str) -> str:
+        marker = id(value)
+        reference = self.object_references.get(marker)
+        if reference is not None and reference is not value:  # pragma: no cover - retained refs prevent reuse
+            raise QualificationStateError(f"object identity reuse while encoding {path}")
+        alias = self.object_alias_by_id.get(marker)
+        if alias is None:
+            alias = f"value-object:{self.next_object_alias:08d}"
+            self.next_object_alias += 1
+            self.object_alias_by_id[marker] = alias
+        self.object_references[marker] = value
+        return alias
+
+    def _new_storage_alias(self) -> str:
+        alias = f"value-storage:{self.next_storage_alias:08d}"
+        self.next_storage_alias += 1
+        return alias
+
+    def tensor_storage_alias(self, tensor: torch.Tensor) -> str:
+        storage = tensor.untyped_storage()
+        key: _TensorStorageKey = (tensor.device.type, tensor.device.index, int(storage._cdata))
+        alias = self.tensor_storage_aliases.get(key)
+        if alias is None:
+            alias = self._new_storage_alias()
+            self.tensor_storage_aliases[key] = alias
+        self.tensor_storage_references[key] = tensor
+        return alias
+
+    def numpy_storage_alias(self, owner: object) -> str:
+        marker = id(owner)
+        reference = self.numpy_storage_references.get(marker)
+        if reference is not None and reference is not owner:  # pragma: no cover - retained refs prevent reuse
+            raise QualificationStateError("NumPy storage owner identity reuse")
+        alias = self.numpy_storage_aliases.get(marker)
+        if alias is None:
+            alias = self._new_storage_alias()
+            self.numpy_storage_aliases[marker] = alias
+        self.numpy_storage_references[marker] = owner
+        return alias
+
+
+def _new_value_encoding_context(
+    *,
+    object_aliases: Mapping[int, str] | None = None,
+    object_references: Mapping[int, object] | None = None,
+    tensor_storage_aliases: Mapping[_TensorStorageKey, str] | None = None,
+    tensor_storage_references: Mapping[_TensorStorageKey, torch.Tensor] | None = None,
+) -> _ValueEncodingContext:
+    aliases = dict(object_aliases or {})
+    references = dict(object_references or {})
+    if aliases.keys() != references.keys():
+        raise QualificationStateError("value context object aliases and references differ")
+    storage_aliases = dict(tensor_storage_aliases or {})
+    storage_references = dict(tensor_storage_references or {})
+    if storage_aliases.keys() != storage_references.keys():
+        raise QualificationStateError("value context storage aliases and references differ")
+    return _ValueEncodingContext(
+        active=set(),
+        object_alias_by_id=aliases,
+        object_references=references,
+        tensor_storage_aliases=storage_aliases,
+        tensor_storage_references=storage_references,
+        numpy_storage_aliases={},
+        numpy_storage_references={},
+    )
+
+
 def _identity(value: object) -> ClassIdentity:
     cls = type(value)
     return ClassIdentity(module=cls.__module__, qualname=cls.__qualname__)
@@ -375,7 +471,7 @@ def _module_inventory(model: nn.Module) -> tuple[tuple[str, nn.Module], ...]:
 
 def _collect_inventories(
     modules: tuple[tuple[str, nn.Module], ...],
-) -> tuple[_ParameterInventory, _BufferInventory, Mapping[int, str], Mapping[tuple[str, int | None, int], str]]:
+) -> tuple[_ParameterInventory, _BufferInventory, Mapping[int, str], Mapping[_TensorStorageKey, str]]:
     parameters: list[tuple[str, nn.Parameter | None]] = []
     buffers: list[tuple[str, torch.Tensor | None, bool]] = []
     tensor_slots: list[tuple[str, torch.Tensor]] = []
@@ -395,7 +491,7 @@ def _collect_inventories(
                 tensor_slots.append((f"buffer:{name}", buffer))
 
     names_by_object: dict[int, list[str]] = {}
-    names_by_storage: dict[tuple[str, int | None, int], list[str]] = {}
+    names_by_storage: dict[_TensorStorageKey, list[str]] = {}
     for typed_name, tensor in tensor_slots:
         _ensure_supported_tensor(tensor, typed_name)
         names_by_object.setdefault(id(tensor), []).append(typed_name)
@@ -460,6 +556,7 @@ def _capture_tensor(tensor: torch.Tensor, path: str) -> TensorRecord:
         shape=tuple(int(dimension) for dimension in tensor.shape),
         stride=tuple(int(value) for value in tensor.stride()),
         storage_offset=int(tensor.storage_offset()),
+        storage_nbytes=int(tensor.untyped_storage().nbytes()),
         layout=str(tensor.layout),
         requires_grad=tensor.requires_grad,
         is_conj=tensor.is_conj(),
@@ -468,27 +565,86 @@ def _capture_tensor(tensor: torch.Tensor, path: str) -> TensorRecord:
     return TensorRecord(metadata=metadata, content=content, content_sha256=sha256(content).hexdigest())
 
 
+def _numpy_view_bounds(
+    shape: tuple[int, ...],
+    strides: tuple[int, ...],
+    storage_offset: int,
+    itemsize: int,
+    storage_nbytes: int,
+    path: str,
+) -> None:
+    if len(shape) != len(strides):
+        raise QualificationStateError(f"NumPy rank mismatch at {path}")
+    if storage_offset < 0 or storage_nbytes < 0:
+        raise QualificationStateError(f"invalid NumPy storage metadata at {path}")
+    if any(dimension == 0 for dimension in shape):
+        if storage_offset > storage_nbytes:
+            raise QualificationStateError(f"NumPy empty view exceeds storage at {path}")
+        return
+    lower = storage_offset
+    upper = storage_offset
+    for dimension, stride in zip(shape, strides):
+        extent = (dimension - 1) * stride
+        lower += min(0, extent)
+        upper += max(0, extent)
+    if lower < 0 or upper + itemsize > storage_nbytes:
+        raise QualificationStateError(f"NumPy view exceeds captured storage at {path}")
+
+
+def _numpy_storage_details(array: object, np: Any, path: str) -> tuple[object, int, int]:
+    root = array
+    seen: set[int] = set()
+    while isinstance(getattr(root, "base", None), np.ndarray):
+        marker = id(root)
+        if marker in seen:
+            raise QualificationStateError(f"NumPy base cycle at {path}")
+        seen.add(marker)
+        root = getattr(root, "base")
+    base = getattr(root, "base", None)
+    if base is None:
+        owner = root
+        lower, upper = np.lib.array_utils.byte_bounds(root)
+        return owner, int(lower), int(upper - lower)
+
+    owner = base
+    while isinstance(owner, memoryview):
+        next_owner = owner.obj
+        if next_owner is owner:
+            break
+        owner = next_owner
+    try:
+        owner_bytes = np.frombuffer(owner, dtype=np.uint8)
+    except (BufferError, TypeError, ValueError) as error:
+        raise QualificationStateError(f"unsupported NumPy storage owner at {path}") from error
+    if not owner_bytes.flags.c_contiguous:  # pragma: no cover - frombuffer guarantees this
+        raise QualificationStateError(f"noncontiguous NumPy storage owner at {path}")
+    pointer = int(owner_bytes.__array_interface__["data"][0])
+    return owner, pointer, int(owner_bytes.nbytes)
+
+
 def encode_value(value: object, *, path: str = "value") -> CanonicalValue:
-    """Recursively encode a deterministic value, rejecting ambiguity and cycles."""
-    return _encode_value(value, path=path, active=set())
+    """Recursively encode a deterministic value, preserving aliases and rejecting cycles."""
+    return _encode_value(value, path=path, context=_new_value_encoding_context())
 
 
-def _encode_value(value: object, *, path: str, active: set[int]) -> CanonicalValue:
+def _encode_value(value: object, *, path: str, context: _ValueEncodingContext) -> CanonicalValue:
     if value is None:
         return NullValue()
     if isinstance(value, Enum):
         marker = id(value)
-        if marker in active:
+        if marker in context.active:
             raise QualificationStateError(f"cycle at {path}")
-        active.add(marker)
+        context.active.add(marker)
+        object_alias = context.object_alias(value, path)
         try:
             return EnumValue(
-                _identity(value),
-                value.name,
-                _encode_value(value.value, path=f"{path}.value", active=active),
+                class_identity=_identity(value),
+                member_name=value.name,
+                value=_encode_value(value.value, path=f"{path}.value", context=context),
+                object_alias=object_alias,
             )
         finally:
-            active.remove(marker)
+            context.active.remove(marker)
     if type(value) is bool:
         return BoolValue(value)
     if type(value) is int:
@@ -504,7 +660,11 @@ def _encode_value(value: object, *, path: str, active: set[int]) -> CanonicalVal
     if isinstance(value, torch.device):
         return TorchDeviceValue(value.type, value.index)
     if isinstance(value, torch.Tensor):
-        return TensorValue(_capture_tensor(value, path))
+        return TensorValue(
+            tensor=_capture_tensor(value, path),
+            object_alias=context.object_alias(value, path),
+            storage_alias=context.tensor_storage_alias(value),
+        )
 
     # NumPy is optional to the qualification substrate at import time.
     try:
@@ -516,9 +676,26 @@ def _encode_value(value: object, *, path: str, active: set[int]) -> CanonicalVal
             raise QualificationStateError(f"NumPy array subclass at {path} is unsupported")
         if value.dtype.hasobject or value.dtype.fields is not None:
             raise QualificationStateError(f"object or structured NumPy array at {path} is unsupported")
+        owner, storage_pointer, storage_nbytes = _numpy_storage_details(value, np, path)
+        pointer = int(value.__array_interface__["data"][0])
+        shape = tuple(int(dimension) for dimension in value.shape)
+        strides = tuple(int(stride) for stride in value.strides)
+        storage_offset = pointer - storage_pointer
+        _numpy_view_bounds(shape, strides, storage_offset, int(value.dtype.itemsize), storage_nbytes, path)
         copied = np.ascontiguousarray(value).copy()
         content = copied.tobytes(order="C")
-        return NumpyArrayValue(copied.dtype.str, tuple(copied.shape), content, sha256(content).hexdigest())
+        return NumpyArrayValue(
+            dtype=copied.dtype.str,
+            shape=shape,
+            content=content,
+            content_sha256=sha256(content).hexdigest(),
+            strides=strides,
+            storage_offset=storage_offset,
+            storage_nbytes=storage_nbytes,
+            writeable=bool(value.flags.writeable),
+            object_alias=context.object_alias(value, path),
+            storage_alias=context.numpy_storage_alias(owner),
+        )
     if np is not None and isinstance(value, np.generic):
         scalar = np.asarray(value)
         if scalar.dtype.hasobject or scalar.dtype.fields is not None:
@@ -531,68 +708,78 @@ def _encode_value(value: object, *, path: str, active: set[int]) -> CanonicalVal
         if any(not isinstance(name, str) for name in named_fields) or len(set(named_fields)) != len(named_fields):
             raise QualificationStateError(f"invalid namedtuple fields at {path}")
         marker = id(value)
-        if marker in active:
+        if marker in context.active:
             raise QualificationStateError(f"cycle at {path}")
-        active.add(marker)
+        context.active.add(marker)
+        object_alias = context.object_alias(value, path)
         try:
             encoded_fields = tuple(
-                MappingEntry(name, _encode_value(getattr(value, name), path=f"{path}.{name}", active=active))
-                for name in named_fields
+                MappingEntry(
+                    name,
+                    _encode_value(getattr(value, name), path=f"{path}.{name}", context=context),
+                )
+                for name in sorted(named_fields)
             )
-            return NamedTupleValue(_identity(value), encoded_fields)
+            return NamedTupleValue(_identity(value), encoded_fields, object_alias=object_alias)
         finally:
-            active.remove(marker)
+            context.active.remove(marker)
     if is_dataclass(value) and not isinstance(value, type):
         marker = id(value)
-        if marker in active:
+        if marker in context.active:
             raise QualificationStateError(f"cycle at {path}")
-        active.add(marker)
+        context.active.add(marker)
+        object_alias = context.object_alias(value, path)
         try:
             encoded_fields = tuple(
                 MappingEntry(
                     field.name,
-                    _encode_value(getattr(value, field.name), path=f"{path}.{field.name}", active=active),
+                    _encode_value(getattr(value, field.name), path=f"{path}.{field.name}", context=context),
                 )
-                for field in fields(value)
+                for field in sorted(fields(value), key=lambda item: item.name)
             )
-            return DataclassValue(_identity(value), encoded_fields)
+            return DataclassValue(_identity(value), encoded_fields, object_alias=object_alias)
         finally:
-            active.remove(marker)
+            context.active.remove(marker)
 
     if isinstance(value, Mapping):
         if type(value) is not dict:
             raise QualificationStateError(f"mapping subclass at {path} is unsupported")
         marker = id(value)
-        if marker in active:
+        if marker in context.active:
             raise QualificationStateError(f"cycle at {path}")
-        active.add(marker)
+        keys = tuple(value)
+        if any(type(key) is not str for key in keys):
+            raise QualificationStateError(f"non-string mapping key at {path}")
+        if any(not key for key in keys):
+            raise QualificationStateError(f"empty mapping key at {path}")
+        context.active.add(marker)
+        object_alias = context.object_alias(value, path)
         try:
-            entries: list[MappingEntry] = []
-            for key in value:
-                if not isinstance(key, str):
-                    raise QualificationStateError(f"non-string mapping key at {path}")
-                entries.append(MappingEntry(key, _encode_value(value[key], path=f"{path}.{key}", active=active)))
-            entries.sort(key=lambda item: item.key)
-            return MappingValue(tuple(entries))
+            entries = tuple(
+                MappingEntry(key, _encode_value(value[key], path=f"{path}.{key}", context=context))
+                for key in sorted(keys)
+            )
+            return MappingValue(entries, object_alias=object_alias)
         finally:
-            active.remove(marker)
+            context.active.remove(marker)
     if type(value) in {list, tuple}:
         marker = id(value)
-        if marker in active:
+        if marker in context.active:
             raise QualificationStateError(f"cycle at {path}")
-        active.add(marker)
+        context.active.add(marker)
+        object_alias = context.object_alias(value, path)
         try:
             items = cast(list[object] | tuple[object, ...], value)
             sequence_type: Literal["list", "tuple"] = "list" if type(value) is list else "tuple"
             return SequenceValue(
                 sequence_type,
                 tuple(
-                    _encode_value(item, path=f"{path}[{index}]", active=active)
-                    for index, item in enumerate(items)
+                    _encode_value(item, path=f"{path}[{index}]", context=context) for index, item in enumerate(items)
                 ),
+                object_alias=object_alias,
             )
         finally:
-            active.remove(marker)
+            context.active.remove(marker)
     raise QualificationStateError(f"unsupported non-deterministic value at {path}: {_identity(value)}")
 
 
@@ -627,7 +814,11 @@ def _validate_gradient_snapshot(snapshot: GradientSnapshot, inventory: _Paramete
             _validate_tensor_record(record.tensor, f"{path}.{record.parameter_alias}.tensor")
 
 
-def _capture_optimizer(optimizer: torch.optim.Optimizer, inventory: _ParameterInventory) -> OptimizerRecord:
+def _capture_optimizer(
+    optimizer: torch.optim.Optimizer,
+    inventory: _ParameterInventory,
+    value_context: _ValueEncodingContext,
+) -> OptimizerRecord:
     aliases = inventory.object_alias_by_id
     seen: set[str] = set()
     groups: list[OptimizerGroup] = []
@@ -644,36 +835,40 @@ def _capture_optimizer(optimizer: torch.optim.Optimizer, inventory: _ParameterIn
             seen.add(alias)
             membership.append(alias)
         options = {key: value for key, value in group.items() if key != "params"}
-        encoded_options = encode_value(options, path=f"optimizer.groups[{group_index}].options")
+        encoded_options = _encode_value(options, path=f"optimizer.groups[{group_index}].options", context=value_context)
         if not isinstance(encoded_options, MappingValue):  # pragma: no cover - construction invariant
             raise AssertionError("optimizer options must encode as a mapping")
         groups.append(OptimizerGroup(tuple(membership), encoded_options))
 
-    state_entries: list[OptimizerStateEntry] = []
+    state_values: list[tuple[str, object]] = []
     for parameter, value in optimizer.state.items():
         if not isinstance(parameter, torch.Tensor) or id(parameter) not in aliases:
             raise QualificationStateError("optimizer.state contains a parameter not owned by the model")
-        alias = aliases[id(parameter)]
-        state_entries.append(
-            OptimizerStateEntry(alias, encode_value(value, path=f"optimizer.state.{alias}"))
-        )
-    state_entries.sort(key=lambda item: item.parameter_alias)
-    if len({item.parameter_alias for item in state_entries}) != len(state_entries):
+        state_values.append((aliases[id(parameter)], value))
+    state_values.sort(key=lambda item: item[0])
+    if len({alias for alias, _ in state_values}) != len(state_values):
         raise QualificationStateError("optimizer.state has ambiguous duplicate parameter keys")
-    defaults = encode_value(optimizer.defaults, path="optimizer.defaults")
+    state_entries = tuple(
+        OptimizerStateEntry(
+            alias,
+            _encode_value(value, path=f"optimizer.state.{alias}", context=value_context),
+        )
+        for alias, value in state_values
+    )
+    defaults = _encode_value(optimizer.defaults, path="optimizer.defaults", context=value_context)
     if not isinstance(defaults, MappingValue):  # pragma: no cover - construction invariant
         raise AssertionError("optimizer defaults must encode as a mapping")
-    return OptimizerRecord(_identity(optimizer), defaults, tuple(groups), tuple(state_entries))
+    return OptimizerRecord(_identity(optimizer), defaults, tuple(groups), state_entries)
 
 
-def _capture_rng(*, capture_cuda_rng: bool) -> RngState:
-    python_state = encode_value(random.getstate(), path="rng.python")
+def _capture_rng(*, capture_cuda_rng: bool, value_context: _ValueEncodingContext) -> RngState:
+    python_state = _encode_value(random.getstate(), path="rng.python", context=value_context)
     try:
         import numpy as np
     except ImportError:
         numpy_state = None
     else:
-        numpy_state = encode_value(np.random.get_state(), path="rng.numpy")
+        numpy_state = _encode_value(np.random.get_state(), path="rng.numpy", context=value_context)
     torch_cpu = _capture_tensor(torch.random.get_rng_state(), "rng.torch_cpu")
     if not capture_cuda_rng:
         cuda = CudaRngState("omitted", ())
@@ -713,13 +908,26 @@ def capture_training_state(
     parameter_inventory, buffer_inventory, object_aliases, storage_aliases = _collect_inventories(modules)
     _validate_gradient_snapshot(raw_gradients, parameter_inventory, "raw_gradients")
     _validate_gradient_snapshot(post_clip_gradients, parameter_inventory, "post_clip_gradients")
+    registered_tensors = [tensor for _, tensor in parameter_inventory.slots if tensor is not None] + [
+        tensor for _, tensor, _ in buffer_inventory.slots if tensor is not None
+    ]
+    object_references = {id(tensor): tensor for tensor in registered_tensors}
+    storage_references: dict[_TensorStorageKey, torch.Tensor] = {
+        (tensor.device.type, tensor.device.index, int(tensor.untyped_storage()._cdata)): tensor
+        for tensor in registered_tensors
+    }
+    value_context = _new_value_encoding_context(
+        object_aliases=object_aliases,
+        object_references=object_references,
+        tensor_storage_aliases=storage_aliases,
+        tensor_storage_references=storage_references,
+    )
 
     names_by_module_id: dict[int, list[str]] = {}
     for name, module in modules:
         names_by_module_id.setdefault(id(module), []).append(name or "<root>")
     has_extra_state_by_id = {
-        id(module): type(module).get_extra_state is not nn.Module.get_extra_state
-        for _, module in modules
+        id(module): type(module).get_extra_state is not nn.Module.get_extra_state for _, module in modules
     }
     module_records = tuple(
         ModuleRecord(
@@ -741,13 +949,15 @@ def capture_training_state(
         try:
             extra_state = module.get_extra_state()
         except Exception as error:
-            raise QualificationStateError(
-                f"module extra state capture failed at modules.{module_alias}"
-            ) from error
+            raise QualificationStateError(f"module extra state capture failed at modules.{module_alias}") from error
         module_extra_states.append(
             ModuleExtraStateRecord(
                 module_alias,
-                encode_value(extra_state, path=f"module_extra_states.{module_alias}"),
+                _encode_value(
+                    extra_state,
+                    path=f"module_extra_states.{module_alias}",
+                    context=value_context,
+                ),
             )
         )
 
@@ -797,19 +1007,25 @@ def capture_training_state(
         buffers=tuple(buffer_records),
         raw_gradients=raw_gradients,
         post_clip_gradients=post_clip_gradients,
-        optimizer=_capture_optimizer(optimizer, parameter_inventory),
-        rng=_capture_rng(capture_cuda_rng=capture_cuda_rng),
-        cursor_before=encode_value(cursor_before, path="cursor_before"),
-        cursor_after=encode_value(cursor_after, path="cursor_after"),
+        optimizer=_capture_optimizer(optimizer, parameter_inventory, value_context),
+        rng=_capture_rng(capture_cuda_rng=capture_cuda_rng, value_context=value_context),
+        cursor_before=_encode_value(cursor_before, path="cursor_before", context=value_context),
+        cursor_after=_encode_value(cursor_after, path="cursor_after", context=value_context),
         step_ordinal=step_ordinal,
-        lr_schedule_values=encode_value(lr_schedule_values, path="lr_schedule_values"),
-        weight_decay_schedule_values=encode_value(
-            weight_decay_schedule_values, path="weight_decay_schedule_values"
+        lr_schedule_values=_encode_value(lr_schedule_values, path="lr_schedule_values", context=value_context),
+        weight_decay_schedule_values=_encode_value(
+            weight_decay_schedule_values,
+            path="weight_decay_schedule_values",
+            context=value_context,
         ),
-        reservation_manifest=encode_value(reservation_manifest, path="reservation_manifest"),
+        reservation_manifest=_encode_value(reservation_manifest, path="reservation_manifest", context=value_context),
         runtime=RuntimeRecord(
-            semantic=encode_value(runtime_semantic, path="runtime.semantic"),
-            authority_local=encode_value(runtime_authority_local, path="runtime.authority_local"),
+            semantic=_encode_value(runtime_semantic, path="runtime.semantic", context=value_context),
+            authority_local=_encode_value(
+                runtime_authority_local,
+                path="runtime.authority_local",
+                context=value_context,
+            ),
         ),
     )
     validate_training_state(state)
@@ -838,9 +1054,7 @@ def _validate_tensor_record(record: TensorRecord, path: str) -> None:
         raise QualificationStateError(f"invalid tensor dtype at {path}.metadata.dtype")
     if type(metadata.device_type) is not str or not metadata.device_type:
         raise QualificationStateError(f"invalid tensor device type at {path}.metadata.device_type")
-    if metadata.device_index is not None and (
-        type(metadata.device_index) is not int or metadata.device_index < 0
-    ):
+    if metadata.device_index is not None and (type(metadata.device_index) is not int or metadata.device_index < 0):
         raise QualificationStateError(f"invalid tensor device index at {path}.metadata.device_index")
     try:
         (
@@ -852,16 +1066,29 @@ def _validate_tensor_record(record: TensorRecord, path: str) -> None:
         raise QualificationStateError(f"invalid tensor device at {path}.metadata") from error
     if type(metadata.element_size) is not int or metadata.element_size <= 0:
         raise QualificationStateError(f"invalid tensor element size at {path}.metadata.element_size")
+    if dtype.itemsize != metadata.element_size:
+        raise QualificationStateError(f"tensor dtype/element-size mismatch at {path}.metadata")
     if type(metadata.shape) is not tuple or any(
         type(dimension) is not int or dimension < 0 for dimension in metadata.shape
     ):
         raise QualificationStateError(f"invalid tensor shape at {path}.metadata.shape")
-    if type(metadata.stride) is not tuple or any(type(value) is not int for value in metadata.stride):
+    if type(metadata.stride) is not tuple or any(type(value) is not int or value < 0 for value in metadata.stride):
         raise QualificationStateError(f"invalid tensor stride at {path}.metadata.stride")
     if len(metadata.shape) != len(metadata.stride):
         raise QualificationStateError(f"tensor rank mismatch at {path}.metadata")
     if type(metadata.storage_offset) is not int or metadata.storage_offset < 0:
         raise QualificationStateError(f"invalid tensor storage offset at {path}.metadata.storage_offset")
+    if type(metadata.storage_nbytes) is not int or metadata.storage_nbytes < 0:
+        raise QualificationStateError(f"invalid tensor storage size at {path}.metadata.storage_nbytes")
+    if any(dimension == 0 for dimension in metadata.shape):
+        if metadata.storage_offset * metadata.element_size > metadata.storage_nbytes:
+            raise QualificationStateError(f"empty tensor view exceeds storage at {path}.metadata")
+    else:
+        final_element = metadata.storage_offset + sum(
+            (dimension - 1) * stride for dimension, stride in zip(metadata.shape, metadata.stride)
+        )
+        if (final_element + 1) * metadata.element_size > metadata.storage_nbytes:
+            raise QualificationStateError(f"tensor view exceeds storage at {path}.metadata")
     if metadata.layout != str(torch.strided):
         raise QualificationStateError(f"invalid tensor layout at {path}.metadata.layout")
     if any(type(value) is not bool for value in (metadata.requires_grad, metadata.is_conj, metadata.is_neg)):
@@ -925,6 +1152,25 @@ def validate_training_state(state: TrainingState) -> None:
         module_groups.setdefault(record.object_alias, []).append(record)
     if len(set(module_names)) != len(module_names) or not module_names or module_names[0] != "":
         raise QualificationStateError("module names are not a unique rooted inventory")
+    module_name_set = set(module_names)
+    children: dict[str, list[str]] = {name: [] for name in module_names}
+    for name in module_names[1:]:
+        if any(not component for component in name.split(".")):
+            raise QualificationStateError(f"invalid qualified module name {name!r}")
+        parent = name.rpartition(".")[0]
+        if parent not in module_name_set:
+            raise QualificationStateError(f"module inventory is not prefix-closed at {name!r}")
+        children[parent].append(name)
+    expected_module_order: list[str] = []
+
+    def visit_module(name: str) -> None:
+        expected_module_order.append(name)
+        for child in sorted(children[name]):
+            visit_module(child)
+
+    visit_module("")
+    if module_names != expected_module_order:
+        raise QualificationStateError("module inventory is not in canonical depth-first name order")
     canonical_module_names = {name or "<root>" for name in module_names}
     for alias, records in module_groups.items():
         names = [record.name or "<root>" for record in records]
@@ -948,12 +1194,13 @@ def validate_training_state(state: TrainingState) -> None:
         if type(record) is not ModuleExtraStateRecord or type(record.module_alias) is not str:
             raise QualificationStateError(f"invalid module extra-state record at {path}")
         actual_extra_aliases.append(record.module_alias)
-        _validate_value(record.state, f"{path}.state")
     if tuple(actual_extra_aliases) != expected_extra_aliases:
         raise QualificationStateError("module extra state is not the complete canonical module inventory")
 
     parameter_names: set[str] = set()
     buffer_names: set[str] = set()
+    parameter_name_order: list[str] = []
+    buffer_name_order: list[str] = []
     parameter_aliases: set[str] = set()
     frozen_by_alias: dict[str, bool] = {}
     object_groups: dict[str, list[str]] = {}
@@ -966,6 +1213,7 @@ def validate_training_state(state: TrainingState) -> None:
         if record.name in parameter_names:
             raise QualificationStateError("duplicate parameter slot names")
         parameter_names.add(record.name)
+        parameter_name_order.append(record.name)
         if type(record.present) is not bool:
             raise QualificationStateError(f"invalid parameter presence at {path}.present")
         if not record.present:
@@ -1021,6 +1269,7 @@ def validate_training_state(state: TrainingState) -> None:
         if record.name in buffer_names:
             raise QualificationStateError("duplicate buffer slot names")
         buffer_names.add(record.name)
+        buffer_name_order.append(record.name)
         if not record.present:
             if any(value is not None for value in (record.object_alias, record.storage_alias, record.tensor)):
                 raise QualificationStateError(f"inconsistent absent slot at {path}")
@@ -1036,7 +1285,55 @@ def validate_training_state(state: TrainingState) -> None:
         object_groups.setdefault(record.object_alias, []).append(typed_name)
         storage_groups.setdefault(record.storage_alias, []).append(typed_name)
         _validate_tensor_record(record.tensor, f"{path}.tensor")
+    registration_conflicts = (parameter_names & buffer_names) | (
+        set(module_names[1:]) & (parameter_names | buffer_names)
+    )
+    if registration_conflicts:
+        raise QualificationStateError(f"module registration namespaces overlap: {sorted(registration_conflicts)!r}")
+
+    def expected_slot_order(names: Sequence[str], kind: str) -> list[str]:
+        by_module: dict[str, list[str]] = {name: [] for name in module_names}
+        for name in names:
+            if any(not component for component in name.split(".")):
+                raise QualificationStateError(f"invalid qualified {kind} slot name: {name!r}")
+            parent = name.rpartition(".")[0]
+            if parent not in by_module:
+                raise QualificationStateError(f"{kind} slot has an unknown module prefix: {name!r}")
+            by_module[parent].append(name)
+        return [name for module_name in module_names for name in sorted(by_module[module_name])]
+
+    if parameter_name_order != expected_slot_order(parameter_name_order, "parameter"):
+        raise QualificationStateError("parameter slots are not in canonical module/local-name order")
+    if buffer_name_order != expected_slot_order(buffer_name_order, "buffer"):
+        raise QualificationStateError("buffer slots are not in canonical module/local-name order")
     _validate_slot_aliases(object_groups, storage_groups, typed_names)
+    external_value_objects: dict[str, TensorRecord] = {}
+    external_value_storages: dict[str, _StorageDescriptor] = {}
+    external_slots: tuple[ParameterSlot | BufferSlot, ...] = (*state.parameters, *state.buffers)
+    for slot in external_slots:
+        if slot.present:
+            assert slot.object_alias is not None and slot.storage_alias is not None and slot.tensor is not None
+            previous = external_value_objects.setdefault(slot.object_alias, slot.tensor)
+            if previous != slot.tensor:
+                raise QualificationStateError(f"inconsistent external tensor alias {slot.object_alias!r}")
+            metadata = slot.tensor.metadata
+            descriptor = _StorageDescriptor(
+                kind="torch",
+                device_type=metadata.device_type,
+                device_index=metadata.device_index,
+                nbytes=metadata.storage_nbytes,
+            )
+            previous_storage = external_value_storages.setdefault(slot.storage_alias, descriptor)
+            if previous_storage != descriptor:
+                raise QualificationStateError(f"inconsistent external storage alias {slot.storage_alias!r}")
+    value_aliases = _ValueAliasValidation(
+        external_objects=external_value_objects,
+        external_storages=external_value_storages,
+        objects={},
+        storages={},
+    )
+    for extra_state in state.module_extra_states:
+        _validate_value(extra_state.state, f"module_extra_states.{extra_state.module_alias}", value_aliases)
 
     expected_gradient_aliases = tuple(sorted(parameter_aliases))
     for name, snapshot in (
@@ -1072,7 +1369,6 @@ def validate_training_state(state: TrainingState) -> None:
         raise QualificationStateError("optimizer inventories must be tuples")
     if type(state.optimizer.defaults) is not MappingValue:
         raise QualificationStateError("optimizer defaults must be a canonical mapping")
-    _validate_value(state.optimizer.defaults, "optimizer.defaults")
     memberships: list[str] = []
     for index, group in enumerate(state.optimizer.groups):
         path = f"optimizer.groups[{index}]"
@@ -1083,7 +1379,7 @@ def validate_training_state(state: TrainingState) -> None:
         if type(group.options) is not MappingValue:
             raise QualificationStateError(f"invalid optimizer options at {path}")
         memberships.extend(group.parameter_aliases)
-        _validate_value(group.options, f"{path}.options")
+        _validate_value(group.options, f"{path}.options", value_aliases)
     if len(memberships) != len(set(memberships)):
         raise QualificationStateError("optimizer groups contain ambiguous duplicate membership")
     if not set(memberships).issubset(parameter_aliases):
@@ -1094,17 +1390,18 @@ def validate_training_state(state: TrainingState) -> None:
         if type(entry) is not OptimizerStateEntry or type(entry.parameter_alias) is not str:
             raise QualificationStateError(f"invalid optimizer state entry at {path}")
         state_aliases.append(entry.parameter_alias)
-        _validate_value(entry.state, f"{path}.state")
+        _validate_value(entry.state, f"optimizer.state.{entry.parameter_alias}", value_aliases)
     if tuple(state_aliases) != tuple(sorted(state_aliases)) or len(state_aliases) != len(set(state_aliases)):
         raise QualificationStateError("optimizer state aliases are not canonical and unique")
     if not set(state_aliases).issubset(parameter_aliases):
         raise QualificationStateError("optimizer state contains a foreign parameter alias")
+    _validate_value(state.optimizer.defaults, "optimizer.defaults", value_aliases)
 
     if type(state.rng) is not RngState or type(state.rng.cuda) is not CudaRngState:
         raise QualificationStateError("invalid RNG record")
-    _validate_value(state.rng.python, "rng.python")
+    _validate_value(state.rng.python, "rng.python", value_aliases)
     if state.rng.numpy is not None:
-        _validate_value(state.rng.numpy, "rng.numpy")
+        _validate_value(state.rng.numpy, "rng.numpy", value_aliases)
     _validate_tensor_record(state.rng.torch_cpu, "rng.torch_cpu")
     if state.rng.cuda.disposition not in {"captured", "unavailable", "omitted"}:
         raise QualificationStateError("invalid CUDA RNG disposition")
@@ -1128,7 +1425,7 @@ def validate_training_state(state: TrainingState) -> None:
         ("runtime.semantic", state.runtime.semantic),
         ("runtime.authority_local", state.runtime.authority_local),
     ):
-        _validate_value(value, path)
+        _validate_value(value, path, value_aliases)
 
 
 def _validate_numpy_payload(dtype_name: str, shape: tuple[int, ...], content: bytes, path: str) -> None:
@@ -1152,7 +1449,71 @@ def _validate_numpy_payload(dtype_name: str, shape: tuple[int, ...], content: by
         raise QualificationStateError(f"NumPy byte length mismatch at {path}.content")
 
 
-def _validate_structured_entries(entries: tuple[MappingEntry, ...], path: str, *, sorted_keys: bool) -> None:
+@dataclass(frozen=True)
+class _StorageDescriptor:
+    kind: Literal["torch", "numpy"]
+    device_type: str
+    device_index: int | None
+    nbytes: int
+
+
+@dataclass
+class _ValueAliasValidation:
+    external_objects: Mapping[str, TensorRecord]
+    external_storages: Mapping[str, _StorageDescriptor]
+    objects: dict[str, tuple[str, CanonicalValue]]
+    storages: dict[str, tuple[str, _StorageDescriptor]]
+    next_object_alias: int = 0
+    next_storage_alias: int = 0
+
+    def register_object(self, value: CanonicalValue, path: str, alias: str) -> None:
+        if type(alias) is not str or not alias:
+            raise QualificationStateError(f"invalid object alias at {path}.object_alias")
+        external = self.external_objects.get(alias)
+        if external is not None:
+            if not isinstance(value, TensorValue) or value.tensor != external:
+                raise QualificationStateError(f"value object alias {alias!r} conflicts with model tensor state")
+            return
+        previous = self.objects.get(alias)
+        if previous is None:
+            expected = f"value-object:{self.next_object_alias:08d}"
+            if alias != expected:
+                raise QualificationStateError(f"noncanonical first object alias at {path}.object_alias")
+            self.next_object_alias += 1
+            self.objects[alias] = (path, value)
+        elif previous[1] != value:
+            raise QualificationStateError(
+                f"inconsistent repeated object alias {alias!r} at {previous[0]!r} and {path!r}"
+            )
+
+    def register_storage(self, path: str, alias: str, descriptor: _StorageDescriptor) -> None:
+        if type(alias) is not str or not alias:
+            raise QualificationStateError(f"invalid storage alias at {path}.storage_alias")
+        external = self.external_storages.get(alias)
+        if external is not None:
+            if descriptor != external:
+                raise QualificationStateError(f"storage alias {alias!r} has incompatible metadata")
+            return
+        previous = self.storages.get(alias)
+        if previous is None:
+            expected = f"value-storage:{self.next_storage_alias:08d}"
+            if alias != expected:
+                raise QualificationStateError(f"noncanonical first storage alias at {path}.storage_alias")
+            self.next_storage_alias += 1
+            self.storages[alias] = (path, descriptor)
+        elif previous[1] != descriptor:
+            raise QualificationStateError(
+                f"inconsistent repeated storage alias {alias!r} at {previous[0]!r} and {path!r}"
+            )
+
+
+def _validate_structured_entries(
+    entries: tuple[MappingEntry, ...],
+    path: str,
+    aliases: _ValueAliasValidation,
+    *,
+    sorted_keys: bool,
+) -> None:
     if type(entries) is not tuple:
         raise QualificationStateError(f"structured fields must be a tuple at {path}")
     keys: list[str] = []
@@ -1160,12 +1521,18 @@ def _validate_structured_entries(entries: tuple[MappingEntry, ...], path: str, *
         if type(entry) is not MappingEntry or type(entry.key) is not str or not entry.key:
             raise QualificationStateError(f"invalid structured field at {path}[{index}]")
         keys.append(entry.key)
-        _validate_value(entry.value, f"{path}.{entry.key}")
+        _validate_value(entry.value, f"{path}.{entry.key}", aliases)
     if len(keys) != len(set(keys)) or (sorted_keys and keys != sorted(keys)):
         raise QualificationStateError(f"noncanonical structured fields at {path}")
 
 
-def _validate_value(value: CanonicalValue, path: str) -> None:
+def _validate_value(
+    value: CanonicalValue,
+    path: str,
+    aliases: _ValueAliasValidation | None = None,
+) -> None:
+    if aliases is None:
+        aliases = _ValueAliasValidation({}, {}, {}, {})
     expected_tags: dict[type[object], str] = {
         NullValue: "null",
         BoolValue: "bool",
@@ -1219,9 +1586,7 @@ def _validate_value(value: CanonicalValue, path: str) -> None:
     elif isinstance(value, TorchDeviceValue):
         if type(value.device_type) is not str or not value.device_type:
             raise QualificationStateError(f"invalid torch device at {path}")
-        if value.device_index is not None and (
-            type(value.device_index) is not int or value.device_index < 0
-        ):
+        if value.device_index is not None and (type(value.device_index) is not int or value.device_index < 0):
             raise QualificationStateError(f"invalid torch device index at {path}")
         try:
             (
@@ -1233,6 +1598,18 @@ def _validate_value(value: CanonicalValue, path: str) -> None:
             raise QualificationStateError(f"invalid torch device at {path}") from error
     elif isinstance(value, TensorValue):
         _validate_tensor_record(value.tensor, f"{path}.tensor")
+        aliases.register_object(value, path, value.object_alias)
+        metadata = value.tensor.metadata
+        aliases.register_storage(
+            path,
+            value.storage_alias,
+            _StorageDescriptor(
+                kind="torch",
+                device_type=metadata.device_type,
+                device_index=metadata.device_index,
+                nbytes=metadata.storage_nbytes,
+            ),
+        )
     elif isinstance(value, NumpyScalarValue):
         _validate_numpy_payload(value.dtype, (), value.content, path)
         if type(value.content_sha256) is not str or sha256(value.content).hexdigest() != value.content_sha256:
@@ -1241,24 +1618,59 @@ def _validate_value(value: CanonicalValue, path: str) -> None:
         _validate_numpy_payload(value.dtype, value.shape, value.content, path)
         if type(value.content_sha256) is not str or sha256(value.content).hexdigest() != value.content_sha256:
             raise QualificationStateError(f"content digest mismatch at {path}.content_sha256")
+        if (
+            type(value.strides) is not tuple
+            or len(value.strides) != len(value.shape)
+            or any(type(stride) is not int for stride in value.strides)
+            or type(value.storage_offset) is not int
+            or value.storage_offset < 0
+            or type(value.storage_nbytes) is not int
+            or value.storage_nbytes < 0
+            or type(value.writeable) is not bool
+        ):
+            raise QualificationStateError(f"invalid NumPy view metadata at {path}")
+        try:
+            import numpy as np
+        except ImportError:  # pragma: no cover - exercised without NumPy
+            pass
+        else:
+            _numpy_view_bounds(
+                value.shape,
+                value.strides,
+                value.storage_offset,
+                int(np.dtype(value.dtype).itemsize),
+                value.storage_nbytes,
+                path,
+            )
+        aliases.register_object(value, path, value.object_alias)
+        aliases.register_storage(
+            path,
+            value.storage_alias,
+            _StorageDescriptor("numpy", "cpu", None, value.storage_nbytes),
+        )
     elif isinstance(value, SequenceValue):
         if value.sequence_type not in ("list", "tuple") or type(value.items) is not tuple:
             raise QualificationStateError(f"invalid sequence at {path}")
+        aliases.register_object(value, path, value.object_alias)
         for index, item in enumerate(value.items):
-            _validate_value(item, f"{path}.items[{index}]")
+            _validate_value(item, f"{path}[{index}]", aliases)
     elif isinstance(value, MappingValue):
-        _validate_structured_entries(value.entries, path, sorted_keys=True)
+        aliases.register_object(value, path, value.object_alias)
+        _validate_structured_entries(value.entries, path, aliases, sorted_keys=True)
     elif isinstance(value, EnumValue):
         _validate_class_identity(value.class_identity, f"{path}.class_identity")
         if type(value.member_name) is not str or not value.member_name:
             raise QualificationStateError(f"invalid enum member at {path}")
-        _validate_value(value.value, f"{path}.value")
+        aliases.register_object(value, path, value.object_alias)
+        _validate_value(value.value, f"{path}.value", aliases)
     elif isinstance(value, NamedTupleValue):
         _validate_class_identity(value.class_identity, f"{path}.class_identity")
-        _validate_structured_entries(value.fields, f"{path}.fields", sorted_keys=False)
+        aliases.register_object(value, path, value.object_alias)
+        _validate_structured_entries(value.fields, path, aliases, sorted_keys=True)
     elif isinstance(value, DataclassValue):
         _validate_class_identity(value.class_identity, f"{path}.class_identity")
-        _validate_structured_entries(value.fields, f"{path}.fields", sorted_keys=False)
+        aliases.register_object(value, path, value.object_alias)
+        _validate_structured_entries(value.fields, path, aliases, sorted_keys=True)
 
 
 def _summary(value: object) -> str:
@@ -1477,6 +1889,7 @@ def deserialize_training_state(payload: bytes) -> TrainingState:
         position += length
     if position != len(payload):
         raise QualificationStateError("trailing bytes in qualification state archive")
+
     def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
         output: dict[str, object] = {}
         for key, value in pairs:
@@ -1489,9 +1902,7 @@ def deserialize_training_state(payload: bytes) -> TrainingState:
         manifest = json.loads(manifest_bytes, object_pairs_hook=reject_duplicate_keys)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise QualificationStateError("invalid qualification manifest JSON") from error
-    canonical_manifest = json.dumps(
-        manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
+    canonical_manifest = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     if canonical_manifest != manifest_bytes:
         raise QualificationStateError("qualification archive is not in canonical serialized form")
 
@@ -1512,4 +1923,6 @@ def deserialize_training_state(payload: bytes) -> TrainingState:
     if type(decoded) is not TrainingState:
         raise QualificationStateError("qualification archive root is not TrainingState")
     validate_training_state(decoded)
+    if serialize_training_state(decoded) != payload:
+        raise QualificationStateError("qualification archive is not in canonical serialized form")
     return decoded

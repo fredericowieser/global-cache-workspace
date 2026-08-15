@@ -10,13 +10,15 @@ state. Production training does not import it.
 
 ## Q1 scope
 
-A capture binds all registered module, parameter, and buffer slots to stable
-qualified names. This includes `None` slots, persistent versus nonpersistent
+A capture binds the prefix-closed, depth-first module inventory and every registered
+parameter and buffer slot to stable qualified names. Local registration order is
+canonicalized, and impossible module/parameter/buffer namespace overlaps fail
+closed. The inventory includes `None` slots, persistent versus nonpersistent
 buffers, mixed module train/eval modes, module `get_extra_state()` payloads, frozen
-parameters, tied object aliases, storage aliases, tensor view metadata, and exact
-cloned logical tensor bytes. Raw and post-clip gradients are separate
-caller-supplied snapshots over the same canonical parameter alias inventory; one
-is never inferred from the other. A populated gradient on a frozen parameter is
+parameters, tied object aliases, storage aliases, storage extents, tensor view
+metadata, and exact cloned logical tensor bytes. Raw and post-clip gradients are
+separate caller-supplied snapshots over the same canonical parameter alias inventory;
+one is never inferred from the other. A populated gradient on a frozen parameter is
 captured rather than suppressed, so accidental frozen-state mutation remains
 observable.
 
@@ -29,19 +31,28 @@ data, and backend runtime data are included. Runtime is split into `semantic` an
 `authority_local`; semantic comparison and hashing exclude the latter in the
 substrate API itself.
 
-Values use explicit tagged records. Mappings require string keys and are sorted.
-Dataclasses, named tuples, and enums retain class identity and field/member
-structure. Python floating-point and NumPy scalar values retain exact dtype and
-bit patterns, including signed zero, infinities, and NaNs. Unsupported values,
-cycles, foreign or ambiguously duplicated optimizer parameters, and sparse,
-quantized, or meta tensors fail closed. Tensor content is copied explicitly to
-CPU from logical elements, so capture does not read unused portions of a view's
-storage. Serialization uses deterministic JSON metadata plus a separately framed
-binary blob archive; tensors are not stringified. Deserialization revalidates
-scalar types and invariants and rejects noncanonical archive encodings. Blob
-digests are content-integrity checks, not authentication. Comparison reports
-field paths and classifies structural, metadata, alias, byte, and ordinary value
-differences.
+Values use explicit tagged records. Mappings require nonempty string keys and are
+sorted. Dataclasses, named tuples, and enums retain class identity and canonical
+field/member structure. One encoding context spans module extra state, optimizer
+groups/state/defaults, RNG data, cursors, schedules, reservations, and runtime
+state. It assigns deterministic object and storage identities, retains strong
+references while capturing to prevent Python identity reuse, preserves repeated
+container/tensor/NumPy-array aliases, and rejects cycles or inconsistent repeated
+objects. Tensor and NumPy views include storage size, offset, shape, and stride;
+shared-storage records must have compatible storage metadata.
+
+Python floating-point and NumPy scalar values retain exact dtype and bit patterns,
+including signed zero, infinities, and NaNs. Unsupported values, foreign or
+ambiguously duplicated optimizer parameters, and sparse, quantized, or meta tensors
+fail closed. Tensor content is copied explicitly to CPU from logical elements, so
+capture does not read unused portions of a view's storage. Serialization uses
+deterministic JSON metadata plus a separately framed binary blob archive; tensors
+are not stringified. Deserialization revalidates scalar types, alias and inventory
+invariants, canonical field order, storage bounds, and the complete reserialized
+archive, rejecting reordered inventories, alias references, or blob permutations
+that could otherwise encode the same represented state more than once. Blob digests
+are content-integrity checks, not authentication. Comparison reports field paths and
+classifies structural, metadata, alias, byte, and ordinary value differences.
 
 ## Threat boundary
 
