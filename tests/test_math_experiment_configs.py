@@ -70,6 +70,9 @@ def test_experiment_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatc
     assert {config.data.dataset for config in configs} == {str(dataset.resolve())}
     assert {config.wandb.entity for config in configs} == {"huawei-noahs-ark"}
     assert {config.wandb.project for config in configs} == {"global-cache-workspace"}
+    assert {config.learning_rate for config in configs if config.trainable == "cache_processor"} == {1e-3}
+    assert next(config for config in configs if config.trainable == "lora").learning_rate == 1e-4
+    assert next(config for config in configs if config.trainable == "backbone").learning_rate == 5e-6
     for config in configs:
         if config.model.variant != "tf" and estimate_non_embedding_params(config.model) > 1_000_000:
             assert processor_params(config.model) <= 0.05 * estimate_non_embedding_params(config.model)

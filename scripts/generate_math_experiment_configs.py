@@ -31,9 +31,7 @@ def _fitted_processor(model: Any, variant: str, *, longshot: bool = False) -> di
         overrides["topk_heads"] = 56
     if longshot:
         overrides.update(encoder_method="query_attention", encoder_query_source="final_token")
-    fitted, _ = fit_processor_config(
-        model, cast(Variant, variant), fraction=0.05, cache_processor_overrides=overrides
-    )
+    fitted, _ = fit_processor_config(model, cast(Variant, variant), fraction=0.05, cache_processor_overrides=overrides)
     if fitted.cache_processor is None:
         raise RuntimeError(f"failed to fit {variant} processor")
     from gcw.config import to_dict
@@ -47,45 +45,45 @@ def _arms(model: Any) -> dict[str, dict[str, Any]]:
     icarus = _fitted_processor(model, "icarus")
     longshot = _fitted_processor(model, "longshot", longshot=True)
     return {
-        "full-sft": {"variant": "tf", "trainable": "backbone", "lr": 1e-5},
+        "full-sft": {"variant": "tf", "trainable": "backbone", "lr": 5e-6},
         "lora-r32": {
             "variant": "tf",
             "trainable": "lora",
             "lr": 1e-4,
             "lora": {"rank": 32, "alpha": 32.0, "dropout": 0.0},
         },
-        "bt": {"variant": "bt", "trainable": "cache_processor", "lr": 1e-4, "cache_processor": bt},
-        "bgt": {"variant": "bgt", "trainable": "cache_processor", "lr": 1e-4, "cache_processor": standard},
-        "icarus": {"variant": "icarus", "trainable": "cache_processor", "lr": 1e-4, "cache_processor": icarus},
+        "bt": {"variant": "bt", "trainable": "cache_processor", "lr": 1e-3, "cache_processor": bt},
+        "bgt": {"variant": "bgt", "trainable": "cache_processor", "lr": 1e-3, "cache_processor": standard},
+        "icarus": {"variant": "icarus", "trainable": "cache_processor", "lr": 1e-3, "cache_processor": icarus},
         "longshot": {
             "variant": "longshot",
             "trainable": "cache_processor",
-            "lr": 1e-4,
+            "lr": 1e-3,
             "cache_processor": longshot,
         },
         "longshot-internal-r4": {
             "variant": "longshot",
             "trainable": "cache_processor",
-            "lr": 1e-4,
+            "lr": 1e-3,
             "cache_processor": {**longshot, "iterations": 4, "iteration_mode": "internal"},
         },
         "longshot-external-r4": {
             "variant": "longshot",
             "trainable": "cache_processor",
-            "lr": 1e-4,
+            "lr": 1e-3,
             "cache_processor": {**longshot, "iterations": 4, "iteration_mode": "external"},
         },
         "flow-bgt-t4": {
             "variant": "bgt",
             "trainable": "cache_processor",
-            "lr": 1e-4,
+            "lr": 1e-3,
             "cache_processor": standard,
             "flow_processor": {"num_steps": 4, "time_conditioning": True, "eta_max": 1.0, "flow_gate_init": -4.0},
         },
         "diffusion-bgt-t4-sigma015": {
             "variant": "bgt",
             "trainable": "cache_processor",
-            "lr": 1e-4,
+            "lr": 1e-3,
             "cache_processor": standard,
             "diffusion_processor": {
                 "num_steps": 4,
@@ -100,7 +98,7 @@ def _arms(model: Any) -> dict[str, dict[str, Any]]:
         "diffusion-bgt-t4-sigma0": {
             "variant": "bgt",
             "trainable": "cache_processor",
-            "lr": 1e-4,
+            "lr": 1e-3,
             "cache_processor": standard,
             "diffusion_processor": {
                 "num_steps": 4,
@@ -121,8 +119,7 @@ def _learning_rates(args: argparse.Namespace) -> dict[str, float]:
         return {}
     payload = json.loads(Path(path).read_text())
     if not isinstance(payload, dict) or not all(
-        isinstance(name, str) and isinstance(value, (int, float)) and value > 0
-        for name, value in payload.items()
+        isinstance(name, str) and isinstance(value, (int, float)) and value > 0 for name, value in payload.items()
     ):
         raise ValueError("learning-rate file must map arm names to positive numbers")
     return {name: float(value) for name, value in payload.items()}

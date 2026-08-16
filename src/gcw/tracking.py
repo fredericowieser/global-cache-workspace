@@ -72,6 +72,10 @@ class RunTracker:
             final.update(summary)
         if self.wandb_run is not None:
             try:
+                if summary is not None:
+                    for key in ("completed_step", "planned_max_steps", "stopped_at_checkpoint"):
+                        if key in summary:
+                            self.wandb_run.summary[key] = summary[key]
                 self.wandb_run.finish(exit_code=1 if error is not None else 0)
             except TypeError:
                 self.wandb_run.finish()

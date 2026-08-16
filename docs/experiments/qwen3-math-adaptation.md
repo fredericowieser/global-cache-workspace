@@ -38,9 +38,11 @@ Processor-off results test the frozen-backbone invariant. Any material differenc
 
 ## Full single-seed series
 
-`scripts/run_math_experiments_full_single_seed.py` declares the first full-epoch series. It evaluates the untouched instruct model, then trains and evaluates full SFT, BT, BGT, noisy Diffusion-BGT, Longshot, Longshot internal recurrence ×4, Longshot external recurrence ×4, LoRA rank 32, and Flow-BGT in that order.
+`scripts/run_math_experiments_full_single_seed.py` declares the expanded 11-arm full-epoch series. It covers full SFT, LoRA rank 32, BT, BGT, Icarus, noisy and noiseless Diffusion-BGT, Longshot, Longshot internal recurrence ×4, Longshot external recurrence ×4, and Flow-BGT. The completed version-1 full-SFT checkpoint remains immutable and may be imported into the additive matrix by digest; historical version-1 configs and evaluation evidence are never rewritten.
 
-The series uses Warmup–Stable–Decay (WSD): linear warmup for 3% of optimizer steps, a constant peak learning rate for 87%, then linear decay to zero for 10%. Full SFT uses `5e-6`; LoRA and every frozen-backbone processor use `1e-4`. A unified processor rate prevents mechanism-specific optimizer tuning from becoming an architectural advantage.
+The series uses Warmup–Stable–Decay (WSD): linear warmup for 3% of optimizer steps, a constant peak learning rate for 87%, then linear decay to zero for 10%. The imported full SFT arm used `5e-6` and LoRA uses `1e-4`. The expanded version-2 matrix uses the user-approved common `1e-3` peak for every frozen-backbone CacheProcessor arm. This rate is a new protocol rather than a continuation of the earlier `1e-4` selection, so production launches require fresh finite-loss and gradient gates.
+
+All canonical launch configs use eager execution. Rejected adaptive grouping, regional compilation, CUDA Graph, pair-wave, and Triton candidates remain disabled; the deployable performance multiplier is `1.00x`.
 
 The 697,744-row split leaves a 16-row remainder at global batch 64. The series uses standard drop-last epoch semantics: 697,728 rows and 10,902 optimizer steps. Every arm sees the same retained rows once, in the same order. The script defaults to a read-only JSON plan and requires `--execute` before it creates artifacts or launches work. It checkpoints exact-resume state, stops launching new cells at the declared deadline, and resumes completed training and evaluation cells on the next invocation.
 
@@ -64,7 +66,8 @@ uv run --extra gpu --extra eval --extra convert python \
   --model /path/to/Qwen3-0.6B \
   --backbone-checkpoint /path/to/native-backbone \
   --data-manifest /path/to/manifest.json \
-  --experiment-root /path/to/experiment-root
+  --experiment-root /path/to/experiment-root \
+  --import-full-sft-bundle /path/to/full-sft/evaluation-bundle
 ```
 
 The command above only prints the resolved plan. Add `--execute` after inspecting it.
@@ -79,7 +82,9 @@ uv run --extra gpu --extra eval python scripts/run_math_training_lane.py \
   --arm bt \
   --config /path/to/experiment/configs/bt.yaml \
   --experiment-root /path/to/experiment \
-  --bundle-outbox /path/to/evaluation-outbox
+  --bundle-outbox /path/to/evaluation-outbox \
+  --campaign-plan /path/to/experiment/plan.json \
+  --expected-gpu H100
 
 # Evaluation host: verify and evaluate the transferred bundle.
 uv run --extra gpu --extra eval python scripts/run_math_evaluation_lane.py \

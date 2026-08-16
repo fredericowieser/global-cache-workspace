@@ -21,10 +21,12 @@ import yaml
 from gcw.config import load_train_config
 from gcw.flops import total_training_flops
 from gcw.params import processor_params
+from gcw.runtime import atomic_write_bytes
+from gcw.training.checkpoint import verify_training_checkpoint_files
 from scripts.generate_math_experiment_configs import generate
 
 
-EXPERIMENT = "qwen3-06b-instruct-math-full-single-seed-v1"
+EXPERIMENT = "qwen3-06b-instruct-math-full-single-seed-v2-matrix11"
 CANONICAL_CORE_TASKS = (
     "hellaswag",
     "piqa",
@@ -47,20 +49,26 @@ EVALUATION_ROOT = "evaluations-v3"
 LEGACY_EVALUATION_ROOT = "evaluations-v2"
 TRAIN_ORDER = (
     "full-sft",
+    "lora-r32",
     "bt",
     "bgt",
+    "icarus",
     "diffusion-bgt-t4-sigma015",
+    "diffusion-bgt-t4-sigma0",
     "longshot",
     "longshot-internal-r4",
     "longshot-external-r4",
-    "lora-r32",
     "flow-bgt-t4",
 )
+IMPORTED_ARMS = frozenset({"full-sft"})
+TRAINABLE_ARMS = tuple(arm for arm in TRAIN_ORDER if arm not in IMPORTED_ARMS)
 PROCESSOR_ARMS = frozenset(
     {
         "bt",
         "bgt",
+        "icarus",
         "diffusion-bgt-t4-sigma015",
+        "diffusion-bgt-t4-sigma0",
         "longshot",
         "longshot-internal-r4",
         "longshot-external-r4",
@@ -71,7 +79,9 @@ MICRO_BATCH_ROWS = {
     "full-sft": 8,
     "bt": 2,
     "bgt": 4,
+    "icarus": 2,
     "diffusion-bgt-t4-sigma015": 4,
+    "diffusion-bgt-t4-sigma0": 4,
     "longshot": 2,
     "longshot-internal-r4": 2,
     "longshot-external-r4": 1,
@@ -80,22 +90,51 @@ MICRO_BATCH_ROWS = {
 }
 PEAK_LEARNING_RATES = {
     "full-sft": 5e-6,
-    "bt": 1e-4,
-    "bgt": 1e-4,
-    "diffusion-bgt-t4-sigma015": 1e-4,
-    "longshot": 1e-4,
-    "longshot-internal-r4": 1e-4,
-    "longshot-external-r4": 1e-4,
+    "bt": 1e-3,
+    "bgt": 1e-3,
+    "icarus": 1e-3,
+    "diffusion-bgt-t4-sigma015": 1e-3,
+    "diffusion-bgt-t4-sigma0": 1e-3,
+    "longshot": 1e-3,
+    "longshot-internal-r4": 1e-3,
+    "longshot-external-r4": 1e-3,
     "lora-r32": 1e-4,
-    "flow-bgt-t4": 1e-4,
+    "flow-bgt-t4": 1e-3,
 }
 SEQUENCE_LENGTH = 4096
 GLOBAL_BATCH_ROWS = 64
 SEED = 24
+DATASET_ROWS = 697_744
+EFFECTIVE_EPOCH_ROWS = 697_728
+MAX_STEPS = 10_902
 VALIDATION_ROWS = 1024
 CHECKPOINT_EVERY = 256
 WANDB_ENTITY = "huawei-noahs-ark"
 WANDB_PROJECT = "global-cache-workspace"
+FULL_SFT_IMPORT_IDENTITIES = {
+    "source_commit": "70e1de149e82cd95db5d247451c3490283f86ea9",
+    "training_config_sha256": "18c574e36a30212f679fe4938aa2c7eb5c72cff39894625898a998c9a7f0ba78",
+    "source_checkpoint_manifest_sha256": "73513e2c8e41b6d8a20cfada45f93e0198f92eb9a6a7b1c26199e9986cc1dfdc",
+    "config.json": "ffdff0e6e3f305fe54c7432c905e50114ea3fc5f64313a90522278923c56e6cc",
+    "model.safetensors": "2685068b048ac0d3e7adadc1b2961bd528a1ce07628a2e6d050e26f8f171b434",
+    "train_state.json": "444cf9bad9e87d1181b74097205a9fbc671ce3ca405232289983dde32f1ee310",
+}
+
+_FORBIDDEN_PERFORMANCE_ENV = (
+    "GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH",
+    "GCW_ALLOW_UNQUALIFIED_TRITON_CACHE",
+    "GCW_ALLOW_REJECTED_ICARUS_COMPILE",
+    "GCW_BT_PROCESSOR_BACKEND",
+    "GCW_CACHE_PROCESSOR_BACKEND",
+    "GCW_COMPILE",
+    "GCW_ICARUS_PROCESSOR_BACKEND",
+)
+
+
+def _reject_performance_overrides(env: dict[str, str]) -> None:
+    enabled = sorted(name for name in _FORBIDDEN_PERFORMANCE_ENV if env.get(name, "").strip())
+    if enabled:
+        raise RuntimeError(f"canonical training forbids performance overrides: {enabled}")
 
 
 def _sha256(path: Path) -> str:
@@ -111,25 +150,83 @@ def _source_commit(repository: Path) -> str:
 
 
 def _require_clean_repository(repository: Path) -> None:
-    status = subprocess.check_output(
-        ["git", "-C", str(repository), "status", "--porcelain", "--untracked-files=no"], text=True
-    )
+    status = subprocess.check_output(["git", "-C", str(repository), "status", "--porcelain"], text=True)
     if status.strip():
-        raise RuntimeError("tracked repository files must be clean before execution")
+        raise RuntimeError("repository must contain no tracked changes or untracked import shadows")
+
+
+def _capture_jsonl_identity(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    rows = 0
+    with path.open("rb") as handle:
+        for line in handle:
+            digest.update(line)
+            rows += bool(line.strip())
+    return digest.hexdigest(), rows
+
+
+def _validate_campaign_config(config: Any, *, arm: str, root: Path, experiment: str) -> None:
+    if arm not in TRAIN_ORDER:
+        raise ValueError(f"unknown campaign arm {arm}")
+    if config.max_steps != MAX_STEPS or config.global_batch_rows != GLOBAL_BATCH_ROWS:
+        raise ValueError(f"{arm} does not preserve the full-epoch optimizer contract")
+    if config.sequence_len != SEQUENCE_LENGTH or config.seed != SEED:
+        raise ValueError(f"{arm} does not preserve sequence length and seed")
+    if config.learning_rate != PEAK_LEARNING_RATES[arm]:
+        raise ValueError(f"{arm} has the wrong peak learning rate")
+    if config.batch_size != MICRO_BATCH_ROWS[arm]:
+        raise ValueError(f"{arm} has the wrong physical microbatch")
+    if config.metadata.get("arm") != arm or config.metadata.get("experiment") != experiment:
+        raise ValueError(f"{arm} metadata does not bind the campaign identity")
+    expected_output = (root / "training-state" / arm).resolve()
+    if Path(config.output_dir).resolve() != expected_output:
+        raise ValueError(f"{arm} output directory is outside the campaign root")
+    if config.backbone_chunk_backend != "eager":
+        raise ValueError(f"{arm} requests a rejected backbone execution backend")
+    performance = config.performance
+    if (
+        performance.adaptive_batching.enabled
+        or performance.reference_loss.mode != "legacy"
+        or performance.longshot_full_history.enabled
+        or performance.kv_score_sidecar.enabled
+        or performance.triton_cache_movement.enabled
+        or performance.optimized_step.enabled
+        or performance.noisy_diffusion.recurrence_backend != "eager"
+    ):
+        raise ValueError(f"{arm} requests a noncanonical performance policy")
+    if arm in PROCESSOR_ARMS:
+        if config.trainable != "cache_processor":
+            raise ValueError(f"{arm} must train only its CacheProcessor")
+        if config.activation_checkpoint_windows != 4:
+            raise ValueError(f"{arm} must use the memory-safe four-window checkpoint oracle")
+        if config.activation_checkpoint_min_padded_sequence_length != 0:
+            raise ValueError(f"{arm} must checkpoint every eligible backbone window")
+    elif config.activation_checkpoint_windows != 0:
+        raise ValueError(f"{arm} must not enable CacheProcessor checkpoint execution")
 
 
 def _load_data_manifest(args: argparse.Namespace) -> dict[str, Any]:
     payload = json.loads(Path(args.data_manifest).expanduser().read_text())
     dataset = Path(args.dataset or payload["dataset_path"]).expanduser().resolve()
     validation = Path(args.validation_dataset or payload["validation_path"]).expanduser().resolve()
+    observed_rows: dict[str, int] = {}
     for name, path, expected in (
         ("dataset", dataset, payload["dataset_sha256"]),
         ("validation", validation, payload["validation_sha256"]),
     ):
         if not path.is_file():
             raise FileNotFoundError(path)
-        if _sha256(path) != expected:
+        observed_sha256, observed_rows[name] = _capture_jsonl_identity(path)
+        if observed_sha256 != expected:
             raise ValueError(f"{name} sha256 does not match the authenticated data manifest")
+    if payload.get("schema") != "gcw.math_experiment_data.v1":
+        raise ValueError("math campaign requires the authenticated data-manifest schema")
+    if int(payload.get("rows", -1)) != DATASET_ROWS or observed_rows["dataset"] != DATASET_ROWS:
+        raise ValueError("math campaign training data must contain exactly 697,744 nonblank rows")
+    if int(payload.get("validation_rows", -1)) != 4096 or observed_rows["validation"] != 4096:
+        raise ValueError("math campaign validation data must contain exactly 4,096 nonblank rows")
+    if payload.get("seed") != SEED or payload.get("sequence_length") != SEQUENCE_LENGTH:
+        raise ValueError("math campaign data manifest has the wrong seed or sequence length")
     payload["dataset_path"] = str(dataset)
     payload["validation_path"] = str(validation)
     return payload
@@ -140,6 +237,8 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
     effective_rows = rows - rows % GLOBAL_BATCH_ROWS
     dropped_rows = rows - effective_rows
     max_steps = effective_rows // GLOBAL_BATCH_ROWS
+    if effective_rows != EFFECTIVE_EPOCH_ROWS or max_steps != MAX_STEPS:
+        raise ValueError("math campaign epoch derivation differs from the approved contract")
     return {
         "schema": "gcw.math_experiment_series.v2",
         "experiment": args.experiment,
@@ -150,6 +249,15 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
         "sequence_length": SEQUENCE_LENGTH,
         "global_batch_rows": GLOBAL_BATCH_ROWS,
         "seed": SEED,
+        "data_identity": {
+            "manifest": str(Path(args.data_manifest).expanduser().resolve()),
+            "dataset": str(data["dataset_path"]),
+            "dataset_sha256": data["dataset_sha256"],
+            "validation": str(data["validation_path"]),
+            "validation_sha256": data["validation_sha256"],
+            "source_ids_sha256": data["source_ids_sha256"],
+            "tokenizer_identity_sha256": data["tokenizer_identity_sha256"],
+        },
         "dataset_rows": rows,
         "effective_epoch_rows": effective_rows,
         "drop_last_rows": dropped_rows,
@@ -165,7 +273,8 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
         "learning_rates": PEAK_LEARNING_RATES,
         "micro_batch_rows": MICRO_BATCH_ROWS,
         "validation": {"rows": VALIDATION_ROWS, "approximately_every_steps": max_steps // 20},
-        "training_order": list(TRAIN_ORDER),
+        "training_order": list(TRAINABLE_ARMS),
+        "imported_arms": sorted(IMPORTED_ARMS),
         "evaluation_order": ["instruct-baseline", *TRAIN_ORDER],
         "tasks": {
             "canonical_multiple_choice": list(CANONICAL_TASKS),
@@ -196,6 +305,50 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
     }
 
 
+def _verify_full_sft_import(bundle: Path) -> dict[str, Any]:
+    from scripts.math_evaluation_bundle import verify_bundle
+
+    manifest = verify_bundle(bundle, expected_arm="full-sft", expected_step=MAX_STEPS)
+    for field in ("source_commit", "training_config_sha256", "source_checkpoint_manifest_sha256"):
+        if manifest.get(field) != FULL_SFT_IMPORT_IDENTITIES[field]:
+            raise ValueError(f"imported full-SFT bundle has the wrong {field}")
+    for name in ("config.json", "model.safetensors", "train_state.json"):
+        if manifest.get("files", {}).get(name, {}).get("sha256") != FULL_SFT_IMPORT_IDENTITIES[name]:
+            raise ValueError(f"imported full-SFT bundle has the wrong {name} identity")
+    return manifest
+
+
+def _write_import_manifest(args: argparse.Namespace, root: Path, source_commit: str) -> None:
+    if args.import_full_sft_bundle is None:
+        raise ValueError("the additive matrix requires --import-full-sft-bundle")
+    bundle = Path(args.import_full_sft_bundle).expanduser().resolve()
+    manifest = _verify_full_sft_import(bundle)
+    bundle_manifest = bundle / "bundle-manifest.json"
+    payload = {
+        "schema": "gcw.math_campaign_imports.v1",
+        "experiment": args.experiment,
+        "preparation_source_commit": source_commit,
+        "imports": {
+            "full-sft": {
+                "bundle": str(bundle),
+                "bundle_manifest_sha256": _sha256(bundle_manifest),
+                "training_source_commit": manifest["source_commit"],
+                "training_config_sha256": manifest["training_config_sha256"],
+                "source_checkpoint_manifest_sha256": manifest["source_checkpoint_manifest_sha256"],
+                "model_sha256": FULL_SFT_IMPORT_IDENTITIES["model.safetensors"],
+                "step": MAX_STEPS,
+            }
+        },
+    }
+    path = root / "imports.json"
+    encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    if path.exists():
+        if path.read_bytes() != encoded:
+            raise RuntimeError("refusing to replace a different immutable import manifest")
+        return
+    atomic_write_bytes(path, encoded, exclusive=True)
+
+
 def _wandb_id(experiment: str, name: str) -> str:
     prefix = re.sub(r"[^A-Za-z0-9_-]+", "-", experiment).strip("-")[:48]
     suffix = hashlib.sha256(f"{experiment}:{name}:{SEED}".encode()).hexdigest()[:12]
@@ -214,6 +367,19 @@ def _prepare_configs(
         missing = [str(path) for path in paths.values() if not path.is_file()]
         if missing:
             raise FileNotFoundError(f"incomplete existing config directory: {missing}")
+        existing_plan_path = root / "plan.json"
+        if not existing_plan_path.is_file():
+            raise RuntimeError("existing campaign configs have no immutable launch plan")
+        existing_plan = json.loads(existing_plan_path.read_text())
+        if existing_plan.get("source_commit") != plan["source_commit"]:
+            raise RuntimeError("existing campaign configs were prepared from another source commit")
+        if set(existing_plan.get("arms", {})) != set(TRAIN_ORDER):
+            raise RuntimeError("existing campaign plan has the wrong arm inventory")
+        for arm, path in paths.items():
+            config = load_train_config(path)
+            _validate_campaign_config(config, arm=arm, root=root, experiment=str(plan["experiment"]))
+            if existing_plan["arms"][arm].get("config_sha256") != _sha256(path):
+                raise RuntimeError(f"existing campaign config digest differs for {arm}")
         return paths
 
     runtime_manifest = root / "data-manifest.json"
@@ -254,6 +420,9 @@ def _prepare_configs(
         payload["final_lr_frac"] = 0.0
         payload["save_every"] = CHECKPOINT_EVERY
         payload["save_final"] = True
+        if arm in PROCESSOR_ARMS:
+            payload["activation_checkpoint_windows"] = 4
+            payload["activation_checkpoint_min_padded_sequence_length"] = 0
         payload["eval_every"] = max(1, plan["max_steps"] // 20)
         payload["eval_batches"] = VALIDATION_ROWS // micro_batch
         payload["eval_on_start"] = True
@@ -279,6 +448,12 @@ def _prepare_configs(
             }
         )
         path.write_text(yaml.safe_dump(payload, sort_keys=False))
+        _validate_campaign_config(
+            load_train_config(path),
+            arm=arm,
+            root=root,
+            experiment=args.experiment,
+        )
         result[arm] = path
     for name, path in all_paths.items():
         if name not in TRAIN_ORDER:
@@ -288,10 +463,14 @@ def _prepare_configs(
 
 def _completed_training(config_path: Path) -> bool:
     config = load_train_config(config_path)
-    state = Path(config.output_dir) / "checkpoint" / "train_state.json"
-    if not state.is_file():
+    checkpoint = Path(config.output_dir) / "checkpoint"
+    state = checkpoint / "train_state.json"
+    if not state.is_file() or int(json.loads(state.read_text()).get("step", -1)) != config.max_steps:
         return False
-    return int(json.loads(state.read_text()).get("step", -1)) == config.max_steps
+    verified = verify_training_checkpoint_files(checkpoint)
+    if int(verified["train_state"].get("step", -1)) != config.max_steps:
+        raise RuntimeError("verified checkpoint step differs from the configured final step")
+    return True
 
 
 def _resume_config(config_path: Path, root: Path) -> Path:
@@ -330,9 +509,7 @@ def _processor_states(arm: str) -> tuple[str, ...]:
 
 def _evaluation_cells(arm: str) -> tuple[tuple[str, str], ...]:
     return tuple(
-        (processor, thinking)
-        for processor in _processor_states(arm)
-        for thinking in ("thinking_off", "thinking_on")
+        (processor, thinking) for processor in _processor_states(arm) for thinking in ("thinking_off", "thinking_on")
     )
 
 
@@ -683,6 +860,12 @@ def _evaluate(
 
 def _preflight(args: argparse.Namespace, repository: Path, root: Path, env: dict[str, str]) -> None:
     _require_clean_repository(repository)
+    _reject_performance_overrides(env)
+    ambient_stops = sorted(
+        name for name in ("GCW_STOP_AFTER_CHECKPOINT_STEP", "GCW_STOP_AFTER_CHECKPOINT_UTC") if env.get(name)
+    )
+    if ambient_stops:
+        raise RuntimeError(f"monolithic campaign forbids ambient checkpoint stops: {ambient_stops}")
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     device_name = torch.cuda.get_device_name(0)
@@ -735,11 +918,14 @@ def _write_plan_with_costs(plan: dict[str, Any], configs: dict[str, Path], path:
             "config_sha256": _sha256(config_path),
             "processor_params": processor_params(config.model),
             "maximum_tokens": maximum_tokens,
-            "estimated_training_flops": total_training_flops(
-                config.model, maximum_tokens, config.sequence_len
-            ),
+            "estimated_training_flops": total_training_flops(config.model, maximum_tokens, config.sequence_len),
         }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    if path.exists():
+        if path.read_bytes() != encoded:
+            raise RuntimeError("refusing to replace a different immutable campaign plan")
+        return
+    atomic_write_bytes(path, encoded, exclusive=True)
 
 
 def execute(args: argparse.Namespace) -> None:
@@ -748,11 +934,20 @@ def execute(args: argparse.Namespace) -> None:
     data = _load_data_manifest(args)
     plan = _plan(args, data, source_commit)
     root = Path(args.experiment_root).expanduser().resolve()
-    if not args.execute:
+    if args.execute and args.prepare_only:
+        raise ValueError("--execute and --prepare-only are mutually exclusive")
+    if not args.execute and not args.prepare_only:
         print(json.dumps(plan, indent=2, sort_keys=True))
         return
 
+    _require_clean_repository(repository)
     root.mkdir(parents=True, exist_ok=True)
+    if args.prepare_only:
+        configs = _prepare_configs(args, root, data, plan)
+        _write_plan_with_costs(plan, configs, root / "plan.json")
+        _write_import_manifest(args, root, source_commit)
+        print(json.dumps({"root": str(root), "plan": str(root / "plan.json")}, sort_keys=True))
+        return
     env = dict(os.environ)
     record_root = (
         Path(args.record_root).expanduser().resolve()
@@ -770,6 +965,7 @@ def execute(args: argparse.Namespace) -> None:
     _preflight(args, repository, root, env)
     configs = _prepare_configs(args, root, data, plan)
     _write_plan_with_costs(plan, configs, root / "plan.json")
+    _write_import_manifest(args, root, source_commit)
     deadline = datetime.now(timezone.utc) + timedelta(hours=args.deadline_hours)
 
     if not _evaluate(
@@ -783,7 +979,19 @@ def execute(args: argparse.Namespace) -> None:
     ):
         return
 
-    for arm in TRAIN_ORDER:
+    full_sft_bundle = Path(args.import_full_sft_bundle).expanduser().resolve()
+    if not _evaluate(
+        args,
+        root,
+        "full-sft",
+        full_sft_bundle,
+        hf_target=False,
+        env=env,
+        deadline=deadline,
+    ):
+        return
+
+    for arm in TRAINABLE_ARMS:
         if _deadline_reached(deadline):
             return
         config_path = configs[arm]
@@ -814,6 +1022,7 @@ def execute(args: argparse.Namespace) -> None:
         "source_commit": source_commit,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "plan_sha256": _sha256(root / "plan.json"),
+        "imports_sha256": _sha256(root / "imports.json"),
     }
     (root / "completed.json").write_text(json.dumps(completion, indent=2, sort_keys=True) + "\n")
 
@@ -828,6 +1037,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", help="Override the manifest training JSONL path without changing its hash")
     parser.add_argument("--validation-dataset", help="Override the manifest validation JSONL path")
     parser.add_argument("--experiment-root", required=True)
+    parser.add_argument("--import-full-sft-bundle")
     parser.add_argument("--record-root")
     parser.add_argument("--experiment", default=EXPERIMENT)
     parser.add_argument("--eval-batch-size", type=int, default=64)
@@ -837,6 +1047,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minimum-free-gib", type=int, default=200)
     parser.add_argument("--expected-gpu", default="H200")
     parser.add_argument("--allow-other-gpu", action="store_true")
+    parser.add_argument("--prepare-only", action="store_true", help="Create immutable configs and plan without CUDA")
     parser.add_argument("--execute", action="store_true", help="Required to create artifacts or launch work")
     return parser
 

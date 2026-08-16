@@ -5,7 +5,7 @@ import json
 from scripts import run_math_experiments_full_single_seed as series
 
 
-def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path):
+def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path, monkeypatch):
     dataset = tmp_path / "train.jsonl"
     validation = tmp_path / "validation.jsonl"
     dataset.write_text("{}\n")
@@ -14,13 +14,27 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path):
     manifest.write_text(
         json.dumps(
             {
+                "schema": "gcw.math_experiment_data.v1",
                 "rows": 697_744,
+                "validation_rows": 4096,
+                "seed": 24,
+                "sequence_length": 4096,
+                "source_ids_sha256": "12" * 32,
+                "tokenizer_identity_sha256": "23" * 32,
                 "dataset_path": str(dataset),
                 "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
                 "validation_path": str(validation),
                 "validation_sha256": hashlib.sha256(validation.read_bytes()).hexdigest(),
             }
         )
+    )
+    monkeypatch.setattr(
+        series,
+        "_capture_jsonl_identity",
+        lambda path: (
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            4096 if path == validation else 697_744,
+        ),
     )
     args = Namespace(
         data_manifest=str(manifest),
@@ -34,7 +48,29 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path):
     data = series._load_data_manifest(args)
     plan = series._plan(args, data, "a" * 40)
 
-    assert plan["training_order"] == list(series.TRAIN_ORDER)
+    assert plan["training_order"] == list(series.TRAINABLE_ARMS)
+    assert plan["imported_arms"] == ["full-sft"]
+    assert len(plan["training_order"]) == 10
+    assert len(plan["evaluation_order"]) == 12
+    assert "icarus" in plan["training_order"]
+    assert "diffusion-bgt-t4-sigma0" in plan["training_order"]
+    assert series.PROCESSOR_ARMS == frozenset(
+        {
+            "bt",
+            "bgt",
+            "icarus",
+            "diffusion-bgt-t4-sigma015",
+            "diffusion-bgt-t4-sigma0",
+            "longshot",
+            "longshot-internal-r4",
+            "longshot-external-r4",
+            "flow-bgt-t4",
+        }
+    )
+    assert all(series.PEAK_LEARNING_RATES[arm] == 1e-3 for arm in series.PROCESSOR_ARMS)
+    assert series.PEAK_LEARNING_RATES["full-sft"] == 5e-6
+    assert series.PEAK_LEARNING_RATES["lora-r32"] == 1e-4
+    assert all(series.MICRO_BATCH_ROWS[arm] > 0 for arm in series.TRAIN_ORDER)
     assert plan["max_steps"] == 10_902
     assert plan["effective_epoch_rows"] == 697_728
     assert plan["drop_last_rows"] == 16
@@ -56,6 +92,8 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path):
         ("on", "thinking_on"),
     )
     assert series._processor_states("bgt") == ("off", "on")
+    assert series._processor_states("icarus") == ("off", "on")
+    assert series._processor_states("diffusion-bgt-t4-sigma0") == ("off", "on")
     assert series._processor_states("full-sft") == ("on",)
     assert plan["schema"] == "gcw.math_experiment_series.v2"
     assert "lambada_openai" not in plan["tasks"]["canonical_multiple_choice"]

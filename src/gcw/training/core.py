@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -104,13 +105,61 @@ from gcw.training.objectives import (
 
 
 def train_from_config(path: str | Path) -> None:
-    train(load_train_config(path))
+    try:
+        train(load_train_config(path))
+    finally:
+        # The CLI process must never retain a distributed group after any
+        # checkpoint, validation, tracking, or model failure.
+        cleanup_distributed()
+
+
+def _checkpoint_stop_policy(config: TrainConfig) -> tuple[int | None, datetime | None] | None:
+    step_text = os.environ.get("GCW_STOP_AFTER_CHECKPOINT_STEP")
+    utc_text = os.environ.get("GCW_STOP_AFTER_CHECKPOINT_UTC")
+    if step_text is None and utc_text is None:
+        return None
+    if config.save_every <= 0:
+        raise ValueError("checkpoint-boundary stopping requires save_every > 0")
+    stop_step: int | None = None
+    if step_text is not None:
+        try:
+            stop_step = int(step_text)
+        except ValueError as error:
+            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_STEP must be an integer") from error
+        if not 1 <= stop_step <= config.max_steps:
+            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_STEP must be within the configured run")
+    stop_utc: datetime | None = None
+    if utc_text is not None:
+        try:
+            stop_utc = datetime.fromisoformat(utc_text.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_UTC must be ISO-8601") from error
+        if stop_utc.tzinfo is None or stop_utc.utcoffset() is None:
+            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_UTC must include a timezone")
+        stop_utc = stop_utc.astimezone(timezone.utc)
+    return stop_step, stop_utc
+
+
+def _checkpoint_stop_requested(
+    policy: tuple[int | None, datetime | None] | None,
+    step: int,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if policy is None:
+        return False
+    stop_step, stop_utc = policy
+    if stop_step is not None and step >= stop_step:
+        return True
+    observed = datetime.now(timezone.utc) if now is None else now.astimezone(timezone.utc)
+    return stop_utc is not None and observed >= stop_utc
 
 
 def train(config: TrainConfig) -> None:
     require_optimized_step_admission(config.performance.optimized_step)
     validate_qwen3_backbone_chunk_backend(config.backbone_chunk_backend)
     validate_experiment(config)
+    checkpoint_stop_policy = _checkpoint_stop_policy(config)
     _, model_receipt = resolve_model(config.model).require()
     resolve_experiment(config, model_receipt).require()
     torch.manual_seed(config.seed)
@@ -181,8 +230,15 @@ def train(config: TrainConfig) -> None:
             print0(f"checkpoint already completed max_steps={config.max_steps}")
             cleanup_distributed()
             return
+        if _checkpoint_stop_requested(checkpoint_stop_policy, start_step):
+            print0(f"checkpoint stop boundary already reached step={start_step}")
+            cleanup_distributed()
+            return
         smooth_loss = checkpoint.resume_state.smooth_loss
         cursor = checkpoint.loader_cursor(rank=rank)
+    elif _checkpoint_stop_requested(checkpoint_stop_policy, start_step):
+        cleanup_distributed()
+        raise RuntimeError("checkpoint deadline elapsed before the first authenticated checkpoint")
 
     initial_processor_state: dict[str, torch.Tensor] | None = None
     if use_fsdp:
@@ -192,6 +248,8 @@ def train(config: TrainConfig) -> None:
         model.init_weights()
         if checkpoint is not None:
             checkpoint.restore_model(model)
+            if config.trainable == "cache_processor":
+                initial_processor_state = checkpoint.load_initial_processor_state(device="cpu")
         elif config.init_checkpoint:
             _load_initial_model(model, config.init_checkpoint)
         elif config.backbone_checkpoint:
@@ -305,8 +363,6 @@ def train(config: TrainConfig) -> None:
     if checkpoint is not None:
         checkpoint.restore_optimizer(opt, device=device)
     stream = build_training_stream(config, device, rank=rank, world_size=world_size, cursor=cursor)
-    if checkpoint is not None:
-        checkpoint.restore_rng(rank=rank)
 
     target_tokens = tokens_per_step * config.max_steps
     flops_per_tok = training_flops_per_token(config.model, config.sequence_len)
@@ -331,6 +387,14 @@ def train(config: TrainConfig) -> None:
         "resume_exact_topology": checkpoint.resume_state.exact_topology if checkpoint is not None else True,
         "resume_saved_world_size": checkpoint.resume_state.saved_world_size if checkpoint is not None else world_size,
         "resume_current_world_size": world_size,
+        "checkpoint_stop_policy": (
+            None
+            if checkpoint_stop_policy is None
+            else {
+                "step": checkpoint_stop_policy[0],
+                "utc": (None if checkpoint_stop_policy[1] is None else checkpoint_stop_policy[1].isoformat()),
+            }
+        ),
         "model_runtime_backends": _model_runtime_backends(model, device),
         "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
         "qwen3_backbone_chunk_backend": qwen3_backbone_chunk_backend_metadata(config.backbone_chunk_backend),
@@ -394,6 +458,10 @@ def train(config: TrainConfig) -> None:
     tracker = RunTracker.for_training(config, run_meta, model=model) if rank == 0 else None
     if tracker is not None:
         tracker.log_message(budget_message)
+    if checkpoint is not None:
+        # W&B/run-record construction is outside the scientific trajectory. Restore
+        # the authenticated state immediately before resumed model execution.
+        checkpoint.restore_rng(rank=rank)
     if start_step == 0 and config.eval_on_start and config.eval_every:
         val = _eval_loss(model, config, device)
         if rank == 0:
@@ -405,6 +473,8 @@ def train(config: TrainConfig) -> None:
 
     retained_checkpoint_every = _retained_checkpoint_every()
     last_checkpoint_step = start_step
+    completed_step = start_step
+    stopped_at_checkpoint = False
     model.train()
     for step in range(start_step, config.max_steps):
         step_start = time.perf_counter()
@@ -510,6 +580,8 @@ def train(config: TrainConfig) -> None:
         opt.step()
 
         step_num = step + 1
+        completed_step = step_num
+        stop_after_step = _checkpoint_stop_requested(checkpoint_stop_policy, step_num)
         step_seconds = time.perf_counter() - step_start
         tokens_seen = tokens_per_step * step_num
         flops_seen = flops_per_tok * tokens_seen
@@ -569,7 +641,7 @@ def train(config: TrainConfig) -> None:
                 adaptive_padded_sequence_lengths,
             )
         )
-        if config.eval_every and step_num % config.eval_every == 0:
+        if not stop_after_step and config.eval_every and step_num % config.eval_every == 0:
             train_metrics.update(_eval_loss(model, config, device))
         if rank == 0:
             msg = f"step {step_num}/{config.max_steps} loss={train_metrics['train/loss_smooth']:.4f}"
@@ -595,7 +667,7 @@ def train(config: TrainConfig) -> None:
                     },
                 )
 
-        if config.save_every and step_num % config.save_every == 0:
+        if stop_after_step or (config.save_every and step_num % config.save_every == 0):
             _save_step_checkpoint(
                 Path(config.output_dir) / "checkpoint",
                 model,
@@ -628,8 +700,12 @@ def train(config: TrainConfig) -> None:
                     use_fsdp=use_fsdp,
                     initial_processor_state=initial_processor_state,
                 )
+            if stop_after_step:
+                stopped_at_checkpoint = True
+                print0(f"stopping after authenticated checkpoint step={step_num}")
+                break
 
-    if config.save_final and last_checkpoint_step != config.max_steps:
+    if not stopped_at_checkpoint and config.save_final and last_checkpoint_step != config.max_steps:
         _save_step_checkpoint(
             Path(config.output_dir) / "checkpoint",
             model,
@@ -647,7 +723,14 @@ def train(config: TrainConfig) -> None:
         )
     _close_training_stream(stream)
     if tracker is not None:
-        tracker.finish(summary={**run_meta, "completed_step": config.max_steps})
+        tracker.finish(
+            summary={
+                **run_meta,
+                "completed_step": completed_step,
+                "planned_max_steps": config.max_steps,
+                "stopped_at_checkpoint": stopped_at_checkpoint,
+            }
+        )
     cleanup_distributed()
 
 

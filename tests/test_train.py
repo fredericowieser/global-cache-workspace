@@ -240,6 +240,7 @@ def test_train_passes_explicit_wandb_resume_identity(monkeypatch, tmp_path):
     assert fake.init_kwargs["id"] == "run-123"
     assert fake.init_kwargs["resume"] == "must"
 
+
 def test_train_logs_longshot_iteration_overlap_metrics(monkeypatch, tmp_path):
     fake = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake)
@@ -470,7 +471,9 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
     train(cfg)
 
     trained, _, _ = load_checkpoint(tmp_path / "run" / "checkpoint")
-    assert torch.allclose(trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123))
+    assert torch.allclose(
+        trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123)
+    )
 
 
 def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
@@ -603,6 +606,42 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
         assert torch.equal(expected, actual)
 
 
+def test_training_can_stop_cleanly_at_an_authenticated_checkpoint(monkeypatch, tmp_path):
+    config = tiny_train_config(tmp_path)
+    config.max_steps = 4
+    config.save_every = 2
+    config.eval_every = 0
+    config.eval_on_start = False
+    config.wandb.enabled = False
+    monkeypatch.setenv("GCW_STOP_AFTER_CHECKPOINT_STEP", "3")
+
+    train(config)
+
+    checkpoint = tmp_path / "run" / "checkpoint"
+    assert json.loads((checkpoint / "manifest.json").read_text())["complete"] is True
+    assert json.loads((checkpoint / "train_state.json").read_text())["step"] == 3
+
+    resumed = tiny_train_config(tmp_path)
+    resumed.max_steps = 4
+    resumed.save_every = 2
+    resumed.eval_every = 0
+    resumed.eval_on_start = False
+    resumed.wandb.enabled = False
+    resumed.resume = ResumeConfig(checkpoint=str(checkpoint))
+    train(resumed)
+    assert json.loads((checkpoint / "train_state.json").read_text())["step"] == 3
+
+
+def test_checkpoint_stop_policy_rejects_malformed_step_before_training(monkeypatch, tmp_path):
+    config = tiny_train_config(tmp_path)
+    config.wandb.enabled = False
+    config.save_every = 1
+    monkeypatch.setenv("GCW_STOP_AFTER_CHECKPOINT_STEP", "not-an-integer")
+
+    with pytest.raises(ValueError, match="must be an integer"):
+        train(config)
+
+
 def test_resume_at_max_steps_exits_without_retraining(capsys, tmp_path):
     config = tiny_train_config(tmp_path)
     config.wandb.enabled = False
@@ -636,6 +675,7 @@ def test_resume_rejects_changed_training_dynamics(tmp_path):
 
     with pytest.raises(CheckpointCompatibilityError, match="optimizer"):
         train(resumed)
+
 
 def test_sft_chat_template_applies_suffix_to_message_rows():
     class ChatTokenizer:
