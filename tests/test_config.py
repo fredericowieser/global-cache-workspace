@@ -18,11 +18,30 @@ def test_row_and_token_batch_contracts_are_mutually_exclusive():
         TrainConfig(total_batch_size=1024, global_batch_rows=64)
 
 
-def test_train_config_rejects_conflicting_checkpoint_sources():
-    with pytest.raises(ValueError, match="mutually exclusive"):
+def test_train_config_allows_backbone_with_resume_for_fingerprint_stability():
+    # Resuming must preserve the original backbone_checkpoint so the training
+    # fingerprint matches, while init_checkpoint remains mutually exclusive.
+    config = TrainConfig(
+        backbone_checkpoint="runs/backbone/checkpoint",
+        resume={"checkpoint": "runs/training/checkpoint"},
+    )
+    assert config.backbone_checkpoint == "runs/backbone/checkpoint"
+    assert config.resume is not None
+
+
+def test_train_config_rejects_init_checkpoint_with_resume():
+    with pytest.raises(ValueError, match="init_checkpoint and resume are mutually exclusive"):
+        TrainConfig(
+            init_checkpoint="runs/init/checkpoint",
+            resume={"checkpoint": "runs/training/checkpoint"},
+        )
+
+
+def test_train_config_rejects_backbone_with_init_checkpoint():
+    with pytest.raises(ValueError, match="backbone_checkpoint and init_checkpoint are mutually exclusive"):
         TrainConfig(
             backbone_checkpoint="runs/backbone/checkpoint",
-            resume={"checkpoint": "runs/training/checkpoint"},
+            init_checkpoint="runs/init/checkpoint",
         )
 
 
@@ -107,7 +126,6 @@ def test_canonical_data_config_requires_non_placeholder_artifact_identity_hashes
             expected_artifact_sha256=artifact_hash,
             expected_source_ids_sha256=source_ids_hash,
         )
-
 
 
 def test_load_train_config_bytes_uses_captured_snapshot(tmp_path) -> None:

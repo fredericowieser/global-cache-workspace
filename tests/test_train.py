@@ -606,6 +606,73 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
         assert torch.equal(expected, actual)
 
 
+def test_resume_with_backbone_checkpoint_preserves_fingerprint_and_continues(monkeypatch, tmp_path):
+    # A resume config must retain the original backbone_checkpoint so the
+    # training fingerprint matches, while the architecture validation allows
+    # backbone_checkpoint + resume together (resume wins model restoration).
+    backbone_cfg = ModelConfig(
+        variant="tf",
+        family="smollm",
+        sequence_len=16,
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=8,
+        tie_embeddings=True,
+    )
+    backbone = build_model(backbone_cfg)
+    backbone.init_weights()
+    backbone_checkpoint = tmp_path / "backbone"
+    save_checkpoint(backbone_checkpoint, backbone, backbone_cfg)
+
+    def bt_config(output_dir: str) -> TrainConfig:
+        config = tiny_train_config(tmp_path)
+        config.model = ModelConfig(
+            variant="bt",
+            family="smollm",
+            sequence_len=16,
+            vocab_size=128,
+            hidden_size=32,
+            intermediate_size=64,
+            num_layers=2,
+            num_heads=4,
+            num_kv_heads=2,
+            head_dim=8,
+            tie_embeddings=True,
+            cache_processor=CacheProcessorConfig(
+                process_every=4,
+                topk=2,
+                hidden_size=8,
+                intermediate_size=16,
+                num_heads=1,
+                num_kv_heads=1,
+            ),
+        )
+        config.trainable = "cache_processor"
+        config.backbone_checkpoint = str(backbone_checkpoint)
+        config.output_dir = output_dir
+        config.max_steps = 4
+        config.save_every = 2
+        config.eval_every = 0
+        config.eval_on_start = False
+        config.wandb.enabled = False
+        return config
+
+    first = bt_config(str(tmp_path / "run"))
+    monkeypatch.setenv("GCW_STOP_AFTER_CHECKPOINT_STEP", "2")
+    train(first)
+    monkeypatch.delenv("GCW_STOP_AFTER_CHECKPOINT_STEP")
+    assert json.loads((tmp_path / "run" / "checkpoint" / "train_state.json").read_text())["step"] == 2
+
+    resumed = bt_config(str(tmp_path / "run"))
+    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "run" / "checkpoint"))
+    train(resumed)
+    assert json.loads((tmp_path / "run" / "checkpoint" / "train_state.json").read_text())["step"] == 4
+
+
 def test_training_can_stop_cleanly_at_an_authenticated_checkpoint(monkeypatch, tmp_path):
     config = tiny_train_config(tmp_path)
     config.max_steps = 4

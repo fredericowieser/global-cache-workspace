@@ -72,8 +72,9 @@ _MODEL_CONFIG_VALIDATION_CODES = {
     "workspace_refinement_write",
 }
 _TRAIN_CONFIG_VALIDATION_CODES = {
+    "backbone_with_init",
     "canonical_resume_manifest",
-    "checkpoint_sources",
+    "init_with_resume",
     "pretrain_data",
     "processor_training_without_processor",
     "sft_data",
@@ -409,11 +410,7 @@ def resolve_experiment(
         capabilities=capabilities,
     )
     processor = config.model.cache_processor
-    recurrence_plan = (
-        "none"
-        if processor is None
-        else f"{processor.iteration_mode}:{processor.iterations}"
-    )
+    recurrence_plan = "none" if processor is None else f"{processor.iteration_mode}:{processor.iterations}"
     if config.model.diffusion_processor is not None:
         flow_plan = f"task_directed_diffusion:{config.model.diffusion_processor.num_steps}"
     elif config.model.flow_processor is not None:
@@ -648,11 +645,16 @@ def _experiment_issues(config: TrainConfig) -> list[CompatibilityIssue]:
         add("unknown_training_mode", f"unknown training mode: {config.mode}", "mode")
     if config.distributed not in {"none", "ddp", "fsdp"}:
         add("unknown_execution", f"unknown distributed strategy: {config.distributed}", "distributed")
-    checkpoint_sources = [config.backbone_checkpoint, config.init_checkpoint, config.resume]
-    if sum(source is not None for source in checkpoint_sources) > 1:
+    if config.init_checkpoint is not None and config.backbone_checkpoint is not None:
         add(
-            "checkpoint_sources",
-            "backbone_checkpoint, init_checkpoint, and resume are mutually exclusive",
+            "backbone_with_init",
+            "backbone_checkpoint and init_checkpoint are mutually exclusive",
+            "init_checkpoint",
+        )
+    if config.init_checkpoint is not None and config.resume is not None:
+        add(
+            "init_with_resume",
+            "init_checkpoint and resume are mutually exclusive",
             "resume",
         )
     if config.mode == "pretrain" and config.data.kind not in {"fineweb", "random"}:
@@ -693,7 +695,9 @@ def _processor_assembly(config: ModelConfig) -> ProcessorAssembly | None:
         flow_solver_steps=(
             config.diffusion_processor.num_steps
             if config.diffusion_processor is not None
-            else 0 if config.flow_processor is None else config.flow_processor.num_steps
+            else 0
+            if config.flow_processor is None
+            else config.flow_processor.num_steps
         ),
     )
 
@@ -731,7 +735,11 @@ def _memory_domains(
                 allowed_writes=kv_writes,
             )
         )
-    if config.family in {"qwen3_5", "qwen3_5_moe"} and config.layer_types is not None and "linear_attention" in config.layer_types:
+    if (
+        config.family in {"qwen3_5", "qwen3_5_moe"}
+        and config.layer_types is not None
+        and "linear_attention" in config.layer_types
+    ):
         domains.extend(
             (
                 MemoryDomainDescriptor(
