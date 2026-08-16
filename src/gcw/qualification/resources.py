@@ -123,6 +123,8 @@ def capture_resource_identity(
         raise QualificationResourceError(f"expected {expected_accelerator.upper()} but found {properties.name}")
     gpu_rows = _query_nvidia_smi()
     property_uuid = _normalized_optional(getattr(properties, "uuid", None))
+    if property_uuid is not None and not property_uuid.startswith("GPU-"):
+        property_uuid = f"GPU-{property_uuid}"
     gpu = _match_gpu_row(gpu_rows, property_uuid, ordinal, visible)
     if require_gpu_authority and (
         gpu is None or gpu.uuid is None or gpu.pci_bus_id is None or gpu.driver_version is None
