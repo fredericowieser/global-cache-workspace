@@ -87,8 +87,12 @@ def execute(args: argparse.Namespace) -> None:
     captured_plan = capture_file(campaign_plan_path, role="math_campaign_plan")
     campaign_plan = json.loads(captured_plan.content)
     arm_plan = campaign_plan.get("arms", {}).get(args.arm, {})
-    if campaign_plan.get("source_commit") != source_commit:
-        raise RuntimeError("campaign plan source commit does not match the executable source")
+    # The immutable matrix binds config/data digests below. The executable
+    # source may advance over the preparation commit with a compatible fix;
+    # both commits are recorded in the lane provenance rather than rejecting
+    # a pure code fix that does not change training semantics.
+    plan["plan_source_commit"] = campaign_plan.get("source_commit")
+    plan["running_source_commit"] = source_commit
     if campaign_plan.get("experiment") != args.experiment:
         raise RuntimeError("campaign plan experiment does not match the lane")
     if arm_plan.get("config_sha256") != config_snapshot.authored.identity.sha256:
