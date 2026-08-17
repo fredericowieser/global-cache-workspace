@@ -20,14 +20,15 @@ model:
     topk_heads: 8
     topk_linear_heads: 192
     linear_state_cache: true
-    linear_state_query_mode: global
+    linear_state_query_mode: per_linear_state
+    linear_state_update_mode: outer_product
     gate_linear_state_delta: true
     score: kv_norm
-    hidden_size: 1664
-    intermediate_size: 6656
-    num_layers: 4
-    num_heads: 13
-    num_kv_heads: 13
+    hidden_size: 768
+    intermediate_size: 3072
+    num_layers: 10
+    num_heads: 6
+    num_kv_heads: 6
     norm_eps: 1.0e-06
     rope_theta: 10000.0
     gate_init: -2.0
@@ -96,13 +97,13 @@ data:
   response_prefix: "\n"
   sft_skip_rows: 128000
 mode: sft
-distributed: ddp
+distributed: fsdp
 freeze_backbone: true
 backbone_checkpoint: runs/bottleneck_llm/qwen35_4b_base_tf_sft/checkpoint-2000
 output_dir: runs/bottleneck_llm/qwen35_4b_base_longshot_query_final_token_unrope_kv_norm_cp_frac005_from_sft_step2000_frozen_shared
-batch_size: 2
+batch_size: 16
 sequence_len: 512
-max_steps: 2000
+max_steps: 3000
 total_batch_size: 65536
 learning_rate: 0.0001
 adam_beta2: 0.999
@@ -112,7 +113,7 @@ weight_decay: 0.0
 grad_clip: 1.0
 precision: bf16_mixed
 seed: 24
-save_every: 100
+save_every: 1000
 wandb:
   enabled: true
   project: global-cache-workspace
@@ -134,8 +135,8 @@ wandb:
   - target-processor-fraction-0.05
 metadata:
   backbone_non_embedding_params: 3570052096
-  processor_params: 180282497
-  total_non_embedding_params: 3750334593
-  processor_fraction: 0.050498561968323724
+  processor_params: 171452929
+  total_non_embedding_params: 3741505025
+  processor_fraction: 0.048025329712163396
   target_processor_fraction: 0.05
   target_processor_params: 178502605
