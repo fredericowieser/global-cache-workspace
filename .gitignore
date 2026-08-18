@@ -47,6 +47,3 @@ wandb/
 .DS_Store
 Thumbs.db
 *.swp
-
-# Agents
-AGENTS.md
