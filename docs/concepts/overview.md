@@ -39,15 +39,14 @@ Five boundaries prevent conceptual mistakes:
 
 | Layer | Main paths | Responsibility |
 |---|---|---|
-| Configuration | `src/gcw/config.py`, `configs/` | Typed experiment definitions and concrete run matrices |
+| Configuration | `src/gcw/config/`, `configs/` | Typed experiment definitions and concrete run matrices |
 | Data | `src/gcw/data/` | Tokenization, FineWeb shards, SFT rows, resumable batch streams |
-| Backbone | `src/gcw/models/backbones/transformer.py` | Decoder-only attention, MLP, RoPE, loss, and generation |
+| Backbone | `src/gcw/models/backbones/` | Decoder-only attention, MLP, RoPE, loss, and generation |
 | Memory | `src/gcw/models/cache_processors/state.py`, `src/gcw/models/cache_processors/windowed.py` | Dynamic and static KV storage plus selection metadata |
 | Processors | `src/gcw/models/cache_processors/` | BT, BGT, Icarus, Longshot, and Flow cache transformations |
-| Training | `src/gcw/training/core.py`, `src/gcw/training/checkpoint.py` | Distributed optimization, schedules, exact resume, W&B |
+| Training | `src/gcw/training/core.py`, `src/gcw/training/checkpoint/` | Distributed optimization, schedules, exact resume, W&B |
 | Evaluation | `src/gcw/evaluation/core.py`, `src/gcw/evaluation/scoring.py` | Task generation, likelihood, BPB, distributed aggregation |
-| Conversion | `src/gcw/convert.py` | Strict translation from external checkpoint layouts |
-| Analysis | `src/gcw/analysis/` | Deterministic ablation and interpretation helpers |
+| Conversion | `src/gcw/convert/` | Strict translation from external checkpoint layouts |
 | Operations | `scripts/`, `docs/` | Slurm launch, reproduction, publication, and focused reports |
 | Verification | `tests/` | Behavioral, numerical, distributed, configuration, and regression contracts |
 

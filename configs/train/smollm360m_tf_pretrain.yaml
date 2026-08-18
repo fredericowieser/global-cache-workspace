@@ -20,7 +20,8 @@ data:
   max_length: 2048
 mode: pretrain
 distributed: ddp
-trainable: all
+freeze_backbone: false
+loss: next_token_ce
 checkpoint_format: native_safetensors
 output_dir: runs/smollm360m_tf_pretrain
 batch_size: 32
@@ -30,7 +31,7 @@ learning_rate: 0.003
 weight_decay: 0.1
 warmup_steps: 1907
 grad_clip: 1.0
-bf16: true
+precision: bf16_mixed
 seed: 24
 save_every: 1000
 eval_every: 250

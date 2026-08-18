@@ -47,6 +47,7 @@ guides/add-a-cache-processor
 
 experiments/qwen3-math-adaptation
 experiments/smollm-matched-total
+experiments/future
 ```
 
 ```{toctree}
@@ -85,5 +86,6 @@ development/testing
 development/documentation
 development/invariants
 development/refactor-plan
+development/future
 development/migration-history
 ```

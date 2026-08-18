@@ -324,7 +324,7 @@ def evaluate_chat_examples(
     generated: list[dict[str, Any] | None] = [None] * len(examples)
     started = time.monotonic()
     peak_memory = 0
-    if torch.cuda.is_available():
+    if backend.device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(backend.device)
     for chunk in batches:
         width = max(len(item.prompt_ids) for item in chunk)
@@ -365,7 +365,7 @@ def evaluate_chat_examples(
                 "parse_success": prediction is not None,
                 "correct": correct,
             }
-        if torch.cuda.is_available():
+        if backend.device.type == "cuda":
             peak_memory = max(peak_memory, int(torch.cuda.max_memory_allocated(backend.device)))
     if any(row is None for row in generated):
         raise RuntimeError("chat generation did not produce every row")

@@ -1,0 +1,284 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any, cast
+import torch
+import torch.nn as nn
+
+from gcw.checkpoint import load_checkpoint
+from gcw.evaluation.scoring import (
+    encode_generate_prompt,
+    stop_token_sequences,
+    tokenizer_for_checkpoint,
+    trim_generated_token_ids,
+)
+from gcw.evaluation.tasks import _normalize_until, _trim_until
+
+try:
+    from lm_eval.api.model import TemplateLM
+    HAS_LM_EVAL = True
+except ImportError:
+    TemplateLM = object
+    HAS_LM_EVAL = False
+
+
+def _distributed_eval_state():
+    try:
+        from accelerate import PartialState
+    except ImportError:
+        return None, 0, 1
+    state = PartialState()
+    return state, state.local_process_index, state.num_processes
+
+
+def _eval_device(local_rank: int) -> torch.device:
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        return torch.device("cuda", local_rank)
+    return torch.device("cpu")
+
+
+def _accelerator():
+    try:
+        from accelerate import Accelerator, PartialState
+    except ImportError:
+        return _NoopAccelerator()
+    return Accelerator() if PartialState().num_processes > 1 else _NoopAccelerator()
+
+
+class _NoopAccelerator:
+    @staticmethod
+    def gather(x):
+        return x
+
+
+class ProcessorBypass(nn.Module):
+    """Expose a composed checkpoint's exact loaded backbone for control cells."""
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        backbone = getattr(model, "backbone", None)
+        if not isinstance(backbone, nn.Module):
+            raise ValueError("processor bypass requires a composed GCW checkpoint")
+        self.backbone = backbone
+        self.config = getattr(backbone, "config")
+
+    def get_device(self) -> torch.device:
+        return cast(Any, self.backbone).get_device()
+
+    def forward(self, *args, **kwargs):
+        return cast(Any, self.backbone)(*args, **kwargs)
+
+    def generate(self, *args, **kwargs):
+        return cast(Any, self.backbone).generate(*args, **kwargs)
+
+    def generate_fast(self, *args, **kwargs):
+        return cast(Any, self.backbone).generate_fast(*args, **kwargs)
+
+
+def _load_eval_target(
+    *,
+    checkpoint: str | Path | None,
+    hf_model: str | Path | None,
+    processor_enabled: bool,
+    device: torch.device,
+    dtype: torch.dtype | str | None = "auto",
+):
+    if (checkpoint is None) == (hf_model is None):
+        raise ValueError("choose exactly one evaluation target: checkpoint or hf_model")
+    if hf_model is not None:
+        return _load_hf_eval_target(hf_model, device)
+    model, cfg, state = load_checkpoint(cast(str | Path, checkpoint), device=device, dtype=dtype)
+    tokenizer = tokenizer_for_checkpoint(cfg, state)
+    if not processor_enabled and hasattr(model, "backbone"):
+        model = ProcessorBypass(model)
+    return model, tokenizer
+
+
+def _load_hf_eval_target(source: str | Path, device: torch.device):
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from gcw.evaluation.scoring import HFTokenizerAdapter
+
+    tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
+    hf_model = cast(
+        Any,
+        AutoModelForCausalLM.from_pretrained(
+            source,
+            trust_remote_code=False,
+            torch_dtype=torch.bfloat16 if device.type == "cuda" else torch.float32,
+        ),
+    ).to(device)
+    adapter = HFCausalLMAdapter(hf_model)
+    return adapter, HFTokenizerAdapter(tokenizer, str(source))
+
+
+class HFCausalLMAdapter(nn.Module):
+    """Minimal native interface used by GCW's lm-eval adapter."""
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+        max_length = int(getattr(model.config, "max_position_embeddings", 2048))
+        self.config = type("EvalConfig", (), {"sequence_len": max_length})()
+
+    def get_device(self) -> torch.device:
+        return next(self.model.parameters()).device
+
+    def forward(self, input_ids: torch.Tensor, *_args, **_kwargs) -> torch.Tensor:
+        return cast(Any, self.model)(input_ids=input_ids).logits
+
+    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, eos_token_id: int | None = None):
+        return cast(Any, self.model).generate(
+            input_ids=input_ids,
+            attention_mask=torch.ones_like(input_ids),
+            do_sample=False,
+            max_new_tokens=max_new_tokens,
+            eos_token_id=eos_token_id,
+            pad_token_id=eos_token_id,
+            use_cache=True,
+        )
+
+
+class GCWEvalLM(TemplateLM):
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        batch_size: int = 8,
+    ):
+        if not HAS_LM_EVAL:
+            raise ImportError("Install the eval extra: uv sync --extra eval")
+        super().__init__()
+        self.accelerator = _accelerator()
+        self.model = model.eval()
+        self.tokenizer = tokenizer
+        self.batch_size = batch_size
+        self.max_length = model.config.sequence_len
+        self.add_special_tokens_for_generate = False
+        self.prompt_mode = "auto"
+
+    @property
+    def tokenizer_name(self) -> str:
+        return getattr(self.tokenizer, "name_or_path", self.tokenizer.__class__.__name__)
+
+    @property
+    def eot_token_id(self) -> int:
+        return self.tokenizer.eot_id
+
+    def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt=True) -> str:
+        kwargs = {
+            "tokenize": False,
+            "add_generation_prompt": add_generation_prompt,
+        }
+        prompt_mode = getattr(self, "prompt_mode", "auto")
+        if prompt_mode in {"thinking_off", "thinking_on"}:
+            kwargs["enable_thinking"] = prompt_mode == "thinking_on"
+        return self.tokenizer.apply_chat_template(chat_history, **kwargs)
+
+    def tok_encode(self, string: str, **kwargs) -> list[int]:
+        return self.tokenizer.encode(string)
+
+    def tok_decode(self, tokens, **kwargs) -> str:
+        return self.tokenizer.decode(tokens)
+
+    @torch.no_grad()
+    def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
+        device = self.model.get_device()
+        out: list[tuple[float, bool] | None] = [None] * len(requests)
+        order = sorted(range(len(requests)), key=lambda i: len(requests[i][1]) + len(requests[i][2]))
+        for start in range(0, len(order), self.batch_size):
+            idxs = order[start : start + self.batch_size]
+            inputs, continuations = [], []
+            for i in idxs:
+                _, ctx, cont = requests[i]
+                full = (ctx + cont)[-(self.max_length + 1) :]
+                inputs.append(full[:-1])
+                continuations.append(cont[-self.max_length :])
+            max_len = max(len(x) for x in inputs)
+            padded = torch.zeros(len(inputs), max_len, dtype=torch.long, device=device)
+            for row, inp in enumerate(inputs):
+                padded[row, : len(inp)] = torch.tensor(inp, dtype=torch.long, device=device)
+            logprobs = torch.log_softmax(self.model(padded), dim=-1)
+            for row, i in enumerate(idxs):
+                cont = continuations[row]
+                cont_len = len(cont)
+                inp_len = len(inputs[row])
+                logp = logprobs[row, inp_len - cont_len : inp_len]
+                target = torch.tensor(cont, dtype=torch.long, device=device)
+                vals = logp.gather(-1, target[:, None]).squeeze(-1)
+                out[i] = (float(vals.sum().item()), bool((logp.argmax(-1) == target).all().item()))
+        return out
+
+    def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
+        out = []
+        for req in requests:
+            text = req.args[0]
+            out.append(sum(x[0] for x in self._loglikelihood_tokens([(None, [self.eot_token_id], self.tok_encode(text))])))
+        return out
+
+    @torch.no_grad()
+    def generate_until(self, requests, disable_tqdm: bool = False):
+        if os.environ.get("GCW_EVAL_REFERENCE_GENERATE") == "1":
+            return self._generate_until_reference(requests)
+        outs: list[str | None] = [None] * len(requests)
+        device = self.model.get_device()
+        groups: dict[tuple[int, int, tuple[str, ...]], list[tuple[int, list[int]]]] = {}
+        for i, req in enumerate(requests):
+            prompt, kwargs = req.args
+            max_new = int(kwargs.get("max_gen_toks", 256))
+            until = _normalize_until(kwargs.get("until"))
+            ids = encode_generate_prompt(
+                self.tokenizer,
+                prompt,
+                self.max_length,
+                add_special_tokens=self.add_special_tokens_for_generate,
+            )
+            groups.setdefault((len(ids), max_new, until), []).append((i, ids))
+
+        use_fast = hasattr(self.model, "generate_fast")
+        for (_, max_new, until), rows in groups.items():
+            stop_seqs = stop_token_sequences(self.tokenizer, until)
+            for start in range(0, len(rows), self.batch_size):
+                chunk = rows[start : start + self.batch_size]
+                prompt_len = len(chunk[0][1])
+                batch_ids = torch.tensor([row_ids for _, row_ids in chunk], dtype=torch.long, device=device)
+                if use_fast:
+                    gen = self.model.generate_fast(
+                        batch_ids,
+                        max_new_tokens=max_new,
+                        eos_token_id=self.eot_token_id,
+                        stop_sequences=stop_seqs,
+                        pad_token_id=self.eot_token_id,
+                    )
+                else:
+                    gen = self.model.generate(batch_ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)
+                for row, (out_idx, _) in enumerate(chunk):
+                    tokens = gen[row, prompt_len:].tolist()
+                    tokens = trim_generated_token_ids(tokens, stop_seqs, self.eot_token_id)
+                    text = _trim_until(self.tok_decode(tokens), until)
+                    outs[out_idx] = text
+        return outs
+
+    @torch.no_grad()
+    def _generate_until_reference(self, requests):
+        outs = []
+        device = self.model.get_device()
+        for req in requests:
+            prompt, kwargs = req.args
+            max_new = int(kwargs.get("max_gen_toks", 256))
+            until = _normalize_until(kwargs.get("until"))
+            ids = torch.tensor(
+                encode_generate_prompt(
+                    self.tokenizer,
+                    prompt,
+                    self.max_length,
+                    add_special_tokens=self.add_special_tokens_for_generate,
+                ),
+                dtype=torch.long,
+                device=device,
+            ).unsqueeze(0)
+            gen = self.model.generate(ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)[0].tolist()
+            text = self.tok_decode(gen[len(ids[0]) :])
+            outs.append(_trim_until(text, until))
+        return outs

@@ -6,8 +6,8 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
-import gcw.training.core as train_module
 import gcw.training.checkpoint as checkpoint_module
+import gcw.training.state as state_module
 from gcw.checkpoint import load_checkpoint
 from gcw.config import DataConfig, ModelConfig, ResumeConfig, TrainConfig
 from gcw.data.shards import ShardWriter
@@ -54,14 +54,14 @@ def test_one_to_two_process_elastic_fineweb_resume_is_deterministic(tmp_path):
         if resume_state.step == 1 and Path(path).name == "checkpoint":
             raise RuntimeError("simulated elastic interruption")
 
-    train_module.save_training_checkpoint = save_then_interrupt
+    state_module.save_training_checkpoint = save_then_interrupt
     try:
         train(config)
     except RuntimeError as exc:
         if "simulated elastic interruption" not in str(exc):
             raise
     finally:
-        train_module.save_training_checkpoint = real_save_training_checkpoint
+        state_module.save_training_checkpoint = real_save_training_checkpoint
 
     outputs = [tmp_path / "elastic-a", tmp_path / "elastic-b"]
     for index, output in enumerate(outputs):
@@ -102,14 +102,14 @@ def _train_worker(rank: int, world_size: int, init_file: str, output_dir: str, i
         if resume_state.step == 1 and Path(path).name == "checkpoint":
             raise RuntimeError("simulated distributed interruption")
 
-    train_module.save_training_checkpoint = save_then_interrupt
+    state_module.save_training_checkpoint = save_then_interrupt
     try:
         train(config)
     except RuntimeError as exc:
         if "simulated distributed interruption" not in str(exc):
             raise
     finally:
-        train_module.save_training_checkpoint = real_save_training_checkpoint
+        state_module.save_training_checkpoint = real_save_training_checkpoint
     config.resume = ResumeConfig(checkpoint=str(Path(output_dir) / "checkpoint"))
     train(config)
 

@@ -137,12 +137,6 @@ def extract_numeric_answer(text: str) -> Fraction | None:
     return _parse_numeric_expression(matches[-1].group(0))
 
 
-def numeric_answers_match(prediction: str, target: str) -> bool:
-    predicted = extract_numeric_answer(prediction)
-    expected = extract_numeric_answer(target)
-    return predicted is not None and expected is not None and predicted == expected
-
-
 def _balanced_box_contents(text: str) -> list[str]:
     marker = r"\boxed{"
     results = []

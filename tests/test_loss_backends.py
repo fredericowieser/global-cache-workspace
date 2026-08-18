@@ -26,7 +26,8 @@ from gcw.performance.losses import (
     require_loss_backend,
 )
 from gcw.training import core as training_module
-from gcw.training.core import _checkpoint_metadata, _training_fingerprint
+import gcw.training.assembly as assembly_module
+from gcw.training.audit import _checkpoint_metadata, _training_fingerprint
 
 
 def _model(*, tied: bool, dtype: torch.dtype = torch.float32) -> TF:
@@ -462,7 +463,7 @@ def test_training_configures_bounded_reference_execution(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(transformer_module, "bounded_reference_loss", record)
-    monkeypatch.setattr(training_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    monkeypatch.setattr(assembly_module, "init_distributed", lambda _kind: torch.device("cpu"))
     config = TrainConfig(
         model=_model(tied=True).config,
         data=DataConfig(kind="random"),

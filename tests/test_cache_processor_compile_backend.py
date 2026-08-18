@@ -30,7 +30,7 @@ from gcw.models.model import LanguageModel
 from gcw.performance.checkpointing import (
     configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
 )
-from gcw.training.core import _training_fingerprint
+from gcw.training.audit import _training_fingerprint
 
 
 def _config(kind: str = "standard", *, process_every: int = 64) -> ModelConfig:

@@ -33,12 +33,12 @@ data:
   kind: random
 mode: pretrain
 distributed: none
-trainable: all
+freeze_backbone: false
 output_dir: runs/smoke_longshot
 batch_size: 2
 sequence_len: 18
 max_steps: 2
 learning_rate: 0.001
 warmup_steps: 1
-bf16: false
+precision: bf16_mixed
 save_every: 0

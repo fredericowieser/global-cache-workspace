@@ -61,11 +61,10 @@ from gcw.provenance import (
     find_repository_root,
     repository_source_identity,
 )
-from gcw.training.core import (
-    _apply_trainable_policy,
+from gcw.training.model_setup import _apply_trainable_policy, _load_initial_model
+from gcw.training.optimizer import (
     _build_optimizer,
     _clip_grad_norm,
-    _load_initial_model,
     _weight_decay,
     _wsd_lr,
 )

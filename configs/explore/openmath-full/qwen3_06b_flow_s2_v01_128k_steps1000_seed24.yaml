@@ -42,7 +42,7 @@ data:
   kind: sft
   dataset: data/OpenMathInstruct-2/train_1M.jsonl
   tokenizer: hf
-  tokenizer_source: artifacts/models/Qwen3-0.6B-base-v1
+  tokenizer_source: data/models/Qwen3-0.6B-base-v1
   sft_skip_rows: 0
   sft_take_rows: 128000
   response_prefix: "\n"
@@ -50,8 +50,8 @@ data:
 mode: sft
 distributed: none
 trainable: cache_processor
-backbone_checkpoint: artifacts/checkpoints/base_backbones/qwen3_06b/tf-v1
-output_dir: artifacts/experiments/openmath-cache/full-flow-s2-v01-seed24
+backbone_checkpoint: data/checkpoints/base_backbones/qwen3_06b/tf-v1
+output_dir: data/experiments/openmath-cache/full-flow-s2-v01-seed24
 batch_size: 32
 sequence_len: 512
 max_steps: 1000

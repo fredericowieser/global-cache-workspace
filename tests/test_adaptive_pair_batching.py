@@ -9,7 +9,7 @@ import pytest
 import torch
 
 import gcw.data.training as training_data_module
-import gcw.training.core as train_module
+import gcw.training.assembly as assembly_module
 from gcw.architecture import resolve_experiment, resolve_model
 from gcw.checkpoint import load_checkpoint
 from gcw.config import (
@@ -35,7 +35,9 @@ from gcw.performance.adjacent_pairs import (
 )
 from gcw.performance.config import AdaptiveBatchingConfig, PerformanceConfig, PhysicalBatchBandConfig
 from gcw.training.checkpoint import save_training_checkpoint as real_save_training_checkpoint
-from gcw.training.core import _build_optimizer, _training_fingerprint, train
+from gcw.training.audit import _training_fingerprint
+from gcw.training.optimizer import _build_optimizer
+from gcw.training.core import train
 from gcw.training.objectives import adjacent_pair_loss_sum, adjacent_pair_loss_sum_from_rows, model_loss
 
 
@@ -381,12 +383,12 @@ def test_training_integrates_adaptive_plan_and_reports_actual_groups(
                 model_loss(oracle, pair.x, pair.y, attention_mask=pair.attention_mask)
             ) / PAIRS_PER_STEP
 
-    monkeypatch.setattr(train_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    monkeypatch.setattr(assembly_module, "init_distributed", lambda _kind: torch.device("cpu"))
     stream = _PairStream(widths)
     tracker = _Tracker()
-    monkeypatch.setattr(train_module, "build_training_stream", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr(assembly_module, "build_training_stream", lambda *_args, **_kwargs: stream)
     monkeypatch.setattr(
-        train_module.RunTracker,
+        assembly_module.RunTracker,
         "for_training",
         lambda _config, _run_meta, model=None: tracker,
     )
@@ -483,7 +485,7 @@ def test_interrupted_adaptive_training_resumes_exactly(
         encoding="utf-8",
     )
     monkeypatch.setattr(training_data_module, "get_tokenizer", lambda _name: _ResumeTokenizer())
-    monkeypatch.setattr(train_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    monkeypatch.setattr(assembly_module, "init_distributed", lambda _kind: torch.device("cpu"))
 
     def make_config(output_dir: str) -> TrainConfig:
         return _adaptive_config(
@@ -524,11 +526,11 @@ def test_interrupted_adaptive_training_resumes_exactly(
         if resume_state.step == 1 and str(path).endswith("checkpoint"):
             raise RuntimeError("simulated adaptive interruption")
 
-    monkeypatch.setattr(train_module, "save_training_checkpoint", save_then_interrupt)
+    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", save_then_interrupt)
     with pytest.raises(RuntimeError, match="simulated adaptive interruption"):
         train(interrupted)
 
-    monkeypatch.setattr(train_module, "save_training_checkpoint", real_save_training_checkpoint)
+    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", real_save_training_checkpoint)
     resumed = make_config(str(tmp_path / "resumed"))
     resumed.save_every = 1
     resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "resumed" / "checkpoint"))

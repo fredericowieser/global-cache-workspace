@@ -50,6 +50,18 @@ The old flat modules and variant classes are removed. Canonical imports are the 
 
 Exact resume requires version-2 training checkpoints. Model-only checkpoints initialize a new run but cannot restore optimizer, cursor, or RNG state.
 
+## Execution-plan resolution
+
+Cross-feature admission lives in exactly one place: `resolve_execution_plan`
+(`architecture/execution.py`). It decides which single execution strategy a
+config selects (`eager_reference`, `backbone_chunk_compile`, `triton_cache_kernel`,
+`longshot_selected_history`, `kv_score_sidecar`, `noisy_diffusion_compile`, or
+`adaptive_pairs`), checks each strategy's `requires`/`forbids` contract, and
+returns a frozen `ExecutionPlan`. `TrainConfig.__post_init__` keeps only field-level
+sanity (ranges, enum membership, coercion) and delegates composition admission to
+the resolver; `train()` re-runs it to obtain the plan. The `ValueError` messages
+are the public admission contract and are asserted verbatim by the tests.
+
 ## Scientific boundaries
 
 Flow is deterministic time-conditioned latent integration. It is not diffusion. A diffusion processor requires a corruption schedule, denoising target, noise conditioning, and trained reverse process. Keep that proposal outside executable claims until implemented and tested.
@@ -61,7 +73,7 @@ Every structural change must pass:
 ```bash
 uv run ruff check src scripts tests
 uv run pytest -q
-uv run mypy src/gcw/config.py src/gcw/architecture.py src/gcw/models/model.py \
+uv run mypy src/gcw/config src/gcw/architecture src/gcw/models/model.py \
   src/gcw/data/sft.py src/gcw/data/training.py src/gcw/training/core.py \
   src/gcw/evaluation/core.py src/gcw/cli.py
 uv run --group docs sphinx-build -W --keep-going -b html docs docs/_build/html

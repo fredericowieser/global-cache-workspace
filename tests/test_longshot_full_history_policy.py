@@ -18,7 +18,7 @@ from gcw.training.checkpoint import (
     TrainingCheckpoint,
     save_training_checkpoint,
 )
-from gcw.training.core import _training_fingerprint
+from gcw.training.audit import _training_fingerprint
 
 
 def _train_config(

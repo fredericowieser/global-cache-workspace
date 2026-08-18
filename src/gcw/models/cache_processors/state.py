@@ -36,10 +36,6 @@ class CacheState:
     def layer(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.keys[idx], self.values[idx]
 
-    def append_scores(self, chunk_scores: torch.Tensor) -> "CacheState":
-        scores = chunk_scores if self.scores.numel() == 0 else torch.cat([self.scores, chunk_scores], dim=1)
-        return CacheState(self.keys, self.values, scores, self.linear_states, self.kv_score_sidecar)
-
     def select_indices(self, process_every: int = 64, topk: int = 32) -> torch.Tensor:
         return select_l2_indices(self.scores, process_every=process_every, topk=topk)
 

@@ -1,711 +1,83 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-import warnings
-from dataclasses import dataclass
-from typing import cast
+from typing import Any
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
+# Re-exported so ``longshot_processor`` can look it up via ``getattr(ls_pkg, "checkpoint")``;
+# tests monkeypatch ``longshot.checkpoint`` to assert checkpointing call counts.
+from torch.utils.checkpoint import checkpoint  # noqa: F401
 
 from gcw.config import (
-    CacheEncoderMethod,
-    CacheEncoderQuerySource,
-    CacheProcessorConfig,
-    FlowProcessorConfig,
     ModelConfig,
     WorkspaceFlowRefinementConfig,
     linear_attention_following_cache_indices,
 )
-from gcw.models.cache_processors.base import CacheProcessorBase, cache_processor_recomputation_id
+from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.ops import (
+    expand_cache_head_indices,
+    gather_per_cache_head_kv,
+    gather_per_cache_head_scores,
+    latest_shared_indices,
+    rotate_cache_keys,
     scatter_latest as _scatter_latest,
     scatter_latest_values as _scatter_latest_values,
     split_merged_cache as _split_merged,
     split_merged_cache_values as _split_merged_values,
-    zero_projection,
-    expand_cache_head_indices,
-    gather_per_cache_head_scores,
-    gather_per_cache_head_kv,
-    latest_shared_indices,
-    rotate_cache_keys,
-    select_per_cache_head_kv_norm_indices_from_scores,
 )
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
-from gcw.models.cache_processors.flow import LatentFlow, sinusoidal_time_embedding
-from gcw.models.backbones.transformer import RMSNorm, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.performance.longshot_cache import (
-    gather_windowed_per_cache_head_kv,
-    longshot_full_history_execution,
-    record_longshot_full_history_event,
+from gcw.models.cache_processors.longshot_workspace import (
+    deliberate_workspace,
+    refine_workspace,
+    validate_workspace_shape,
+    workspace_cycle_input,
+    workspace_velocity,
+    write_workspace_for_readout,
 )
-from gcw.performance.triton.execution import triton_cache_movement_enabled
+from gcw.models.cache_processors.longshot_selection import (
+    cache_movement_backend,
+    refresh_sidecar,
+    select_kv_norm_history,
+    synchronize_sidecar,
+)
+from gcw.models.cache_processors.longshot_layers import (
+    EncoderMethod,
+    LongshotWorkspaceSource,
+    _select_heads_from_head_scores,
+)
+from gcw.models.cache_processors.longshot_processor import CacheProcessor
+from gcw.models.cache_processors.longshot_linear_state import (
+    LinearStateInputs,
+    LinearStateSpec,
+    _topk_linear_heads,
+)
 from gcw.performance.longshot_scores import (
-    chunked_fp32_concatenated_kv_squared_l2,
-    chunked_fp32_unroped_concatenated_kv_squared_l2,
     chunked_fp32_l2_norm,
-    chunked_fp32_squared_l2,
+    # Re-exported: ``longshot_selection`` reaches it via ``ls_pkg`` and tests
+    # monkeypatch it to compare eager vs optimized scoring.
+    chunked_fp32_squared_l2,  # noqa: F401
 )
 from gcw.performance.kv_score_sidecar import (
     kv_score_sidecar_execution,
-    kv_score_sidecar_spec,
-    refresh_kv_score_sidecar,
-    synchronize_kv_score_sidecar,
+    # Re-exported: ``longshot_selection`` reaches these via ``getattr(ls_pkg, ...)``
+    # and tests monkeypatch them to assert sidecar lifecycle behavior.
+    refresh_kv_score_sidecar,  # noqa: F401
+    synchronize_kv_score_sidecar,  # noqa: F401
 )
 
+# Re-exported for backward compatibility: downstream modules and tests import
+# these layer primitives from the historical monolithic ``longshot`` module
+# location rather than from ``longshot_layers``.
+from gcw.models.cache_processors.longshot_layers import (  # noqa: F401
+    ProcessorAttention,
+    QueryAttentionTimeEncoder,
+    _gradient_checkpointing_enabled,
+    longshot_gradient_checkpointing_override,
+)
+
+# The cache object any processor path accepts: static, mutable, or windowed.
 CacheLike = CacheState | StaticCacheState | WindowedCache
-
-
-EncoderMethod = CacheEncoderMethod
-EncoderQuerySource = CacheEncoderQuerySource
-
-_GRADIENT_CHECKPOINTING_OVERRIDE: ContextVar[bool | None] = ContextVar(
-    "gcw_longshot_gradient_checkpointing_override",
-    default=None,
-)
-
-
-@contextmanager
-def longshot_gradient_checkpointing_override(enabled: bool) -> Iterator[None]:
-    """Override Longshot processor-layer checkpointing for one forward context."""
-    token = _GRADIENT_CHECKPOINTING_OVERRIDE.set(enabled)
-    try:
-        yield
-    finally:
-        _GRADIENT_CHECKPOINTING_OVERRIDE.reset(token)
-
-
-def _gradient_checkpointing_enabled(configured: bool) -> bool:
-    override = _GRADIENT_CHECKPOINTING_OVERRIDE.get()
-    return configured if override is None else override
-
-
-@dataclass(frozen=True)
-class LongshotWorkspaceSource:
-    merged: torch.Tensor
-    indices: torch.Tensor
-    selected_heads: torch.Tensor
-    latest_indices: torch.Tensor
-
-
-class ProcessorAttention(nn.Module):
-    def __init__(self, config: CacheProcessorConfig):
-        super().__init__()
-        if config.hidden_size % config.num_heads != 0:
-            raise ValueError("processor hidden_size must be divisible by num_heads")
-        if config.num_heads % config.num_kv_heads != 0:
-            raise ValueError("processor num_heads must be divisible by num_kv_heads")
-        self.num_heads = config.num_heads
-        self.num_kv_heads = config.num_kv_heads
-        self.head_dim = config.hidden_size // config.num_heads
-        self.dropout = config.attention_dropout
-        self.q_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
-        self.k_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
-        self.v_proj = nn.Linear(config.hidden_size, config.num_kv_heads * self.head_dim, bias=True)
-        self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-        self.internal_iteration_score = config.internal_iteration_score
-        self.include_self_head_kv = config.include_self_head_kv
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        selected_heads: torch.Tensor,
-        return_attn_scores: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        if self.include_self_head_kv:
-            return self.forward_with_self_head_kv(x, selected_heads, return_attn_scores)
-        return self.forward_selected_head_kv(x, selected_heads, return_attn_scores)
-
-    def forward_with_iteration_scores(
-        self,
-        x: torch.Tensor,
-        selected_heads: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.internal_iteration_score == "cache_head_attention":
-            return self.forward_with_cache_head_attention_scores(
-                x,
-                selected_heads,
-                include_self_head_kv=self.include_self_head_kv,
-            )
-        result = self.forward(x, selected_heads, return_attn_scores=True)
-        if not isinstance(result, tuple):
-            raise TypeError("iteration scoring requires attention scores")
-        return result
-
-    def forward_selected_head_kv(
-        self,
-        x: torch.Tensor,
-        selected_heads: torch.Tensor,
-        return_attn_scores: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        batch, cache_heads, _ = x.shape
-        score_kv_norm = return_attn_scores and self.internal_iteration_score == "kv_norm"
-        assert selected_heads.shape[-1] > 0, "selected_heads must include at least one cache head"
-        q = self.q_proj(x).view(batch, cache_heads, self.num_heads, self.head_dim)
-        if score_kv_norm:
-            k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-            v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-            iteration_scores = k_all.float().pow(2).sum(dim=(2, 3)) + v_all.float().pow(2).sum(dim=(2, 3))
-            gather_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
-            k = torch.gather(k_all, dim=1, index=gather_index)
-            v = torch.gather(v_all, dim=1, index=gather_index)
-        else:
-            selected_x = _gather_cache_heads(x, selected_heads)
-            k = self.k_proj(selected_x).view(batch, selected_heads.shape[-1], self.num_kv_heads, self.head_dim)
-            v = self.v_proj(selected_x).view(batch, selected_heads.shape[-1], self.num_kv_heads, self.head_dim)
-        q = q.permute(0, 2, 1, 3)
-        k, v = (t.permute(0, 2, 1, 3) for t in (k, v))
-        q, k = q.to(v.dtype), k.to(v.dtype)
-        y = flash_sdpa(
-            q,
-            k,
-            v,
-            dropout_p=self.dropout if self.training else 0.0,
-            enable_gqa=self.num_kv_heads != self.num_heads,
-        )
-        y = y.permute(0, 2, 1, 3).contiguous().view(batch, cache_heads, -1)
-        y = self.o_proj(y)
-        if return_attn_scores:
-            if score_kv_norm:
-                return y, iteration_scores
-            return y, y.float().pow(2).sum(dim=-1)
-        return y
-
-    def forward_with_self_head_kv(
-        self,
-        x: torch.Tensor,
-        selected_heads: torch.Tensor,
-        return_attn_scores: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        batch, cache_heads, _ = x.shape
-        selected_count = selected_heads.shape[-1]
-        assert selected_count > 0, "selected_heads must include at least one cache head"
-        groups = self.num_heads // self.num_kv_heads
-
-        q = self.q_proj(x).view(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
-        k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-        v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-        if return_attn_scores and self.internal_iteration_score == "kv_norm":
-            iteration_scores = k_all.float().pow(2).sum(dim=(2, 3)) + v_all.float().pow(2).sum(dim=(2, 3))
-        gather_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
-        k_sel = torch.gather(k_all, dim=1, index=gather_index)
-        v_sel = torch.gather(v_all, dim=1, index=gather_index)
-
-        q, k_sel, k_all = q.to(v_all.dtype), k_sel.to(v_all.dtype), k_all.to(v_all.dtype)
-        scale = self.head_dim**-0.5
-        selected_logits = torch.einsum("bckgd,bskd->bckgs", q, k_sel) * scale
-        self_logits = torch.einsum("bckgd,bckd->bckg", q, k_all)[:, :, :, :, None] * scale
-        query_heads = torch.arange(cache_heads, device=x.device)
-        self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
-        self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None], float("-inf"))
-
-        logits = torch.cat([selected_logits, self_logits], dim=-1)
-        attn = torch.softmax(logits, dim=-1)
-        if self.training and self.dropout > 0.0:
-            attn = F.dropout(attn, p=self.dropout, training=True)
-
-        selected_attn, self_attn = attn[..., :selected_count], attn[..., selected_count]
-        y = torch.einsum("bckgs,bskd->bckgd", selected_attn, v_sel)
-        y = y + self_attn[:, :, :, :, None] * v_all[:, :, :, None, :]
-        y = y.contiguous().view(batch, cache_heads, self.num_heads * self.head_dim)
-        y = self.o_proj(y)
-        if return_attn_scores:
-            if self.internal_iteration_score == "kv_norm":
-                return y, iteration_scores
-            return y, y.float().pow(2).sum(dim=-1)
-        return y
-
-    def forward_with_cache_head_attention_scores(
-        self,
-        x: torch.Tensor,
-        selected_heads: torch.Tensor,
-        *,
-        include_self_head_kv: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return the attention output plus all-key attention mass per cache head."""
-        batch, cache_heads, _ = x.shape
-        selected_count = selected_heads.shape[-1]
-        assert selected_count > 0, "selected_heads must include at least one cache head"
-        groups = self.num_heads // self.num_kv_heads
-
-        q = self.q_proj(x).view(batch, cache_heads, self.num_kv_heads, groups, self.head_dim)
-        k_all = self.k_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-        v_all = self.v_proj(x).view(batch, cache_heads, self.num_kv_heads, self.head_dim)
-
-        q, k_all = q.to(v_all.dtype), k_all.to(v_all.dtype)
-        scale = self.head_dim**-0.5
-        logits = torch.einsum("bckgd,bskd->bckgs", q, k_all) * scale
-        all_attn = torch.softmax(logits.float(), dim=-1)
-        cache_head_attention_scores = all_attn.float().sum(dim=(1, 2, 3))
-
-        logit_index = selected_heads[:, None, None, None, :].expand(
-            -1,
-            cache_heads,
-            self.num_kv_heads,
-            groups,
-            -1,
-        )
-        selected_logits = torch.gather(logits, dim=-1, index=logit_index)
-        value_index = selected_heads[:, :, None, None].expand(-1, -1, self.num_kv_heads, self.head_dim)
-        v_sel = torch.gather(v_all, dim=1, index=value_index)
-
-        if include_self_head_kv:
-            query_heads = torch.arange(cache_heads, device=x.device)
-            self_index = query_heads[None, :, None, None, None].expand(
-                batch,
-                -1,
-                self.num_kv_heads,
-                groups,
-                1,
-            )
-            self_logits = torch.gather(logits, dim=-1, index=self_index)
-            self_is_selected = (selected_heads[:, None, :] == query_heads[None, :, None]).any(dim=-1)
-            self_logits = self_logits.masked_fill(self_is_selected[:, :, None, None, None], float("-inf"))
-            output_logits = torch.cat([selected_logits, self_logits], dim=-1)
-        else:
-            output_logits = selected_logits
-
-        output_attn = torch.softmax(output_logits, dim=-1)
-        if self.training and self.dropout > 0.0:
-            output_attn = F.dropout(output_attn, p=self.dropout, training=True)
-
-        selected_attn = output_attn[..., :selected_count]
-        y = torch.einsum("bckgs,bskd->bckgd", selected_attn, v_sel)
-        if include_self_head_kv:
-            self_attn = output_attn[..., selected_count]
-            y = y + self_attn[:, :, :, :, None] * v_all[:, :, :, None, :]
-        y = y.contiguous().view(batch, cache_heads, self.num_heads * self.head_dim)
-        return self.o_proj(y), cache_head_attention_scores
-
-
-class ProcessorLayer(nn.Module):
-    def __init__(self, config: CacheProcessorConfig):
-        super().__init__()
-        self.attn = ProcessorAttention(config)
-        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-        self.input_norm = RMSNorm(config.hidden_size, config.norm_eps)
-        self.post_norm = RMSNorm(config.hidden_size, config.norm_eps)
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        selected_heads: torch.Tensor,
-        return_attn_scores: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        h = self.input_norm(x)
-        if return_attn_scores:
-            attn_out, attn_scores = self.attn.forward_with_iteration_scores(h, selected_heads)
-        else:
-            result = self.attn(h, selected_heads)
-            if not isinstance(result, torch.Tensor):
-                raise TypeError("attention returned scores when none were requested")
-            attn_out = result
-        x = x + attn_out
-        h = self.post_norm(x)
-        x = x + self.down_proj(F.silu(self.gate_proj(h)) * self.up_proj(h))
-        if return_attn_scores:
-            return x, attn_scores
-        return x
-
-
-class PerCacheHeadLinear(nn.Module):
-    def __init__(self, num_cache_heads: int, in_features: int, out_features: int, bias: bool = True):
-        super().__init__()
-        self.weight = nn.Parameter(torch.empty(num_cache_heads, in_features, out_features))
-        self.bias = nn.Parameter(torch.empty(num_cache_heads, out_features)) if bias else None
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = torch.einsum("bci,cio->bco", x, self.weight)
-        if self.bias is not None:
-            y = y + self.bias[None, :, :]
-        return y
-
-
-class QueryAttentionTimeEncoder(nn.Module):
-    def __init__(self, input_dim: int, num_cache_heads: int, config: CacheProcessorConfig):
-        super().__init__()
-        self.input_dim = input_dim
-        self.encoder_query_source = config.encoder_query_source
-        if self.encoder_query_source == "learned":
-            self.query = nn.Parameter(torch.empty(num_cache_heads, input_dim))
-        elif self.encoder_query_source == "final_token":
-            self.query_proj: nn.Module
-            if config.per_cache_head_projections:
-                self.query_proj = PerCacheHeadLinear(num_cache_heads, input_dim, input_dim)
-            else:
-                self.query_proj = nn.Linear(input_dim, input_dim)
-        else:
-            raise ValueError(f"unknown encoder_query_source: {self.encoder_query_source}")
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        query = self._query(x)
-        scale = self.input_dim**-0.5
-        scores = torch.einsum("bcsi,bci->bcs", x, query.to(x.dtype)) * scale
-        weights = torch.softmax(scores.float(), dim=-1).to(x.dtype)
-        return torch.einsum("bcs,bcsi->bci", weights, x)
-
-    def _query(self, x: torch.Tensor) -> torch.Tensor:
-        if self.encoder_query_source == "learned":
-            return self.query[None, :, :].expand(x.shape[0], -1, -1)
-        if self.encoder_query_source == "final_token":
-            return self.query_proj(x[:, :, -1, :])
-        raise ValueError(f"unsupported encoder_query_source: {self.encoder_query_source}")
-
-
-class CacheProcessor(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        num_cache_heads: int,
-        config: CacheProcessorConfig,
-        *,
-        encoder_method: EncoderMethod = "linear",
-        encoder_seq_len: int | None = None,
-        output_dim: int | None = None,
-        flow_config: FlowProcessorConfig | None = None,
-        kv_cache_heads: int | None = None,
-        model_config: ModelConfig | None = None,
-        linear_state_specs: list["LinearStateSpec"] | None = None,
-    ):
-        super().__init__()
-        self.config = config
-        self.input_dim = input_dim
-        self.output_dim = output_dim or input_dim
-        self.encoder_method = encoder_method
-        self.encoder_query_source = config.encoder_query_source
-        self.encoder_seq_len = encoder_seq_len or config.encoder_seq_len or config.process_every + max(config.topk, 0)
-        self.kv_cache_heads = kv_cache_heads or num_cache_heads
-        self.in_norm = RMSNorm(input_dim, config.norm_eps)
-        if encoder_method == "linear":
-            in_features = self.encoder_seq_len * input_dim
-        elif encoder_method == "query_attention":
-            in_features = input_dim
-            self.time_encoder = QueryAttentionTimeEncoder(input_dim, self.kv_cache_heads, config)
-        else:
-            raise ValueError(f"unknown encoder_method: {encoder_method}")
-        self.in_proj: nn.Module
-        if config.per_cache_head_projections:
-            self.in_proj = PerCacheHeadLinear(self.kv_cache_heads, in_features, config.hidden_size)
-        else:
-            self.in_proj = nn.Linear(in_features, config.hidden_size)
-        self.layers = nn.ModuleList(ProcessorLayer(config) for _ in range(config.num_layers))
-        self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
-        self.out_proj: nn.Module
-        if config.per_cache_head_projections:
-            self.out_proj = PerCacheHeadLinear(self.kv_cache_heads, config.hidden_size, self.output_dim)
-        else:
-            self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
-        self.gate = nn.Parameter(torch.full((1,), config.gate_init))
-        self.flow = LatentFlow(config.hidden_size, flow_config) if flow_config is not None else None
-        self._selected_head_overlap_totals: dict[int, torch.Tensor] = {}
-        self._selected_head_overlap_counts: dict[int, int] = {}
-        self.linear_state_adapter: LinearStateAdapter | None
-        self.init_weights()
-        if linear_state_specs:
-            if model_config is None:
-                raise ValueError("linear_state_specs require model_config")
-            self.linear_state_adapter = LinearStateAdapter(model_config, config, linear_state_specs)
-        else:
-            self.linear_state_adapter = None
-
-    def init_weights(self, std: float = 0.02) -> None:
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.normal_(module.weight, mean=0.0, std=std)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif isinstance(module, PerCacheHeadLinear):
-                nn.init.normal_(module.weight, mean=0.0, std=std)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif isinstance(module, RMSNorm):
-                nn.init.ones_(module.weight)
-            elif isinstance(module, QueryAttentionTimeEncoder) and hasattr(module, "query"):
-                nn.init.normal_(module.query, mean=0.0, std=std)
-        nn.init.constant_(self.gate, self.config.gate_init)
-        if self.config.out_proj_init == "zero":
-            _zero_projection(self.out_proj)
-
-    def encode_input(self, x: torch.Tensor) -> torch.Tensor:
-        return self._encode_time(self.in_norm(x))  # TODO: add a skip connection here?
-
-    def process_hidden(
-        self,
-        h: torch.Tensor,
-        selected_heads: torch.Tensor,
-        *,
-        topk_heads: int | None = None,
-        kv_cache_heads: int | None = None,
-        topk_linear_heads: int | None = None,
-    ) -> torch.Tensor:
-        if self.flow is not None:
-            return self.flow(
-                h,
-                lambda state, _time: self.out_norm(self._run_flow_field(state, selected_heads)),
-            )
-        topk_heads = self.config.topk_heads if topk_heads is None else topk_heads
-        iterations = self.config.iterations if self.config.iteration_mode == "internal" else 1
-        for iteration in range(iterations):
-            return_attn_scores = iteration + 1 < iterations
-            layer_scores = []
-            for module in self.layers:
-                layer = cast(ProcessorLayer, module)
-                result = self._run_layer(layer, h, selected_heads, return_attn_scores=return_attn_scores)
-                if return_attn_scores:
-                    if not isinstance(result, tuple):
-                        raise TypeError("processor layer did not return iteration scores")
-                    h, attn_scores = result
-                    layer_scores.append(attn_scores)
-                else:
-                    if not isinstance(result, torch.Tensor):
-                        raise TypeError("processor layer returned unexpected iteration scores")
-                    h = result
-            if return_attn_scores:
-                head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
-                if kv_cache_heads is None or topk_linear_heads is None:
-                    next_selected_heads = _select_heads_from_head_scores(head_scores, topk_heads)
-                else:
-                    kv_selected = _select_heads_from_head_scores(
-                        head_scores[:, :kv_cache_heads],
-                        topk_heads,
-                    )
-                    if topk_linear_heads > 0:
-                        linear_selected = (
-                            _select_heads_from_head_scores(
-                                head_scores[:, kv_cache_heads:],
-                                topk_linear_heads,
-                            )
-                            + kv_cache_heads
-                        )
-                        next_selected_heads = torch.cat([kv_selected, linear_selected], dim=-1)
-                    else:
-                        next_selected_heads = kv_selected
-                self.record_selected_head_overlap(iteration + 1, selected_heads, next_selected_heads)
-                selected_heads = next_selected_heads
-        return self.out_norm(h)
-
-    def project_output(self, h: torch.Tensor) -> torch.Tensor:
-        return self.out_proj(h)
-
-    def compute_update(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        return self.project_output(self.process_hidden(self.encode_input(x), selected_heads))
-
-    def has_linear_state_adapter(self) -> bool:
-        return self.linear_state_adapter is not None
-
-    def linear_state_query(self, layer_idx: int, following_cache_idx: int, context: torch.Tensor) -> torch.Tensor:
-        if self.linear_state_adapter is None:
-            raise ValueError("linear state adapter is not configured")
-        return self.linear_state_adapter.query(layer_idx, following_cache_idx, context)
-
-    def linear_state_query_cache_key(self, layer_idx: int, following_cache_idx: int) -> str:
-        if self.linear_state_adapter is None:
-            raise ValueError("linear state adapter is not configured")
-        return self.linear_state_adapter.query_cache_key(layer_idx, following_cache_idx)
-
-    def linear_state_update_dims(self) -> tuple[int, int]:
-        if self.linear_state_adapter is None:
-            raise ValueError("linear state adapter is not configured")
-        return self.linear_state_adapter.linear_key_dim, self.linear_state_adapter.linear_value_dim
-
-    def forward_with_linear_state_features(
-        self,
-        x: torch.Tensor,
-        kv_hidden: torch.Tensor,
-        linear_features: torch.Tensor,
-        selected_heads: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.linear_state_adapter is None:
-            raise ValueError("linear state adapter is not configured")
-        if x.shape[2] == 0:
-            raise ValueError("Longshot cache processor requires at least one selected time position")
-        hidden = torch.cat([kv_hidden, self.linear_state_adapter.encode(linear_features)], dim=1)
-        processed = self.process_hidden(
-            hidden,
-            selected_heads,
-            topk_heads=self.config.topk_heads,
-            kv_cache_heads=kv_hidden.shape[1],
-            topk_linear_heads=_topk_linear_heads(self.config),
-        )
-        gate = self._gate_scale(processed.dtype)
-        primary_delta = self.project_output(processed[:, : x.shape[1]]) * gate
-        auxiliary_delta = self.linear_state_adapter.output_proj(processed[:, x.shape[1] :])
-        if self.config.gate_linear_state_delta:
-            auxiliary_delta = auxiliary_delta * gate
-        residual = x[:, :, -1, -self.output_dim :]
-        return residual + primary_delta, auxiliary_delta
-
-    def _run_flow_field(self, state: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        for module in self.layers:
-            layer = cast(ProcessorLayer, module)
-            result = self._run_layer(layer, state, selected_heads, return_attn_scores=False)
-            if not isinstance(result, torch.Tensor):
-                raise TypeError("flow field unexpectedly returned iteration scores")
-            state = result
-        return state
-
-    def _run_layer(
-        self,
-        layer: ProcessorLayer,
-        h: torch.Tensor,
-        selected_heads: torch.Tensor,
-        *,
-        return_attn_scores: bool,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        if (
-            _gradient_checkpointing_enabled(self.config.gradient_checkpointing)
-            and self.training
-            and torch.is_grad_enabled()
-        ):
-            return checkpoint(layer, h, selected_heads, return_attn_scores, use_reentrant=False)
-        return layer(h, selected_heads, return_attn_scores=return_attn_scores)
-
-    def pop_iteration_metrics(self) -> dict[str, float]:
-        if cache_processor_recomputation_id() is not None:
-            return {}
-        metrics = {
-            f"cache_processor/selected_head_overlap_after_iter_{iteration}": float(
-                (total / self._selected_head_overlap_counts[iteration]).detach().cpu()
-            )
-            for iteration in sorted(self._selected_head_overlap_totals)
-            for total in (self._selected_head_overlap_totals[iteration],)
-            if self._selected_head_overlap_counts[iteration] > 0
-        }
-        self._selected_head_overlap_totals.clear()
-        self._selected_head_overlap_counts.clear()
-        return metrics
-
-    def record_selected_head_overlap(
-        self,
-        iteration: int,
-        selected_heads: torch.Tensor,
-        next_selected_heads: torch.Tensor,
-    ) -> None:
-        if cache_processor_recomputation_id() is not None:
-            return
-        assert selected_heads.shape[-1] > 0, "selected_heads must include at least one cache head"
-        assert next_selected_heads.shape[-1] > 0, "next_selected_heads must include at least one cache head"
-        maintained = (selected_heads[:, :, None] == next_selected_heads[:, None, :]).any(dim=-1)
-        overlap = maintained.float().mean().detach()
-        if iteration in self._selected_head_overlap_totals:
-            self._selected_head_overlap_totals[iteration] = self._selected_head_overlap_totals[iteration] + overlap
-            self._selected_head_overlap_counts[iteration] += 1
-        else:
-            self._selected_head_overlap_totals[iteration] = overlap
-            self._selected_head_overlap_counts[iteration] = 1
-
-    def scaled_update(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        delta = self.project_output(self.process_hidden(self.encode_input(x), selected_heads))
-        return delta * self._gate_scale(delta.dtype)
-
-    def forward_from_hidden(self, x: torch.Tensor, hidden: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        if x.shape[2] == 0:
-            raise ValueError("Longshot cache processor requires at least one selected time position")
-        residual = x[:, :, -1, -self.output_dim :]
-        delta = self.project_output(self.process_hidden(hidden, selected_heads))
-        return residual + delta * self._gate_scale(delta.dtype)
-
-    def forward(self, x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-        return self.forward_from_hidden(x, self.encode_input(x), selected_heads)  # TODO: ablate with self-attention
-
-    def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
-        if self.config.gate_mode == "sigmoid":
-            return torch.sigmoid(self.gate).to(dtype)
-        if self.config.gate_mode == "direct":
-            return self.gate.to(dtype)
-        raise ValueError(f"unsupported cache processor gate_mode: {self.config.gate_mode}")
-
-    def _encode_time(self, x: torch.Tensor) -> torch.Tensor:
-        if self.encoder_method == "linear":
-            x = _fit_time_length(x, self.encoder_seq_len)
-            return self.in_proj(x.flatten(start_dim=2))
-        if self.encoder_method == "query_attention":
-            return self.in_proj(self.time_encoder(x))
-        raise ValueError(f"unknown encoder_method: {self.encoder_method}")
-
-
-@dataclass(frozen=True)
-class LinearStateSpec:
-    layer_idx: int
-    following_cache_idx: int
-    head_count: int
-
-
-@dataclass
-class LinearStateInputs:
-    features: torch.Tensor
-    specs: list[LinearStateSpec]
-
-
-class LinearStateAdapter(nn.Module):
-    def __init__(self, model_config: ModelConfig, processor_config: CacheProcessorConfig, specs: list[LinearStateSpec]):
-        super().__init__()
-        self.query_mode = processor_config.linear_state_query_mode
-        self.num_kv_heads = model_config.num_kv_heads
-        if model_config.head_dim is None:
-            raise ValueError("linear state adapter requires a resolved model head_dim")
-        self.full_head_dim = model_config.head_dim
-        self.linear_key_dim = int(model_config.linear_key_head_dim or self.full_head_dim)
-        self.linear_value_dim = int(model_config.linear_value_head_dim or self.linear_key_dim)
-        self.linear_value_heads = int(model_config.linear_num_value_heads or model_config.num_heads)
-        self.context_dim = processor_config.hidden_size
-        self.feature_dim = self.linear_key_dim + self.linear_value_dim
-        self.query_projs = nn.ModuleDict()
-        for key in self._query_projection_keys(specs):
-            out_dim = (
-                self.linear_key_dim
-                if self.query_mode != "per_linear_state"
-                else self.linear_value_heads * self.linear_key_dim
-            )
-            self.query_projs[key] = nn.Linear(self.context_dim, out_dim)
-        self.query_context_norm = RMSNorm(self.context_dim, processor_config.norm_eps)
-        self.input_norm = RMSNorm(self.feature_dim, processor_config.norm_eps)
-        self.input_proj = nn.Linear(self.feature_dim, processor_config.hidden_size)
-        self.output_proj = nn.Linear(processor_config.hidden_size, self.feature_dim)
-        self.init_weights(processor_config)
-
-    def init_weights(self, config: CacheProcessorConfig, std: float = 0.02) -> None:
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.normal_(module.weight, mean=0.0, std=std)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-            elif isinstance(module, RMSNorm):
-                nn.init.ones_(module.weight)
-        if config.out_proj_init == "zero":
-            _zero_projection(self.output_proj)
-
-    def query(self, layer_idx: int, following_cache_idx: int, context: torch.Tensor) -> torch.Tensor:
-        projected = self.query_projs[self.query_cache_key(layer_idx, following_cache_idx)](
-            self.query_context_norm(context)
-        )
-        if self.query_mode != "per_linear_state":
-            query = projected[:, None, :].expand(-1, self.linear_value_heads, -1)
-        else:
-            query = projected.view(projected.shape[0], self.linear_value_heads, self.linear_key_dim)
-        return F.normalize(query.float(), p=2, dim=-1).to(projected.dtype)
-
-    def query_cache_key(self, layer_idx: int, following_cache_idx: int) -> str:
-        if self.query_mode == "per_linear_state":
-            return f"layer:{layer_idx}"
-        if self.query_mode == "shared":
-            return f"cache:{following_cache_idx}"
-        if self.query_mode == "global":
-            return "global"
-        raise ValueError(f"unsupported linear_state_query_mode: {self.query_mode}")
-
-    def _query_projection_keys(self, specs: list[LinearStateSpec]) -> list[str]:
-        return sorted({self.query_cache_key(spec.layer_idx, spec.following_cache_idx) for spec in specs})
-
-    def encode(self, features: torch.Tensor) -> torch.Tensor:
-        return self.input_proj(self.input_norm(features.to(self.input_proj.weight.dtype)))
 
 
 class GlobalCacheProcessor(CacheProcessorBase):
@@ -715,8 +87,10 @@ class GlobalCacheProcessor(CacheProcessorBase):
         *,
         encoder_method: EncoderMethod | None = None,
         encoder_seq_len: int | None = None,
+        linear_state_dynamics: dict[int, Any] | None = None,
     ):
         super().__init__()
+        self.linear_state_dynamics = linear_state_dynamics or {}
         model_config.ensure_uniform_stored_cache_shape("Longshot")
         if model_config.cache_processor is None:
             raise ValueError("Longshot requires cache_processor config")
@@ -840,25 +214,17 @@ class GlobalCacheProcessor(CacheProcessorBase):
         workspace: torch.Tensor,
         source: LongshotWorkspaceSource,
     ) -> None:
-        expected_shape = source.merged[:, :, -1, -self.block.output_dim :].shape
-        if workspace.shape != expected_shape:
-            raise ValueError(f"Longshot workspace shape must be {tuple(expected_shape)}, got {tuple(workspace.shape)}")
+        validate_workspace_shape(workspace, source, self.block.output_dim)
 
     def deliberate(self, workspace: torch.Tensor, source: LongshotWorkspaceSource) -> torch.Tensor:
-        self._validate_workspace_shape(workspace, source)
-        cycle_input = self._workspace_cycle_input(workspace, source)
-        return self.block(cycle_input, source.selected_heads)
+        return deliberate_workspace(self, workspace, source)
 
     def _workspace_cycle_input(
         self,
         workspace: torch.Tensor,
         source: LongshotWorkspaceSource,
     ) -> torch.Tensor:
-        frontier = torch.cat(
-            [source.merged[:, :, -1, : -self.block.output_dim], workspace],
-            dim=-1,
-        )
-        return torch.cat([source.merged[:, :, :-1], frontier[:, :, None]], dim=2)
+        return workspace_cycle_input(workspace, source, self.block.output_dim)
 
     def refine_workspace(
         self,
@@ -866,27 +232,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
         source: LongshotWorkspaceSource,
     ) -> torch.Tensor:
         """Integrate the opt-in tied workspace field without changing source state."""
-        self._validate_workspace_shape(workspace, source)
-        config = self.workspace_flow_refinement
-        if config is None:
-            return workspace
-        state = workspace
-        step_size = 1.0 / config.solver_steps
-        for step in range(config.solver_steps):
-            time = step * step_size
-            if config.solver == "euler":
-                state = state + step_size * self._workspace_velocity(state, time, source, config)
-            else:
-                first_velocity = self._workspace_velocity(state, time, source, config)
-                midpoint = state + 0.5 * step_size * first_velocity
-                midpoint_velocity = self._workspace_velocity(
-                    midpoint,
-                    time + 0.5 * step_size,
-                    source,
-                    config,
-                )
-                state = state + step_size * midpoint_velocity
-        return state
+        return refine_workspace(self, workspace, source)
 
     def _workspace_velocity(
         self,
@@ -895,10 +241,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
         source: LongshotWorkspaceSource,
         config: WorkspaceFlowRefinementConfig,
     ) -> torch.Tensor:
-        time_condition = sinusoidal_time_embedding(time, workspace.shape[-1], workspace)
-        cycle_input = self._workspace_cycle_input(workspace + time_condition, source)
-        raw_velocity = self.block.compute_update(cycle_input, source.selected_heads)
-        return config.max_velocity * torch.tanh(raw_velocity)
+        return workspace_velocity(self, workspace, time, source, config)
 
     def write_for_readout(
         self,
@@ -906,122 +249,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
         source: LongshotWorkspaceSource,
         workspace: torch.Tensor,
     ) -> WindowedCache:
-        if self.config.update_stream != "v":
-            raise ValueError("Longshot workspace readout initially supports value-only writes")
-        if not isinstance(cache, WindowedCache):
-            raise TypeError("Longshot workspace readout requires a WindowedCache")
-        if cache.linear_states is not None:
-            raise ValueError("Longshot workspace readout does not support shared linear cache state")
-        self._validate_workspace_shape(workspace, source)
-        workspace = self.refine_workspace(workspace, source)
-        branch = WindowedCache(
-            keys=cache.keys.clone(),
-            values=cache.values.clone(),
-            scores=cache.scores.clone(),
-            linear_states=cache.linear_states,
-            kv_score_sidecar=cache.kv_score_sidecar,
-        )
-        values = _split_merged_values(
-            workspace[:, :, None],
-            self.num_layers,
-            self.num_kv_heads,
-            self.head_dim,
-        )
-        branch = cast(WindowedCache, _scatter_latest_values(branch, source.latest_indices, values))
-        return cast(WindowedCache, self._refresh_kv_score_sidecar(branch, source.latest_indices))
+        return write_workspace_for_readout(self, cache, source, workspace)
 
     def _select_kv_norm_history(
         self,
         cache: CacheLike,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        sidecar_policy = kv_score_sidecar_execution(self)
-        if sidecar_policy.enabled:
-            policy = longshot_full_history_execution(self)
-            if policy.enabled:
-                raise RuntimeError("KV-score sidecar cannot run with Longshot full-history execution")
-            if not isinstance(cache, WindowedCache):
-                raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
-            self._synchronize_kv_score_sidecar(cache)
-            state = cache.kv_score_sidecar
-            if state is None:
-                raise RuntimeError("KV-score sidecar bootstrap did not produce state")
-            all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
-            merged_all = gather_per_cache_head_kv(
-                cache,
-                all_indices,
-                unrope_keys=self.config.unrope_keys,
-                rope_theta=self.rope_theta,
-                rotary_style=self.rotary_style,
-                rotary_dim=self.rotary_dim,
-                backend=self._cache_movement_backend(),
-            )
-            scores = state.scores
-            indices = select_per_cache_head_kv_norm_indices_from_scores(
-                scores, self.config.process_every, self.config.topk
-            )
-            index = indices[..., None].expand(-1, -1, -1, merged_all.shape[-1])
-            return torch.gather(merged_all, dim=2, index=index), scores, indices
-
-        policy = longshot_full_history_execution(self)
-        if not policy.enabled:
-            all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
-            merged_all = gather_per_cache_head_kv(
-                cache,
-                all_indices,
-                unrope_keys=self.config.unrope_keys,
-                rope_theta=self.rope_theta,
-                rotary_style=self.rotary_style,
-                rotary_dim=self.rotary_dim,
-                backend=self._cache_movement_backend(),
-            )
-            scores = chunked_fp32_squared_l2(merged_all)
-            indices = select_per_cache_head_kv_norm_indices_from_scores(
-                scores, self.config.process_every, self.config.topk
-            )
-            index = indices[..., None].expand(-1, -1, -1, merged_all.shape[-1])
-            return torch.gather(merged_all, dim=2, index=index), scores, indices
-
-        if not isinstance(cache, WindowedCache):
-            raise TypeError("enabled Longshot selected-history execution requires contiguous WindowedCache storage")
-        # The eager per-row FP32 expression and existing top-k remain the oracle.
-        with torch.no_grad():
-            if self.config.unrope_keys:
-                scores = chunked_fp32_unroped_concatenated_kv_squared_l2(
-                    cache.keys,
-                    cache.values,
-                    theta=self.rope_theta,
-                    rotary_style=self.rotary_style,
-                    rotary_dim=self.rotary_dim,
-                    max_temp_bytes=policy.max_temp_bytes,
-                )
-            else:
-                scores = chunked_fp32_concatenated_kv_squared_l2(
-                    cache.keys,
-                    cache.values,
-                    max_temp_bytes=policy.max_temp_bytes,
-                )
-            indices = select_per_cache_head_kv_norm_indices_from_scores(
-                scores, self.config.process_every, self.config.topk
-            )
-
-        keys, values = gather_windowed_per_cache_head_kv(
-            cache.keys,
-            cache.values,
-            indices,
-            unrope_keys=self.config.unrope_keys,
-            rope_theta=self.rope_theta,
-            rotary_style=self.rotary_style,
-            rotary_dim=self.rotary_dim,
-        )
-        record_longshot_full_history_event(
-            self,
-            keys=cache.keys,
-            selected_positions=indices.shape[-1],
-            max_temp_bytes=policy.max_temp_bytes,
-            unrope_keys=self.config.unrope_keys,
-            rotary_dim=self.rotary_dim,
-        )
-        return torch.cat([keys, values], dim=-1), scores, indices
+        return select_kv_norm_history(self, cache)
 
     def _forward_once(self, cache: CacheLike, *, select_all: bool = False) -> tuple[CacheLike, torch.Tensor | None]:
         if kv_score_sidecar_execution(self).enabled:
@@ -1099,22 +333,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
         return self._refresh_kv_score_sidecar(cache, latest), selected_heads
 
     def _synchronize_kv_score_sidecar(self, cache: WindowedCache) -> None:
-        spec = kv_score_sidecar_spec(self)
-        cache.kv_score_sidecar = synchronize_kv_score_sidecar(cache.kv_score_sidecar, cache.keys, cache.values, spec)
+        synchronize_sidecar(self, cache)
 
     def _refresh_kv_score_sidecar(self, cache: CacheLike, positions: torch.Tensor) -> CacheLike:
-        if not kv_score_sidecar_execution(self).enabled:
-            return cache
-        if not isinstance(cache, WindowedCache):
-            raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
-        spec = kv_score_sidecar_spec(self)
-        cache.kv_score_sidecar = refresh_kv_score_sidecar(
-            cache.kv_score_sidecar, cache.keys, cache.values, positions, spec
-        )
-        return cache
+        return refresh_sidecar(self, cache, positions)
 
     def _cache_movement_backend(self) -> str:
-        return "triton" if triton_cache_movement_enabled(self) else "eager"
+        return cache_movement_backend(self)
 
     def _select_combined_heads(
         self,
@@ -1128,10 +353,11 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if select_all:
             head_count = self.num_kv_cache_heads + (0 if linear_inputs is None else linear_inputs.features.shape[1])
             return torch.arange(head_count, dtype=torch.long, device=device).unsqueeze(0).expand(batch, -1)
+        topk_heads = int(self.config.topk_heads or 0)
         if linear_inputs is None:
-            return _select_heads_from_head_scores(kv_head_scores, self.config.topk_heads)
-        selected = [_select_heads_from_head_scores(kv_head_scores, self.config.topk_heads)]
-        topk_linear = _topk_linear_heads(self.config)
+            return _select_heads_from_head_scores(kv_head_scores, topk_heads)
+        selected = [_select_heads_from_head_scores(kv_head_scores, topk_heads)]
+        topk_linear = int(_topk_linear_heads(self.config) or 0)
         if topk_linear > 0:
             key_dim = self.block.linear_state_update_dims()[0]
             linear_head_scores = linear_inputs.features[..., key_dim:].float().pow(2).sum(dim=-1)
@@ -1179,6 +405,28 @@ class GlobalCacheProcessor(CacheProcessorBase):
         end = start + self.num_kv_heads
         return kv_hidden[:, start:end].mean(dim=1)
 
+    def _linear_state_forward(
+        self,
+        layer_idx: int,
+        recurrent_state: torch.Tensor,
+        query: torch.Tensor,
+    ) -> torch.Tensor:
+        from gcw.models.backbones.qwen3 import qwen35_gated_delta_rule
+
+        dynamics = self.linear_state_dynamics.get(layer_idx)
+        if dynamics is None:
+            raise RuntimeError(f"missing linear state dynamics for layer {layer_idx}")
+        key, value, g, beta = dynamics(query)
+        _, final_state = qwen35_gated_delta_rule(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            initial_state=recurrent_state,
+        )
+        return final_state.to(recurrent_state.dtype)
+
     def _scatter_linear_state_updates(
         self,
         cache: CacheLike,
@@ -1198,55 +446,53 @@ class GlobalCacheProcessor(CacheProcessorBase):
             conv_state, recurrent_state = states[spec.layer_idx]
             if recurrent_state is None:
                 continue
+            if self.config.linear_state_update_mode == "gated_delta":
+                new_recurrent = self._gated_delta_linear_state_update(
+                    spec.layer_idx,
+                    update,
+                    recurrent_state,
+                )
+                states[spec.layer_idx] = (conv_state, new_recurrent)
+                continue
             delta_key, delta_value = torch.split(update, [key_dim, value_dim], dim=-1)
             delta_key = F.normalize(delta_key.float(), p=2, dim=-1).to(delta_value.dtype)
-            # TODO(qwen3.5-linear-state): Qwen3.5 uses the gated delta-rule state
-            # transition with decay/gating terms. This additive normalized-key
-            # outer-product is useful as a learned perturbation, but it is not the
-            # exact recurrent update used by the native Qwen3.5 linear layer.
             delta_state = torch.einsum("bhk,bhv->bhkv", delta_key.float(), delta_value.float())
             states[spec.layer_idx] = (conv_state, recurrent_state + delta_state.to(recurrent_state.dtype))
         cache.linear_states = states
         return cache
 
+    def _gated_delta_linear_state_update(
+        self,
+        layer_idx: int,
+        update: torch.Tensor,
+        recurrent_state: torch.Tensor,
+    ) -> torch.Tensor:
+        from gcw.models.backbones.qwen3 import qwen35_gated_delta_rule
 
-def _zero_projection(module: nn.Module) -> None:
-    zero_projection(module, per_head_type=PerCacheHeadLinear)
-
-
-def _fit_time_length(x: torch.Tensor, seq_len: int) -> torch.Tensor:
-    current = x.shape[2]
-    if current == seq_len:
-        return x
-    warnings.warn(
-        f"Longshot linear encoder expected {seq_len} selected positions but got {current}; "
-        "padding/truncating the selected cache history.",
-        stacklevel=2,
-    )
-    if current > seq_len:
-        return x[:, :, -seq_len:, :]
-    out = x.new_zeros(x.shape[0], x.shape[1], seq_len, x.shape[3])
-    out[:, :, :current, :] = x
-    return out
-
-
-def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
-    if selected_heads.ndim != 2:
-        raise ValueError("selected_heads must have shape (batch, selected_heads)")
-    if x.ndim != 3:
-        raise ValueError("x must have shape (batch, cache_heads, hidden)")
-    index = selected_heads[:, :, None].expand(-1, -1, x.shape[2])
-    return torch.gather(x, dim=1, index=index)
-
-
-def _topk_linear_heads(config: CacheProcessorConfig) -> int:
-    return config.topk_heads if config.topk_linear_heads is None else config.topk_linear_heads
-
-
-def _select_heads_from_head_scores(scores: torch.Tensor, topk: int) -> torch.Tensor:
-    if scores.ndim != 2:
-        raise ValueError("scores must have shape (batch, cache_heads)")
-    assert topk > 0, "topk must select at least one cache head"
-    k = min(topk, scores.shape[-1])
-    _, indices = torch.topk(scores.float(), k=k, dim=-1)
-    return indices.sort(dim=-1).values
+        dynamics = self.linear_state_dynamics.get(layer_idx)
+        if dynamics is None:
+            raise ValueError(
+                f"missing Qwen3.5 linear-state dynamics for layer {layer_idx}"
+            )
+        key_dim, value_dim = self.block.linear_state_update_dims()
+        synthetic_key, synthetic_value, beta_logit, decay_input = torch.split(
+            update, [key_dim, value_dim, 1, 1], dim=-1
+        )
+        batch, heads, _ = synthetic_key.shape
+        query = synthetic_key.reshape(batch, 1, heads, key_dim)
+        key = query
+        value = synthetic_value.reshape(batch, 1, heads, value_dim)
+        beta = torch.sigmoid(beta_logit.squeeze(-1)).unsqueeze(1)
+        g = (
+            -dynamics.A_log.float().exp()
+            * F.softplus(decay_input.squeeze(-1).float() + dynamics.dt_bias)
+        ).unsqueeze(1)
+        _, final_state = qwen35_gated_delta_rule(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            initial_state=recurrent_state,
+        )
+        return final_state.to(recurrent_state.dtype)

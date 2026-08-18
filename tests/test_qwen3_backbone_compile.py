@@ -25,11 +25,9 @@ from gcw.models.cache_processors.state import CacheState
 from gcw.models.model import LanguageModel
 from gcw.provenance import canonical_json_sha256
 from gcw.training.checkpoint import CheckpointCompatibilityError
-from gcw.training.core import (
-    _apply_trainable_policy,
-    _training_fingerprint,
-    train,
-)
+from gcw.training.audit import _training_fingerprint
+from gcw.training.model_setup import _apply_trainable_policy
+from gcw.training.core import train
 
 
 def _model_config(*, variant: str = "bt") -> ModelConfig:

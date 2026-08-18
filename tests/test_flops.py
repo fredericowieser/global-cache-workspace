@@ -171,12 +171,19 @@ def test_qwen35_longshot_linear_state_flops_are_counted():
     global_query = replace(enabled, cache_processor=replace(enabled.cache_processor, linear_state_query_mode="global"))
     shared = replace(enabled, cache_processor=replace(enabled.cache_processor, linear_state_query_mode="shared"))
     unselected = replace(enabled, cache_processor=replace(enabled.cache_processor, topk_linear_heads=0))
+    gated = replace(
+        enabled,
+        cache_processor=replace(
+            enabled.cache_processor, linear_state_update_mode="gated_delta"
+        ),
+    )
 
     assert processor_forward_flops_per_sequence(enabled, 16) > processor_forward_flops_per_sequence(cfg, 16)
     assert processor_forward_flops_per_sequence(unselected, 16) < processor_forward_flops_per_sequence(enabled, 16)
     assert processor_forward_flops_per_sequence(global_query, 16) == processor_forward_flops_per_sequence(enabled, 16)
     assert processor_forward_flops_per_sequence(shared, 16) == processor_forward_flops_per_sequence(enabled, 16)
     assert processor_forward_flops_per_sequence(shared, 16) < processor_forward_flops_per_sequence(per_linear_state, 16)
+    assert processor_forward_flops_per_sequence(gated, 16) > processor_forward_flops_per_sequence(enabled, 16)
 
 
 def test_icarus_value_only_writeback_flops_keep_kv_input_but_reduce_output():

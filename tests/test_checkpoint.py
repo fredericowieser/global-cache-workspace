@@ -38,6 +38,77 @@ def test_checkpoint_roundtrip(tmp_path):
     assert loaded(x).shape == (1, 4, 64)
 
 
+def test_checkpoint_dtype_override_casts_fp32_weights_to_bf16(tmp_path):
+    cfg = ModelConfig(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+    )
+    model = build_model(cfg)
+    model.init_weights()
+    save_checkpoint(tmp_path, model, cfg)
+
+    loaded, _, _ = load_checkpoint(tmp_path, dtype="bfloat16")
+
+    assert {param.dtype for param in loaded.parameters()} == {torch.bfloat16}
+
+
+def test_checkpoint_cache_processor_only_roundtrip(tmp_path):
+    backbone_path = tmp_path / "backbone"
+    cp_path = tmp_path / "cp_checkpoint"
+    base_cfg = ModelConfig(
+        variant="tf",
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+    )
+    backbone = build_model(base_cfg)
+    backbone.init_weights()
+    save_checkpoint(backbone_path, backbone, base_cfg)
+
+    from gcw.config import CacheProcessorConfig
+    from dataclasses import replace
+
+    longshot_cfg = replace(
+        base_cfg,
+        variant="longshot",
+        cache_processor=CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            hidden_size=8,
+            intermediate_size=16,
+            num_layers=1,
+            num_heads=1,
+            num_kv_heads=1,
+        ),
+    )
+    model = build_model(longshot_cfg)
+    model.init_weights()
+    save_checkpoint(
+        cp_path,
+        model,
+        longshot_cfg,
+        {"backbone_checkpoint": str(backbone_path)},
+        cache_processor_only=True,
+    )
+
+    loaded, loaded_cfg, state = load_checkpoint(cp_path)
+    assert loaded_cfg.variant == "longshot"
+    assert state["backbone_checkpoint"] == str(backbone_path)
+    x = torch.randint(0, 64, (1, 4))
+    assert loaded(x).shape == (1, 4, 64)
+
+
 def test_backbone_checkpoint_initializes_lora_model_without_overwriting_adapters(tmp_path):
     base_config = ModelConfig(
         vocab_size=64,

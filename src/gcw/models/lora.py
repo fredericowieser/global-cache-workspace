@@ -43,10 +43,3 @@ def apply_lora(module: ModuleT, config: LoRAConfig | None) -> ModuleT:
             if name in targets and isinstance(child, nn.Linear) and not isinstance(child, LoRALinear):
                 setattr(parent, name, LoRALinear(child, config))
     return module
-
-
-def lora_parameters(module: nn.Module):
-    for child in module.modules():
-        if isinstance(child, LoRALinear):
-            yield child.lora_a
-            yield child.lora_b

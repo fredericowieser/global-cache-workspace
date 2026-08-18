@@ -28,7 +28,7 @@ value = torch.ones(1, device="cuda")
 print("cuda_tensor", value.item(), flush=True)
 PY
 
-srun "$PYTHON" examples/flow_smoke.py --device cuda --flow-steps 2
+srun "$PYTHON" scripts/quickstart/flow_smoke.py --device cuda --flow-steps 2
 
 SUCCESS_PATH="$GCW_PROJECT_DIR/gpu-smoke-$SLURM_JOB_ID.ok"
 set -o noclobber

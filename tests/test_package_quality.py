@@ -10,7 +10,6 @@ import sys
 
 def test_package_version_and_curated_subpackage_exports() -> None:
     import gcw
-    import gcw.analysis as analysis
     import gcw.performance as performance
 
     assert gcw.__version__ == version("gcw")
@@ -25,12 +24,6 @@ def test_package_version_and_curated_subpackage_exports() -> None:
         "TrainConfig",
         "build_model",
     ]
-    assert analysis.__all__ == (
-        "HeadMeanAblator",
-        "UnigramBaseline",
-        "deterministic_masks",
-        "synergy_from_losses",
-    )
     assert performance.__all__ == (
         "AdaptiveBatchingConfig",
         "KVScoreSidecarConfig",
@@ -71,7 +64,7 @@ def test_cpu_smoke_example_runs_from_the_source_layout() -> None:
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
-        [sys.executable, str(root / "examples/cpu_smoke.py")],
+        [sys.executable, str(root / "scripts/quickstart/cpu_smoke.py")],
         cwd=root,
         env=environment,
         capture_output=True,
@@ -86,9 +79,27 @@ def test_cpu_smoke_example_runs_from_the_source_layout() -> None:
     assert "Longshot rejected" in result.stdout
 
 
+def test_flow_smoke_example_runs_from_the_source_layout() -> None:
+    root = Path(__file__).resolve().parents[1]
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts/quickstart/flow_smoke.py"), "--device", "cpu", "--flow-steps", "2"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert '"architecture": "flow_bgt"' in result.stdout
+    assert '"architecture": "flow_longshot"' in result.stdout
+
+
 def test_flow_cpu_gate_uses_the_src_layout_mypy_boundary() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts/cluster/slurm/flow_cpu_gate.sbatch").read_text()
 
-    assert '"$PYTHON" -m mypy \\\n  src/gcw/architecture.py' in script
+    assert '"$PYTHON" -m mypy \\\n  src/gcw \\\n  scripts/quickstart/cpu_smoke.py \\\n  scripts/quickstart/flow_smoke.py' in script
     assert '"$PYTHON" -m mypy gcw' not in script

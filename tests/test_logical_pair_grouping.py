@@ -8,16 +8,19 @@ import pytest
 import torch
 
 import gcw.training.core as train_module
+import gcw.training.assembly as assembly_module
 from gcw.architecture import resolve_experiment, resolve_model
 from gcw.config import DataConfig, DiffusionProcessorConfig, ModelConfig, TrainConfig
 from gcw.data.training import SFTBatchStream, SFTCursor, TrainingBatch
 from gcw.models import build_model
+from gcw.training.audit import _training_fingerprint
+from gcw.training.objectives import (
+    logical_pair_grouped_loss as _logical_pair_grouped_loss,
+    model_loss as _model_loss,
+)
+from gcw.training.optimizer import _build_optimizer
 from gcw.training.core import (
-    _build_optimizer,
     _eval_loss,
-    _logical_pair_grouped_loss,
-    _model_loss,
-    _training_fingerprint,
     train,
 )
 
@@ -239,9 +242,12 @@ def test_training_metrics_preserve_32_pair_global_objective(monkeypatch: pytest.
         ) / len(batches)
 
     tracker = _Tracker()
-    monkeypatch.setattr(train_module, "build_training_stream", lambda *_args, **_kwargs: _FixedStream(batches))
+    # This test builds a CPU oracle and CPU batches; pin the training device to CPU
+    # so the single step reproduces the oracle loss on GPU hosts too.
+    monkeypatch.setattr(assembly_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    monkeypatch.setattr(assembly_module, "build_training_stream", lambda *_args, **_kwargs: _FixedStream(batches))
     monkeypatch.setattr(
-        train_module.RunTracker,
+        assembly_module.RunTracker,
         "for_training",
         lambda _config, _run_meta, model=None: tracker,
     )

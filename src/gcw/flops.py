@@ -277,7 +277,8 @@ def _longshot_processor_block_flops_per_call(
         else:
             raise ValueError(f"unsupported cache_processor.linear_state_query_mode: {config.linear_state_query_mode}")
         feature_dim = linear_key_dim + linear_value_dim
-        linear_in_out = linear_heads * (feature_dim * config.hidden_size + config.hidden_size * feature_dim)
+        linear_output_dim = feature_dim + (2 if config.linear_state_update_mode == "gated_delta" else 0)
+        linear_in_out = linear_heads * (feature_dim * config.hidden_size + config.hidden_size * linear_output_dim)
         encode_extra += 2 * query_count * context_dim * query_out
         encode_extra += 4 * linear_heads * linear_key_dim * linear_value_dim
     encode_decode = 2 * (cache_heads * kv_in_out + linear_in_out) + encode_extra

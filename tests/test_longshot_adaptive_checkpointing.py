@@ -22,9 +22,9 @@ from gcw.performance.checkpointing import (
 )
 from gcw.training.objectives import model_loss as _model_loss
 from gcw.training.checkpoint import CheckpointCompatibilityError
+from gcw.training.audit import _training_fingerprint
 from gcw.training.core import (
     _eval_loss,
-    _training_fingerprint,
     train,
 )
 

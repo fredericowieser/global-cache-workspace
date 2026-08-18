@@ -1,0 +1,74 @@
+model:
+  variant: bgt
+  family: llama
+  sequence_len: 8192
+  vocab_size: 128256
+  hidden_size: 2048
+  intermediate_size: 8192
+  num_layers: 16
+  num_heads: 32
+  num_kv_heads: 8
+  head_dim: 64
+  rope_theta: 500000.0
+  norm_eps: 1.0e-05
+  tie_embeddings: true
+  qk_norm: false
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    score: attn_l2
+    hidden_size: 1536
+    intermediate_size: 6272
+    num_layers: 1
+    num_heads: 16
+    num_kv_heads: 16
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+    update_stream: kv
+    out_proj_init: normal
+    gate_mode: sigmoid
+    processor_mode: standard
+    writer_head_fraction: 1.0
+    salience_temperature: 1.0
+    kv_score_init_k: 0.25
+    kv_score_init_v: 0.75
+  legacy_bottleneck_generate: true
+data:
+  kind: sft
+  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
+  tokenizer: hf
+  tokenizer_source: /mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model
+  sft_skip_rows: 128000
+  sft_take_rows: 128000
+  response_prefix: "\n"
+mode: sft
+distributed: ddp
+freeze_backbone: true
+backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf
+output_dir: runs/bottleneck_llm/llama32_1b_bgt_from_sft_frozen
+batch_size: 16
+sequence_len: 512
+max_steps: 1000
+total_batch_size: 65536
+learning_rate: 0.0001
+adam_beta2: 0.999
+warmup_steps: 0
+warmdown_ratio: 0.0
+weight_decay: 0.0
+grad_clip: 1.0
+precision: bf16_mixed
+seed: 24
+save_every: 100
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: llama32-1b-bgt-from-sft-frozen
+  group: bottleneck-llm-reproduction
+  tags:
+  - bottleneck-llm
+  - bgt
+  - llama-3.2-1b
+  - openmath

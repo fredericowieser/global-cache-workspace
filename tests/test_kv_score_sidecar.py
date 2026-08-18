@@ -38,7 +38,7 @@ from gcw.performance.kv_score_sidecar import (
     synchronize_kv_score_sidecar,
 )
 from gcw.performance.longshot_cache import configure_longshot_full_history_execution
-from gcw.training.core import _training_fingerprint
+from gcw.training.audit import _training_fingerprint
 from gcw.training.checkpoint import ResumeState, save_training_checkpoint
 
 

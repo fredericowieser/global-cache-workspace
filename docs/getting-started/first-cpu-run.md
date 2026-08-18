@@ -5,12 +5,12 @@
 The maintained smoke program constructs TF and BGT, computes losses, admits Longshot, and rejects one incompatible Longshot composition.
 
 ```bash
-uv run --extra cpu python examples/cpu_smoke.py
+uv run --extra cpu python scripts/quickstart/cpu_smoke.py
 ```
 
 Success prints two finite losses, `Longshot admitted: longshot`, and one explicit compatibility rejection. CI executes the same file that this page references.
 
-```{literalinclude} ../../examples/cpu_smoke.py
+```{literalinclude} ../../scripts/quickstart/cpu_smoke.py
 :language: python
-:caption: examples/cpu_smoke.py
+:caption: scripts/quickstart/cpu_smoke.py
 ```

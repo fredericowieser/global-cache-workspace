@@ -14,11 +14,32 @@ from gcw.config import ModelConfig, to_dict
 from gcw.models import build_model
 
 
+def _upgrade_qwen35_gated_delta_keys(
+    state: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    upgraded = dict(state)
+    suffixes = {
+        ".linear_attn.A_log": ".linear_attn.dynamics.A_log",
+        ".linear_attn.dt_bias": ".linear_attn.dynamics.dt_bias",
+    }
+    for key in list(state):
+        for legacy_suffix, current_suffix in suffixes.items():
+            if key.endswith(legacy_suffix):
+                current_key = key[:-len(legacy_suffix)] + current_suffix
+                if current_key not in upgraded:
+                    upgraded[current_key] = upgraded[key]
+                del upgraded[key]
+                break
+    return upgraded
+
+
 def save_checkpoint(
     path: str | Path,
     model: torch.nn.Module | dict[str, torch.Tensor],
     model_config: ModelConfig,
     train_state: dict[str, Any] | None = None,
+    *,
+    cache_processor_only: bool = False,
 ) -> None:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
@@ -27,6 +48,17 @@ def save_checkpoint(
         if isinstance(runtime_config, ModelConfig) and to_dict(runtime_config) != to_dict(model_config):
             raise ValueError("checkpoint model_config does not match the model's runtime config")
     state = model if isinstance(model, dict) else model.state_dict()
+    if cache_processor_only:
+        state = {
+            key: tensor
+            for key, tensor in state.items()
+            if key.startswith("cache_processor.")
+        }
+        if not state:
+            raise ValueError(
+                "cannot save a cache-processor-only checkpoint because the "
+                "model has no cache_processor state"
+            )
     state = {k: v.detach().cpu() for k, v in state.items()}
     save_file(state, path / "model.safetensors")
     with open(path / "config.json", "w", encoding="utf-8") as f:
@@ -88,6 +120,7 @@ def load_checkpoint_bytes(
     train_state_bytes: bytes,
     model_bytes: bytes,
     device: torch.device | str = "cpu",
+    dtype: torch.dtype | str | None = "auto",
 ):
     try:
         config_payload = json.loads(config_bytes.decode("utf-8"))
@@ -100,9 +133,10 @@ def load_checkpoint_bytes(
         raise ValueError("checkpoint train-state snapshot must be an object")
     cfg = _model_config_from_checkpoint(config_payload["model"])
     weights = load_safetensors(model_bytes)
+    weights = _upgrade_qwen35_gated_delta_keys(weights)
     model = build_model(cfg)
     dtype_name = train_state.get("dtype")
-    if dtype_name == "mixed_bfloat16_backbone_float32_processor":
+    if dtype_name == "mixed_bfloat16_backbone_float32_processor" and (dtype is None or dtype == "auto"):
         backbone = getattr(model, "backbone", None)
         cache_processor = getattr(model, "cache_processor", None)
         if not isinstance(backbone, torch.nn.Module) or not isinstance(
@@ -117,10 +151,27 @@ def load_checkpoint_bytes(
         recorded_dtype = {"bfloat16": torch.bfloat16, "float32": torch.float32}.get(
             dtype_name if isinstance(dtype_name, str) else ""
         )
-        dtype = recorded_dtype or _infer_floating_dtype(weights)
-        if dtype is not None:
-            model.to(dtype=dtype)
-    model.load_state_dict(weights, strict=True)
+        resolved = _resolve_dtype(dtype, weights) or recorded_dtype
+        if resolved is not None:
+            model.to(dtype=resolved)
+    model_keys = set(model.state_dict())
+    weight_keys = set(weights)
+    unexpected = weight_keys - model_keys
+    if unexpected:
+        raise KeyError(f"unexpected checkpoint keys: {sorted(unexpected)[:8]}")
+    missing = model_keys - weight_keys
+    if missing:
+        backbone_keys = {key for key in model_keys if key.startswith("backbone.")}
+        if not missing.issubset(backbone_keys):
+            raise KeyError(f"missing checkpoint keys: {sorted(missing)[:8]}")
+        backbone_checkpoint = train_state.get("backbone_checkpoint")
+        if not backbone_checkpoint:
+            raise KeyError(
+                "checkpoint contains only cache processor parameters but "
+                "train_state.json does not specify backbone_checkpoint"
+            )
+        load_backbone_checkpoint(model, backbone_checkpoint)
+    model.load_state_dict(weights, strict=not missing)
     model.to(device)
     return model, cfg, train_state
 
@@ -140,19 +191,45 @@ def _model_config_from_checkpoint(payload: Any) -> ModelConfig:
     return ModelConfig(**model_payload)
 
 
-def load_checkpoint(path: str | Path, device: torch.device | str = "cpu"):
+def load_checkpoint(
+    path: str | Path,
+    device: torch.device | str = "cpu",
+    dtype: torch.dtype | str | None = "auto",
+):
     path = Path(path)
     return load_checkpoint_bytes(
         config_bytes=(path / "config.json").read_bytes(),
         train_state_bytes=(path / "train_state.json").read_bytes(),
         model_bytes=(path / "model.safetensors").read_bytes(),
         device=device,
+        dtype=dtype,
     )
+
+
+def _resolve_dtype(
+    dtype: torch.dtype | str | None, state: dict[str, torch.Tensor]
+) -> torch.dtype | None:
+    if dtype is None or dtype == "auto":
+        return _infer_floating_dtype(state)
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    choices = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }
+    try:
+        return choices[dtype]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported dtype {dtype!r}; use auto, bfloat16, float16, or float32"
+        ) from exc
 
 
 def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     path = Path(path)
     weights = load_file(path / "model.safetensors", device="cpu")
+    weights = _upgrade_qwen35_gated_delta_keys(weights)
     target = cast(torch.nn.Module, getattr(model, "backbone", model))
     target_state = target.state_dict()
     loadable = {}

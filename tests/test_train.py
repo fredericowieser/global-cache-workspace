@@ -4,7 +4,6 @@ import sys
 import pytest
 import torch
 
-import gcw.training.core as train_module
 from gcw.config import (
     CacheProcessorConfig,
     DataConfig,
@@ -23,16 +22,20 @@ from gcw.models import build_model
 from gcw.models.lora import LoRALinear
 from gcw.performance.checkpointing import transformer_layer_classes as _transformer_layer_classes
 from gcw.training.objectives import model_loss as _model_loss
-from gcw.training.core import (
-    _build_training_model,
+from gcw.training.audit import (
     _checkpoint_metadata,
     _checkpoint_state,
-    _apply_trainable_policy,
-    _load_initial_model,
     _validate_train_batch,
-    _wsd_lr,
-    train,
 )
+from gcw.training.distributed import _fsdp_wrap_classes
+from gcw.training.model_setup import (
+    _apply_trainable_policy,
+    _build_training_model,
+    _load_initial_model,
+)
+from gcw.training.optimizer import _build_optimizer, _wsd_lr
+from gcw.training.precision import _uses_bf16_autocast
+from gcw.training.core import train
 from gcw.training.checkpoint import CheckpointCompatibilityError
 from gcw.training.checkpoint import save_training_checkpoint as real_save_training_checkpoint
 
@@ -320,12 +323,67 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp
     assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
 
 
+def test_train_precision_defaults_and_legacy_bf16_alias():
+    assert TrainConfig().precision == "fp32"
+    assert TrainConfig(bf16=True).precision == "bf16_mixed"
+    assert TrainConfig(precision="bf16").bf16 is True
+    cuda = torch.device("cuda")
+    assert _uses_bf16_autocast(TrainConfig(bf16=True), cuda) is True
+    assert _uses_bf16_autocast(TrainConfig(precision="bf16"), cuda) is False
+
+
+def test_train_precision_rejects_invalid_or_conflicting_values():
+    with pytest.raises(ValueError, match="unsupported training precision"):
+        TrainConfig(precision="float16")
+    with pytest.raises(ValueError, match="conflicts"):
+        TrainConfig(precision="fp32", bf16=True)
+
+
+def test_full_bf16_uses_bf16_model_gradients_and_optimizer_moments(tmp_path):
+    cfg = tiny_train_config(tmp_path)
+    cfg.precision = "bf16"
+    model = _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=False)
+    floating_tensors = [
+        *model.parameters(),
+        *(buffer for buffer in model.buffers() if buffer.is_floating_point()),
+    ]
+    assert floating_tensors
+    assert {tensor.dtype for tensor in floating_tensors} == {torch.bfloat16}
+
+    params = [param for param in model.parameters() if param.requires_grad]
+    optimizer = _build_optimizer(params, cfg)
+    x = torch.randint(0, cfg.model.vocab_size, (1, 4))
+    y = torch.roll(x, shifts=-1, dims=1)
+    loss = model(x, y)
+    assert loss.dtype == torch.float32
+    loss.backward()
+    assert {param.grad.dtype for param in params if param.grad is not None} == {torch.bfloat16}
+    optimizer.step()
+    moment_dtypes = {
+        value.dtype
+        for state in optimizer.state.values()
+        for key, value in state.items()
+        if key in {"exp_avg", "exp_avg_sq"}
+    }
+    assert moment_dtypes == {torch.bfloat16}
+
+
 def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):
     monkeypatch.setitem(sys.modules, "gcw.models.backbones.qwen3", None)
 
     classes = _transformer_layer_classes("llama")
 
     assert classes
+
+
+def test_qwen35_fsdp_wraps_gated_delta_dynamics_separately():
+    from gcw.models.backbones.qwen3 import Qwen35GatedDeltaDynamics
+
+    default_classes = _transformer_layer_classes("qwen3_5")
+    fsdp_classes = _fsdp_wrap_classes("qwen3_5")
+
+    assert Qwen35GatedDeltaDynamics not in default_classes
+    assert Qwen35GatedDeltaDynamics in fsdp_classes
 
 
 def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
@@ -373,7 +431,7 @@ def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step
     def fake_save(path, model, optimizer, config, resume_state, fingerprint, rank):
         calls.append((path, resume_state.step, rank))
 
-    monkeypatch.setattr("gcw.training.core._save_training_state", fake_save)
+    monkeypatch.setattr("gcw.training.state._save_training_state", fake_save)
 
     train(cfg)
 
@@ -461,7 +519,7 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
             num_kv_heads=1,
         ),
     )
-    cfg.trainable = "cache_processor"
+    cfg.freeze_backbone = True
     cfg.backbone_checkpoint = str(checkpoint)
     cfg.wandb.enabled = False
     cfg.eval_every = 0
@@ -470,7 +528,15 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
 
     train(cfg)
 
-    trained, _, _ = load_checkpoint(tmp_path / "run" / "checkpoint")
+    from safetensors.torch import load_file
+
+    trained_checkpoint = tmp_path / "run" / "checkpoint"
+    weights = load_file(trained_checkpoint / "model.safetensors")
+    assert weights
+    assert all(key.startswith("cache_processor.") for key in weights)
+    trained, _, _ = load_checkpoint(trained_checkpoint)
+    trained_state = trained.state_dict()
+    assert all(torch.equal(trained_state[key], tensor) for key, tensor in weights.items())
     assert torch.allclose(
         trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123)
     )
@@ -584,11 +650,11 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
         if resume_state.step == 2 and str(path).endswith("checkpoint"):
             raise RuntimeError("simulated interruption")
 
-    monkeypatch.setattr(train_module, "save_training_checkpoint", save_then_interrupt, raising=False)
+    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", save_then_interrupt, raising=False)
     with pytest.raises(RuntimeError, match="simulated interruption"):
         train(interrupted)
 
-    monkeypatch.setattr(train_module, "save_training_checkpoint", real_save_training_checkpoint)
+    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", real_save_training_checkpoint)
     resumed = tiny_train_config(tmp_path)
     resumed.output_dir = str(tmp_path / "resumed")
     resumed.max_steps = 4

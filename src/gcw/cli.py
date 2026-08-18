@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
             choices=["auto", "plain", "thinking_off", "thinking_on"],
             default="auto",
         )
+        command.add_argument(
+            "--dtype",
+            choices=["auto", "bfloat16", "float16", "float32"],
+            default="auto",
+        )
         if suite == "tasks":
             command.add_argument("--tasks", nargs="+", required=True)
         command.add_argument("--out", default=None)
@@ -66,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
     fineweb.add_argument("--data-dir", default=None)
     fineweb.add_argument("--eval-tokens", type=int, default=10 * 524288)
     fineweb.add_argument("--batch-size", type=int, default=16)
+    fineweb.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float16", "float32"],
+        default="auto",
+    )
     fineweb.add_argument("--out", default=None)
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
@@ -110,6 +120,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 data_dir=args.data_dir,
                 eval_tokens=args.eval_tokens,
                 batch_size=args.batch_size,
+                dtype=args.dtype,
             )
         elif args.suite == "chat":
             from gcw.evaluation.chat_benchmarks import run_chat_benchmarks
@@ -135,6 +146,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 "prompt_mode": args.prompt_mode,
                 "hf_model": args.hf_model,
                 "processor_enabled": args.processor == "on",
+                "dtype": args.dtype,
             }
             results = run_tasks(args.tasks, **common) if args.suite == "tasks" else runners[args.suite](**common)
         if not is_main_process():

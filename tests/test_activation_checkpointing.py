@@ -23,11 +23,9 @@ from gcw.performance.checkpointing import (
 )
 from gcw.training.objectives import logical_pair_grouped_loss as _logical_pair_grouped_loss
 from gcw.training.checkpoint import CheckpointCompatibilityError, save_training_checkpoint
-from gcw.training.core import (
-    _apply_trainable_policy,
-    _training_fingerprint,
-    train,
-)
+from gcw.training.audit import _training_fingerprint
+from gcw.training.model_setup import _apply_trainable_policy
+from gcw.training.core import train
 
 
 def _model_config(
@@ -515,7 +513,7 @@ def test_adaptive_segment_policy_is_visible_in_per_step_metrics(
         save_final=False,
     )
     monkeypatch.setattr(
-        "gcw.training.core.RunTracker.for_training",
+        "gcw.training.assembly.RunTracker.for_training",
         lambda *_args, **_kwargs: Tracker(),
     )
 
@@ -553,11 +551,11 @@ def test_segmented_training_exact_resume_matches_uninterrupted(
         if resume_state.step == 1:
             raise RuntimeError("simulated interruption")
 
-    monkeypatch.setattr("gcw.training.core.save_training_checkpoint", save_then_interrupt)
+    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", save_then_interrupt)
     with pytest.raises(RuntimeError, match="simulated interruption"):
         train(interrupted)
 
-    monkeypatch.setattr("gcw.training.core.save_training_checkpoint", save_training_checkpoint)
+    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", save_training_checkpoint)
     resumed = replace(
         interrupted,
         resume=ResumeConfig(checkpoint=str(tmp_path / "resumed" / "checkpoint")),

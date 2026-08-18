@@ -27,7 +27,7 @@ from gcw.performance.backends.icarus import (
     icarus_training_execution,
     validate_icarus_training_admission,
 )
-from gcw.training.core import _training_fingerprint
+from gcw.training.audit import _training_fingerprint
 
 
 @pytest.fixture(autouse=True)

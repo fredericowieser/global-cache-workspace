@@ -876,7 +876,8 @@ def _prefixed_state_like(state: dict[str, torch.Tensor], prefix: str) -> dict[st
         elif key == "lm_head.weight":
             remote = f"{prefix}lm_head.weight"
         else:
-            remote = f"{prefix}model.{key}"
+            remote_key = key.replace(".linear_attn.dynamics.", ".linear_attn.")
+            remote = f"{prefix}model.{remote_key}"
         if value.is_floating_point():
             out[remote] = torch.randn_like(value)
         else:

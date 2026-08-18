@@ -15,7 +15,8 @@ from gcw.config import TrainConfig, load_train_config
 from gcw.data.training import TrainingBatch, build_training_stream
 from gcw.performance.adjacent_pairs import PAIRS_PER_STEP
 from gcw.performance.pair_waves import PairWaveRuntime
-from gcw.training.core import _apply_trainable_policy, _model_loss
+from gcw.training.model_setup import _apply_trainable_policy
+from gcw.training.objectives import model_loss as _model_loss
 from scripts.benchmarks.harness import _build_configured_model, device_identity
 
 

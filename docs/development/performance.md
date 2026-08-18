@@ -75,13 +75,14 @@ A future experiment may preserve the oracle only by retaining a physical shape o
 
 Promotion requires changing the source-bound admission bit only after H100 and H200 evidence is accepted. That changes the plan digest. Runtime must then authenticate an exact source/config/device/runtime context and a receipt that names both independent accelerator lineages and their evidence hashes. A receipt from an older plan, another GPU UUID, or another qualification challenge fails closed.
 
-## Static workspace and ragged planning primitives
+## Static workspace and ragged planning primitives (removed)
 
-`gcw.performance.workspaces` provides closed signature/lane arenas with explicit leases spanning staging through backward completion. An arena cannot be restaged while any forward/backward owns it, stale or double releases fail, and unseen signatures or tensor metadata fail closed. The arenas are runtime objects rather than model state. They are infrastructure for graph inputs and pair lanes; allocation alone is not a speed claim.
-
-`gcw.performance.ragged` validates physical two-row prefix masks and records exact per-row valid lengths, active windows, partial tails, and semantic processor boundaries. It performs no model dispatch yet. A future kernel may consume only these closed plans; removing padding work is unavailable until per-row Qwen forward/backward and cache-event parity pass on both GPUs.
-
-`gcw.performance.activation_lifetime` closes phase order, producer/consumer uses, and the exact post-phase release schedule before execution. Its runtime owns Python references and fails on missing, duplicate, reordered, or prematurely released values. It does not mutate tensors or claim allocator release; an optimized executor must still observe CUDA allocation/pool behavior in a fresh process before a lifetime plan earns a memory result.
+The static-workspace, ragged-pair-plan, and activation-lifetime primitives
+(`gcw.performance.workspaces`, `gcw.performance.ragged`,
+`gcw.performance.activation_lifetime`) were closed, no-dispatch infrastructure
+for the composed optimized-step profile, but had no live importer. They were
+removed as dead code; the `combined_v1` plan keeps their names in its pinned
+component list purely to preserve the receipt-bound plan digest.
 
 ## Rejected exact fixed-pair wave candidate
 

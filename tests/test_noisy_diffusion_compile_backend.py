@@ -33,7 +33,7 @@ from gcw.performance.backends.diffusion import (
     noisy_diffusion_compile_telemetry,
     noisy_diffusion_recurrence_backend_metadata,
 )
-from gcw.training.core import _training_fingerprint
+from gcw.training.audit import _training_fingerprint
 from tests.test_diffusion import tiny_diffusion_config
 
 
@@ -368,16 +368,16 @@ def test_default_noisy_diffusion_policy_preserves_pre_feature_receipts() -> None
     _, composition_receipt = resolve_experiment(train, model_receipt).require()
 
     assert model_receipt.model_config_sha256 == (
-        "1db30db79c348e5f29ec2699ea9744e4c2fb37cbbbceaaae8fbf7e5a45ab2fc9"
+        "9dd26b562261322e6eaba070dae228cacc0798a18b114c5750f86952940843a4"
     )
     assert model_receipt.receipt_sha256 == (
-        "5a2ef93ac2e6ca753b3034116acf4846beda371dca38566d0eba255c644161eb"
+        "72966699bd2994287c5b1e11fe65c97d468e9eeb5fc9d53016cd3c015cabfc2c"
     )
     assert composition_receipt.train_config_sha256 == (
-        "b4bd02d2185d2017e07fa57d4154a0d087c2e20acf0fd5e3c8c983f45fd807ef"
+        "5bc9238792f6dc0d1a281d6d57c3dbd48ace12ecedee79bee9ba77f0c1271b1e"
     )
     assert composition_receipt.receipt_sha256 == (
-        "75721acc440dc737d4b809370e0efbe00ac2bfd254a9aceb1bed209336450398"
+        "b3d088b213a2ef5a72c54596639a1ff967e96686bf92bc97cc27d62889faa4b7"
     )
 
 

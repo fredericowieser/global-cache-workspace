@@ -55,6 +55,10 @@ data/analysis/*
 *.npy
 *.npz
 
+# Locally-downloaded model weights (tokenizers, safetensors, configs)
+data/models/
+artifacts/
+
 # Editor and OS noise
 .DS_Store
 Thumbs.db

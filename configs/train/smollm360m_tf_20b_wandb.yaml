@@ -21,7 +21,8 @@ data:
   max_length: 2048
 mode: pretrain
 distributed: ddp
-trainable: all
+freeze_backbone: false
+loss: next_token_ce
 checkpoint_format: native_safetensors
 output_dir: runs/smollm360m_tf_20b_1gpu_wandb
 batch_size: 8
@@ -34,7 +35,7 @@ warmup_steps: 1907
 warmdown_ratio: 0.2
 final_lr_frac: 0.0
 grad_clip: 1.0
-bf16: true
+precision: bf16_mixed
 seed: 24
 save_every: 2000
 eval_every: 250

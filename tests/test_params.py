@@ -115,8 +115,12 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
     default_cfg = replace(cfg, cache_processor=replace(cp, linear_state_cache=False))
     shared_cfg = replace(cfg, cache_processor=replace(cp, linear_state_query_mode="shared"))
     per_linear_state_cfg = replace(cfg, cache_processor=replace(cp, linear_state_query_mode="per_linear_state"))
+    gated_cfg = replace(cfg, cache_processor=replace(cp, linear_state_update_mode="gated_delta"))
+    gated_model = build_model(gated_cfg)
 
     assert processor_params(cfg) == sum(p.numel() for p in model.cache_processor.parameters())
+    assert processor_params(gated_cfg) == sum(p.numel() for p in gated_model.cache_processor.parameters())
+    assert processor_params(gated_cfg) > processor_params(cfg)
     assert processor_params(cfg) > processor_params(default_cfg)
     assert processor_params(cfg) < processor_params(shared_cfg)
     assert processor_params(shared_cfg) < processor_params(per_linear_state_cfg)

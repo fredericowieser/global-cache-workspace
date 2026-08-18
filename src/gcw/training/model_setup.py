@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+from pathlib import Path
+import torch
+
+from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint
+from gcw.config import TrainConfig, to_dict
+from gcw.models import build_model
+from gcw.models.lora import LoRALinear
+
+
+def _load_initial_model(model: torch.nn.Module, checkpoint_path: str | Path) -> None:
+    """Load a complete model state without restoring optimizer or run state."""
+    source, source_config, _ = load_checkpoint(checkpoint_path, device="cpu")
+    model_config = getattr(model, "config", None)
+    if not isinstance(model_config, type(source_config)) or to_dict(model_config) != to_dict(source_config):
+        raise ValueError("init_checkpoint model configuration differs from train.model")
+    model.load_state_dict(source.state_dict(), strict=True)
+
+
+def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
+    """Select trainable ownership before wrapping or optimizer construction."""
+    backbone = getattr(model, "backbone", model)
+    processor = getattr(model, "cache_processor", None)
+    if policy == "all":
+        model.requires_grad_(True)
+        return
+    if policy == "backbone":
+        backbone.requires_grad_(True)
+        if isinstance(processor, torch.nn.Module):
+            processor.requires_grad_(False)
+        return
+    if policy == "lora":
+        model.requires_grad_(False)
+        adapters = [module for module in backbone.modules() if isinstance(module, LoRALinear)]
+        if not adapters:
+            raise ValueError("trainable='lora' requires attached LoRA projections")
+        for adapter in adapters:
+            adapter.lora_a.requires_grad_(True)
+            adapter.lora_b.requires_grad_(True)
+        return
+    if policy == "cache_processor":
+        if not isinstance(processor, torch.nn.Module):
+            raise ValueError("trainable='cache_processor' requires a cache processor")
+        backbone.requires_grad_(False)
+        processor.requires_grad_(True)
+        return
+    raise ValueError(f"unsupported trainable policy: {policy}")
+
+
+def _build_training_model(
+    config: TrainConfig, device: torch.device, *, rank: int, use_fsdp: bool
+) -> torch.nn.Module:
+    model_dtype = (
+        torch.bfloat16
+        if config.precision == "bf16"
+        else (torch.float16 if config.precision == "fp16" else torch.float32)
+    )
+    if use_fsdp:
+        if rank == 0:
+            model = build_model(config.model).to(dtype=model_dtype)
+            model.init_weights()
+            if config.init_checkpoint:
+                _load_initial_model(model, config.init_checkpoint)
+            elif config.backbone_checkpoint:
+                load_backbone_checkpoint(model, config.backbone_checkpoint)
+            return model
+        with torch.device("meta"):
+            return build_model(config.model).to(dtype=model_dtype)
+
+    model = build_model(config.model).to(device=device, dtype=model_dtype)
+    model.init_weights()
+    if config.init_checkpoint:
+        _load_initial_model(model, config.init_checkpoint)
+    elif config.backbone_checkpoint:
+        load_backbone_checkpoint(model, config.backbone_checkpoint)
+    return model

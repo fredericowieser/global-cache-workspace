@@ -1,3 +1,9 @@
+"""Global cache workspace: bottleneck-cache language models and their training/evaluation.
+
+The top-level package exposes the small public surface (config types and model
+construction); everything else is imported from its domain subpackage.
+"""
+
 from importlib.metadata import PackageNotFoundError, version
 
 from gcw.config import CacheProcessorConfig, EvalConfig, ModelConfig, TrainConfig

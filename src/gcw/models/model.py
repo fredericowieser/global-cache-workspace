@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -34,6 +35,20 @@ class LanguageModel(nn.Module):
 
     def get_device(self) -> torch.device:
         return self.backbone.get_device()
+
+    def refresh_linear_state_dynamics(self) -> None:
+        """Re-resolve Qwen3.5 gated-delta dynamics after FSDP wrapping.
+
+        ``build_language_model`` resolves the backbone's ``Qwen35GatedDeltaDynamics``
+        modules and hands them to the Longshot processor at build time. FSDP wraps
+        those modules, so the processor must re-resolve them from the wrapped
+        backbone to keep sharding and gradient flow correct.
+        """
+        if not hasattr(self.cache_processor, "linear_state_dynamics"):
+            return
+        from gcw.models.backbones.qwen3 import _qwen35_linear_state_dynamics
+
+        setattr(self.cache_processor, "linear_state_dynamics", _qwen35_linear_state_dynamics(self.backbone))
 
     def _processor_config(self) -> CacheProcessorConfig:
         config = self.config.cache_processor
@@ -160,7 +175,12 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
     if config.variant == "tf":
         return build_backbone(config)
 
-    processor = build_cache_processor(config)
+    from gcw.performance.backends.cache_processors import resolve_cache_processor_backend
+    from gcw.performance.backends.icarus import resolve_icarus_processor_backend
+
+    resolve_cache_processor_backend(config)
+    resolve_icarus_processor_backend(config)
+
     backbone_config = replace(
         config,
         flow_processor=None,
@@ -170,10 +190,20 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
     if config.variant == "longshot":
         backbone_config = replace(backbone_config, workspace_flow_refinement=None)
     backbone = build_backbone(backbone_config)
+    linear_state_dynamics = None
+    if config.variant == "longshot" and config.cache_processor and config.cache_processor.linear_state_cache:
+        from gcw.models.backbones.qwen3 import _qwen35_linear_state_dynamics
+
+        linear_state_dynamics = _qwen35_linear_state_dynamics(backbone)
+    processor = build_cache_processor(config, linear_state_dynamics=linear_state_dynamics)
     return LanguageModel(config, backbone, processor)
 
 
-def build_cache_processor(config: ModelConfig) -> CacheProcessorBase:
+def build_cache_processor(
+    config: ModelConfig,
+    *,
+    linear_state_dynamics: dict[int, Any] | None = None,
+) -> CacheProcessorBase:
     """Construct one cache processor without constructing a backbone."""
     from gcw.performance.backends.cache_processors import resolve_cache_processor_backend
     from gcw.performance.backends.icarus import resolve_icarus_processor_backend
@@ -195,5 +225,5 @@ def build_cache_processor(config: ModelConfig) -> CacheProcessorBase:
     if config.variant == "longshot":
         from gcw.models.cache_processors.longshot import GlobalCacheProcessor as LongshotProcessor
 
-        return LongshotProcessor(config)
+        return LongshotProcessor(config, linear_state_dynamics=linear_state_dynamics)
     raise ValueError(f"variant {config.variant!r} does not define a cache processor")

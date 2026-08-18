@@ -19,18 +19,9 @@ printf 'job=%s node=%s source_commit=%s started=%s\n' \
 "$PYTHON" -m pytest -q
 "$PYTHON" -m ruff check .
 "$PYTHON" -m mypy \
-  src/gcw/architecture.py \
-  src/gcw/provenance.py \
-  src/gcw/config.py \
-  src/gcw/performance/config.py \
-  src/gcw/performance/adjacent_pairs.py \
-  src/gcw/performance/checkpointing.py \
-  src/gcw/performance/prepared_bt.py \
-  src/gcw/performance/backends/icarus.py \
-  src/gcw/training/objectives.py \
-  src/gcw/models/__init__.py \
-  src/gcw/analysis/__init__.py \
-  examples/cpu_smoke.py
+  src/gcw \
+  scripts/quickstart/cpu_smoke.py \
+  scripts/quickstart/flow_smoke.py
 BASH_BIN="$(command -v bash)"
 test -x "$BASH_BIN" || { printf 'Missing Bash interpreter\n' >&2; exit 1; }
 "$BASH_BIN" -n scripts/cluster/slurm/flow_cpu_gate.sbatch scripts/cluster/slurm/flow_smoke.sbatch

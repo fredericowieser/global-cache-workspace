@@ -14,7 +14,7 @@ from gcw.performance.triton.execution import (
     TritonCacheExecutionContext,
     configure_triton_cache_movement,
 )
-from gcw.training.core import _apply_trainable_policy
+from gcw.training.model_setup import _apply_trainable_policy
 
 pytestmark = [pytest.mark.gpu, pytest.mark.performance]
 

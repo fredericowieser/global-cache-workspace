@@ -53,7 +53,7 @@ Do not place either token in a config file, shell script, run manifest, or Git. 
 
 ```bash
 uv run --extra gpu python -c 'import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))'
-uv run --extra cpu python examples/cpu_smoke.py
+uv run --extra cpu python scripts/quickstart/cpu_smoke.py
 uv run --extra cpu --group dev pytest -q
 ```
 
@@ -112,8 +112,7 @@ uv run --extra cpu --group docs sphinx-build -W --keep-going -b html docs docs/_
 - `src/gcw/`: reusable installed library.
 - `configs/`: human-authored experiment definitions.
 - `data/`: dataset registries, run records, mutable state, results, evidence, and generated analysis.
-- `scripts/`: thin data, analysis, cluster, and publication commands.
-- `examples/`: executable examples used by documentation and CI.
+- `scripts/`: thin data, analysis, cluster, and publication commands, plus `scripts/quickstart/` smoke tests.
 - `tests/`: unit, integration, provenance, and compatibility contracts.
 
 Local metric files are canonical. W&B mirrors them. Historical evidence keeps its original paths and identity schemas.

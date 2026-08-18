@@ -14,13 +14,6 @@ import torch.distributed as dist
 LOG = logging.getLogger("gcw")
 
 
-def setup_logging() -> None:
-    logging.basicConfig(
-        level=os.environ.get("GCW_LOGLEVEL", "INFO"),
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-
-
 def base_dir() -> Path:
     root = Path(os.environ.get("GCW_BASE_DIR", Path.home() / ".cache" / "gcw"))
     root.mkdir(parents=True, exist_ok=True)

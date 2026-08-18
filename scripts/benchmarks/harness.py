@@ -43,12 +43,11 @@ from gcw.provenance import (
     tensor_state_sha256,
 )
 from gcw.performance.whole_model import maybe_compile_whole_model
-from gcw.training.core import (
-    _apply_trainable_policy,
+from gcw.training.model_setup import _apply_trainable_policy, _load_initial_model
+from gcw.training.objectives import model_loss as _model_loss
+from gcw.training.optimizer import (
     _build_optimizer,
     _clip_grad_norm,
-    _load_initial_model,
-    _model_loss,
     _weight_decay,
     _wsd_lr,
 )

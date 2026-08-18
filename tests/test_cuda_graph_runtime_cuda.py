@@ -17,7 +17,7 @@ from gcw.performance.cuda_graphs import (
     cuda_graph_replay_counts,
     run_graphed_callable,
 )
-from gcw.training.core import _apply_trainable_policy
+from gcw.training.model_setup import _apply_trainable_policy
 
 pytestmark = [pytest.mark.gpu, pytest.mark.performance]
 
