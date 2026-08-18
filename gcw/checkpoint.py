@@ -53,7 +53,7 @@ def load_checkpoint(
     train_state = (
         json.loads(state_path.read_text()) if state_path.exists() else {}
     )
-    weights = load_file(path / "model.safetensors", device=str(device))
+    weights = load_file(path / "model.safetensors", device="cpu")
     weights = _upgrade_qwen35_gated_delta_keys(weights)
     model = build_model(cfg)
     model_dtype = _resolve_dtype(dtype, weights)
