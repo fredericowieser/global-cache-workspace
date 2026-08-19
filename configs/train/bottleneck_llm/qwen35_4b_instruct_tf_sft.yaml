@@ -64,9 +64,27 @@ data:
   tokenizer_source: Qwen/Qwen3.5-4B
   sft_take_rows: 128000
   response_prefix: "\n"
+  prompt_suffix: ""
+  sft_chat_template: false
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  validation_dataset: null
 mode: sft
 distributed: fsdp
 freeze_backbone: false
+trainable: all
+save_cache_processor_only: false
+loss_backend: reference
+activation_checkpointing: none
+backbone_chunk_backend: eager
+activation_checkpoint_windows: 0
+activation_checkpoint_min_padded_sequence_length: 0
+longshot_gradient_checkpointing_seq_len_threshold: null
+global_batch_rows: 0
+logical_pair_grouping: false
+init_checkpoint: null
+resume: null
+save_final: true
 backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/hf_native/qwen35_4b/tf_base
 output_dir: runs/bottleneck_llm/qwen35_4b_instruct_tf_sft
 batch_size: 32
@@ -82,6 +100,17 @@ grad_clip: 1.0
 precision: bf16_mixed
 seed: 24
 save_every: 1000
+performance:
+  adaptive_batching:
+    enabled: false
+  reference_loss:
+    mode: legacy
+  longshot_full_history:
+    enabled: false
+  kv_score_sidecar:
+    enabled: false
+  triton_cache_movement:
+    enabled: false
 wandb:
   enabled: true
   project: global-cache-workspace

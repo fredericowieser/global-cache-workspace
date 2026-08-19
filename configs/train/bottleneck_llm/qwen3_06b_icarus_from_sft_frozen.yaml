@@ -39,9 +39,27 @@ data:
   sft_skip_rows: 128000
   sft_take_rows: 128000
   response_prefix: "\n"
+  prompt_suffix: ""
+  sft_chat_template: false
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  validation_dataset: null
 mode: sft
 distributed: ddp
 freeze_backbone: true
+trainable: cache_processor
+save_cache_processor_only: true
+loss_backend: reference
+activation_checkpointing: none
+backbone_chunk_backend: eager
+activation_checkpoint_windows: 0
+activation_checkpoint_min_padded_sequence_length: 0
+longshot_gradient_checkpointing_seq_len_threshold: null
+global_batch_rows: 0
+logical_pair_grouping: false
+init_checkpoint: null
+resume: null
+save_final: true
 backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/qwen3_06b/tf
 output_dir: runs/bottleneck_llm/qwen3_06b_icarus_from_sft_frozen
 batch_size: 16
@@ -57,6 +75,17 @@ grad_clip: 1.0
 precision: bf16_mixed
 seed: 24
 save_every: 100
+performance:
+  adaptive_batching:
+    enabled: false
+  reference_loss:
+    mode: legacy
+  longshot_full_history:
+    enabled: false
+  kv_score_sidecar:
+    enabled: false
+  triton_cache_movement:
+    enabled: false
 wandb:
   enabled: true
   project: global-cache-workspace
