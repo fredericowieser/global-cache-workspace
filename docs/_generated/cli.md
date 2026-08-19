@@ -29,7 +29,8 @@ usage: gcw convert hf [-h] --family {llama,qwen3,qwen3_5,qwen3_5_moe,gemma4}
 ## `gcw eval`
 
 ```text
-usage: gcw eval [-h] {all,math,general,tasks,chat,fineweb} ...
+usage: gcw eval [-h]
+                {paper7,paper7-legacy,all,math,general,tasks,chat,fineweb} ...
 ```
 
 ## `gcw eval all`
@@ -39,7 +40,7 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                     [--processor {on,off}] [--limit LIMIT]
                     [--batch-size BATCH_SIZE]
                     [--prompt-mode {auto,plain,thinking_off,thinking_on}]
-                    [--out OUT]
+                    [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
 
 | Argument | Contract |
@@ -50,6 +51,7 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
 
 ## `gcw eval chat`
@@ -79,7 +81,7 @@ usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 ```text
 usage: gcw eval fineweb [-h] --checkpoint CHECKPOINT [--data-dir DATA_DIR]
                         [--eval-tokens EVAL_TOKENS] [--batch-size BATCH_SIZE]
-                        [--out OUT]
+                        [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
 
 | Argument | Contract |
@@ -88,6 +90,7 @@ usage: gcw eval fineweb [-h] --checkpoint CHECKPOINT [--data-dir DATA_DIR]
 | `--data-dir` | flag |
 | `--eval-tokens` | default: `5242880`; type: `int` |
 | `--batch-size` | default: `16`; type: `int` |
+| `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
 
 ## `gcw eval general`
@@ -97,7 +100,7 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                         [--processor {on,off}] [--limit LIMIT]
                         [--batch-size BATCH_SIZE]
                         [--prompt-mode {auto,plain,thinking_off,thinking_on}]
-                        [--out OUT]
+                        [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
 
 | Argument | Contract |
@@ -108,6 +111,7 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
 
 ## `gcw eval math`
@@ -117,7 +121,7 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                      [--processor {on,off}] [--limit LIMIT]
                      [--batch-size BATCH_SIZE]
                      [--prompt-mode {auto,plain,thinking_off,thinking_on}]
-                     [--out OUT]
+                     [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
 
 | Argument | Contract |
@@ -128,6 +132,40 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
+| `--out` | flag |
+
+## `gcw eval paper7`
+
+```text
+usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
+                       [--batch-size BATCH_SIZE]
+                       [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
+```
+
+| Argument | Contract |
+|---|---|
+| `--checkpoint` | required |
+| `--limit` | type: `int` |
+| `--batch-size` | default: `8`; type: `int` |
+| `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
+| `--out` | flag |
+
+## `gcw eval paper7-legacy`
+
+```text
+usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
+                              [--batch-size BATCH_SIZE]
+                              [--dtype {auto,bfloat16,float16,float32}]
+                              [--out OUT]
+```
+
+| Argument | Contract |
+|---|---|
+| `--checkpoint` | required |
+| `--limit` | type: `int` |
+| `--batch-size` | default: `8`; type: `int` |
+| `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
 
 ## `gcw eval tasks`
@@ -137,7 +175,8 @@ usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                       [--processor {on,off}] [--limit LIMIT]
                       [--batch-size BATCH_SIZE]
                       [--prompt-mode {auto,plain,thinking_off,thinking_on}]
-                      --tasks TASKS [TASKS ...] [--out OUT]
+                      [--dtype {auto,bfloat16,float16,float32}] --tasks TASKS
+                      [TASKS ...] [--out OUT]
 ```
 
 | Argument | Contract |
@@ -148,6 +187,7 @@ usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--tasks` | required |
 | `--out` | flag |
 

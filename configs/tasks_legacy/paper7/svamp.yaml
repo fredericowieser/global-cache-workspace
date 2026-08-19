@@ -1,0 +1,58 @@
+task: svamp
+dataset_path: ChilleD/SVAMP
+dataset_name: null
+output_type: generate_until
+training_split: train
+fewshot_split: train
+test_split: test
+# ``question_concat`` = ``Body`` + ``Question`` concatenated, which is the
+# prompt style the original SVAMP paper and downstream work use.
+doc_to_text: "{{question_concat}}"
+doc_to_target: "{{Answer}}"
+num_fewshot: 0
+generation_kwargs:
+  until:
+    - "</s>"
+    - "<|end_of_text|>"
+    - "<|eot_id|>"
+    - "\n\nQuestion:"
+    - "\nQuestion:"
+  do_sample: false
+  temperature: 0.0
+  max_gen_toks: 256
+repeats: 1
+filter_list:
+  # \boxed{N} - format matching OpenMathInstruct-2 SFT outputs.
+  - name: "boxed"
+    filter:
+      - function: "regex"
+        group_select: -1
+        regex_pattern: "\\\\boxed\\{([^{}]*)\\}"
+      - function: "take_first"
+  # "answer is N" - natural-language phrasing.
+  - name: "answer_is"
+    filter:
+      - function: "regex"
+        group_select: -1
+        regex_pattern: "(?i)answer (?:is|=|:)\\s*(-?[0-9\\.,]+)"
+      - function: "take_first"
+  # Last-number fallback - most permissive.
+  - name: "flexible"
+    filter:
+      - function: "regex"
+        group_select: -1
+        regex_pattern: "(-?[$0-9.,]{2,})|(-?[0-9]+)"
+      - function: "take_first"
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+    regexes_to_ignore:
+      - ","
+      - "\\$"
+      - "\\.$"
+      - "\\s+"
+metadata:
+  version: 1.0

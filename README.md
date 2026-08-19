@@ -86,6 +86,40 @@ uv run --extra cpu --extra eval gcw eval all \
 
 Evaluation creates an independent record under `data/eval-runs/`. It does not mutate training state.
 
+### Legacy paper7 compatibility
+
+Use `paper7-legacy` only when reproducing martin-branch paper7 results or comparing new checkpoints directly against those historical runs. It keeps the old lm-eval task set, generation limits, chat template invocation, special-token handling, and legacy JSON shape. The `paper7` suite name is retained as an alias for this compatibility path.
+
+```bash
+GCW_EVAL_SKIP_TASKS=theoremqa \
+uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7-legacy \
+  --checkpoint /path/to/checkpoint \
+  --batch-size 16 \
+  --out results/<run>_paper7.json
+```
+
+When evaluating in a pre-synced cluster environment, add `--locked --no-sync` to `uv run` to avoid changing the installed runtime during a Slurm job.
+
+Report paper7 legacy results in the martin table order:
+
+| Column | Task | Metric |
+|---|---|---|
+| GSM8K | `gsm8k_openmath` | `exact_match,flexible` |
+| SVAMP | `svamp` | `exact_match,flexible` |
+| GSM-Hd | `gsm8k_hard` | `exact_match,flexible` |
+| ThmQA | `theoremqa` | `exact_match,none` |
+| LogiQA | `logiqa` | `acc_norm,none` |
+| Gaokao | `agieval_gaokao_mathqa` | `acc_norm,none` |
+
+If `GCW_EVAL_SKIP_TASKS=theoremqa` is set, leave the ThmQA cell blank and compute `AVG` over the remaining present task columns. To generate the historical markdown and CSV table:
+
+```bash
+uv run --extra eval python scripts/extract_paper_table.py \
+  --json results/<run>_paper7.json \
+  --out results/<run>_paper7.md \
+  --csv results/<run>_paper7.csv
+```
+
 ## Documentation
 
 The [documentation index](docs/index.md) is the human knowledge layer.

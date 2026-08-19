@@ -34,6 +34,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     eval_p = sub.add_parser("eval")
     eval_sub = eval_p.add_subparsers(dest="suite", required=True)
+    for suite in ("paper7", "paper7-legacy"):
+        legacy = eval_sub.add_parser(suite)
+        legacy.add_argument("--checkpoint", required=True)
+        legacy.add_argument("--limit", type=int, default=None)
+        legacy.add_argument("--batch-size", type=int, default=8)
+        legacy.add_argument(
+            "--dtype",
+            choices=["auto", "bfloat16", "float16", "float32"],
+            default="auto",
+        )
+        legacy.add_argument("--out", default=None)
     for suite in ("all", "math", "general", "tasks"):
         command = eval_sub.add_parser(suite)
         target = command.add_mutually_exclusive_group(required=True)
@@ -134,6 +145,15 @@ def dispatch(args: argparse.Namespace) -> None:
                 hf_model=args.hf_model,
                 tokenizer_path=args.tokenizer_path,
                 processor_enabled=args.processor == "on",
+            )
+        elif args.suite in {"paper7", "paper7-legacy"}:
+            from gcw.evaluation.legacy import run_paper7_legacy
+
+            results = run_paper7_legacy(
+                args.checkpoint,
+                limit=args.limit,
+                batch_size=args.batch_size,
+                dtype=args.dtype,
             )
         else:
             from gcw.evaluation.core import run_tasks

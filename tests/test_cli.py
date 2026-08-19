@@ -21,6 +21,26 @@ def test_chat_eval_parser_requires_explicit_mode_tasks_and_target():
     assert args.max_new_tokens == 2048
 
 
+def test_legacy_paper7_eval_parser_restores_old_suite_alias():
+    for suite in ("paper7", "paper7-legacy"):
+        args = cli.build_parser().parse_args(
+            [
+                "eval",
+                suite,
+                "--checkpoint",
+                "checkpoint-3000",
+                "--batch-size",
+                "16",
+            ]
+        )
+        assert args.suite == suite
+        assert args.checkpoint == "checkpoint-3000"
+        assert args.batch_size == 16
+        assert args.dtype == "auto"
+        assert not hasattr(args, "prompt_mode")
+        assert not hasattr(args, "processor")
+
+
 def test_convert_hf_forwards_processor_variants(monkeypatch):
     calls = []
 

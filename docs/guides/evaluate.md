@@ -21,6 +21,57 @@
 
 Evaluation constructs independent state. It does not mutate a training checkpoint. Experiment pages define stricter task sets, controls, and evidence gates.
 
+## Legacy paper7 compatibility
+
+`gcw eval paper7-legacy` exists for direct compatibility with martin-branch paper7
+evaluation runs. Use it for old-checkpoint replication and for new checkpoints that
+must be compared against those legacy result files. The short suite name
+`gcw eval paper7` is an alias for the same path.
+
+The compatibility path intentionally preserves the old protocol:
+
+- task YAMLs are loaded from `configs/tasks_legacy/paper7`;
+- GSM8K OpenMath and GSM8K Hard generation use 512 new tokens;
+- SVAMP generation uses 256 new tokens;
+- Qwen chat templates are invoked without a thinking-mode keyword;
+- legacy Qwen3.5 and Gemma4 checkpoints keep the old generate-time special-token behavior;
+- result JSON keeps the old lm-eval-compatible top-level shape.
+
+Run Qwen3.5 legacy paper7 evaluation with the Qwen3.5 runtime extra:
+
+```bash
+GCW_EVAL_SKIP_TASKS=theoremqa \
+uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7-legacy \
+  --checkpoint /path/to/checkpoint \
+  --batch-size 16 \
+  --out results/<run>_paper7.json
+```
+
+On a pre-synced Slurm environment, prefer `uv run --locked --no-sync --extra gpu
+--extra eval --extra qwen35 ...` so the job does not rebuild dependencies on the
+compute node.
+
+Report legacy paper7 metrics in the martin table order:
+
+| Column | Task | Metric |
+|---|---|---|
+| GSM8K | `gsm8k_openmath` | `exact_match,flexible` |
+| SVAMP | `svamp` | `exact_match,flexible` |
+| GSM-Hd | `gsm8k_hard` | `exact_match,flexible` |
+| ThmQA | `theoremqa` | `exact_match,none` |
+| LogiQA | `logiqa` | `acc_norm,none` |
+| Gaokao | `agieval_gaokao_mathqa` | `acc_norm,none` |
+
+If TheoremQA is skipped, leave ThmQA blank and compute `AVG` over the remaining
+present task columns. `scripts/extract_paper_table.py` reproduces this extraction:
+
+```bash
+uv run --extra eval python scripts/extract_paper_table.py \
+  --json results/<run>_paper7.json \
+  --out results/<run>_paper7.md \
+  --csv results/<run>_paper7.csv
+```
+
 ## Canonical scores versus numeric thinking comparisons
 
 Keep two protocols separate:
