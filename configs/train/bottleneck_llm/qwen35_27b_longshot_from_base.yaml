@@ -1,0 +1,184 @@
+model:
+  variant: longshot
+  family: qwen3_5
+  sequence_len: 262144
+  vocab_size: 248320
+  hidden_size: 5120
+  intermediate_size: 17408
+  num_layers: 64
+  num_heads: 24
+  num_kv_heads: 4
+  head_dim: 256
+  rope_theta: 10000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: false
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 16
+    topk_linear_heads: 576
+    linear_state_cache: true
+    linear_state_query_mode: per_linear_state
+    linear_state_update_mode: outer_product
+    gate_linear_state_delta: true
+    score: kv_norm
+    hidden_size: 896
+    intermediate_size: 3584
+    num_layers: 7
+    num_heads: 7
+    num_kv_heads: 7
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -2.0
+    attention_dropout: 0.0
+    per_cache_head_projections: false
+    gradient_checkpointing: true
+    encoder_method: query_attention
+    encoder_query_source: final_token
+    unrope_keys: true
+  legacy_bottleneck_generate: true
+  layer_types:
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  processor_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  - 19
+  - 23
+  - 27
+  - 31
+  - 35
+  - 39
+  - 43
+  - 47
+  - 51
+  - 55
+  - 59
+  - 63
+  partial_rotary_factor: 0.25
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: 128
+  linear_value_head_dim: 128
+  linear_num_key_heads: 16
+  linear_num_value_heads: 48
+  hidden_act: silu
+data:
+  kind: sft
+  dataset: /mnt/gcw/data/OpenMathInstruct-2/train.jsonl
+  tokenizer: hf
+  tokenizer_source: Qwen/Qwen3.5-27B
+  sft_take_rows: 128000
+  response_prefix: "\n"
+  sft_skip_rows: 128000
+mode: sft
+distributed: fsdp
+freeze_backbone: true
+backbone_checkpoint: /mnt/gcw/checkpoints/hf_native/qwen35_27b/tf_base
+output_dir: runs/bottleneck_llm/qwen35_27b/longshot/qwen35_27b_longshot_query_final_token_unrope_kv_norm_from_sft_step2000_frozen_shared_linear_query_per_head_outer_product_gated_linear_state_delta_seed24
+batch_size: 2
+sequence_len: 512
+max_steps: 3000
+total_batch_size: 65536
+learning_rate: 0.0001
+adam_beta2: 0.999
+warmup_steps: 0
+warmdown_ratio: 0.0
+weight_decay: 0.0
+grad_clip: 1.0
+precision: bf16
+seed: 24
+save_every: 1000
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: qwen35-27b-longshot-query-final-token-unrope-kv-norm-from-sft-step2000-frozen-shared-linear-query-per-head-outer-product-gated-linear-state-delta-seed24
+  group: bottleneck-llm-reproduction
+  tags:
+  - bottleneck-llm
+  - longshot
+  - final-token-query
+  - qwen3.5-27b
+  - openmath
+  - frozen-backbone
+  - sft-step-2000
+  - shared-projection
+  - unrope-keys
+  - kv-norm
+  - per-head-token-selection
+  - linear-query-per-head
+  - outer-product
+  - gated-linear-state-delta
+  - seed-24
+metadata:
+  backbone_non_embedding_params: 24353201664
+  processor_params: 356126849
+  total_non_embedding_params: 24709328513
+  processor_fraction: 0.014623409846206905
+  target_processor_fraction: 0.015429182539856872
+  target_processor_params: 375749994

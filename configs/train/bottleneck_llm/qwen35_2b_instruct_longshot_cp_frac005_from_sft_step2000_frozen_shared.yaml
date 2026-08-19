@@ -20,14 +20,15 @@ model:
     topk_heads: 3
     topk_linear_heads: 72
     linear_state_cache: true
-    linear_state_query_mode: global
+    linear_state_query_mode: per_linear_state
+    linear_state_update_mode: outer_product
     gate_linear_state_delta: true
     score: kv_norm
-    hidden_size: 1024
-    intermediate_size: 4096
+    hidden_size: 768
+    intermediate_size: 3072
     num_layers: 4
-    num_heads: 8
-    num_kv_heads: 8
+    num_heads: 6
+    num_kv_heads: 6
     norm_eps: 1.0e-06
     rope_theta: 10000.0
     gate_init: -2.0
@@ -96,7 +97,7 @@ weight_decay: 0.0
 grad_clip: 1.0
 precision: bf16_mixed
 seed: 24
-save_every: 100
+save_every: 1000
 wandb:
   enabled: true
   project: global-cache-workspace
@@ -118,8 +119,8 @@ wandb:
   - target-processor-fraction-0.05
 metadata:
   backbone_non_embedding_params: 1373265728
-  processor_params: 69101697
-  total_non_embedding_params: 1442367425
-  processor_fraction: 0.05031924673503539
+  processor_params: 67559425
+  total_non_embedding_params: 1440825153
+  processor_fraction: 0.04919617785728357
   target_processor_fraction: 0.05
   target_processor_params: 68663286
