@@ -183,7 +183,7 @@ def _training_fingerprint(
             else "next_token_ce"
         ),
         "checkpoint_format": config.checkpoint_format,
-        "bf16": config.bf16,
+        "precision": config.precision,
         "seed": config.seed,
         "optimizer": {
             "learning_rate": config.learning_rate,

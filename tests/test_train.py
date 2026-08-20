@@ -439,6 +439,21 @@ def test_checkpoint_metadata_records_precision_and_the_real_parameter_dtype(tmp_
     assert metadata["dtype"] == expected
 
 
+def test_training_fingerprint_records_precision_and_separates_the_bf16_modes(tmp_path):
+    from gcw.training.audit import _training_fingerprint
+
+    fingerprints = {}
+    for precision in ("fp32", "bf16_mixed", "bf16"):
+        cfg = tiny_train_config(tmp_path)
+        cfg.precision = precision
+        fingerprints[precision] = _training_fingerprint(cfg, 1, 8, 8, 1)
+        assert fingerprints[precision]["precision"] == precision
+        assert "bf16" not in fingerprints[precision]
+
+    assert fingerprints["bf16"] != fingerprints["bf16_mixed"]
+    assert fingerprints["fp32"] != fingerprints["bf16_mixed"]
+
+
 def test_precision_summary_reports_autocast_a_device_cannot_run():
     from gcw.training.precision import _precision_summary
 

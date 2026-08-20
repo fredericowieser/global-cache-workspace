@@ -2,6 +2,7 @@ import copy
 from dataclasses import replace
 import json
 import shutil
+import warnings
 
 import pytest
 import torch
@@ -219,6 +220,92 @@ def test_elastic_resume_rejects_non_fineweb_data(tmp_path):
             expected_fingerprint=fingerprint,
             topology="elastic_ddp",
             current_world_size=2,
+        )
+
+
+def _legacy_precision_checkpoint(tmp_path, legacy_bf16: bool):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(path, model, config, optimizer, resume, {**fingerprint, "bf16": legacy_bf16})
+    return path, fingerprint
+
+
+@pytest.mark.parametrize("precision", ["bf16_mixed", "bf16"])
+def test_legacy_bf16_fingerprint_resumes_into_either_bf16_precision(tmp_path, precision):
+    path, fingerprint = _legacy_precision_checkpoint(tmp_path, legacy_bf16=True)
+
+    with pytest.warns(RuntimeWarning, match="predates precision fingerprinting"):
+        checkpoint = TrainingCheckpoint.open(
+            path,
+            expected_fingerprint={**fingerprint, "precision": precision},
+            topology="same",
+            current_world_size=1,
+        )
+
+    assert checkpoint.resume_state.step == 1
+    assert checkpoint.manifest["training_fingerprint"]["bf16"] is True
+
+
+def test_legacy_fp32_fingerprint_resumes_without_warning(tmp_path):
+    path, fingerprint = _legacy_precision_checkpoint(tmp_path, legacy_bf16=False)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        checkpoint = TrainingCheckpoint.open(
+            path,
+            expected_fingerprint={**fingerprint, "precision": "fp32"},
+            topology="same",
+            current_world_size=1,
+        )
+
+    assert checkpoint.resume_state.step == 1
+
+
+@pytest.mark.parametrize(
+    ("legacy_bf16", "precision"),
+    [(True, "fp32"), (False, "bf16_mixed"), (False, "bf16")],
+)
+def test_legacy_fingerprint_still_rejects_a_disagreeing_precision(tmp_path, legacy_bf16, precision):
+    path, fingerprint = _legacy_precision_checkpoint(tmp_path, legacy_bf16=legacy_bf16)
+
+    with pytest.raises(CheckpointCompatibilityError) as failure:
+        TrainingCheckpoint.open(
+            path,
+            expected_fingerprint={**fingerprint, "precision": precision},
+            topology="same",
+            current_world_size=1,
+        )
+
+    assert "precision" in str(failure.value)
+    assert "bf16," not in str(failure.value)
+
+
+def test_current_fingerprint_separates_the_two_bf16_precisions(tmp_path):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(path, model, config, optimizer, resume, {**fingerprint, "precision": "bf16_mixed"})
+
+    with pytest.raises(CheckpointCompatibilityError, match="precision"):
+        TrainingCheckpoint.open(
+            path,
+            expected_fingerprint={**fingerprint, "precision": "bf16"},
+            topology="same",
+            current_world_size=1,
+        )
+
+
+def test_legacy_upgrade_does_not_touch_a_manifest_that_already_records_precision(tmp_path):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    path = tmp_path / "checkpoint"
+    saved = {**fingerprint, "precision": "bf16", "bf16": True}
+    save_training_checkpoint(path, model, config, optimizer, resume, saved)
+
+    with pytest.raises(CheckpointCompatibilityError, match="bf16"):
+        TrainingCheckpoint.open(
+            path,
+            expected_fingerprint={**fingerprint, "precision": "bf16"},
+            topology="same",
+            current_world_size=1,
         )
 
 

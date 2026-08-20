@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import random
 from typing import Any, Literal
+import warnings
 
 import numpy as np
 import torch
@@ -27,6 +28,36 @@ from gcw.training.checkpoint.types import (
     TrainingCheckpointError,
     UnsupportedTopologyError,
 )
+
+
+LEGACY_PRECISION_FINGERPRINT_KEY = "bf16"
+
+
+def _fingerprint_with_legacy_precision(saved: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
+    """Accept manifests written before ``precision`` replaced ``bf16`` in the training fingerprint.
+
+    The legacy flag was ``config.precision != "fp32"``, so it cannot separate ``bf16_mixed`` from ``bf16``.
+    A legacy manifest therefore resumes into either mode when the flag agrees, which is exactly the
+    behaviour those checkpoints were written under. The ambiguity is warned about, not hidden.
+    """
+    if "precision" in saved or LEGACY_PRECISION_FINGERPRINT_KEY not in saved:
+        return saved
+    legacy_bf16 = bool(saved[LEGACY_PRECISION_FINGERPRINT_KEY])
+    expected_precision = expected.get("precision")
+    upgraded = {key: value for key, value in saved.items() if key != LEGACY_PRECISION_FINGERPRINT_KEY}
+    if legacy_bf16 != (expected_precision != "fp32"):
+        upgraded["precision"] = "bf16_mixed" if legacy_bf16 else "fp32"
+        return upgraded
+    if legacy_bf16:
+        warnings.warn(
+            f"checkpoint predates precision fingerprinting and records only bf16=true; "
+            f"resuming as precision={expected_precision!r} without being able to confirm it was not "
+            f"{'bf16' if expected_precision == 'bf16_mixed' else 'bf16_mixed'}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    upgraded["precision"] = expected_precision
+    return upgraded
 
 
 class TrainingCheckpoint:
@@ -71,6 +102,8 @@ class TrainingCheckpoint:
         manifest = _parse_manifest_bytes(manifest_bytes, resolved)
         payloads = _capture_verified_payloads(resolved, manifest)
         saved_fingerprint = manifest.get("training_fingerprint")
+        if isinstance(saved_fingerprint, dict):
+            saved_fingerprint = _fingerprint_with_legacy_precision(saved_fingerprint, expected_fingerprint)
         if saved_fingerprint != expected_fingerprint:
             differing = sorted(
                 key
