@@ -114,8 +114,6 @@ class CacheProcessor(nn.Module):
         selected_heads: torch.Tensor,
         *,
         topk_heads: int | None = None,
-        kv_cache_heads: int | None = None,
-        topk_linear_heads: int | None = None,
     ) -> torch.Tensor:
         if self.flow is not None:
             return self.flow(
@@ -141,24 +139,7 @@ class CacheProcessor(nn.Module):
                     h = result
             if return_attn_scores:
                 head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
-                if kv_cache_heads is None or topk_linear_heads is None:
-                    next_selected_heads = _select_heads_from_head_scores(head_scores, topk_heads)
-                else:
-                    kv_selected = _select_heads_from_head_scores(
-                        head_scores[:, :kv_cache_heads],
-                        topk_heads,
-                    )
-                    if topk_linear_heads > 0:
-                        linear_selected = (
-                            _select_heads_from_head_scores(
-                                head_scores[:, kv_cache_heads:],
-                                topk_linear_heads,
-                            )
-                            + kv_cache_heads
-                        )
-                        next_selected_heads = torch.cat([kv_selected, linear_selected], dim=-1)
-                    else:
-                        next_selected_heads = kv_selected
+                next_selected_heads = _select_heads_from_head_scores(head_scores, topk_heads)
                 self.record_selected_head_overlap(iteration + 1, selected_heads, next_selected_heads)
                 selected_heads = next_selected_heads
         return self.out_norm(h)
@@ -202,9 +183,7 @@ class CacheProcessor(nn.Module):
         processed = self.process_hidden(
             hidden,
             selected_heads,
-            topk_heads=self.config.topk_heads,
-            kv_cache_heads=kv_hidden.shape[1],
-            topk_linear_heads=_topk_linear_heads(self.config),
+            topk_heads=self.config.topk_heads + _topk_linear_heads(self.config),
         )
         gate = self._gate_scale(processed.dtype)
         primary_delta = self.project_output(processed[:, : x.shape[1]]) * gate

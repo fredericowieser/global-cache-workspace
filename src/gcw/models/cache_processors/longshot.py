@@ -117,6 +117,17 @@ class GlobalCacheProcessor(CacheProcessorBase):
         self.rotary_dim = int(self.head_dim * model_config.partial_rotary_factor)
         self.num_kv_cache_heads = self.num_layers * self.num_kv_heads
         self.linear_state_specs = self._build_linear_state_specs(model_config)
+        if self.config.linear_state_update_mode == "gated_delta" and self.linear_state_specs:
+            missing = sorted(
+                spec.layer_idx
+                for spec in self.linear_state_specs
+                if spec.layer_idx not in self.linear_state_dynamics
+            )
+            if missing:
+                raise ValueError(
+                    "gated_delta linear-state updates require matching Qwen3.5 linear-attention "
+                    f"modules for layers {missing}"
+                )
         self.num_linear_state_heads = sum(spec.head_count for spec in self.linear_state_specs)
         self.num_cache_heads = self.num_kv_cache_heads + self.num_linear_state_heads
         output_dim = self.head_dim if self.config.update_stream == "v" else 2 * self.head_dim
@@ -479,6 +490,11 @@ class GlobalCacheProcessor(CacheProcessorBase):
             update, [key_dim, value_dim, 1, 1], dim=-1
         )
         batch, heads, _ = synthetic_key.shape
+        dynamics_heads = int(dynamics.A_log.shape[0])
+        if heads != dynamics_heads:
+            raise ValueError(
+                f"linear state head count {heads} does not match layer {layer_idx} value heads {dynamics_heads}"
+            )
         query = synthetic_key.reshape(batch, 1, heads, key_dim)
         key = query
         value = synthetic_value.reshape(batch, 1, heads, value_dim)

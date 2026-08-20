@@ -32,6 +32,7 @@ from gcw.models.cache_processors.longshot import GlobalCacheProcessor as Longsho
 from gcw.models.cache_processors.longshot import CacheProcessor as LongshotCacheProcessor
 from gcw.models.cache_processors.longshot import ProcessorAttention as LongshotProcessorAttention
 from gcw.models.cache_processors.longshot import QueryAttentionTimeEncoder
+from gcw.models.cache_processors.longshot_layers import _gather_cache_heads as _longshot_gather_cache_heads
 from gcw.models.lora import LoRALinear
 from gcw.models.backbones.qwen3 import Qwen35GatedDeltaDynamics
 from gcw.models.backbones.transformer import _matches_stop_sequence, apply_rotary
@@ -666,7 +667,7 @@ def test_qwen35_longshot_linear_state_head_selection_is_split_from_kv_heads():
     assert torch.equal(selected, torch.tensor([[1]]))
 
 
-def test_qwen35_longshot_internal_reselection_preserves_kv_and_linear_quotas():
+def test_qwen35_longshot_internal_reselection_uses_one_budget_across_kv_and_linear_heads():
     class RecordingLayer(nn.Module):
         def __init__(self, scores: torch.Tensor):
             super().__init__()
@@ -714,7 +715,7 @@ def test_qwen35_longshot_internal_reselection_preserves_kv_and_linear_quotas():
 
     assert len(layer.calls) == 2
     assert torch.equal(layer.calls[0], torch.tensor([[0, 2, 3]]))
-    assert torch.equal(layer.calls[1], torch.tensor([[0, 2, 3]]))
+    assert torch.equal(layer.calls[1], torch.tensor([[2, 3, 4]]))
 
 
 @pytest.mark.parametrize("linear_state_update_mode", ["outer_product", "gated_delta"])
@@ -2798,3 +2799,47 @@ def _assert_cache_positions_unchanged(original: CacheState, actual: CacheState, 
         for batch_idx in range(mask.shape[0]):
             assert torch.equal(old_key[batch_idx, :, mask[batch_idx], :], new_key[batch_idx, :, mask[batch_idx], :])
             assert torch.equal(old_value[batch_idx, :, mask[batch_idx], :], new_value[batch_idx, :, mask[batch_idx], :])
+
+
+def test_qwen35_longshot_gated_delta_rejects_a_head_count_the_dynamics_cannot_gate():
+    cfg = tiny_qwen35_config(
+        "longshot",
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+        linear_state_update_mode="gated_delta",
+    )
+    mismatched = Qwen35GatedDeltaDynamics(1)
+    processor = LongshotGlobalCacheProcessor(
+        cfg, linear_state_dynamics={0: mismatched, 2: mismatched}
+    )
+    key_dim, value_dim = processor.block.linear_state_update_dims()
+    update = torch.randn(1, 2, key_dim + value_dim + 2)
+    recurrent = torch.zeros(1, 2, key_dim, value_dim)
+
+    with pytest.raises(ValueError, match="head count 2 does not match layer 0 value heads 1"):
+        processor._gated_delta_linear_state_update(0, update, recurrent)
+
+
+
+def test_qwen35_longshot_gated_delta_rejects_construction_without_matching_dynamics():
+    cfg = tiny_qwen35_config(
+        "longshot",
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+        linear_state_update_mode="gated_delta",
+    )
+
+    with pytest.raises(ValueError, match="require matching Qwen3.5 linear-attention modules for layers"):
+        LongshotGlobalCacheProcessor(cfg, linear_state_dynamics={})
+
+
+def test_gather_cache_heads_rejects_shapes_it_cannot_gather():
+    x = torch.randn(2, 6, 8)
+    selected = torch.tensor([[0, 2], [1, 3]])
+
+    with pytest.raises(ValueError, match="selected_heads must have shape"):
+        _longshot_gather_cache_heads(x, selected[None])
+    with pytest.raises(ValueError, match="x must have shape"):
+        _longshot_gather_cache_heads(x[None], selected)

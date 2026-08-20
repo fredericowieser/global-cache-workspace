@@ -1,7 +1,17 @@
+import warnings
+
+import pytest
 import torch
+import torch.nn as nn
 
 from gcw.config import CacheProcessorConfig
 from gcw.models.cache_processors.longshot import ProcessorAttention
+from gcw.models.cache_processors.longshot_layers import (
+    PerCacheHeadLinear,
+    _fit_time_length,
+    _select_heads_from_head_scores,
+    _zero_projection,
+)
 
 
 def test_processor_attention_self_head_kv_matches_dense_gqa_reference():
@@ -161,3 +171,58 @@ def _dense_self_head_kv_reference(
     y = y.contiguous().view(batch, cache_heads, attn.num_heads * attn.head_dim)
     return attn.o_proj(y)
 
+
+
+def test_select_heads_rejects_a_non_positive_head_budget():
+    scores = torch.randn(2, 8)
+
+    with pytest.raises(ValueError, match="at least one cache head"):
+        _select_heads_from_head_scores(scores, 0)
+
+
+def test_select_heads_returns_every_head_when_the_budget_covers_them():
+    scores = torch.randn(3, 5)
+
+    for topk in (5, 9):
+        selected = _select_heads_from_head_scores(scores, topk)
+        assert torch.equal(selected, torch.arange(5).expand(3, -1))
+
+
+def test_zero_projection_rejects_a_projection_it_cannot_zero():
+    class Opaque(nn.Module):
+        pass
+
+    with pytest.raises(TypeError, match="unsupported projection type"):
+        _zero_projection(Opaque())
+
+
+def test_zero_projection_zeroes_both_supported_projections():
+    linear = nn.Linear(4, 3)
+    per_head = PerCacheHeadLinear(2, 4, 3)
+
+    for projection in (linear, per_head):
+        nn.init.normal_(projection.weight)
+        _zero_projection(projection)
+        assert torch.count_nonzero(projection.weight) == 0
+        assert torch.count_nonzero(projection.bias) == 0
+
+
+def test_fit_time_length_warns_when_it_changes_the_history_length():
+    x = torch.randn(1, 2, 4, 3)
+
+    with pytest.warns(UserWarning, match="expected 6 selected positions but got 4"):
+        padded = _fit_time_length(x, 6)
+    assert torch.equal(padded[:, :, 2:], x)
+    assert torch.count_nonzero(padded[:, :, :2]) == 0
+
+    with pytest.warns(UserWarning, match="expected 3 selected positions but got 4"):
+        trimmed = _fit_time_length(x, 3)
+    assert torch.equal(trimmed, x[:, :, -3:])
+
+
+def test_fit_time_length_is_silent_when_the_history_already_fits():
+    x = torch.randn(1, 2, 5, 3)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _fit_time_length(x, 5) is x

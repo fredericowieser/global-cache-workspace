@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -15,6 +16,7 @@ from gcw.config import (
     CacheProcessorConfig,
 )
 from gcw.models.backbones.transformer import RMSNorm, flash_sdpa
+from gcw.models.cache_processors.ops import zero_projection
 
 EncoderMethod = CacheEncoderMethod
 EncoderQuerySource = CacheEncoderQuerySource
@@ -49,30 +51,36 @@ class LongshotWorkspaceSource:
 
 
 def _gather_cache_heads(x: torch.Tensor, selected_heads: torch.Tensor) -> torch.Tensor:
+    if selected_heads.ndim != 2:
+        raise ValueError("selected_heads must have shape (batch, selected_heads)")
+    if x.ndim != 3:
+        raise ValueError("x must have shape (batch, cache_heads, hidden)")
     batch, _, dim = x.shape
     index = selected_heads[:, :, None].expand(-1, -1, dim)
     return torch.gather(x, dim=1, index=index)
 
 
 def _select_heads_from_head_scores(head_scores: torch.Tensor, topk_heads: int) -> torch.Tensor:
-    if topk_heads <= 0 or topk_heads >= head_scores.shape[-1]:
+    if topk_heads <= 0:
+        raise ValueError(f"topk_heads must select at least one cache head, got {topk_heads}")
+    if topk_heads >= head_scores.shape[-1]:
         return torch.arange(head_scores.shape[-1], device=head_scores.device).expand(head_scores.shape[0], -1)
     return torch.topk(head_scores, k=topk_heads, dim=-1, largest=True, sorted=True).indices
 
 
 def _zero_projection(projection: nn.Module) -> None:
-    weight = getattr(projection, "weight", None)
-    if isinstance(weight, torch.Tensor):
-        nn.init.zeros_(weight)
-    bias = getattr(projection, "bias", None)
-    if isinstance(bias, torch.Tensor):
-        nn.init.zeros_(bias)
+    zero_projection(projection, per_head_type=PerCacheHeadLinear)
 
 
 def _fit_time_length(x: torch.Tensor, target_len: int) -> torch.Tensor:
     seq_len = x.shape[2]
     if seq_len == target_len:
         return x
+    warnings.warn(
+        f"Longshot linear encoder expected {target_len} selected positions but got {seq_len}; "
+        "padding/truncating the selected cache history.",
+        stacklevel=2,
+    )
     if seq_len > target_len:
         return x[:, :, -target_len:, :]
     pad = target_len - seq_len
