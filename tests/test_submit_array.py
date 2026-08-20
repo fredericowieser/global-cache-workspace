@@ -4,7 +4,7 @@ import subprocess
 import time
 from pathlib import Path
 
-SCRIPT = Path(__file__).parents[1] / "scripts" / "submit_array.sh"
+SCRIPT = Path(__file__).parents[1] / "scripts" / "cluster" / "submit_array.sh"
 
 
 def _write_fixture(
@@ -147,6 +147,27 @@ def test_local_worker_records_success_and_status(tmp_path: Path) -> None:
     ).strip() == "local"
 
 
+def test_dev_defaults_use_qwen35_legacy_eval_and_cluster_preflight(tmp_path: Path) -> None:
+    capture = tmp_path / "uv-args"
+    config, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"',
+    )
+    env.update({"EVAL_AFTER_TRAIN": "1", "UV_CAPTURE": str(capture)})
+
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", str(config)], env
+    )
+    state_dir = _state_dir(result.stdout)
+    _wait_for_status(state_dir, env, "SUCCEEDED")
+
+    invocations = capture.read_text(encoding="utf-8").splitlines()
+    expected_prefix = "run --locked --extra gpu --extra eval --extra qwen35"
+    assert f"{expected_prefix} python scripts/cluster/check_cuda_env.py" in invocations
+    assert any(f"{expected_prefix} gcw train --config " in line for line in invocations)
+    assert any(f"{expected_prefix} gcw eval paper7-legacy --checkpoint " in line for line in invocations)
+
+
 def test_local_worker_can_be_cancelled_as_a_process_group(
     tmp_path: Path,
 ) -> None:
@@ -273,7 +294,8 @@ def test_idle_monitor_stops_nebius_only_after_gpu_is_idle(
     )
     assert "GCW local job finished" in alerts
     assert "test-array" in alerts
-    assert (Path(env["LOCAL_STATE_ROOT"]) / "vm-stop-requested").exists()
+    stop_marker = Path(env["LOCAL_STATE_ROOT"]) / "vm-stop-requested"
+    _wait_for_file(stop_marker)
     monitor_log = (state_dir / "idle-stop-monitor.out").read_text(
         encoding="utf-8"
     )
