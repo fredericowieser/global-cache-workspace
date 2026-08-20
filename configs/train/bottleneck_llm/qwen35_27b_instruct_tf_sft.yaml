@@ -91,7 +91,7 @@ model:
   hidden_act: silu
 data:
   kind: sft
-  dataset: /mnt/gcw/data/OpenMathInstruct-2/train.jsonl
+  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
   tokenizer: hf
   tokenizer_source: Qwen/Qwen3.5-27B
   sft_take_rows: 128000
@@ -117,7 +117,7 @@ logical_pair_grouping: false
 init_checkpoint: null
 resume: null
 save_final: true
-backbone_checkpoint: /mnt/gcw/checkpoints/hf_native/qwen35_27b/tf_base
+backbone_checkpoint: /mnt/jfs-01/shared/gcw/checkpoints/hf_native/qwen35_27b/tf_base
 output_dir: runs/bottleneck_llm/qwen35_27b_instruct_tf_sft
 batch_size: 16
 sequence_len: 512
