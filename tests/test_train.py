@@ -1,5 +1,6 @@
 import json
 import sys
+from typing import get_args
 
 import pytest
 import torch
@@ -366,6 +367,86 @@ def test_full_bf16_uses_bf16_model_gradients_and_optimizer_moments(tmp_path):
         if key in {"exp_avg", "exp_avg_sq"}
     }
     assert moment_dtypes == {torch.bfloat16}
+
+
+def test_full_bf16_training_run_keeps_bf16_parameters(tmp_path):
+    from safetensors.torch import load_file
+
+    cfg = tiny_train_config(tmp_path)
+    cfg.precision = "bf16"
+    cfg.wandb = WandbConfig(enabled=False)
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.save_final = True
+
+    train(cfg)
+
+    weights = load_file(tmp_path / "run" / "checkpoint" / "model.safetensors")
+    assert weights
+    assert {tensor.dtype for tensor in weights.values()} == {torch.bfloat16}
+
+
+@pytest.mark.parametrize("precision", ["fp32", "bf16_mixed"])
+def test_mixed_and_fp32_precisions_keep_float32_parameters(tmp_path, precision):
+    cfg = tiny_train_config(tmp_path)
+    cfg.precision = precision
+    model = _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=False)
+    assert {param.dtype for param in model.parameters()} == {torch.float32}
+
+
+@pytest.mark.parametrize("use_fsdp", [False, True])
+def test_full_bf16_draws_initial_weights_in_float32_before_casting(tmp_path, use_fsdp):
+    cfg = tiny_train_config(tmp_path)
+    cfg.precision = "bf16"
+
+    torch.manual_seed(cfg.seed)
+    built = _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=use_fsdp)
+
+    torch.manual_seed(cfg.seed)
+    reference = build_model(cfg.model)
+    reference.init_weights()
+    reference = reference.to(dtype=torch.bfloat16)
+
+    built_state = built.state_dict()
+    reference_state = reference.state_dict()
+    assert built_state.keys() == reference_state.keys()
+    assert all(torch.equal(built_state[key], tensor) for key, tensor in reference_state.items())
+
+
+def test_supported_precisions_match_the_declared_type():
+    from gcw.config.types import TrainingPrecision
+
+    assert set(get_args(TrainingPrecision)) == {"fp32", "bf16_mixed", "bf16"}
+    for precision in get_args(TrainingPrecision):
+        assert TrainConfig(precision=precision).precision == precision
+    for removed in ("auto", "fp16", "fp16_mixed"):
+        with pytest.raises(ValueError, match="unsupported training precision"):
+            TrainConfig(precision=removed)
+
+
+@pytest.mark.parametrize(
+    ("precision", "expected"),
+    [("fp32", "float32"), ("bf16_mixed", "float32"), ("bf16", "bfloat16")],
+)
+def test_checkpoint_metadata_records_precision_and_the_real_parameter_dtype(tmp_path, precision, expected):
+    from gcw.training.audit import _checkpoint_metadata
+
+    cfg = tiny_train_config(tmp_path)
+    cfg.precision = precision
+    metadata = _checkpoint_metadata(cfg, {}, admission={})
+
+    assert metadata["precision"] == precision
+    assert metadata["dtype"] == expected
+
+
+def test_precision_summary_reports_autocast_a_device_cannot_run():
+    from gcw.training.precision import _precision_summary
+
+    cfg = TrainConfig(precision="bf16_mixed")
+    summary = _precision_summary(cfg, torch.device("cpu"))
+
+    assert "parameters float32" in summary
+    assert "autocast disabled on cpu" in summary
 
 
 def test_llama_fsdp_layer_lookup_does_not_import_qwen35(monkeypatch):

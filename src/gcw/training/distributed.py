@@ -31,7 +31,7 @@ def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device
     auto_wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=layer_classes)
     mixed_precision = (
         MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
-        if (config.precision in {"bf16_mixed", "bf16"} or (config.precision == "auto" and config.bf16))
+        if config.precision in {"bf16_mixed", "bf16"}
         else None
     )
     kwargs: dict[str, Any] = {

@@ -48,30 +48,31 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
     raise ValueError(f"unsupported trainable policy: {policy}")
 
 
+def _model_dtype(config: TrainConfig) -> torch.dtype:
+    """Parameter dtype implied by the precision mode; mixed modes keep float32 and autocast."""
+    return torch.bfloat16 if config.precision == "bf16" else torch.float32
+
+
 def _build_training_model(
     config: TrainConfig, device: torch.device, *, rank: int, use_fsdp: bool
 ) -> torch.nn.Module:
-    model_dtype = (
-        torch.bfloat16
-        if config.precision == "bf16"
-        else (torch.float16 if config.precision == "fp16" else torch.float32)
-    )
+    model_dtype = _model_dtype(config)
     if use_fsdp:
         if rank == 0:
-            model = build_model(config.model).to(dtype=model_dtype)
+            model = build_model(config.model)
             model.init_weights()
             if config.init_checkpoint:
                 _load_initial_model(model, config.init_checkpoint)
             elif config.backbone_checkpoint:
                 load_backbone_checkpoint(model, config.backbone_checkpoint)
-            return model
+            return model.to(dtype=model_dtype)
         with torch.device("meta"):
             return build_model(config.model).to(dtype=model_dtype)
 
-    model = build_model(config.model).to(device=device, dtype=model_dtype)
+    model = build_model(config.model).to(device)
     model.init_weights()
     if config.init_checkpoint:
         _load_initial_model(model, config.init_checkpoint)
     elif config.backbone_checkpoint:
         load_backbone_checkpoint(model, config.backbone_checkpoint)
-    return model
+    return model.to(dtype=model_dtype)

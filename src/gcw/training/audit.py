@@ -40,7 +40,8 @@ def _checkpoint_metadata(
         **run_meta,
         "data_kind": config.data.kind,
         "tokenizer": config.data.tokenizer,
-        "dtype": "bfloat16" if config.bf16 else "float32",
+        "precision": config.precision,
+        "dtype": "bfloat16" if config.precision == "bf16" else "float32",
         "loss_backend": loss_backend_metadata(config.loss_backend),
     }
     if config.data.dataset is not None:

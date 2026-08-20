@@ -93,9 +93,10 @@ from gcw.training.model_setup import (
     _apply_trainable_policy,
     _build_training_model,
     _load_initial_model,
+    _model_dtype,
 )
 from gcw.training.optimizer import _build_optimizer
-from gcw.training.precision import _validate_precision
+from gcw.training.precision import _precision_summary, _validate_precision
 
 
 @dataclass(frozen=True)
@@ -285,6 +286,7 @@ def assemble_training_execution(
             _load_initial_model(model, config.init_checkpoint)
         elif config.backbone_checkpoint:
             load_backbone_checkpoint(model, config.backbone_checkpoint)
+        model = model.to(dtype=_model_dtype(config))
         if checkpoint is None:
             initial_processor_state = _processor_state(model)
     _apply_trainable_policy(model, config.trainable)
@@ -493,6 +495,7 @@ def assemble_training_execution(
         f"grad_accum={grad_accum_steps}"
     )
     print0(budget_message)
+    print0(_precision_summary(config, device))
     tracker = RunTracker.for_training(config, run_meta, model=model) if rank == 0 else None
     if tracker is not None:
         tracker.log_message(budget_message)

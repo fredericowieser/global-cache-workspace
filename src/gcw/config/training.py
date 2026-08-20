@@ -135,8 +135,11 @@ class TrainConfig:
             self.save_cache_processor_only = self.freeze_backbone
         if self.precision is None:
             self.precision = "bf16_mixed" if self.bf16 else "fp32"
-        elif self.precision not in {"fp32", "bf16_mixed", "bf16"}:
-            raise ValueError(f"unsupported training precision {self.precision!r}")
+        elif self.precision not in get_args(TrainingPrecision):
+            raise ValueError(
+                f"unsupported training precision {self.precision!r}; "
+                f"use one of {', '.join(get_args(TrainingPrecision))}"
+            )
         elif self.bf16 and self.precision == "fp32":
             raise ValueError("bf16=true conflicts with precision='fp32'")
         self.bf16 = self.precision != "fp32"

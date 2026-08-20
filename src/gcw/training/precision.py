@@ -24,16 +24,19 @@ def _validate_precision(config: TrainConfig, device: torch.device) -> None:
 def _autocast_kwargs(config: TrainConfig, device: torch.device) -> dict[str, Any]:
     if config.precision == "bf16_mixed":
         return {"device_type": device.type, "dtype": torch.bfloat16, "enabled": device.type == "cuda"}
-    if config.precision == "fp16_mixed":
-        return {"device_type": device.type, "dtype": torch.float16, "enabled": device.type == "cuda"}
     if config.precision == "bf16":
         return {"device_type": device.type, "dtype": torch.bfloat16, "enabled": False}
-    if config.precision == "fp16":
-        return {"device_type": device.type, "dtype": torch.float16, "enabled": False}
-    if config.precision == "fp32":
-        return {"device_type": device.type, "dtype": torch.float32, "enabled": False}
-    return {
-        "device_type": device.type,
-        "dtype": torch.bfloat16,
-        "enabled": config.bf16 and device.type == "cuda",
-    }
+    return {"device_type": device.type, "dtype": torch.float32, "enabled": False}
+
+
+def _precision_summary(config: TrainConfig, device: torch.device) -> str:
+    """Describe the precision actually in effect, including autocast that a device disables."""
+    parameters = "bfloat16" if config.precision == "bf16" else "float32"
+    autocast = _autocast_kwargs(config, device)
+    if autocast["enabled"]:
+        compute = f"autocast {str(autocast['dtype']).removeprefix('torch.')}"
+    elif config.precision == "bf16_mixed":
+        compute = f"autocast disabled on {device.type}, computing in float32"
+    else:
+        compute = f"no autocast, computing in {parameters}"
+    return f"precision: {config.precision} (parameters {parameters}, {compute})"
