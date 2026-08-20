@@ -63,9 +63,15 @@ On load, a broken destination may fall back to a valid `.previous`. A legacy mod
 
 ## Compatibility fingerprint
 
-Exact continuation requires equality for fields that change training dynamics: model configuration, loss, optimizer hyperparameters, schedules, BF16 mode, frozen parameters, activation-checkpointing policies (including `activation_checkpoint_windows` and `activation_checkpoint_min_padded_sequence_length`), adaptive-batching policy and ordered bands, data kind and identity, sequence length, total batch, gradient accumulation, and `max_steps`. Output paths, checkpoint/evaluation frequency, and display-only W&B metadata may change.
+Exact continuation requires equality for fields that change training dynamics: model configuration, loss, optimizer hyperparameters, schedules, `precision`, frozen parameters, activation-checkpointing policies (including `activation_checkpoint_windows` and `activation_checkpoint_min_padded_sequence_length`), adaptive-batching policy and ordered bands, data kind and identity, sequence length, total batch, gradient accumulation, and `max_steps`. Output paths, checkpoint/evaluation frequency, and display-only W&B metadata may change.
 
 The current data identity records paths, shard names, and sizes, not content hashes. A same-size in-place data mutation can therefore evade the fingerprint. Treat prepared datasets as immutable.
+
+### Legacy precision fingerprints
+
+The fingerprint used to record a `bf16` boolean rather than `precision`. That boolean was `precision != "fp32"`, so it could not separate `bf16_mixed` from `bf16`, and resuming across those two modes was accepted silently.
+
+Checkpoints written before the change still resume. A manifest carrying `bf16` and no `precision` is mapped onto the current key before comparison: `bf16: false` resumes into `fp32`, and `bf16: true` resumes into either `bf16_mixed` or `bf16` with a `RuntimeWarning` naming the ambiguity the old manifest cannot resolve. A legacy flag that disagrees with the current mode is still rejected, and the error names `precision`. Manifests that already record `precision` get the strict comparison and are never rewritten.
 
 ## Same-topology and elastic resume
 
