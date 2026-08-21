@@ -145,12 +145,25 @@ class HFBenchmarkBackend:
 
 class GCWBenchmarkBackend:
     def __init__(
-        self, checkpoint: Path, device: torch.device, *, processor_enabled: bool
+        self,
+        checkpoint: Path,
+        device: torch.device,
+        *,
+        processor_enabled: bool,
+        generation_process_every: int | None = None,
     ):
         from gcw.checkpoint import load_checkpoint
         from gcw.evaluation.core import ProcessorBypass
+        from gcw.evaluation.lm_eval_adapter import (
+            _apply_generation_process_every,
+        )
 
         model, config, state = load_checkpoint(checkpoint, device=device)
+        if generation_process_every is not None and not processor_enabled:
+            raise ValueError(
+                "generation_process_every requires processor_enabled=True"
+            )
+        _apply_generation_process_every(config, generation_process_every)
         if not processor_enabled:
             model = ProcessorBypass(model)
         self.model = model.eval()
@@ -164,6 +177,7 @@ class GCWBenchmarkBackend:
             **_directory_identity(checkpoint, kind="gcw"),
             "architecture": config.architecture_name,
             "processor_enabled": processor_enabled,
+            "generation_process_every": generation_process_every,
             "checkpoint_state": state,
         }
 

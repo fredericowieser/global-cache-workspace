@@ -8,8 +8,8 @@ import torch
 
 from gcw.runtime import base_dir
 from gcw.evaluation.bpb import (
-    run_fineweb,
-)  # noqa: F401  (re-exported for the CLI)
+    run_fineweb,  # noqa: F401  (re-exported for the CLI)
+)
 from gcw.evaluation.lm_eval_adapter import (
     GCWEvalLM,
     HAS_LM_EVAL,
@@ -48,6 +48,7 @@ def run_all(
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
@@ -58,6 +59,7 @@ def run_all(
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
+        generation_process_every=generation_process_every,
     )
 
 
@@ -70,6 +72,7 @@ def run_general(
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
@@ -80,6 +83,7 @@ def run_general(
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
+        generation_process_every=generation_process_every,
     )
 
 
@@ -92,6 +96,7 @@ def run_math(
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
@@ -102,6 +107,7 @@ def run_math(
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
+        generation_process_every=generation_process_every,
     )
 
 
@@ -115,6 +121,7 @@ def run_tasks(
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
 ) -> dict:
     runs = [([task], TASK_FEWSHOT.get(task, 0)) for task in tasks]
     return run_task_groups(
@@ -126,6 +133,7 @@ def run_tasks(
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
+        generation_process_every=generation_process_every,
     )
 
 
@@ -139,6 +147,7 @@ def run_task_groups(
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -164,6 +173,7 @@ def run_task_groups(
         processor_enabled=processor_enabled,
         device=device,
         dtype=dtype,
+        generation_process_every=generation_process_every,
     )
     lm = GCWEvalLM(
         model,
@@ -262,5 +272,6 @@ def run_task_groups(
             if prompt_mode == "plain"
             else prompt_mode.startswith("thinking_")
         ),
+        "generation_process_every": generation_process_every,
     }
     return merged

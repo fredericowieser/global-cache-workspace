@@ -11,6 +11,7 @@ from gcw.evaluation.chat_benchmarks import (
     extract_final_choices,
     format_multiple_choice_prompt,
     format_numeric_prompt,
+    run_chat_benchmarks,
 )
 
 
@@ -74,6 +75,21 @@ def test_final_choice_extraction_requires_an_explicit_final_answer():
 
 def test_numeric_prompt_preserves_the_calibrated_question():
     assert format_numeric_prompt("  What is 1 + 1?  ") == "What is 1 + 1?"
+
+
+def test_chat_generation_cadence_requires_active_gcw_processor():
+    try:
+        run_chat_benchmarks(
+            tasks=["gsm8k_openmath"],
+            mode="thinking_off",
+            batch_size=1,
+            hf_model="hf-model",
+            generation_process_every=1,
+        )
+    except ValueError as exc:
+        assert "only to GCW checkpoints" in str(exc)
+    else:
+        raise AssertionError("accepted generation cadence for an HF target")
 
 
 def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():

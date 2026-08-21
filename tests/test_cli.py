@@ -1,3 +1,5 @@
+import pytest
+
 from gcw import cli
 
 
@@ -31,14 +33,65 @@ def test_legacy_paper7_eval_parser_restores_old_suite_alias():
                 "checkpoint-3000",
                 "--batch-size",
                 "16",
+                "--generation-process-every",
+                "1",
             ]
         )
         assert args.suite == suite
         assert args.checkpoint == "checkpoint-3000"
         assert args.batch_size == 16
+        assert args.generation_process_every == 1
         assert args.dtype == "auto"
         assert not hasattr(args, "prompt_mode")
         assert not hasattr(args, "processor")
+
+
+def test_legacy_paper7_eval_parser_rejects_nonpositive_generation_cadence():
+    for value in ("0", "-1"):
+        with pytest.raises(SystemExit) as exc_info:
+            cli.build_parser().parse_args(
+                [
+                    "eval",
+                    "paper7-legacy",
+                    "--checkpoint",
+                    "checkpoint-3000",
+                    "--generation-process-every",
+                    value,
+                ]
+            )
+        assert exc_info.value.code == 2
+
+
+def test_generation_cadence_is_available_to_all_generative_eval_parsers():
+    standard = cli.build_parser().parse_args(
+        [
+            "eval",
+            "math",
+            "--checkpoint",
+            "checkpoint-3000",
+            "--generation-process-every",
+            "2",
+        ]
+    )
+    chat = cli.build_parser().parse_args(
+        [
+            "eval",
+            "chat",
+            "--checkpoint",
+            "checkpoint-3000",
+            "--tokenizer-path",
+            "tokenizer",
+            "--tasks",
+            "gsm8k_openmath",
+            "--mode",
+            "thinking_off",
+            "--generation-process-every",
+            "2",
+        ]
+    )
+
+    assert standard.generation_process_every == 2
+    assert chat.generation_process_every == 2
 
 
 def test_convert_hf_forwards_processor_variants(monkeypatch):

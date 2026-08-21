@@ -178,6 +178,65 @@ def test_dev_defaults_use_qwen35_legacy_eval_and_cluster_preflight(
     )
 
 
+def test_eval_only_targets_one_step_with_generation_cadence(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "uv-args"
+    config, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"',
+    )
+    env.update(
+        {
+            "EVAL_ONLY": "1",
+            "EVAL_CHECKPOINT_STEP": "3000",
+            "GENERATION_PROCESS_EVERY": "1",
+            "OUT_SUFFIX": "generation-process-every1",
+            "UV_CAPTURE": str(capture),
+        }
+    )
+
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", str(config)],
+        env,
+    )
+    state_dir = _state_dir(result.stdout)
+    _wait_for_status(state_dir, env, "SUCCEEDED")
+
+    invocation = next(
+        line
+        for line in capture.read_text(encoding="utf-8").splitlines()
+        if " gcw eval " in f" {line} "
+    )
+    assert f"--checkpoint {tmp_path / 'output'}/checkpoint-3000" in invocation
+    assert "--generation-process-every 1" in invocation
+    assert "--batch-size 16" in invocation
+    assert "step3000_generation-process-every1_paper7-legacy.json" in invocation
+
+
+def test_generation_cadence_rejects_non_generative_eval_suite(
+    tmp_path: Path,
+) -> None:
+    config, env = _write_fixture(tmp_path)
+    env.update({"EVAL_SUITE": "fineweb", "GENERATION_PROCESS_EVERY": "1"})
+
+    result = _run(
+        [
+            "--backend",
+            "local",
+            "--dry-run",
+            "--local-gpus",
+            "GPU-test",
+            str(config),
+        ],
+        env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "not supported for fineweb" in result.stdout
+
+
 def test_local_worker_can_be_cancelled_as_a_process_group(
     tmp_path: Path,
 ) -> None:
@@ -256,7 +315,7 @@ def test_idle_monitor_stops_nebius_only_after_gpu_is_idle(
     )
     nvidia_smi.chmod(0o755)
     nebius.write_text(
-        "#!/usr/bin/env bash\n" 'printf "%s\\n" "$*" > "$NEBIUS_CAPTURE"\n',
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" > "$NEBIUS_CAPTURE"\n',
         encoding="utf-8",
     )
     nebius.chmod(0o755)

@@ -486,12 +486,21 @@ def run_chat_benchmarks(
     tokenizer_path: str | Path | None = None,
     processor_enabled: bool = True,
     max_new_tokens: int = MAX_NEW_TOKENS,
+    generation_process_every: int | None = None,
 ) -> dict[str, Any]:
     unknown = sorted(set(tasks) - set(CHAT_TASKS))
     if unknown:
         raise ValueError(f"unknown chat benchmark tasks: {unknown}")
     if (checkpoint is None) == (hf_model is None):
         raise ValueError("choose exactly one evaluation target")
+    if generation_process_every is not None and hf_model is not None:
+        raise ValueError(
+            "generation_process_every applies only to GCW checkpoints"
+        )
+    if generation_process_every is not None and not processor_enabled:
+        raise ValueError(
+            "generation_process_every requires processor_enabled=True"
+        )
     if max_new_tokens != MAX_NEW_TOKENS:
         raise ValueError(
             f"chat benchmark protocol requires max_new_tokens={MAX_NEW_TOKENS}"
@@ -511,6 +520,7 @@ def run_chat_benchmarks(
             Path(cast(str | Path, checkpoint)).expanduser().resolve(),
             device,
             processor_enabled=processor_enabled,
+            generation_process_every=generation_process_every,
         )
         if tokenizer_path is None:
             raise ValueError(
@@ -533,6 +543,7 @@ def run_chat_benchmarks(
         "tokenizer": tokenizer_identity,
         "datasets": dataset_identity,
         "processor_enabled": processor_enabled,
+        "generation_process_every": generation_process_every,
         **result,
     }
     encoded = json.dumps(

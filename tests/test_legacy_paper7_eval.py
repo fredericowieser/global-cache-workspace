@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 
+from gcw.config import ModelConfig
 from gcw.evaluation import legacy
 import gcw.evaluation.lm_eval_adapter as lm_eval_adapter
 
@@ -105,12 +106,70 @@ def test_legacy_chat_template_does_not_pass_thinking_kwarg(monkeypatch):
     assert calls[0][1] == {"tokenize": False, "add_generation_prompt": True}
 
 
+def test_eval_target_applies_generation_cadence_without_changing_checkpoint(
+    monkeypatch,
+):
+    config = ModelConfig(variant="bgt")
+    model = type("Model", (), {"config": config})()
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "load_checkpoint",
+        lambda *args, **kwargs: (model, config, {}),
+    )
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "tokenizer_for_checkpoint",
+        lambda config, state: "tokenizer",
+    )
+
+    loaded, tokenizer = lm_eval_adapter._load_eval_target(
+        checkpoint="checkpoint",
+        hf_model=None,
+        processor_enabled=True,
+        device=torch.device("cpu"),
+        generation_process_every=1,
+    )
+
+    assert loaded is model
+    assert tokenizer == "tokenizer"
+    assert config.cache_processor is not None
+    assert config.cache_processor.generation_process_every == 1
+
+
+def test_eval_target_rejects_generation_cadence_without_active_processor():
+    common = {
+        "processor_enabled": True,
+        "device": torch.device("cpu"),
+        "generation_process_every": 1,
+    }
+    try:
+        lm_eval_adapter._load_eval_target(
+            checkpoint=None, hf_model="hf-model", **common
+        )
+    except ValueError as exc:
+        assert "only to GCW checkpoints" in str(exc)
+    else:
+        raise AssertionError("accepted generation cadence for an HF target")
+
+    try:
+        lm_eval_adapter._load_eval_target(
+            checkpoint="checkpoint",
+            hf_model=None,
+            **{**common, "processor_enabled": False},
+        )
+    except ValueError as exc:
+        assert "processor_enabled=True" in str(exc)
+    else:
+        raise AssertionError("accepted generation cadence with processor off")
+
+
 def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     monkeypatch.setattr(legacy, "HAS_LM_EVAL", True)
     monkeypatch.setattr(lm_eval_adapter, "HAS_LM_EVAL", True)
     monkeypatch.setenv("GCW_EVAL_SKIP_TASKS", "theoremqa")
 
     calls = []
+    load_calls = []
     task_manager_paths = []
 
     class TaskManager:
@@ -168,7 +227,7 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     monkeypatch.setattr(
         legacy,
         "_load_eval_target",
-        lambda **kwargs: (Model(), Tokenizer()),
+        lambda **kwargs: (load_calls.append(kwargs) or Model(), Tokenizer()),
     )
     monkeypatch.setattr(legacy, "_distributed_eval_state", lambda: (None, 0, 1))
     monkeypatch.setattr(
@@ -179,7 +238,11 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     )
     monkeypatch.setattr(legacy, "_write_partial_results", lambda merged: None)
 
-    out = legacy.run_paper7_legacy("checkpoint", batch_size=16)
+    out = legacy.run_paper7_legacy(
+        "checkpoint", batch_size=16, generation_process_every=1
+    )
+
+    assert load_calls[0]["generation_process_every"] == 1
 
     assert [call["tasks"] for call in calls] == [
         ["gsm8k_openmath"],

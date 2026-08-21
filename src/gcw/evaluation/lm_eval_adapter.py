@@ -84,6 +84,19 @@ class ProcessorBypass(nn.Module):
         return cast(Any, self.backbone).generate_fast(*args, **kwargs)
 
 
+def _apply_generation_process_every(config, value: int | None) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("generation_process_every must be a positive integer")
+    processor_config = getattr(config, "cache_processor", None)
+    if processor_config is None:
+        raise ValueError(
+            "generation_process_every requires a cache-processor checkpoint"
+        )
+    processor_config.generation_process_every = value
+
+
 def _load_eval_target(
     *,
     checkpoint: str | Path | None,
@@ -91,16 +104,26 @@ def _load_eval_target(
     processor_enabled: bool,
     device: torch.device,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
 ):
     if (checkpoint is None) == (hf_model is None):
         raise ValueError(
             "choose exactly one evaluation target: checkpoint or hf_model"
         )
     if hf_model is not None:
+        if generation_process_every is not None:
+            raise ValueError(
+                "generation_process_every applies only to GCW checkpoints"
+            )
         return _load_hf_eval_target(hf_model, device)
+    if generation_process_every is not None and not processor_enabled:
+        raise ValueError(
+            "generation_process_every requires processor_enabled=True"
+        )
     model, cfg, state = load_checkpoint(
         cast(str | Path, checkpoint), device=device, dtype=dtype
     )
+    _apply_generation_process_every(cfg, generation_process_every)
     tokenizer = tokenizer_for_checkpoint(cfg, state)
     if not processor_enabled and hasattr(model, "backbone"):
         model = ProcessorBypass(model)

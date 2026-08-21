@@ -37,8 +37,9 @@ usage: gcw eval [-h]
 
 ```text
 usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
-                    [--processor {on,off}] [--limit LIMIT]
-                    [--batch-size BATCH_SIZE]
+                    [--processor {on,off}]
+                    [--generation-process-every GENERATION_PROCESS_EVERY]
+                    [--limit LIMIT] [--batch-size BATCH_SIZE]
                     [--prompt-mode {auto,plain,thinking_off,thinking_on}]
                     [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
@@ -48,6 +49,7 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
@@ -59,6 +61,7 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 ```text
 usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                      [--tokenizer-path TOKENIZER_PATH] [--processor {on,off}]
+                     [--generation-process-every GENERATION_PROCESS_EVERY]
                      --tasks TASKS [TASKS ...] --mode
                      {thinking_off,thinking_on} [--batch-size BATCH_SIZE]
                      [--max-new-tokens MAX_NEW_TOKENS] [--out OUT]
@@ -70,6 +73,7 @@ usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--hf-model` | flag |
 | `--tokenizer-path` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--generation-process-every` | type: `_positive_int` |
 | `--tasks` | required |
 | `--mode` | required; choices: `thinking_off`, `thinking_on` |
 | `--batch-size` | default: `8`; type: `int` |
@@ -97,8 +101,9 @@ usage: gcw eval fineweb [-h] --checkpoint CHECKPOINT [--data-dir DATA_DIR]
 
 ```text
 usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
-                        [--processor {on,off}] [--limit LIMIT]
-                        [--batch-size BATCH_SIZE]
+                        [--processor {on,off}]
+                        [--generation-process-every GENERATION_PROCESS_EVERY]
+                        [--limit LIMIT] [--batch-size BATCH_SIZE]
                         [--prompt-mode {auto,plain,thinking_off,thinking_on}]
                         [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
@@ -108,6 +113,7 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
@@ -118,8 +124,9 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 
 ```text
 usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
-                     [--processor {on,off}] [--limit LIMIT]
-                     [--batch-size BATCH_SIZE]
+                     [--processor {on,off}]
+                     [--generation-process-every GENERATION_PROCESS_EVERY]
+                     [--limit LIMIT] [--batch-size BATCH_SIZE]
                      [--prompt-mode {auto,plain,thinking_off,thinking_on}]
                      [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
@@ -129,6 +136,7 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
@@ -140,7 +148,9 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 ```text
 usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
                        [--batch-size BATCH_SIZE]
-                       [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
+                       [--dtype {auto,bfloat16,float16,float32}]
+                       [--generation-process-every GENERATION_PROCESS_EVERY]
+                       [--out OUT]
 ```
 
 | Argument | Contract |
@@ -149,6 +159,7 @@ usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
+| `--generation-process-every` | type: `_positive_int` |
 | `--out` | flag |
 
 ## `gcw eval paper7-legacy`
@@ -157,6 +168,7 @@ usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
                               [--batch-size BATCH_SIZE]
                               [--dtype {auto,bfloat16,float16,float32}]
+                              [--generation-process-every GENERATION_PROCESS_EVERY]
                               [--out OUT]
 ```
 
@@ -166,14 +178,16 @@ usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
+| `--generation-process-every` | type: `_positive_int` |
 | `--out` | flag |
 
 ## `gcw eval tasks`
 
 ```text
 usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
-                      [--processor {on,off}] [--limit LIMIT]
-                      [--batch-size BATCH_SIZE]
+                      [--processor {on,off}]
+                      [--generation-process-every GENERATION_PROCESS_EVERY]
+                      [--limit LIMIT] [--batch-size BATCH_SIZE]
                       [--prompt-mode {auto,plain,thinking_off,thinking_on}]
                       [--dtype {auto,bfloat16,float16,float32}] --tasks TASKS
                       [TASKS ...] [--out OUT]
@@ -184,6 +198,7 @@ usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
