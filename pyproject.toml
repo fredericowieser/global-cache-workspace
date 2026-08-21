@@ -135,7 +135,7 @@ markers = [
 ]
 
 [tool.ruff]
-line-length = 120
+line-length = 80
 
 [tool.mypy]
 python_version = "3.10"
