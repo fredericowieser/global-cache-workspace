@@ -17,6 +17,7 @@ from gcw.evaluation.tasks import _normalize_until, _trim_until
 
 try:
     from lm_eval.api.model import TemplateLM
+
     HAS_LM_EVAL = True
 except ImportError:
     TemplateLM = object
@@ -44,7 +45,11 @@ def _accelerator():
         from accelerate import Accelerator, PartialState
     except ImportError:
         return _NoopAccelerator()
-    return Accelerator() if PartialState().num_processes > 1 else _NoopAccelerator()
+    return (
+        Accelerator()
+        if PartialState().num_processes > 1
+        else _NoopAccelerator()
+    )
 
 
 class _NoopAccelerator:
@@ -60,7 +65,9 @@ class ProcessorBypass(nn.Module):
         super().__init__()
         backbone = getattr(model, "backbone", None)
         if not isinstance(backbone, nn.Module):
-            raise ValueError("processor bypass requires a composed GCW checkpoint")
+            raise ValueError(
+                "processor bypass requires a composed GCW checkpoint"
+            )
         self.backbone = backbone
         self.config = getattr(backbone, "config")
 
@@ -86,10 +93,14 @@ def _load_eval_target(
     dtype: torch.dtype | str | None = "auto",
 ):
     if (checkpoint is None) == (hf_model is None):
-        raise ValueError("choose exactly one evaluation target: checkpoint or hf_model")
+        raise ValueError(
+            "choose exactly one evaluation target: checkpoint or hf_model"
+        )
     if hf_model is not None:
         return _load_hf_eval_target(hf_model, device)
-    model, cfg, state = load_checkpoint(cast(str | Path, checkpoint), device=device, dtype=dtype)
+    model, cfg, state = load_checkpoint(
+        cast(str | Path, checkpoint), device=device, dtype=dtype
+    )
     tokenizer = tokenizer_for_checkpoint(cfg, state)
     if not processor_enabled and hasattr(model, "backbone"):
         model = ProcessorBypass(model)
@@ -106,7 +117,9 @@ def _load_hf_eval_target(source: str | Path, device: torch.device):
         AutoModelForCausalLM.from_pretrained(
             source,
             trust_remote_code=False,
-            torch_dtype=torch.bfloat16 if device.type == "cuda" else torch.float32,
+            torch_dtype=(
+                torch.bfloat16 if device.type == "cuda" else torch.float32
+            ),
         ),
     ).to(device)
     adapter = HFCausalLMAdapter(hf_model)
@@ -125,10 +138,17 @@ class HFCausalLMAdapter(nn.Module):
     def get_device(self) -> torch.device:
         return next(self.model.parameters()).device
 
-    def forward(self, input_ids: torch.Tensor, *_args, **_kwargs) -> torch.Tensor:
+    def forward(
+        self, input_ids: torch.Tensor, *_args, **_kwargs
+    ) -> torch.Tensor:
         return cast(Any, self.model)(input_ids=input_ids).logits
 
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, eos_token_id: int | None = None):
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int,
+        eos_token_id: int | None = None,
+    ):
         return cast(Any, self.model).generate(
             input_ids=input_ids,
             attention_mask=torch.ones_like(input_ids),
@@ -160,13 +180,17 @@ class GCWEvalLM(TemplateLM):
 
     @property
     def tokenizer_name(self) -> str:
-        return getattr(self.tokenizer, "name_or_path", self.tokenizer.__class__.__name__)
+        return getattr(
+            self.tokenizer, "name_or_path", self.tokenizer.__class__.__name__
+        )
 
     @property
     def eot_token_id(self) -> int:
         return self.tokenizer.eot_id
 
-    def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt=True) -> str:
+    def apply_chat_template(
+        self, chat_history: list[dict[str, str]], add_generation_prompt=True
+    ) -> str:
         kwargs = {
             "tokenize": False,
             "add_generation_prompt": add_generation_prompt,
@@ -186,7 +210,10 @@ class GCWEvalLM(TemplateLM):
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         device = self.model.get_device()
         out: list[tuple[float, bool] | None] = [None] * len(requests)
-        order = sorted(range(len(requests)), key=lambda i: len(requests[i][1]) + len(requests[i][2]))
+        order = sorted(
+            range(len(requests)),
+            key=lambda i: len(requests[i][1]) + len(requests[i][2]),
+        )
         for start in range(0, len(order), self.batch_size):
             idxs = order[start : start + self.batch_size]
             inputs, continuations = [], []
@@ -196,9 +223,13 @@ class GCWEvalLM(TemplateLM):
                 inputs.append(full[:-1])
                 continuations.append(cont[-self.max_length :])
             max_len = max(len(x) for x in inputs)
-            padded = torch.zeros(len(inputs), max_len, dtype=torch.long, device=device)
+            padded = torch.zeros(
+                len(inputs), max_len, dtype=torch.long, device=device
+            )
             for row, inp in enumerate(inputs):
-                padded[row, : len(inp)] = torch.tensor(inp, dtype=torch.long, device=device)
+                padded[row, : len(inp)] = torch.tensor(
+                    inp, dtype=torch.long, device=device
+                )
             logprobs = torch.log_softmax(self.model(padded), dim=-1)
             for row, i in enumerate(idxs):
                 cont = continuations[row]
@@ -207,14 +238,24 @@ class GCWEvalLM(TemplateLM):
                 logp = logprobs[row, inp_len - cont_len : inp_len]
                 target = torch.tensor(cont, dtype=torch.long, device=device)
                 vals = logp.gather(-1, target[:, None]).squeeze(-1)
-                out[i] = (float(vals.sum().item()), bool((logp.argmax(-1) == target).all().item()))
+                out[i] = (
+                    float(vals.sum().item()),
+                    bool((logp.argmax(-1) == target).all().item()),
+                )
         return out
 
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         out = []
         for req in requests:
             text = req.args[0]
-            out.append(sum(x[0] for x in self._loglikelihood_tokens([(None, [self.eot_token_id], self.tok_encode(text))])))
+            out.append(
+                sum(
+                    x[0]
+                    for x in self._loglikelihood_tokens(
+                        [(None, [self.eot_token_id], self.tok_encode(text))]
+                    )
+                )
+            )
         return out
 
     @torch.no_grad()
@@ -223,7 +264,9 @@ class GCWEvalLM(TemplateLM):
             return self._generate_until_reference(requests)
         outs: list[str | None] = [None] * len(requests)
         device = self.model.get_device()
-        groups: dict[tuple[int, int, tuple[str, ...]], list[tuple[int, list[int]]]] = {}
+        groups: dict[
+            tuple[int, int, tuple[str, ...]], list[tuple[int, list[int]]]
+        ] = {}
         for i, req in enumerate(requests):
             prompt, kwargs = req.args
             max_new = int(kwargs.get("max_gen_toks", 256))
@@ -242,7 +285,11 @@ class GCWEvalLM(TemplateLM):
             for start in range(0, len(rows), self.batch_size):
                 chunk = rows[start : start + self.batch_size]
                 prompt_len = len(chunk[0][1])
-                batch_ids = torch.tensor([row_ids for _, row_ids in chunk], dtype=torch.long, device=device)
+                batch_ids = torch.tensor(
+                    [row_ids for _, row_ids in chunk],
+                    dtype=torch.long,
+                    device=device,
+                )
                 if use_fast:
                     gen = self.model.generate_fast(
                         batch_ids,
@@ -252,10 +299,16 @@ class GCWEvalLM(TemplateLM):
                         pad_token_id=self.eot_token_id,
                     )
                 else:
-                    gen = self.model.generate(batch_ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)
+                    gen = self.model.generate(
+                        batch_ids,
+                        max_new_tokens=max_new,
+                        eos_token_id=self.eot_token_id,
+                    )
                 for row, (out_idx, _) in enumerate(chunk):
                     tokens = gen[row, prompt_len:].tolist()
-                    tokens = trim_generated_token_ids(tokens, stop_seqs, self.eot_token_id)
+                    tokens = trim_generated_token_ids(
+                        tokens, stop_seqs, self.eot_token_id
+                    )
                     text = _trim_until(self.tok_decode(tokens), until)
                     outs[out_idx] = text
         return outs
@@ -278,7 +331,9 @@ class GCWEvalLM(TemplateLM):
                 dtype=torch.long,
                 device=device,
             ).unsqueeze(0)
-            gen = self.model.generate(ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id)[0].tolist()
+            gen = self.model.generate(
+                ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id
+            )[0].tolist()
             text = self.tok_decode(gen[len(ids[0]) :])
             outs.append(_trim_until(text, until))
         return outs

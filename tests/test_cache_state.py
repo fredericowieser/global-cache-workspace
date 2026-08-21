@@ -1,7 +1,10 @@
 import torch
 
 from gcw.models.cache_processors.base import CacheProcessorBase
-from gcw.models.cache_processors.state import processor_call_count, select_l2_indices
+from gcw.models.cache_processors.state import (
+    processor_call_count,
+    select_l2_indices,
+)
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
 
@@ -37,7 +40,12 @@ def test_cache_storage_selects_all_heads():
     values = [torch.zeros(1, 3, 4, 2) for _ in range(2)]
     scores = torch.zeros(1, 4)
     cache = CacheState(keys, values, scores)
-    static = StaticCacheState([k.clone() for k in keys], [v.clone() for v in values], scores.clone(), 4)
+    static = StaticCacheState(
+        [k.clone() for k in keys],
+        [v.clone() for v in values],
+        scores.clone(),
+        4,
+    )
     windowed = WindowedCache.from_cache_state(cache)
 
     assert cache.all_heads().tolist() == [[0, 1, 2, 3, 4, 5]]

@@ -4,7 +4,12 @@ import torch
 import pytest
 
 from gcw.data.shards import ShardWriter
-from gcw.data.training import FineWebBatchStream, IndexedJSONL, RandomBatchStream, SFTBatchStream
+from gcw.data.training import (
+    FineWebBatchStream,
+    IndexedJSONL,
+    RandomBatchStream,
+    SFTBatchStream,
+)
 
 
 class TinyTokenizer:
@@ -15,8 +20,22 @@ class TinyTokenizer:
 
 
 def test_random_stream_is_rank_distinct_and_resumable():
-    rank0 = RandomBatchStream(batch_size=2, sequence_len=4, vocab_size=128, device="cpu", seed=24, rank=0)
-    rank1 = RandomBatchStream(batch_size=2, sequence_len=4, vocab_size=128, device="cpu", seed=24, rank=1)
+    rank0 = RandomBatchStream(
+        batch_size=2,
+        sequence_len=4,
+        vocab_size=128,
+        device="cpu",
+        seed=24,
+        rank=0,
+    )
+    rank1 = RandomBatchStream(
+        batch_size=2,
+        sequence_len=4,
+        vocab_size=128,
+        device="cpu",
+        seed=24,
+        rank=1,
+    )
 
     first0 = next(rank0)
     first1 = next(rank1)
@@ -41,8 +60,22 @@ def test_fineweb_stream_resumes_at_next_global_microbatch(tmp_path):
     writer.add_tokens([index % 128 for index in range(129)])
     writer.close()
 
-    rank0 = FineWebBatchStream(tmp_path, batch_size=2, sequence_len=4, device="cpu", rank=0, world_size=2)
-    rank1 = FineWebBatchStream(tmp_path, batch_size=2, sequence_len=4, device="cpu", rank=1, world_size=2)
+    rank0 = FineWebBatchStream(
+        tmp_path,
+        batch_size=2,
+        sequence_len=4,
+        device="cpu",
+        rank=0,
+        world_size=2,
+    )
+    rank1 = FineWebBatchStream(
+        tmp_path,
+        batch_size=2,
+        sequence_len=4,
+        device="cpu",
+        rank=1,
+        world_size=2,
+    )
     batch0 = next(rank0)
     batch1 = next(rank1)
     cursor = rank0.cursor
@@ -58,14 +91,15 @@ def test_fineweb_stream_resumes_at_next_global_microbatch(tmp_path):
     )
 
     assert rank1.cursor == cursor
-    assert set(batch0.x.flatten().tolist()).isdisjoint(batch1.x.flatten().tolist())
+    assert set(batch0.x.flatten().tolist()).isdisjoint(
+        batch1.x.flatten().tolist()
+    )
     assert torch.equal(next(resumed).x, expected.x)
 
 
 def test_sft_stream_partitions_global_rows_between_ranks():
     rows = [
-        {"prompt": f"Q{index}", "answer": f"A{index}"}
-        for index in range(8)
+        {"prompt": f"Q{index}", "answer": f"A{index}"} for index in range(8)
     ]
     rank0 = SFTBatchStream(
         rows,
@@ -100,7 +134,12 @@ def test_sft_stream_partitions_global_rows_between_ranks():
 
 def test_indexed_jsonl_supports_random_access_and_slices(tmp_path):
     path = tmp_path / "rows.jsonl"
-    path.write_text("\n".join(json.dumps({"prompt": str(i), "answer": "x"}) for i in range(4)) + "\n")
+    path.write_text(
+        "\n".join(
+            json.dumps({"prompt": str(i), "answer": "x"}) for i in range(4)
+        )
+        + "\n"
+    )
     rows = IndexedJSONL(path)
 
     assert len(rows) == 4

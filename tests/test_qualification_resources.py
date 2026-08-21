@@ -32,7 +32,9 @@ def test_accelerator_classification_is_closed_to_hopper_authority() -> None:
         _classify_accelerator("NVIDIA A100-SXM4-80GB")
 
 
-def test_gpu_row_matching_requires_unambiguous_uuid_or_single_visibility() -> None:
+def test_gpu_row_matching_requires_unambiguous_uuid_or_single_visibility() -> (
+    None
+):
     h100 = _NvidiaSMIRow("GPU-one", "00000000:01:00.0", "570.1")
     h200 = _NvidiaSMIRow("GPU-two", "00000000:02:00.0", "570.1")
     assert _match_gpu_row((h100, h200), "GPU-two", 0, 1) == h200
@@ -41,7 +43,9 @@ def test_gpu_row_matching_requires_unambiguous_uuid_or_single_visibility() -> No
     assert _match_gpu_row((h100, h100), "GPU-one", 0, 1) is None
 
 
-def test_parent_observes_cuda_process_rows_reach_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parent_observes_cuda_process_rows_reach_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     rows = [((101, 4096),), ((101, 1024),), ()]
     sleeps: list[float] = []
 

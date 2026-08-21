@@ -23,7 +23,12 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from gcw.architecture import ExecutionPlan, admission_receipt_metadata, resolve_experiment, resolve_model
+from gcw.architecture import (
+    ExecutionPlan,
+    admission_receipt_metadata,
+    resolve_experiment,
+    resolve_model,
+)
 from gcw.checkpoint import load_backbone_checkpoint
 from gcw.config import TrainConfig
 from gcw.experiment import validate_experiment
@@ -76,17 +81,26 @@ from gcw.performance.losses import (
     reference_loss_execution_metadata,
     require_loss_backend,
 )
-from gcw.performance.telemetry import model_runtime_backends as _model_runtime_backends
+from gcw.performance.telemetry import (
+    model_runtime_backends as _model_runtime_backends,
+)
 from gcw.performance.triton.execution import (
     TritonCacheExecutionContext,
     configure_triton_cache_movement,
     triton_cache_movement_metadata,
     validate_triton_cache_movement_request,
 )
-from gcw.performance.whole_model import maybe_compile_whole_model, whole_model_compile_requested
+from gcw.performance.whole_model import (
+    maybe_compile_whole_model,
+    whole_model_compile_requested,
+)
 from gcw.params import processor_params, total_non_embedding_params
 from gcw.tracking import RunTracker
-from gcw.training.audit import _checkpoint_metadata, _processor_state, _training_fingerprint
+from gcw.training.audit import (
+    _checkpoint_metadata,
+    _processor_state,
+    _training_fingerprint,
+)
 from gcw.training.checkpoint import TrainingCheckpoint
 from gcw.training.distributed import _fsdp_active, _wrap_fsdp
 from gcw.training.model_setup import (
@@ -136,7 +150,9 @@ class TrainingPlan:
     audit_output: str | None
 
 
-def _checkpoint_stop_policy(config: TrainConfig) -> tuple[int | None, datetime | None] | None:
+def _checkpoint_stop_policy(
+    config: TrainConfig,
+) -> tuple[int | None, datetime | None] | None:
     step_text = os.environ.get("GCW_STOP_AFTER_CHECKPOINT_STEP")
     utc_text = os.environ.get("GCW_STOP_AFTER_CHECKPOINT_UTC")
     if step_text is None and utc_text is None:
@@ -148,17 +164,25 @@ def _checkpoint_stop_policy(config: TrainConfig) -> tuple[int | None, datetime |
         try:
             stop_step = int(step_text)
         except ValueError as error:
-            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_STEP must be an integer") from error
+            raise ValueError(
+                "GCW_STOP_AFTER_CHECKPOINT_STEP must be an integer"
+            ) from error
         if not 1 <= stop_step <= config.max_steps:
-            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_STEP must be within the configured run")
+            raise ValueError(
+                "GCW_STOP_AFTER_CHECKPOINT_STEP must be within the configured run"
+            )
     stop_utc: datetime | None = None
     if utc_text is not None:
         try:
             stop_utc = datetime.fromisoformat(utc_text.replace("Z", "+00:00"))
         except ValueError as error:
-            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_UTC must be ISO-8601") from error
+            raise ValueError(
+                "GCW_STOP_AFTER_CHECKPOINT_UTC must be ISO-8601"
+            ) from error
         if stop_utc.tzinfo is None or stop_utc.utcoffset() is None:
-            raise ValueError("GCW_STOP_AFTER_CHECKPOINT_UTC must include a timezone")
+            raise ValueError(
+                "GCW_STOP_AFTER_CHECKPOINT_UTC must include a timezone"
+            )
         stop_utc = stop_utc.astimezone(timezone.utc)
     return stop_step, stop_utc
 
@@ -174,7 +198,11 @@ def _checkpoint_stop_requested(
     stop_step, stop_utc = policy
     if stop_step is not None and step >= stop_step:
         return True
-    observed = datetime.now(timezone.utc) if now is None else now.astimezone(timezone.utc)
+    observed = (
+        datetime.now(timezone.utc)
+        if now is None
+        else now.astimezone(timezone.utc)
+    )
     return stop_utc is not None and observed >= stop_utc
 
 
@@ -197,7 +225,9 @@ def assemble_training_execution(
     torch.manual_seed(config.seed)
     device = init_distributed(config.distributed)
     require_loss_backend(config.loss_backend, device)
-    validate_triton_cache_movement_request(config.performance.triton_cache_movement, device)
+    validate_triton_cache_movement_request(
+        config.performance.triton_cache_movement, device
+    )
     _, rank, _, world_size = dist_info()
     adaptive_batching = config.performance.adaptive_batching
     if adaptive_batching.enabled and (
@@ -205,7 +235,9 @@ def assemble_training_execution(
         or int(os.environ.get("WORLD_SIZE", "1")) != 1
         or (dist.is_available() and dist.is_initialized())
     ):
-        raise ValueError("adaptive batching v1 requires one process and no initialized distributed group")
+        raise ValueError(
+            "adaptive batching v1 requires one process and no initialized distributed group"
+        )
     micro_tokens = config.batch_size * config.sequence_len * world_size
     micro_rows = config.batch_size * world_size
     if config.global_batch_rows:
@@ -222,10 +254,14 @@ def assemble_training_execution(
                 f"total_batch_size {tokens_per_step} must be divisible by micro batch tokens {micro_tokens}"
             )
         grad_accum_steps = tokens_per_step // micro_tokens
-    fingerprint = _training_fingerprint(config, world_size, micro_tokens, tokens_per_step, grad_accum_steps)
+    fingerprint = _training_fingerprint(
+        config, world_size, micro_tokens, tokens_per_step, grad_accum_steps
+    )
     audit_output = os.environ.get("GCW_TRAIN_AUDIT_OUT")
     if audit_output is not None and world_size != 1:
-        raise ValueError("training audit currently requires the approved one-GPU topology")
+        raise ValueError(
+            "training audit currently requires the approved one-GPU topology"
+        )
     _validate_precision(config, device)
     use_fsdp = _fsdp_active(config)
     icarus_backend = resolve_icarus_processor_backend(config.model)
@@ -236,7 +272,9 @@ def assemble_training_execution(
         distributed_initialized=dist.is_available() and dist.is_initialized(),
         batch_size=config.batch_size,
         adaptive_batch_sizes=(
-            tuple(band.physical_rows for band in adaptive_batching.bands) if adaptive_batching.enabled else None
+            tuple(band.physical_rows for band in adaptive_batching.bands)
+            if adaptive_batching.enabled
+            else None
         ),
         device=device,
     )
@@ -257,20 +295,26 @@ def assemble_training_execution(
         )
         start_step = checkpoint.resume_state.step
         if start_step > config.max_steps:
-            raise ValueError(f"checkpoint step {start_step} exceeds max_steps {config.max_steps}")
+            raise ValueError(
+                f"checkpoint step {start_step} exceeds max_steps {config.max_steps}"
+            )
         if start_step == config.max_steps:
             print0(f"checkpoint already completed max_steps={config.max_steps}")
             cleanup_distributed()
             return None
         if _checkpoint_stop_requested(checkpoint_stop_policy, start_step):
-            print0(f"checkpoint stop boundary already reached step={start_step}")
+            print0(
+                f"checkpoint stop boundary already reached step={start_step}"
+            )
             cleanup_distributed()
             return None
         smooth_loss = checkpoint.resume_state.smooth_loss
         cursor = checkpoint.loader_cursor(rank=rank)
     elif _checkpoint_stop_requested(checkpoint_stop_policy, start_step):
         cleanup_distributed()
-        raise RuntimeError("checkpoint deadline elapsed before the first authenticated checkpoint")
+        raise RuntimeError(
+            "checkpoint deadline elapsed before the first authenticated checkpoint"
+        )
 
     initial_processor_state: dict[str, torch.Tensor] | None = None
     if use_fsdp:
@@ -281,7 +325,9 @@ def assemble_training_execution(
         if checkpoint is not None:
             checkpoint.restore_model(model)
             if config.trainable == "cache_processor":
-                initial_processor_state = checkpoint.load_initial_processor_state(device="cpu")
+                initial_processor_state = (
+                    checkpoint.load_initial_processor_state(device="cpu")
+                )
         elif config.init_checkpoint:
             _load_initial_model(model, config.init_checkpoint)
         elif config.backbone_checkpoint:
@@ -290,12 +336,16 @@ def assemble_training_execution(
         if checkpoint is None:
             initial_processor_state = _processor_state(model)
     _apply_trainable_policy(model, config.trainable)
-    activation_checkpointing_runtime = _configure_native_activation_checkpointing(
-        model, config.activation_checkpointing
+    activation_checkpointing_runtime = (
+        _configure_native_activation_checkpointing(
+            model, config.activation_checkpointing
+        )
     )
     configure_qwen3_backbone_chunk_backend(model, config.backbone_chunk_backend)
     configure_reference_loss_execution(model, config.performance.reference_loss)
-    configure_longshot_full_history_execution(model, config.performance.longshot_full_history)
+    configure_longshot_full_history_execution(
+        model, config.performance.longshot_full_history
+    )
     configure_kv_score_sidecar_execution(
         model,
         config.performance.kv_score_sidecar,
@@ -343,12 +393,27 @@ def assemble_training_execution(
         _apply_fsdp_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
     else:
-        if whole_model_compile_requested() and config.performance.longshot_full_history.enabled:
-            raise RuntimeError("Longshot selected-history execution cannot be combined with GCW_COMPILE")
-        if whole_model_compile_requested() and config.performance.kv_score_sidecar.enabled:
-            raise RuntimeError("KV-score sidecar cannot be combined with GCW_COMPILE")
-        if whole_model_compile_requested() and config.performance.reference_loss.mode != "legacy":
-            raise RuntimeError("bounded reference-loss execution cannot be combined with GCW_COMPILE")
+        if (
+            whole_model_compile_requested()
+            and config.performance.longshot_full_history.enabled
+        ):
+            raise RuntimeError(
+                "Longshot selected-history execution cannot be combined with GCW_COMPILE"
+            )
+        if (
+            whole_model_compile_requested()
+            and config.performance.kv_score_sidecar.enabled
+        ):
+            raise RuntimeError(
+                "KV-score sidecar cannot be combined with GCW_COMPILE"
+            )
+        if (
+            whole_model_compile_requested()
+            and config.performance.reference_loss.mode != "legacy"
+        ):
+            raise RuntimeError(
+                "bounded reference-loss execution cannot be combined with GCW_COMPILE"
+            )
         regional_backend = resolve_cache_processor_backend(config.model)
         if whole_model_compile_requested() and (
             config.model.variant == "bt"
@@ -373,7 +438,10 @@ def assemble_training_execution(
         ):
             model = maybe_compile_whole_model(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
-            model = DDP(model, device_ids=[device.index] if device.type == "cuda" else None)
+            model = DDP(
+                model,
+                device_ids=[device.index] if device.type == "cuda" else None,
+            )
 
     icarus_admitted_batches = (
         tuple(band.physical_rows for band in adaptive_batching.bands)
@@ -389,13 +457,21 @@ def assemble_training_execution(
             device=device,
             bf16=config.bf16,
         )
-    icarus_execution_scope = partial(icarus_training_execution, model) if icarus_backend == "compile" else nullcontext
+    icarus_execution_scope = (
+        partial(icarus_training_execution, model)
+        if icarus_backend == "compile"
+        else nullcontext
+    )
 
-    params = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    params = [
+        parameter for parameter in model.parameters() if parameter.requires_grad
+    ]
     opt = _build_optimizer(params, config)
     if checkpoint is not None:
         checkpoint.restore_optimizer(opt, device=device)
-    stream = build_training_stream(config, device, rank=rank, world_size=world_size, cursor=cursor)
+    stream = build_training_stream(
+        config, device, rank=rank, world_size=world_size, cursor=cursor
+    )
 
     target_tokens = tokens_per_step * config.max_steps
     flops_per_tok = training_flops_per_token(config.model, config.sequence_len)
@@ -408,55 +484,98 @@ def assemble_training_execution(
         "tokens_per_step": tokens_per_step,
         "rows_per_step": micro_rows * grad_accum_steps,
         "logical_pair_grouping": config.logical_pair_grouping,
-        "logical_pairs_per_step": config.global_batch_rows // 2 if config.logical_pair_grouping else None,
-        "adaptive_batching": adaptive_batching_metadata(adaptive_batching, global_batch_rows=config.global_batch_rows),
+        "logical_pairs_per_step": (
+            config.global_batch_rows // 2
+            if config.logical_pair_grouping
+            else None
+        ),
+        "adaptive_batching": adaptive_batching_metadata(
+            adaptive_batching, global_batch_rows=config.global_batch_rows
+        ),
         "total_training_tokens": target_tokens,
         "training_flops_per_token": flops_per_tok,
-        "total_training_flops": total_training_flops(config.model, target_tokens, config.sequence_len),
+        "total_training_flops": total_training_flops(
+            config.model, target_tokens, config.sequence_len
+        ),
         "non_embedding_params": total_non_embedding_params(config.model),
         "processor_params": processor_params(config.model),
         "world_size": world_size,
         "resumed_from_step": start_step if checkpoint is not None else None,
-        "resume_exact_topology": checkpoint.resume_state.exact_topology if checkpoint is not None else True,
-        "resume_saved_world_size": checkpoint.resume_state.saved_world_size if checkpoint is not None else world_size,
+        "resume_exact_topology": (
+            checkpoint.resume_state.exact_topology
+            if checkpoint is not None
+            else True
+        ),
+        "resume_saved_world_size": (
+            checkpoint.resume_state.saved_world_size
+            if checkpoint is not None
+            else world_size
+        ),
         "resume_current_world_size": world_size,
         "checkpoint_stop_policy": (
             None
             if checkpoint_stop_policy is None
             else {
                 "step": checkpoint_stop_policy[0],
-                "utc": (None if checkpoint_stop_policy[1] is None else checkpoint_stop_policy[1].isoformat()),
+                "utc": (
+                    None
+                    if checkpoint_stop_policy[1] is None
+                    else checkpoint_stop_policy[1].isoformat()
+                ),
             }
         ),
         "model_runtime_backends": _model_runtime_backends(model, device),
-        "bt_processor_backend": bt_processor_backend_metadata() if config.model.variant == "bt" else None,
-        "qwen3_backbone_chunk_backend": qwen3_backbone_chunk_backend_metadata(config.backbone_chunk_backend),
+        "bt_processor_backend": (
+            bt_processor_backend_metadata()
+            if config.model.variant == "bt"
+            else None
+        ),
+        "qwen3_backbone_chunk_backend": qwen3_backbone_chunk_backend_metadata(
+            config.backbone_chunk_backend
+        ),
         "cache_processor_backend": (
-            cache_processor_backend_metadata(config.model) if config.model.variant == "bgt" else None
+            cache_processor_backend_metadata(config.model)
+            if config.model.variant == "bgt"
+            else None
         ),
         "noisy_diffusion_recurrence_backend": (
-            noisy_diffusion_recurrence_backend_metadata(config.model, config.performance.noisy_diffusion)
+            noisy_diffusion_recurrence_backend_metadata(
+                config.model, config.performance.noisy_diffusion
+            )
             if config.model.diffusion_processor is not None
             else None
         ),
         "icarus_processor_backend": (
-            icarus_processor_backend_metadata(config.model) if config.model.variant == "icarus" else None
+            icarus_processor_backend_metadata(config.model)
+            if config.model.variant == "icarus"
+            else None
         ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
         **(
-            {"triton_cache_movement": triton_cache_movement_metadata(config.performance.triton_cache_movement)}
+            {
+                "triton_cache_movement": triton_cache_movement_metadata(
+                    config.performance.triton_cache_movement
+                )
+            }
             if config.performance.triton_cache_movement.enabled
             else {}
         ),
-        "activation_checkpoint_min_padded_sequence_length": (config.activation_checkpoint_min_padded_sequence_length),
-        "longshot_gradient_checkpointing": _longshot_gradient_checkpointing_runtime(config),
+        "activation_checkpoint_min_padded_sequence_length": (
+            config.activation_checkpoint_min_padded_sequence_length
+        ),
+        "longshot_gradient_checkpointing": _longshot_gradient_checkpointing_runtime(
+            config
+        ),
         "loss_backend": loss_backend_metadata(config.loss_backend),
         **(
             {
                 "longshot_full_history_execution": longshot_full_history_execution_metadata(
                     config.performance.longshot_full_history,
-                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
+                    unrope_keys=bool(
+                        config.model.cache_processor
+                        and config.model.cache_processor.unrope_keys
+                    ),
                 )
             }
             if config.performance.longshot_full_history.enabled
@@ -466,14 +585,21 @@ def assemble_training_execution(
             {
                 "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(
                     config.performance.kv_score_sidecar,
-                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
+                    unrope_keys=bool(
+                        config.model.cache_processor
+                        and config.model.cache_processor.unrope_keys
+                    ),
                 )
             }
             if config.performance.kv_score_sidecar.enabled
             else {}
         ),
         **(
-            {"reference_loss_execution": reference_loss_execution_metadata(config.performance.reference_loss)}
+            {
+                "reference_loss_execution": reference_loss_execution_metadata(
+                    config.performance.reference_loss
+                )
+            }
             if config.performance.reference_loss.mode != "legacy"
             else {}
         ),
@@ -485,7 +611,9 @@ def assemble_training_execution(
         model_receipt=model_receipt,
         composition_receipt=composition_receipt,
     )
-    checkpoint_meta = _checkpoint_metadata(config, run_meta, admission=admission)
+    checkpoint_meta = _checkpoint_metadata(
+        config, run_meta, admission=admission
+    )
     budget_message = (
         "training budget: "
         f"tokens={target_tokens:,} flops/token={flops_per_tok:.6e} "
@@ -496,7 +624,11 @@ def assemble_training_execution(
     )
     print0(budget_message)
     print0(_precision_summary(config, device))
-    tracker = RunTracker.for_training(config, run_meta, model=model) if rank == 0 else None
+    tracker = (
+        RunTracker.for_training(config, run_meta, model=model)
+        if rank == 0
+        else None
+    )
     if tracker is not None:
         tracker.log_message(budget_message)
     if checkpoint is not None:

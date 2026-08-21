@@ -76,17 +76,25 @@ class PreparedBatchedCacheProcessorParameters:
     activation_checkpointing: bool
 
 
-def prepare_batched_cache_processor_parameters(blocks) -> PreparedBatchedCacheProcessorParameters:
+def prepare_batched_cache_processor_parameters(
+    blocks,
+) -> PreparedBatchedCacheProcessorParameters:
     """Stack homogeneous processor parameters once for graph-local reuse."""
     block_list = list(blocks)
     if not block_list:
         raise ValueError("cannot prepare an empty cache-processor collection")
     layer_count = len(block_list[0].layers)
     if any(len(block.layers) != layer_count for block in block_list):
-        raise ValueError("batched cache processors must have the same number of layers")
-    checkpointing = {bool(block.activation_checkpointing) for block in block_list}
+        raise ValueError(
+            "batched cache processors must have the same number of layers"
+        )
+    checkpointing = {
+        bool(block.activation_checkpointing) for block in block_list
+    }
     if len(checkpointing) != 1:
-        raise ValueError("batched cache processors must use one activation-checkpointing policy")
+        raise ValueError(
+            "batched cache processors must use one activation-checkpointing policy"
+        )
 
     prepared_layers = []
     for layer_idx in range(layer_count):
@@ -94,8 +102,12 @@ def prepare_batched_cache_processor_parameters(blocks) -> PreparedBatchedCachePr
         attns = [layer.attn for layer in layers]
         prepared_layers.append(
             PreparedProcessorLayerParameters(
-                input_norm=_prepare_rms_norm([layer.input_norm for layer in layers]),
-                post_norm=_prepare_rms_norm([layer.post_norm for layer in layers]),
+                input_norm=_prepare_rms_norm(
+                    [layer.input_norm for layer in layers]
+                ),
+                post_norm=_prepare_rms_norm(
+                    [layer.post_norm for layer in layers]
+                ),
                 attention=PreparedAttentionParameters(
                     q_proj=_prepare_linear(attns, "q_proj"),
                     k_proj=_prepare_linear(attns, "k_proj"),
@@ -120,7 +132,9 @@ def prepare_batched_cache_processor_parameters(blocks) -> PreparedBatchedCachePr
         layers=tuple(prepared_layers),
         out_norm=_prepare_rms_norm([block.out_norm for block in block_list]),
         out_proj=_prepare_linear(block_list, "out_proj"),
-        gate=torch.stack([block.gate for block in block_list], dim=0).view(len(block_list), 1, 1, 1),
+        gate=torch.stack([block.gate for block in block_list], dim=0).view(
+            len(block_list), 1, 1, 1
+        ),
         gate_mode=block_list[0].config.gate_mode,
         activation_checkpointing=checkpointing.pop(),
     )
@@ -132,9 +146,15 @@ def run_prepared_batched_cache_processors(
     positions: torch.Tensor,
 ) -> torch.Tensor:
     """Run BT using stacks prepared for this language-model forward."""
-    h = _prepared_linear(_prepared_rms_norm(x, prepared.in_norm), prepared.in_proj)
+    h = _prepared_linear(
+        _prepared_rms_norm(x, prepared.in_norm), prepared.in_proj
+    )
     for layer in prepared.layers:
-        if prepared.activation_checkpointing and layer.attention.training and torch.is_grad_enabled():
+        if (
+            prepared.activation_checkpointing
+            and layer.attention.training
+            and torch.is_grad_enabled()
+        ):
             h = checkpoint(
                 _run_prepared_processor_layer,
                 h,
@@ -145,7 +165,9 @@ def run_prepared_batched_cache_processors(
             )
         else:
             h = _run_prepared_processor_layer(h, positions, layer)
-    delta = _prepared_linear(_prepared_rms_norm(h, prepared.out_norm), prepared.out_proj)
+    delta = _prepared_linear(
+        _prepared_rms_norm(h, prepared.out_norm), prepared.out_proj
+    )
     return x + delta * _prepared_gate_scale(prepared, delta.dtype)
 
 
@@ -154,10 +176,13 @@ def _run_prepared_processor_layer(
     positions: torch.Tensor,
     layer: PreparedProcessorLayerParameters,
 ) -> torch.Tensor:
-    h = h + _prepared_attention(_prepared_rms_norm(h, layer.input_norm), layer.attention, positions)
+    h = h + _prepared_attention(
+        _prepared_rms_norm(h, layer.input_norm), layer.attention, positions
+    )
     m = _prepared_rms_norm(h, layer.post_norm)
     return h + _prepared_linear(
-        F.silu(_prepared_linear(m, layer.gate_proj)) * _prepared_linear(m, layer.up_proj),
+        F.silu(_prepared_linear(m, layer.gate_proj))
+        * _prepared_linear(m, layer.up_proj),
         layer.down_proj,
     )
 
@@ -178,7 +203,9 @@ def _prepare_rms_norm(norms) -> PreparedRMSNormParameters:
     )
 
 
-def _prepared_linear(x: torch.Tensor, linear: PreparedLinearParameters) -> torch.Tensor:
+def _prepared_linear(
+    x: torch.Tensor, linear: PreparedLinearParameters
+) -> torch.Tensor:
     layers, batch, seq, in_features = x.shape
     out_features = linear.weight.shape[1]
     out = torch.bmm(
@@ -190,7 +217,9 @@ def _prepared_linear(x: torch.Tensor, linear: PreparedLinearParameters) -> torch
     return out
 
 
-def _prepared_rms_norm(x: torch.Tensor, norm: PreparedRMSNormParameters) -> torch.Tensor:
+def _prepared_rms_norm(
+    x: torch.Tensor, norm: PreparedRMSNormParameters
+) -> torch.Tensor:
     y = x * torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + norm.eps)
     return y * norm.weight.to(x.dtype)[:, None, None, :]
 
@@ -211,23 +240,33 @@ def _prepared_attention(
         num_layers, batch, seq, attention.num_kv_heads, attention.head_dim
     )
 
-    cos_sin = rotary_for_indices(positions, attention.head_dim, attention.theta, q.dtype)
+    cos_sin = rotary_for_indices(
+        positions, attention.head_dim, attention.theta, q.dtype
+    )
     q = apply_rotary(q, *cos_sin).permute(0, 1, 3, 2, 4).contiguous()
     k = apply_rotary(k, *cos_sin).permute(0, 1, 3, 2, 4).contiguous()
     v = v.permute(0, 1, 3, 2, 4).contiguous()
     q, k = q.to(v.dtype), k.to(v.dtype)
 
     y = flash_sdpa(
-        q.view(num_layers * batch, attention.num_heads, seq, attention.head_dim),
-        k.view(num_layers * batch, attention.num_kv_heads, seq, attention.head_dim),
-        v.view(num_layers * batch, attention.num_kv_heads, seq, attention.head_dim),
+        q.view(
+            num_layers * batch, attention.num_heads, seq, attention.head_dim
+        ),
+        k.view(
+            num_layers * batch, attention.num_kv_heads, seq, attention.head_dim
+        ),
+        v.view(
+            num_layers * batch, attention.num_kv_heads, seq, attention.head_dim
+        ),
         dropout_p=attention.dropout if attention.training else 0.0,
         enable_gqa=attention.num_kv_heads != attention.num_heads,
     )
     y = y.view(num_layers, batch, attention.num_heads, seq, attention.head_dim)
     y = y.permute(0, 1, 3, 2, 4).contiguous()
     return _prepared_linear(
-        y.view(num_layers, batch, seq, attention.num_heads * attention.head_dim),
+        y.view(
+            num_layers, batch, seq, attention.num_heads * attention.head_dim
+        ),
         attention.o_proj,
     )
 
@@ -240,28 +279,43 @@ def _prepared_gate_scale(
         return torch.sigmoid(prepared.gate).to(dtype)
     if prepared.gate_mode == "direct":
         return prepared.gate.to(dtype)
-    raise ValueError(f"unsupported cache processor gate_mode: {prepared.gate_mode}")
+    raise ValueError(
+        f"unsupported cache processor gate_mode: {prepared.gate_mode}"
+    )
 
 
-def run_batched_cache_processors(blocks, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+def run_batched_cache_processors(
+    blocks, x: torch.Tensor, positions: torch.Tensor
+) -> torch.Tensor:
     """Run the vectorized BT reference without retaining prepared stacks."""
     block_list = list(blocks)
-    h = _linear(_rms_norm(x, [b.in_norm for b in block_list]), block_list, "in_proj")
+    h = _linear(
+        _rms_norm(x, [b.in_norm for b in block_list]), block_list, "in_proj"
+    )
     for layer_idx in range(len(block_list[0].layers)):
         layers = [b.layers[layer_idx] for b in block_list]
-        h = h + _attention(_rms_norm(h, [layer.input_norm for layer in layers]), layers, positions)
+        h = h + _attention(
+            _rms_norm(h, [layer.input_norm for layer in layers]),
+            layers,
+            positions,
+        )
         m = _rms_norm(h, [layer.post_norm for layer in layers])
         h = h + _linear(
-            F.silu(_linear(m, layers, "gate_proj")) * _linear(m, layers, "up_proj"),
+            F.silu(_linear(m, layers, "gate_proj"))
+            * _linear(m, layers, "up_proj"),
             layers,
             "down_proj",
         )
-    delta = _linear(_rms_norm(h, [b.out_norm for b in block_list]), block_list, "out_proj")
+    delta = _linear(
+        _rms_norm(h, [b.out_norm for b in block_list]), block_list, "out_proj"
+    )
     return x + delta * _gate_scale(block_list, delta.dtype)
 
 
 def _gate_scale(blocks, dtype: torch.dtype) -> torch.Tensor:
-    gate = torch.stack([b.gate for b in blocks], dim=0).view(len(blocks), 1, 1, 1)
+    gate = torch.stack([b.gate for b in blocks], dim=0).view(
+        len(blocks), 1, 1, 1
+    )
     mode = blocks[0].config.gate_mode
     if mode == "sigmoid":
         return torch.sigmoid(gate).to(dtype)
@@ -292,16 +346,24 @@ def _rms_norm(x: torch.Tensor, norms) -> torch.Tensor:
     return y * weight[:, None, None, :]
 
 
-def _attention(x: torch.Tensor, layers, positions: torch.Tensor) -> torch.Tensor:
+def _attention(
+    x: torch.Tensor, layers, positions: torch.Tensor
+) -> torch.Tensor:
     attns = [layer.attn for layer in layers]
     num_layers, batch, seq, _ = x.shape
     num_heads = attns[0].num_heads
     num_kv_heads = attns[0].num_kv_heads
     head_dim = attns[0].head_dim
 
-    q = _linear(x, attns, "q_proj").view(num_layers, batch, seq, num_heads, head_dim)
-    k = _linear(x, attns, "k_proj").view(num_layers, batch, seq, num_kv_heads, head_dim)
-    v = _linear(x, attns, "v_proj").view(num_layers, batch, seq, num_kv_heads, head_dim)
+    q = _linear(x, attns, "q_proj").view(
+        num_layers, batch, seq, num_heads, head_dim
+    )
+    k = _linear(x, attns, "k_proj").view(
+        num_layers, batch, seq, num_kv_heads, head_dim
+    )
+    v = _linear(x, attns, "v_proj").view(
+        num_layers, batch, seq, num_kv_heads, head_dim
+    )
 
     cos_sin = rotary_for_indices(positions, head_dim, layers[0].theta, q.dtype)
     q = apply_rotary(q, *cos_sin).permute(0, 1, 3, 2, 4).contiguous()
@@ -316,5 +378,11 @@ def _attention(x: torch.Tensor, layers, positions: torch.Tensor) -> torch.Tensor
         dropout_p=attns[0].dropout if attns[0].training else 0.0,
         enable_gqa=num_kv_heads != num_heads,
     )
-    y = y.view(num_layers, batch, num_heads, seq, head_dim).permute(0, 1, 3, 2, 4).contiguous()
-    return _linear(y.view(num_layers, batch, seq, num_heads * head_dim), attns, "o_proj")
+    y = (
+        y.view(num_layers, batch, num_heads, seq, head_dim)
+        .permute(0, 1, 3, 2, 4)
+        .contiguous()
+    )
+    return _linear(
+        y.view(num_layers, batch, seq, num_heads * head_dim), attns, "o_proj"
+    )

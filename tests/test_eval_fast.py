@@ -1,10 +1,13 @@
-
 from gcw.evaluation.core import (
     _normalize_until,
     _should_apply_chat_template,
     _trim_until,
 )
-from gcw.evaluation.scoring import tokenizer_for_checkpoint, trim_generated_token_ids, truncate_context_continuation
+from gcw.evaluation.scoring import (
+    tokenizer_for_checkpoint,
+    trim_generated_token_ids,
+    truncate_context_continuation,
+)
 
 
 def test_trim_until_matches_existing_ordered_stop_semantics():
@@ -38,19 +41,38 @@ def test_native_hf_families_require_original_tokenizer(monkeypatch):
         @staticmethod
         def from_pretrained(source, **kwargs):
             calls.append((source, kwargs))
-            return type("Tokenizer", (), {"eos_token_id": 1, "pad_token_id": 1, "__len__": lambda self: 2})()
+            return type(
+                "Tokenizer",
+                (),
+                {
+                    "eos_token_id": 1,
+                    "pad_token_id": 1,
+                    "__len__": lambda self: 2,
+                },
+            )()
 
-    monkeypatch.setitem(__import__("sys").modules, "transformers", type("Transformers", (), {"AutoTokenizer": AutoTokenizer}))
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "transformers",
+        type("Transformers", (), {"AutoTokenizer": AutoTokenizer}),
+    )
     for family in ("qwen3_5", "gemma4"):
-        tokenizer_for_checkpoint(type("Config", (), {"family": family, "vocab_size": 2})(), {"source": "model"})
+        tokenizer_for_checkpoint(
+            type("Config", (), {"family": family, "vocab_size": 2})(),
+            {"source": "model"},
+        )
     assert len(calls) == 2
 
 
 def test_context_continuation_truncation_keeps_at_least_one_context_token():
-    ctx, cont = truncate_context_continuation([1, 2, 3, 4], [5, 6], max_length=4)
+    ctx, cont = truncate_context_continuation(
+        [1, 2, 3, 4], [5, 6], max_length=4
+    )
     assert ctx == [2, 3, 4]
     assert cont == [5, 6]
 
-    ctx, cont = truncate_context_continuation([1], [2, 3, 4, 5, 6], max_length=3)
+    ctx, cont = truncate_context_continuation(
+        [1], [2, 3, 4, 5, 6], max_length=3
+    )
     assert ctx == [3]
     assert cont == [4, 5, 6]

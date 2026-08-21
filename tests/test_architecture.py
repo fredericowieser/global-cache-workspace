@@ -12,7 +12,13 @@ from gcw.architecture import (
     resolve_experiment,
     resolve_model,
 )
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, load_train_config
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    ModelConfig,
+    TrainConfig,
+    load_train_config,
+)
 from gcw.models import build_model
 from gcw.provenance import canonical_json_sha256
 
@@ -60,7 +66,9 @@ def test_every_canonical_train_config_is_admitted_without_io() -> None:
         assert receipt.model_assembly_sha256 == model_receipt.receipt_sha256
 
 
-def test_model_receipt_is_deterministic_canonical_and_self_authenticating() -> None:
+def test_model_receipt_is_deterministic_canonical_and_self_authenticating() -> (
+    None
+):
     config = _tiny_model("longshot")
     first_model, first = resolve_model(config).require()
     second_model, second = resolve_model(replace(config)).require()
@@ -82,14 +90,19 @@ def test_processor_free_causal_lm_is_first_class() -> None:
     assert "cache_intervention" not in receipt.capabilities
 
 
-def test_model_resolution_collects_incompatibilities_without_constructing(monkeypatch) -> None:
+def test_model_resolution_collects_incompatibilities_without_constructing(
+    monkeypatch,
+) -> None:
     config = _tiny_model("longshot")
     assert config.cache_processor is not None
     config.variant = "not-a-variant"  # type: ignore[assignment]
     config.flow_processor = object()  # type: ignore[assignment]
     config.cache_processor.processor_mode = "workspace_broadcast"
 
-    monkeypatch.setattr("gcw.models.build_language_model", lambda *_args, **_kwargs: pytest.fail("allocated"))
+    monkeypatch.setattr(
+        "gcw.models.build_language_model",
+        lambda *_args, **_kwargs: pytest.fail("allocated"),
+    )
     resolution = resolve_model(config)
 
     assert isinstance(resolution.report, CompatibilityReport)
@@ -104,7 +117,9 @@ def test_model_resolution_collects_incompatibilities_without_constructing(monkey
         resolution.require()
 
 
-def test_build_model_dispatches_only_after_admission_and_preserves_model_ownership() -> None:
+def test_build_model_dispatches_only_after_admission_and_preserves_model_ownership() -> (
+    None
+):
     for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         config = _tiny_model(variant)
         model = build_model(config)
@@ -118,34 +133,50 @@ def test_build_model_dispatches_only_after_admission_and_preserves_model_ownersh
         else:
             assert assembly.processor is not None
             assert hasattr(model, "backbone")
-            assert any(key.startswith("backbone.") for key in model.state_dict())
-            assert any(key.startswith("cache_processor.") for key in model.state_dict())
+            assert any(
+                key.startswith("backbone.") for key in model.state_dict()
+            )
+            assert any(
+                key.startswith("cache_processor.") for key in model.state_dict()
+            )
 
 
 def test_unknown_variant_fails_before_constructor_dispatch(monkeypatch) -> None:
     config = _tiny_model("tf")
     config.variant = "flow_bgt"  # type: ignore[assignment]
     called: list[bool] = []
-    monkeypatch.setattr("gcw.models.build_backbone", lambda *_: called.append(True))
+    monkeypatch.setattr(
+        "gcw.models.build_backbone", lambda *_: called.append(True)
+    )
 
-    with pytest.raises(CompatibilityError, match="unknown model variant: flow_bgt"):
+    with pytest.raises(
+        CompatibilityError, match="unknown model variant: flow_bgt"
+    ):
         build_model(config)
     assert called == []
 
 
-def test_admission_receipt_metadata_is_self_authenticating_and_runtime_ready() -> None:
-    config = TrainConfig(model=_tiny_model("bgt"), data=DataConfig(kind="random"))
+def test_admission_receipt_metadata_is_self_authenticating_and_runtime_ready() -> (
+    None
+):
+    config = TrainConfig(
+        model=_tiny_model("bgt"), data=DataConfig(kind="random")
+    )
 
     metadata = admission_receipt_metadata(config)
 
     assert metadata["schema"] == "gcw.admission.v1"
     for name in ("model_assembly_receipt", "composition_receipt"):
         document = metadata[name]
-        assert document["receipt_sha256"] == canonical_json_sha256(document["payload"])
+        assert document["receipt_sha256"] == canonical_json_sha256(
+            document["payload"]
+        )
         assert document["payload"]
 
 
-def test_experiment_receipt_separates_protocol_parameter_and_execution_axes() -> None:
+def test_experiment_receipt_separates_protocol_parameter_and_execution_axes() -> (
+    None
+):
     config = TrainConfig(
         model=_tiny_model("bgt"),
         data=DataConfig(kind="random"),
@@ -165,22 +196,33 @@ def test_experiment_receipt_separates_protocol_parameter_and_execution_axes() ->
     assert receipt.receipt_sha256 == canonical_json_sha256(receipt.payload())
 
 
-def test_experiment_resolution_rejects_self_consistent_forged_model_receipt() -> None:
+def test_experiment_resolution_rejects_self_consistent_forged_model_receipt() -> (
+    None
+):
     from dataclasses import replace
 
-    config = TrainConfig(model=_tiny_model("bgt"), data=DataConfig(kind="random"))
+    config = TrainConfig(
+        model=_tiny_model("bgt"), data=DataConfig(kind="random")
+    )
     _, canonical = resolve_model(config.model).require()
     forged = replace(canonical, generation_policy="forged-generation-policy")
-    forged = replace(forged, receipt_sha256=canonical_json_sha256(forged.payload()))
+    forged = replace(
+        forged, receipt_sha256=canonical_json_sha256(forged.payload())
+    )
 
     resolution = resolve_experiment(config, forged)
 
     assert not resolution.report.compatible
-    assert any(issue.code == "model_receipt_noncanonical" for issue in resolution.report.issues)
+    assert any(
+        issue.code == "model_receipt_noncanonical"
+        for issue in resolution.report.issues
+    )
 
 
 def test_experiment_resolution_rejects_invented_protocol_components() -> None:
-    config = TrainConfig(model=_tiny_model("bgt"), data=DataConfig(kind="random"))
+    config = TrainConfig(
+        model=_tiny_model("bgt"), data=DataConfig(kind="random")
+    )
     config.data.kind = "forged_data"
     config.checkpoint_format = "forged_checkpoint"
     _, model_receipt = resolve_model(config.model).require()
@@ -194,8 +236,12 @@ def test_experiment_resolution_rejects_invented_protocol_components() -> None:
     }
 
 
-def test_experiment_resolution_rejects_stale_model_receipt_and_collects_protocol_issues() -> None:
-    config = TrainConfig(model=_tiny_model("bgt"), data=DataConfig(kind="random"))
+def test_experiment_resolution_rejects_stale_model_receipt_and_collects_protocol_issues() -> (
+    None
+):
+    config = TrainConfig(
+        model=_tiny_model("bgt"), data=DataConfig(kind="random")
+    )
     _, stale_receipt = resolve_model(_tiny_model("tf")).require()
     config.mode = "unsupported"  # type: ignore[assignment]
     config.distributed = "unsupported"  # type: ignore[assignment]

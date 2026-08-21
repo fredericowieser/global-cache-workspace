@@ -29,8 +29,14 @@ def require_triton_runtime(device: torch.device) -> TritonRuntimeIdentity:
     if device.type != "cuda":
         raise RuntimeError("GCW Triton kernels require a CUDA tensor")
     if not torch.cuda.is_available():
-        raise RuntimeError("GCW Triton kernels were requested but CUDA is unavailable")
-    index = device.index if device.index is not None else torch.cuda.current_device()
+        raise RuntimeError(
+            "GCW Triton kernels were requested but CUDA is unavailable"
+        )
+    index = (
+        device.index
+        if device.index is not None
+        else torch.cuda.current_device()
+    )
     return _require_triton_runtime_cached(index)
 
 
@@ -46,7 +52,9 @@ def _require_triton_runtime_cached(index: int) -> TritonRuntimeIdentity:
     except metadata.PackageNotFoundError as exc:
         raise RuntimeError("GCW Triton kernels require triton==3.6.0") from exc
     if version != _SUPPORTED_TRITON_VERSION:
-        raise RuntimeError(f"GCW Triton kernels require triton=={_SUPPORTED_TRITON_VERSION}; found {version}")
+        raise RuntimeError(
+            f"GCW Triton kernels require triton=={_SUPPORTED_TRITON_VERSION}; found {version}"
+        )
     return TritonRuntimeIdentity(
         torch_version=str(torch.__version__),
         cuda_runtime=str(torch.version.cuda),
@@ -61,8 +69,14 @@ def load_kernel_module(module: str, device: torch.device) -> ModuleType:
     if device.type != "cuda":
         raise RuntimeError("GCW Triton kernels require a CUDA tensor")
     if not torch.cuda.is_available():
-        raise RuntimeError("GCW Triton kernels were requested but CUDA is unavailable")
-    index = device.index if device.index is not None else torch.cuda.current_device()
+        raise RuntimeError(
+            "GCW Triton kernels were requested but CUDA is unavailable"
+        )
+    index = (
+        device.index
+        if device.index is not None
+        else torch.cuda.current_device()
+    )
     return _load_kernel_module_cached(module, index)
 
 
@@ -70,8 +84,12 @@ def load_kernel_module(module: str, device: torch.device) -> ModuleType:
 def _load_kernel_module_cached(module: str, index: int) -> ModuleType:
     _require_triton_runtime_cached(index)
     if not module.startswith("gcw.performance.triton._"):
-        raise ValueError("Triton kernel modules must be private gcw.performance.triton modules")
+        raise ValueError(
+            "Triton kernel modules must be private gcw.performance.triton modules"
+        )
     try:
         return import_module(module)
     except (ImportError, OSError) as exc:
-        raise RuntimeError(f"failed to import requested Triton kernel module {module!r}") from exc
+        raise RuntimeError(
+            f"failed to import requested Triton kernel module {module!r}"
+        ) from exc

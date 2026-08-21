@@ -47,7 +47,9 @@ class _ScatterSharedKV(torch.autograd.Function):
                     new_value_bits.view(old_values.dtype),
                     global_layout=global_layout,
                 )
-        return new_key_bits.view(old_keys.dtype), new_value_bits.view(old_values.dtype)
+        return new_key_bits.view(old_keys.dtype), new_value_bits.view(
+            old_values.dtype
+        )
 
     @staticmethod
     def backward(  # type: ignore[override]
@@ -57,7 +59,9 @@ class _ScatterSharedKV(torch.autograd.Function):
     ) -> tuple[torch.Tensor, torch.Tensor, None, torch.Tensor, None]:
         (indices,) = ctx.saved_tensors
         if grad_keys is None and grad_values is None:
-            raise RuntimeError("Triton functional scatter backward received no cache gradients")
+            raise RuntimeError(
+                "Triton functional scatter backward received no cache gradients"
+            )
         reference = grad_keys if grad_keys is not None else grad_values
         assert reference is not None
         if grad_keys is None:
@@ -121,7 +125,9 @@ class _GatherSharedKV(torch.autograd.Function):
         layers, batch, heads, _history, head_dim = keys.shape
         if indices.shape[1] == 0:
             shape = (
-                (batch, 0, layers * 2 * heads * head_dim) if global_layout else (layers, batch, 0, 2 * heads * head_dim)
+                (batch, 0, layers * 2 * heads * head_dim)
+                if global_layout
+                else (layers, batch, 0, 2 * heads * head_dim)
             )
             return keys.new_empty(shape)
         kernels = load_kernel_module(_KERNEL_MODULE, keys.device)
@@ -198,12 +204,18 @@ class _GatherPerCacheHeadKV(torch.autograd.Function):
             )
         contiguous_grad = grad_output.contiguous()
         kernels = load_kernel_module(_KERNEL_MODULE, grad_output.device)
-        grad_key_bits, grad_value_bits = kernels.scatter_per_cache_head_grad_bits(
-            contiguous_grad.view(torch.int16),
-            indices,
-            cache_shape,
+        grad_key_bits, grad_value_bits = (
+            kernels.scatter_per_cache_head_grad_bits(
+                contiguous_grad.view(torch.int16),
+                indices,
+                cache_shape,
+            )
         )
-        return grad_key_bits.view(grad_output.dtype), grad_value_bits.view(grad_output.dtype), None
+        return (
+            grad_key_bits.view(grad_output.dtype),
+            grad_value_bits.view(grad_output.dtype),
+            None,
+        )
 
 
 def scatter_shared_kv(
@@ -218,11 +230,21 @@ def scatter_shared_kv(
     """Functionally split and scatter one BT/BGT merged cache update."""
     _validate_cache_inputs(old_keys, old_values)
     if layout not in {"layer", "global"}:
-        raise ValueError("Triton shared cache layout must be 'layer' or 'global'")
+        raise ValueError(
+            "Triton shared cache layout must be 'layer' or 'global'"
+        )
     if indices.device != old_keys.device or indices.dtype != torch.long:
-        raise ValueError("Triton shared cache indices must be torch.long on the K/V device")
-    if indices.ndim != 2 or indices.shape[0] != old_keys.shape[1] or not indices.is_contiguous():
-        raise ValueError("Triton shared cache indices must be contiguous (2, selected)")
+        raise ValueError(
+            "Triton shared cache indices must be torch.long on the K/V device"
+        )
+    if (
+        indices.ndim != 2
+        or indices.shape[0] != old_keys.shape[1]
+        or not indices.is_contiguous()
+    ):
+        raise ValueError(
+            "Triton shared cache indices must be contiguous (2, selected)"
+        )
     layers, batch, heads, _history, head_dim = old_keys.shape
     expected = (
         (batch, indices.shape[1], layers * 2 * heads * head_dim)
@@ -241,7 +263,9 @@ def scatter_shared_kv(
         raise ValueError("Triton shared cache update must be contiguous")
     if validate_indices:
         _validate_index_values(indices, old_keys.shape[3])
-    return _ScatterSharedKV.apply(old_keys, old_values, indices, update, layout == "global")
+    return _ScatterSharedKV.apply(
+        old_keys, old_values, indices, update, layout == "global"
+    )
 
 
 def gather_shared_kv(
@@ -259,11 +283,21 @@ def gather_shared_kv(
     """
     _validate_cache_inputs(keys, values)
     if layout not in {"layer", "global"}:
-        raise ValueError("Triton shared cache layout must be 'layer' or 'global'")
+        raise ValueError(
+            "Triton shared cache layout must be 'layer' or 'global'"
+        )
     if indices.device != keys.device or indices.dtype != torch.long:
-        raise ValueError("Triton shared cache indices must be torch.long on the K/V device")
-    if indices.ndim != 2 or indices.shape[0] != keys.shape[1] or not indices.is_contiguous():
-        raise ValueError("Triton shared cache indices must be contiguous (2, selected)")
+        raise ValueError(
+            "Triton shared cache indices must be torch.long on the K/V device"
+        )
+    if (
+        indices.ndim != 2
+        or indices.shape[0] != keys.shape[1]
+        or not indices.is_contiguous()
+    ):
+        raise ValueError(
+            "Triton shared cache indices must be contiguous (2, selected)"
+        )
     if validate_indices:
         _validate_index_values(indices, keys.shape[3])
     return _GatherSharedKV.apply(keys, values, indices, layout == "global")
@@ -297,20 +331,35 @@ def gather_per_cache_head_kv(
 
 def _validate_cache_inputs(keys: torch.Tensor, values: torch.Tensor) -> None:
     if keys.ndim != 5 or keys.shape != values.shape:
-        raise ValueError("Triton cache gather requires matching five-dimensional K/V")
+        raise ValueError(
+            "Triton cache gather requires matching five-dimensional K/V"
+        )
     if keys.shape[1] != 2:
-        raise ValueError("Triton cache gather requires fixed physical batch size 2")
+        raise ValueError(
+            "Triton cache gather requires fixed physical batch size 2"
+        )
     if keys.dtype != torch.bfloat16 or values.dtype != torch.bfloat16:
         raise TypeError("Triton cache gather currently supports BF16 K/V only")
     if keys.device != values.device or keys.device.type != "cuda":
         raise ValueError("Triton cache gather requires K/V on one CUDA device")
     if not keys.is_contiguous() or not values.is_contiguous():
-        raise ValueError("Triton cache gather requires contiguous layer-major K/V")
-    if keys.shape[0] <= 0 or keys.shape[2] <= 0 or keys.shape[3] <= 0 or keys.shape[4] <= 0:
-        raise ValueError("Triton cache gather requires positive cache dimensions")
+        raise ValueError(
+            "Triton cache gather requires contiguous layer-major K/V"
+        )
+    if (
+        keys.shape[0] <= 0
+        or keys.shape[2] <= 0
+        or keys.shape[3] <= 0
+        or keys.shape[4] <= 0
+    ):
+        raise ValueError(
+            "Triton cache gather requires positive cache dimensions"
+        )
 
 
-def _normalize_indices(indices: torch.Tensor, keys: torch.Tensor) -> torch.Tensor:
+def _normalize_indices(
+    indices: torch.Tensor, keys: torch.Tensor
+) -> torch.Tensor:
     cache_heads = keys.shape[0] * keys.shape[2]
     if indices.device != keys.device:
         raise ValueError("Triton cache indices must be on the K/V device")
@@ -318,16 +367,24 @@ def _normalize_indices(indices: torch.Tensor, keys: torch.Tensor) -> torch.Tenso
         raise TypeError("Triton cache indices must use torch.long")
     if indices.ndim == 2:
         if indices.shape[0] != keys.shape[1]:
-            raise ValueError("shared Triton cache indices must have shape (2, selected)")
+            raise ValueError(
+                "shared Triton cache indices must have shape (2, selected)"
+            )
         normalized = indices[:, None, :].expand(-1, cache_heads, -1)
     elif indices.ndim == 3:
         if indices.shape[:2] != (keys.shape[1], cache_heads):
-            raise ValueError("per-head Triton cache indices must have shape (2, layers * heads, selected)")
+            raise ValueError(
+                "per-head Triton cache indices must have shape (2, layers * heads, selected)"
+            )
         normalized = indices
     else:
-        raise ValueError("Triton cache indices must be shared or per-cache-head")
+        raise ValueError(
+            "Triton cache indices must be shared or per-cache-head"
+        )
     if normalized.stride(-1) != 1:
-        raise ValueError("Triton cache indices must be contiguous in the selected dimension")
+        raise ValueError(
+            "Triton cache indices must be contiguous in the selected dimension"
+        )
     return normalized
 
 
@@ -339,4 +396,6 @@ def _validate_index_values(indices: torch.Tensor, history: int) -> None:
     if indices.shape[-1] > 1:
         differences = indices[..., 1:] - indices[..., :-1]
         if not bool(torch.all(differences > 0).item()):
-            raise ValueError("Triton cache indices must be strictly increasing and unique")
+            raise ValueError(
+                "Triton cache indices must be strictly increasing and unique"
+            )

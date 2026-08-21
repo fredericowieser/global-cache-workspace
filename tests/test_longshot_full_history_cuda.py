@@ -19,7 +19,11 @@ from gcw.performance.longshot_cache import (
     pop_longshot_full_history_metrics,
     longshot_full_history_execution_metadata,
 )
-from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
+from gcw.training.checkpoint import (
+    ResumeState,
+    TrainingCheckpoint,
+    save_training_checkpoint,
+)
 from gcw.training.objectives import row_loss_sums_and_counts
 
 _RUN_CUDA_PARITY = os.environ.get("GCW_RUN_LONGSHOT_CUDA_PARITY") == "1"
@@ -32,7 +36,9 @@ pytestmark = [
 ]
 
 
-def _processor(*, layers: int = 2, topk: int = 8, unrope_keys: bool = False) -> GlobalCacheProcessor:
+def _processor(
+    *, layers: int = 2, topk: int = 8, unrope_keys: bool = False
+) -> GlobalCacheProcessor:
     config = ModelConfig(
         variant="longshot",
         family="smollm",
@@ -70,70 +76,111 @@ def _processor(*, layers: int = 2, topk: int = 8, unrope_keys: bool = False) -> 
 
 def _cache(seed: int, *, layers: int = 2, sequence: int = 32) -> WindowedCache:
     generator = torch.Generator().manual_seed(seed)
-    keys = torch.randn(layers, 4, 2, sequence, 16, generator=generator, dtype=torch.bfloat16).cuda()
-    values = torch.randn(layers, 4, 2, sequence, 16, generator=generator, dtype=torch.bfloat16).cuda()
+    keys = torch.randn(
+        layers, 4, 2, sequence, 16, generator=generator, dtype=torch.bfloat16
+    ).cuda()
+    values = torch.randn(
+        layers, 4, 2, sequence, 16, generator=generator, dtype=torch.bfloat16
+    ).cuda()
     scores = torch.randn(4, sequence, generator=generator).cuda()
-    return WindowedCache(keys=keys.contiguous(), values=values.contiguous(), scores=scores)
+    return WindowedCache(
+        keys=keys.contiguous(), values=values.contiguous(), scores=scores
+    )
 
 
 def _trajectory_step(
     processor: GlobalCacheProcessor,
     optimizer: torch.optim.Optimizer,
     cache: WindowedCache,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[torch.Tensor | None]]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    list[torch.Tensor | None],
+]:
     optimizer.zero_grad(set_to_none=True)
     selected = processor._select_kv_norm_history(cache)[2]
     with torch.autocast("cuda", dtype=torch.bfloat16):
         output = processor(cache)
         row_losses = output.keys.float().square().mean(dim=(0, 2, 3, 4))
-        row_losses = row_losses + output.values.float().square().mean(dim=(0, 2, 3, 4))
+        row_losses = row_losses + output.values.float().square().mean(
+            dim=(0, 2, 3, 4)
+        )
         pair_losses = row_losses.reshape(-1, 2).mean(dim=1)
         loss = pair_losses.sum()
     loss.backward()
     gradients = [
-        None if parameter.grad is None else parameter.grad.detach().clone() for parameter in processor.parameters()
+        None if parameter.grad is None else parameter.grad.detach().clone()
+        for parameter in processor.parameters()
     ]
     optimizer.step()
-    return selected, output.keys.detach(), output.values.detach(), pair_losses.detach(), gradients
+    return (
+        selected,
+        output.keys.detach(),
+        output.values.detach(),
+        pair_losses.detach(),
+        gradients,
+    )
 
 
 @pytest.mark.parametrize("unrope_keys", [False, True])
-def test_cuda_bf16_checkpointed_trajectory_and_resume_identity(unrope_keys: bool) -> None:
+def test_cuda_bf16_checkpointed_trajectory_and_resume_identity(
+    unrope_keys: bool,
+) -> None:
     torch.manual_seed(211)
     reference = _processor(unrope_keys=unrope_keys)
     optimized = copy.deepcopy(reference)
-    configure_longshot_full_history_execution(optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096))
+    configure_longshot_full_history_execution(
+        optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
+    )
     reference_optimizer = torch.optim.AdamW(reference.parameters(), lr=3e-4)
     optimized_optimizer = torch.optim.AdamW(optimized.parameters(), lr=3e-4)
 
     for seed in (223, 227):
-        reference_result = _trajectory_step(reference, reference_optimizer, _cache(seed))
-        optimized_result = _trajectory_step(optimized, optimized_optimizer, _cache(seed))
-        for actual, expected in zip(optimized_result[:4], reference_result[:4], strict=True):
+        reference_result = _trajectory_step(
+            reference, reference_optimizer, _cache(seed)
+        )
+        optimized_result = _trajectory_step(
+            optimized, optimized_optimizer, _cache(seed)
+        )
+        for actual, expected in zip(
+            optimized_result[:4], reference_result[:4], strict=True
+        ):
             assert torch.equal(actual, expected)
-        for actual, expected in zip(optimized_result[4], reference_result[4], strict=True):
+        for actual, expected in zip(
+            optimized_result[4], reference_result[4], strict=True
+        ):
             assert (actual is None) == (expected is None)
             if actual is not None:
                 assert expected is not None
                 torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
-        for actual, expected in zip(optimized.parameters(), reference.parameters(), strict=True):
+        for actual, expected in zip(
+            optimized.parameters(), reference.parameters(), strict=True
+        ):
             torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
 
     saved_model = copy.deepcopy(optimized.state_dict())
     saved_optimizer = copy.deepcopy(optimized_optimizer.state_dict())
     saved_rng = torch.cuda.get_rng_state()
-    uninterrupted = _trajectory_step(optimized, optimized_optimizer, _cache(229))
+    uninterrupted = _trajectory_step(
+        optimized, optimized_optimizer, _cache(229)
+    )
     uninterrupted_state = copy.deepcopy(optimized.state_dict())
 
     resumed = _processor(unrope_keys=unrope_keys)
-    configure_longshot_full_history_execution(resumed, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096))
+    configure_longshot_full_history_execution(
+        resumed, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
+    )
     resumed.load_state_dict(saved_model)
     resumed_optimizer = torch.optim.AdamW(resumed.parameters(), lr=3e-4)
     resumed_optimizer.load_state_dict(saved_optimizer)
     torch.cuda.set_rng_state(saved_rng)
     resumed_result = _trajectory_step(resumed, resumed_optimizer, _cache(229))
 
-    for actual, expected in zip(resumed_result[:4], uninterrupted[:4], strict=True):
+    for actual, expected in zip(
+        resumed_result[:4], uninterrupted[:4], strict=True
+    ):
         assert torch.equal(actual, expected)
     for name, expected in uninterrupted_state.items():
         assert torch.equal(resumed.state_dict()[name], expected)
@@ -193,7 +240,9 @@ def _install_position_trace(model: torch.nn.Module) -> list[torch.Tensor]:
         trace.append(result[2].detach().clone())
         return result
 
-    object.__setattr__(processor, "_select_kv_norm_history", MethodType(traced, processor))
+    object.__setattr__(
+        processor, "_select_kv_norm_history", MethodType(traced, processor)
+    )
     return trace
 
 
@@ -203,7 +252,9 @@ def _language_model_step(
     trace: list[torch.Tensor],
     inputs: torch.Tensor,
     targets: torch.Tensor,
-) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor], dict[str, float]]:
+) -> tuple[
+    torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor], dict[str, float]
+]:
     optimizer.zero_grad(set_to_none=True)
     trace.clear()
     with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -214,7 +265,9 @@ def _language_model_step(
             activation_checkpoint_windows=2,
             longshot_gradient_checkpointing=True,
         )
-        pair_losses = row_sums.reshape(-1, 2).sum(dim=1) / row_counts.reshape(-1, 2).sum(dim=1)
+        pair_losses = row_sums.reshape(-1, 2).sum(dim=1) / row_counts.reshape(
+            -1, 2
+        ).sum(dim=1)
         pair_losses.mean().backward()
     gradients = {
         name: parameter.grad.detach().clone()
@@ -227,25 +280,40 @@ def _language_model_step(
 
 
 @pytest.mark.parametrize("unrope_keys", [False, True])
-def test_cuda_bf16_segmented_language_model_pair_loss_trajectory(unrope_keys: bool) -> None:
+def test_cuda_bf16_segmented_language_model_pair_loss_trajectory(
+    unrope_keys: bool,
+) -> None:
     torch.manual_seed(241)
     reference = _language_model(unrope_keys=unrope_keys)
     optimized = copy.deepcopy(reference)
-    configure_longshot_full_history_execution(optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096))
+    configure_longshot_full_history_execution(
+        optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
+    )
     reference_trace = _install_position_trace(reference)
     optimized_trace = _install_position_trace(optimized)
-    reference_optimizer = torch.optim.AdamW(reference.cache_processor.parameters(), lr=3e-4)
-    optimized_optimizer = torch.optim.AdamW(optimized.cache_processor.parameters(), lr=3e-4)
+    reference_optimizer = torch.optim.AdamW(
+        reference.cache_processor.parameters(), lr=3e-4
+    )
+    optimized_optimizer = torch.optim.AdamW(
+        optimized.cache_processor.parameters(), lr=3e-4
+    )
 
     generator = torch.Generator().manual_seed(251)
     for _ in range(2):
         inputs = torch.randint(0, 64, (4, 12), generator=generator).cuda()
         targets = torch.randint(0, 64, (4, 12), generator=generator).cuda()
-        expected_losses, expected_trace, expected_gradients, expected_metrics = _language_model_step(
+        (
+            expected_losses,
+            expected_trace,
+            expected_gradients,
+            expected_metrics,
+        ) = _language_model_step(
             reference, reference_optimizer, reference_trace, inputs, targets
         )
-        actual_losses, actual_trace, actual_gradients, actual_metrics = _language_model_step(
-            optimized, optimized_optimizer, optimized_trace, inputs, targets
+        actual_losses, actual_trace, actual_gradients, actual_metrics = (
+            _language_model_step(
+                optimized, optimized_optimizer, optimized_trace, inputs, targets
+            )
         )
 
         assert torch.equal(actual_losses, expected_losses)
@@ -254,7 +322,9 @@ def test_cuda_bf16_segmented_language_model_pair_loss_trajectory(unrope_keys: bo
             assert torch.equal(actual, expected)
         assert actual_gradients.keys() == expected_gradients.keys()
         for name, expected in expected_gradients.items():
-            torch.testing.assert_close(actual_gradients[name], expected, rtol=0.0, atol=0.0)
+            torch.testing.assert_close(
+                actual_gradients[name], expected, rtol=0.0, atol=0.0
+            )
         for actual, expected in zip(
             optimized.cache_processor.parameters(),
             reference.cache_processor.parameters(),
@@ -274,7 +344,8 @@ def test_cuda_peak_memory_and_counters_prove_selected_only_materialization(
     reference = _processor(layers=4, topk=16, unrope_keys=unrope_keys)
     optimized = copy.deepcopy(reference)
     configure_longshot_full_history_execution(
-        optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=2 * 1024 * 1024)
+        optimized,
+        LongshotFullHistoryConfig(enabled=True, max_temp_bytes=2 * 1024 * 1024),
     )
     cache = _cache(239, layers=4, sequence=2048)
 
@@ -301,8 +372,12 @@ def test_cuda_peak_memory_and_counters_prove_selected_only_materialization(
     record_property("profile_counters", metrics)
     assert optimized_peak < reference_peak
     assert (
-        metrics["performance/longshot_full_history_selected_history_logical_payload_bytes"]
-        < metrics["performance/longshot_full_history_reference_full_history_logical_payload_bytes"]
+        metrics[
+            "performance/longshot_full_history_selected_history_logical_payload_bytes"
+        ]
+        < metrics[
+            "performance/longshot_full_history_reference_full_history_logical_payload_bytes"
+        ]
     )
     assert (
         metrics[
@@ -327,7 +402,9 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
     record_property: Callable[[str, object], None],
 ) -> None:
     if torch.cuda.get_device_properties(0).total_memory < 70 * 1024**3:
-        pytest.skip("production-sized Longshot memory acceptance requires an H200-class GPU")
+        pytest.skip(
+            "production-sized Longshot memory acceptance requires an H200-class GPU"
+        )
     config = ModelConfig(
         variant="longshot",
         family="qwen3",
@@ -376,7 +453,11 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
                 shape, generator=generator, dtype=torch.bfloat16, device="cuda"
             ),
             scores=torch.randn(
-                2, sequence, generator=generator, dtype=torch.float32, device="cuda"
+                2,
+                sequence,
+                generator=generator,
+                dtype=torch.float32,
+                device="cuda",
             ),
         )
 
@@ -388,7 +469,9 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
         torch.cuda.synchronize()
         reference_end = torch.cuda.memory_allocated()
         reference_peak = torch.cuda.max_memory_allocated()
-        reference_transient = reference_peak - max(reference_baseline, reference_end)
+        reference_transient = reference_peak - max(
+            reference_baseline, reference_end
+        )
         reference_evidence[sequence] = reference_transient
         expected_cpu = tuple(tensor.cpu() for tensor in expected)
         del expected
@@ -416,7 +499,9 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
             allocator_evidence[sequence][cap] = transient
             metrics = pop_longshot_full_history_metrics(optimized)
 
-            for actual_tensor, expected_tensor in zip(actual, expected_cpu, strict=True):
+            for actual_tensor, expected_tensor in zip(
+                actual, expected_cpu, strict=True
+            ):
                 assert torch.equal(actual_tensor.cpu(), expected_tensor)
             assert (
                 metrics[
@@ -442,13 +527,10 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
             # The cap in ``authenticated`` is fingerprinted. The other term is
             # history-independent selected-key rotation, reported by runtime
             # telemetry and inclusive of rotate_cache_keys inner allocations.
-            allowance = (
-                2 * int(authenticated["max_temp_bytes"])
-                + int(
-                    metrics[
-                        "performance/longshot_full_history_optimized_selected_unrope_estimated_live_bytes"
-                    ]
-                )
+            allowance = 2 * int(authenticated["max_temp_bytes"]) + int(
+                metrics[
+                    "performance/longshot_full_history_optimized_selected_unrope_estimated_live_bytes"
+                ]
             )
             assert transient <= allowance
             assert allowance < int(
@@ -475,7 +557,9 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
     record_property("production_reference_transient_bytes", reference_evidence)
 
 
-def test_cuda_bf16_unrope_full_checkpoint_resume_replays_exactly(tmp_path) -> None:
+def test_cuda_bf16_unrope_full_checkpoint_resume_replays_exactly(
+    tmp_path,
+) -> None:
     torch.manual_seed(263)
     history = LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
     config = _language_model_config(unrope_keys=True)
@@ -499,11 +583,15 @@ def test_cuda_bf16_unrope_full_checkpoint_resume_replays_exactly(tmp_path) -> No
         exact_topology=True,
     )
     checkpoint_path = tmp_path / "checkpoint"
-    save_training_checkpoint(checkpoint_path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        checkpoint_path, model, config, optimizer, resume, fingerprint
+    )
 
     restored = _language_model(unrope_keys=True)
     configure_longshot_full_history_execution(restored, history)
-    restored_optimizer = torch.optim.AdamW(restored.cache_processor.parameters(), lr=3e-4)
+    restored_optimizer = torch.optim.AdamW(
+        restored.cache_processor.parameters(), lr=3e-4
+    )
     checkpoint = TrainingCheckpoint.open(
         checkpoint_path,
         expected_fingerprint=fingerprint,
@@ -518,12 +606,16 @@ def test_cuda_bf16_unrope_full_checkpoint_resume_replays_exactly(tmp_path) -> No
     actual_trace = _install_position_trace(restored)
     next_inputs = torch.randint(0, 64, (4, 12), device="cuda")
     next_targets = torch.randint(0, 64, (4, 12), device="cuda")
-    expected = _language_model_step(model, optimizer, expected_trace, next_inputs, next_targets)
+    expected = _language_model_step(
+        model, optimizer, expected_trace, next_inputs, next_targets
+    )
     actual = _language_model_step(
         restored, restored_optimizer, actual_trace, next_inputs, next_targets
     )
     assert torch.equal(actual[0], expected[0])
-    for actual_indices, expected_indices in zip(actual[1], expected[1], strict=True):
+    for actual_indices, expected_indices in zip(
+        actual[1], expected[1], strict=True
+    ):
         assert torch.equal(actual_indices, expected_indices)
     assert actual[2].keys() == expected[2].keys()
     for name, expected_gradient in expected[2].items():

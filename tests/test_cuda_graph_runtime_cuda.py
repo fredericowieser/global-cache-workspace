@@ -10,7 +10,9 @@ from torch import nn
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.models.model import LanguageModel
-from gcw.performance.backends.qwen3 import configure_qwen3_backbone_chunk_backend
+from gcw.performance.backends.qwen3 import (
+    configure_qwen3_backbone_chunk_backend,
+)
 from gcw.performance.cuda_graphs import (
     clear_cuda_graph_runtime,
     cuda_graph_capture_stats,
@@ -24,19 +26,28 @@ pytestmark = [pytest.mark.gpu, pytest.mark.performance]
 
 def _require_cuda_gate() -> None:
     if os.environ.get("GCW_RUN_CUDA_GRAPH_RUNTIME_TESTS") != "1":
-        pytest.skip("set GCW_RUN_CUDA_GRAPH_RUNTIME_TESTS=1 for CUDA Graph tests")
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (9, 0):
+        pytest.skip(
+            "set GCW_RUN_CUDA_GRAPH_RUNTIME_TESTS=1 for CUDA Graph tests"
+        )
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (
+        9,
+        0,
+    ):
         pytest.skip("CUDA Graph tests require H100/H200")
 
 
-def test_graphed_callable_replays_distinct_inputs_and_matching_backward() -> None:
+def test_graphed_callable_replays_distinct_inputs_and_matching_backward() -> (
+    None
+):
     _require_cuda_gate()
     torch.manual_seed(9)
     eager = nn.Linear(16, 16, bias=False, device="cuda").requires_grad_(False)
     candidate = copy.deepcopy(eager)
     for seed in (1, 2):
         generator = torch.Generator(device="cuda").manual_seed(seed)
-        eager_input = torch.randn(8, 16, device="cuda", generator=generator, requires_grad=True)
+        eager_input = torch.randn(
+            8, 16, device="cuda", generator=generator, requires_grad=True
+        )
         candidate_input = eager_input.detach().clone().requires_grad_(True)
         expected = eager(eager_input).sin()
         actual = run_graphed_callable(
@@ -49,7 +60,9 @@ def test_graphed_callable_replays_distinct_inputs_and_matching_backward() -> Non
         expected.sum().backward()
         actual.sum().backward()
         assert eager_input.grad is not None and candidate_input.grad is not None
-        torch.testing.assert_close(candidate_input.grad, eager_input.grad, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(
+            candidate_input.grad, eager_input.grad, atol=0.0, rtol=0.0
+        )
     assert len(cuda_graph_capture_stats(candidate)) == 1
     assert tuple(cuda_graph_replay_counts(candidate).values()) == (2,)
     clear_cuda_graph_runtime(candidate)
@@ -101,16 +114,28 @@ def test_qwen_cuda_graph_windows_match_eager_processor_gradients(
     targets = torch.randint(0, 64, (2, 128), device="cuda")
     with torch.autocast("cuda", dtype=torch.bfloat16):
         eager_loss = eager(inputs, targets, loss_reduction="row_sum").sum()
-        candidate_loss = candidate(inputs, targets, loss_reduction="row_sum").sum()
+        candidate_loss = candidate(
+            inputs, targets, loss_reduction="row_sum"
+        ).sum()
     torch.testing.assert_close(candidate_loss, eager_loss, atol=0.0, rtol=0.0)
     eager_loss.backward()
     candidate_loss.backward()
-    eager_parameters = tuple(parameter for parameter in eager.parameters() if parameter.requires_grad)
-    candidate_parameters = tuple(parameter for parameter in candidate.parameters() if parameter.requires_grad)
-    for reference, actual in zip(eager_parameters, candidate_parameters, strict=True):
+    eager_parameters = tuple(
+        parameter for parameter in eager.parameters() if parameter.requires_grad
+    )
+    candidate_parameters = tuple(
+        parameter
+        for parameter in candidate.parameters()
+        if parameter.requires_grad
+    )
+    for reference, actual in zip(
+        eager_parameters, candidate_parameters, strict=True
+    ):
         if reference.grad is None or actual.grad is None:
             assert reference.grad is actual.grad is None
         else:
-            torch.testing.assert_close(actual.grad, reference.grad, atol=0.0, rtol=0.0)
+            torch.testing.assert_close(
+                actual.grad, reference.grad, atol=0.0, rtol=0.0
+            )
     assert len(cuda_graph_capture_stats(candidate.backbone)) == 2
     clear_cuda_graph_runtime(candidate.backbone)

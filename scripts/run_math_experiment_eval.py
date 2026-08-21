@@ -9,13 +9,20 @@ from gcw.evaluation.core import run_all
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate one experiment target in declared prompt modes")
+    parser = argparse.ArgumentParser(
+        description="Evaluate one experiment target in declared prompt modes"
+    )
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--checkpoint")
     target.add_argument("--hf-model")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--processor", choices=("on", "off"), default="on")
-    parser.add_argument("--modes", nargs="+", choices=("thinking_off", "thinking_on"), default=("thinking_off", "thinking_on"))
+    parser.add_argument(
+        "--modes",
+        nargs="+",
+        choices=("thinking_off", "thinking_on"),
+        default=("thinking_off", "thinking_on"),
+    )
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--limit", type=int, default=None)
     args = parser.parse_args()
@@ -35,9 +42,13 @@ def main() -> None:
             batch_size=args.batch_size,
             limit=args.limit,
         )
-        (mode_dir / "result.json").write_text(json.dumps(result, indent=2, default=str) + "\n")
+        (mode_dir / "result.json").write_text(
+            json.dumps(result, indent=2, default=str) + "\n"
+        )
         summary[mode] = result
-    (output / "summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
+    (output / "summary.json").write_text(
+        json.dumps(summary, indent=2, default=str) + "\n"
+    )
 
 
 if __name__ == "__main__":

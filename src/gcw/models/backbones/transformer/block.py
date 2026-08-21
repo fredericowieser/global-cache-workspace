@@ -14,7 +14,9 @@ class Block(nn.Module):
         super().__init__()
         self.input_layernorm = RMSNorm(config.hidden_size, config.norm_eps)
         self.self_attn = CausalSelfAttention(config, layer_idx)
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, config.norm_eps)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, config.norm_eps
+        )
         self.mlp = MLP(config)
 
     def forward(
@@ -23,7 +25,9 @@ class Block(nn.Module):
         cos_sin: tuple[torch.Tensor, torch.Tensor],
         past: tuple[torch.Tensor, torch.Tensor] | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        attn_out, keys, values, scores = self.self_attn(self.input_layernorm(x), cos_sin, past)
+        attn_out, keys, values, scores = self.self_attn(
+            self.input_layernorm(x), cos_sin, past
+        )
         x = x + attn_out
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x, keys, values, scores
@@ -36,7 +40,9 @@ class Block(nn.Module):
         start_pos: int,
         end_pos: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        attn_out, scores = self.self_attn.forward_static(self.input_layernorm(x), cos_sin, cache, start_pos, end_pos)
+        attn_out, scores = self.self_attn.forward_static(
+            self.input_layernorm(x), cos_sin, cache, start_pos, end_pos
+        )
         x = x + attn_out
         x = x + self.mlp(self.post_attention_layernorm(x))
         return x, scores
@@ -50,7 +56,11 @@ class Block(nn.Module):
         attention_bias: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         attn_out, keys, values, scores = self.self_attn.forward_tensor_past(
-            self.input_layernorm(x), cos_sin, past_keys, past_values, attention_bias
+            self.input_layernorm(x),
+            cos_sin,
+            past_keys,
+            past_values,
+            attention_bias,
         )
         x = x + attn_out
         x = x + self.mlp(self.post_attention_layernorm(x))

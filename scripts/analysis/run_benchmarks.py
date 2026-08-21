@@ -3,11 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 
-from gcw.evaluation.benchmarks import MAX_NEW_TOKENS, BenchmarkConfig, run_benchmark_matrix
+from gcw.evaluation.benchmarks import (
+    MAX_NEW_TOKENS,
+    BenchmarkConfig,
+    run_benchmark_matrix,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run an authenticated Qwen3 GSM8K benchmark matrix")
+    parser = argparse.ArgumentParser(
+        description="Run an authenticated Qwen3 GSM8K benchmark matrix"
+    )
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--target-kind", choices=("hf", "gcw"), default="hf")
     parser.add_argument("--tokenizer-path", default=None)
@@ -49,7 +55,9 @@ def main() -> None:
     print(
         json.dumps(
             {
-                mode: {key: cell[key] for key in ("correct", "total", "accuracy")}
+                mode: {
+                    key: cell[key] for key in ("correct", "total", "accuracy")
+                }
                 for mode, cell in result["cells"].items()
             },
             indent=2,

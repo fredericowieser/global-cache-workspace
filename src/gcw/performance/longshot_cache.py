@@ -33,20 +33,30 @@ def configure_longshot_full_history_execution(
         return
     processor: Any = getattr(model, "cache_processor", model)
     if type(processor).__module__ != "gcw.models.cache_processors.longshot":
-        raise ValueError("Longshot full-history execution found no Longshot cache processor")
+        raise ValueError(
+            "Longshot full-history execution found no Longshot cache processor"
+        )
     processor_config = processor.config
     if processor_config.score != "kv_norm":
-        raise ValueError("Longshot full-history execution requires score='kv_norm'")
+        raise ValueError(
+            "Longshot full-history execution requires score='kv_norm'"
+        )
     if processor_config.attention_dropout != 0.0:
-        raise ValueError("Longshot full-history execution requires attention_dropout=0")
+        raise ValueError(
+            "Longshot full-history execution requires attention_dropout=0"
+        )
     if processor_config.linear_state_cache:
-        raise ValueError("Longshot full-history execution rejects linear recurrent cache state")
+        raise ValueError(
+            "Longshot full-history execution rejects linear recurrent cache state"
+        )
     if (
         processor_config.iterations > 1
         and processor_config.iteration_mode == "internal"
         and processor_config.internal_iteration_score != "kv_norm"
     ):
-        raise ValueError("Longshot full-history execution rejects internal non-KV recurrence")
+        raise ValueError(
+            "Longshot full-history execution rejects internal non-KV recurrence"
+        )
     minimum_temp_bytes = (
         unroped_score_estimated_temp_bytes_per_row(
             dtype=torch.float32,
@@ -57,7 +67,11 @@ def configure_longshot_full_history_execution(
         else 2 * processor.head_dim * 4
     )
     if config.max_temp_bytes < minimum_temp_bytes:
-        strategy = "un-RoPE rotation and score" if processor_config.unrope_keys else "FP32 K/V score"
+        strategy = (
+            "un-RoPE rotation and score"
+            if processor_config.unrope_keys
+            else "FP32 K/V score"
+        )
         raise ValueError(
             f"Longshot full-history max_temp_bytes must fit one complete {strategy} row "
             f"({minimum_temp_bytes})"
@@ -65,13 +79,17 @@ def configure_longshot_full_history_execution(
     object.__setattr__(processor, _POLICY_ATTRIBUTE, config)
 
 
-def longshot_full_history_execution(processor: torch.nn.Module) -> LongshotFullHistoryConfig:
+def longshot_full_history_execution(
+    processor: torch.nn.Module,
+) -> LongshotFullHistoryConfig:
     """Return the attached policy; absent configuration means exact eager execution."""
     value = getattr(processor, _POLICY_ATTRIBUTE, None)
     if value is None:
         return LongshotFullHistoryConfig()
     if not isinstance(value, LongshotFullHistoryConfig):
-        raise TypeError("configured Longshot full-history execution policy has an invalid type")
+        raise TypeError(
+            "configured Longshot full-history execution policy has an invalid type"
+        )
     return value
 
 
@@ -151,13 +169,19 @@ def gather_windowed_per_cache_head_kv(
     _validate_inputs(keys, values, indices)
     layers, batch, heads, _, head_dim = keys.shape
     selected = indices.shape[-1]
-    by_layer = indices.reshape(batch, layers, heads, selected).permute(1, 0, 2, 3)
-    gather_index = by_layer[..., None].expand(layers, batch, heads, selected, head_dim)
+    by_layer = indices.reshape(batch, layers, heads, selected).permute(
+        1, 0, 2, 3
+    )
+    gather_index = by_layer[..., None].expand(
+        layers, batch, heads, selected, head_dim
+    )
     selected_keys = torch.gather(keys, dim=3, index=gather_index)
     selected_values = torch.gather(values, dim=3, index=gather_index)
     output_shape = (batch, layers * heads, selected, head_dim)
     selected_keys = selected_keys.permute(1, 0, 2, 3, 4).reshape(output_shape)
-    selected_values = selected_values.permute(1, 0, 2, 3, 4).reshape(output_shape)
+    selected_values = selected_values.permute(1, 0, 2, 3, 4).reshape(
+        output_shape
+    )
     if unrope_keys:
         from gcw.models.cache_processors.ops import rotate_cache_keys
 
@@ -191,13 +215,20 @@ def record_longshot_full_history_event(
     layers, batch, heads, sequence, head_dim = keys.shape
     element_bytes = keys.element_size()
     full_elements = layers * batch * heads * sequence * 2 * head_dim
-    selected_elements = layers * batch * heads * selected_positions * 2 * head_dim
+    selected_elements = (
+        layers * batch * heads * selected_positions * 2 * head_dim
+    )
     score_elements = batch * layers * heads * sequence * 2 * head_dim
     event = {
         "events": 1,
-        "reference_full_history_logical_payload_bytes": full_elements * element_bytes,
-        "selected_history_logical_payload_bytes": selected_elements * element_bytes,
-        "logical_payload_bytes_avoided": max(0, full_elements - selected_elements) * element_bytes,
+        "reference_full_history_logical_payload_bytes": full_elements
+        * element_bytes,
+        "selected_history_logical_payload_bytes": selected_elements
+        * element_bytes,
+        "logical_payload_bytes_avoided": max(
+            0, full_elements - selected_elements
+        )
+        * element_bytes,
         "reference_score_estimated_fp32_working_set_bound_bytes": 2
         * min(score_elements * 4, LONGSHOT_SCORE_FP32_CHUNK_BYTES),
         "optimized_score_estimated_fp32_working_set_bound_bytes": 2
@@ -222,11 +253,16 @@ def record_longshot_full_history_event(
             rotary_dim=rotary_dim
         )
         score_rows_per_chunk = max(1, max_temp_bytes // score_row_bound)
-        score_rotation_calls = (full_rows + score_rows_per_chunk - 1) // score_rows_per_chunk
+        score_rotation_calls = (
+            full_rows + score_rows_per_chunk - 1
+        ) // score_rows_per_chunk
         selected_rotation_calls = int(selected_rows > 0)
-        unrope_live_bytes_per_row = rotation_row_bound + 4 * head_dim * element_bytes
+        unrope_live_bytes_per_row = (
+            rotation_row_bound + 4 * head_dim * element_bytes
+        )
         score_working_set_bound = (
-            min(full_rows * score_row_bound, max_temp_bytes) + rotation_fixed_bound
+            min(full_rows * score_row_bound, max_temp_bytes)
+            + rotation_fixed_bound
         )
         event["optimized_score_estimated_fp32_working_set_bound_bytes"] = (
             score_working_set_bound
@@ -290,7 +326,9 @@ def record_longshot_full_history_event(
             current[key] = max(current[key], value)
 
 
-def pop_longshot_full_history_metrics(processor: torch.nn.Module) -> dict[str, float]:
+def pop_longshot_full_history_metrics(
+    processor: torch.nn.Module,
+) -> dict[str, float]:
     """Pop profiling counters while keeping them outside parameters and buffers."""
     if cache_processor_recomputation_id() is not None:
         return {}
@@ -302,19 +340,35 @@ def pop_longshot_full_history_metrics(processor: torch.nn.Module) -> dict[str, f
     return {f"{prefix}{key}": float(value) for key, value in values.items()}
 
 
-def _validate_inputs(keys: torch.Tensor, values: torch.Tensor, indices: torch.Tensor) -> None:
+def _validate_inputs(
+    keys: torch.Tensor, values: torch.Tensor, indices: torch.Tensor
+) -> None:
     if keys.ndim != 5:
-        raise ValueError("Longshot windowed cache tensors must have shape (layers, batch, heads, seq, dim)")
+        raise ValueError(
+            "Longshot windowed cache tensors must have shape (layers, batch, heads, seq, dim)"
+        )
     if keys.shape != values.shape:
-        raise ValueError("Longshot cache keys and values must have identical shapes")
+        raise ValueError(
+            "Longshot cache keys and values must have identical shapes"
+        )
     if keys.dtype != values.dtype or keys.device != values.device:
-        raise ValueError("Longshot cache keys and values must share dtype and device")
+        raise ValueError(
+            "Longshot cache keys and values must share dtype and device"
+        )
     if not keys.is_contiguous() or not values.is_contiguous():
-        raise ValueError("Longshot selected-history execution requires contiguous layer-major cache tensors")
+        raise ValueError(
+            "Longshot selected-history execution requires contiguous layer-major cache tensors"
+        )
     if indices.ndim != 3:
-        raise ValueError("Longshot cache indices must have shape (batch, cache_heads, selected)")
+        raise ValueError(
+            "Longshot cache indices must have shape (batch, cache_heads, selected)"
+        )
     layers, batch, heads, _, _ = keys.shape
     if indices.shape[:2] != (batch, layers * heads):
-        raise ValueError("Longshot cache indices do not match the layer-major cache shape")
+        raise ValueError(
+            "Longshot cache indices do not match the layer-major cache shape"
+        )
     if indices.dtype != torch.long or indices.device != keys.device:
-        raise ValueError("Longshot cache indices must be long tensors on the cache device")
+        raise ValueError(
+            "Longshot cache indices must be long tensors on the cache device"
+        )

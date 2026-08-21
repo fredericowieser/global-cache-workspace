@@ -16,11 +16,12 @@ from gcw.models import TF
 from gcw.provenance import file_sha256
 from gcw.runtime import atomic_write_json
 
-
 SCHEMA_VERSION = 3
 EVIDENCE_KIND = "hf_to_gcw_conversion_parity"
 POLICY_ID = "qwen3-06b-bf16-parameters-fp32-comparison-v2"
-CANONICAL_PROMPT = "Verify the converted model logits for this deterministic prompt."
+CANONICAL_PROMPT = (
+    "Verify the converted model logits for this deterministic prompt."
+)
 MAX_ABS_THRESHOLD = 0.25
 MEAN_ABS_THRESHOLD = 0.01
 REQUIRED_DTYPE = "bfloat16"
@@ -41,14 +42,21 @@ CHECKPOINT_PARITY_FILES = (
 )
 
 
-def _file_manifest(root: Path, names: tuple[str, ...]) -> dict[str, dict[str, object]]:
+def _file_manifest(
+    root: Path, names: tuple[str, ...]
+) -> dict[str, dict[str, object]]:
     resolved = root.resolve(strict=True)
     manifest: dict[str, dict[str, object]] = {}
     for name in names:
         path = resolved / name
         if not path.is_file() or path.is_symlink():
-            raise FileNotFoundError(f"required regular parity artifact missing: {path}")
-        manifest[name] = {"bytes": path.stat().st_size, "sha256": file_sha256(path)}
+            raise FileNotFoundError(
+                f"required regular parity artifact missing: {path}"
+            )
+        manifest[name] = {
+            "bytes": path.stat().st_size,
+            "sha256": file_sha256(path),
+        }
     return manifest
 
 
@@ -59,7 +67,12 @@ def _token_ids_sha256(token_ids: list[int]) -> str:
 
 
 def _dtype_names(parameters) -> list[str]:
-    return sorted({str(parameter.dtype).removeprefix("torch.") for parameter in parameters})
+    return sorted(
+        {
+            str(parameter.dtype).removeprefix("torch.")
+            for parameter in parameters
+        }
+    )
 
 
 def _evidence_base(hf_path: Path, checkpoint: Path) -> dict[str, object]:
@@ -91,11 +104,15 @@ def verify_hf_conversion(
 
     result = _evidence_base(hf_path, checkpoint)
     hf_files_before = _file_manifest(hf_path, HF_PARITY_FILES)
-    checkpoint_files_before = _file_manifest(checkpoint, CHECKPOINT_PARITY_FILES)
+    checkpoint_files_before = _file_manifest(
+        checkpoint, CHECKPOINT_PARITY_FILES
+    )
     tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=False)
     token_ids = tokenizer.encode(CANONICAL_PROMPT, add_special_tokens=True)
     if len(token_ids) < 2:
-        raise ValueError("canonical parity prompt encoded to fewer than two tokens")
+        raise ValueError(
+            "canonical parity prompt encoded to fewer than two tokens"
+        )
     tokens = torch.tensor([token_ids], dtype=torch.long, device=device)
 
     hf = AutoModelForCausalLM.from_pretrained(
@@ -104,7 +121,9 @@ def verify_hf_conversion(
     hf.eval()
     hf_parameter_dtypes = _dtype_names(hf.parameters())
     if hf_parameter_dtypes != [REQUIRED_DTYPE]:
-        raise TypeError(f"HF parameters are not uniformly BF16: {hf_parameter_dtypes!r}")
+        raise TypeError(
+            f"HF parameters are not uniformly BF16: {hf_parameter_dtypes!r}"
+        )
     with torch.inference_mode():
         hf_logits_raw = hf(input_ids=tokens).logits
         hf_logits_dtype = str(hf_logits_raw.dtype).removeprefix("torch.")
@@ -116,7 +135,9 @@ def verify_hf_conversion(
 
     native, config, state = load_checkpoint(checkpoint, device=device)
     if not isinstance(native, TF):
-        raise TypeError(f"converted checkpoint is not a TF model: {type(native)!r}")
+        raise TypeError(
+            f"converted checkpoint is not a TF model: {type(native)!r}"
+        )
     if state.get("dtype") != REQUIRED_DTYPE:
         raise TypeError(
             f"converted checkpoint state dtype is {state.get('dtype')!r}, "
@@ -130,7 +151,9 @@ def verify_hf_conversion(
     native.eval()
     with torch.inference_mode():
         native_logits_raw = native(tokens)
-        native_logits_dtype = str(native_logits_raw.dtype).removeprefix("torch.")
+        native_logits_dtype = str(native_logits_raw.dtype).removeprefix(
+            "torch."
+        )
         native_logits = native_logits_raw.float().cpu()
     if hf_logits_dtype != REQUIRED_DTYPE or native_logits_dtype != "float32":
         raise TypeError(
@@ -152,7 +175,10 @@ def verify_hf_conversion(
             f"non-finite parity errors: max_abs={max_abs}, mean_abs={mean_abs}"
         )
     top1_match_fraction = float(
-        (native_logits.argmax(dim=-1) == hf_logits.argmax(dim=-1)).float().mean().item()
+        (native_logits.argmax(dim=-1) == hf_logits.argmax(dim=-1))
+        .float()
+        .mean()
+        .item()
     )
     final_top1_match = bool(
         native_logits[0, -1].argmax().item() == hf_logits[0, -1].argmax().item()
@@ -165,9 +191,13 @@ def verify_hf_conversion(
     hf_files_after = _file_manifest(hf_path, HF_PARITY_FILES)
     checkpoint_files_after = _file_manifest(checkpoint, CHECKPOINT_PARITY_FILES)
     if hf_files_after != hf_files_before:
-        raise RuntimeError("HF model/tokenizer artifacts changed during parity execution")
+        raise RuntimeError(
+            "HF model/tokenizer artifacts changed during parity execution"
+        )
     if checkpoint_files_after != checkpoint_files_before:
-        raise RuntimeError("converted checkpoint artifacts changed during parity execution")
+        raise RuntimeError(
+            "converted checkpoint artifacts changed during parity execution"
+        )
     result.update(
         {
             "passed": passed,
@@ -196,7 +226,9 @@ def verify_hf_conversion(
             "torch_cuda_version": torch.version.cuda,
             "device": str(device),
             "gpu_name": (
-                torch.cuda.get_device_name(device) if device.type == "cuda" else None
+                torch.cuda.get_device_name(device)
+                if device.type == "cuda"
+                else None
             ),
         }
     )
@@ -255,16 +287,24 @@ def validate_parity_evidence(
     missing = required_generated_fields - payload.keys()
     if missing:
         raise ValueError(f"parity evidence missing fields: {sorted(missing)!r}")
-    expected_fields = set(expected_header) | required_generated_fields | {
-        "hf_path",
-        "checkpoint",
-    }
+    expected_fields = (
+        set(expected_header)
+        | required_generated_fields
+        | {
+            "hf_path",
+            "checkpoint",
+        }
+    )
     unexpected = payload.keys() - expected_fields
     if unexpected:
-        raise ValueError(f"parity evidence has unexpected fields: {sorted(unexpected)!r}")
+        raise ValueError(
+            f"parity evidence has unexpected fields: {sorted(unexpected)!r}"
+        )
     if payload.get("passed") is not True:
         raise ValueError("parity evidence did not pass")
-    if Path(str(payload.get("hf_path", ""))).resolve() != hf_path.resolve(strict=True):
+    if Path(str(payload.get("hf_path", ""))).resolve() != hf_path.resolve(
+        strict=True
+    ):
         raise ValueError("parity HF source path mismatch")
     if Path(str(payload.get("checkpoint", ""))).resolve() != checkpoint.resolve(
         strict=True
@@ -289,13 +329,18 @@ def validate_parity_evidence(
         "vocab_size": 151936,
         "tie_word_embeddings": True,
     }
-    if any(hf_config.get(key) != value for key, value in expected_hf_config.items()):
+    if any(
+        hf_config.get(key) != value for key, value in expected_hf_config.items()
+    ):
         raise ValueError("parity HF config does not match canonical Qwen3-0.6B")
     token_ids = payload.get("token_ids")
     if (
         not isinstance(token_ids, list)
         or len(token_ids) < 2
-        or any(not isinstance(token, int) or isinstance(token, bool) for token in token_ids)
+        or any(
+            not isinstance(token, int) or isinstance(token, bool)
+            for token in token_ids
+        )
         or payload.get("tokens") != len(token_ids)
         or payload.get("token_ids_sha256") != _token_ids_sha256(token_ids)
     ):
@@ -303,15 +348,23 @@ def validate_parity_evidence(
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(hf_path, trust_remote_code=False)
-    expected_token_ids = tokenizer.encode(CANONICAL_PROMPT, add_special_tokens=True)
+    expected_token_ids = tokenizer.encode(
+        CANONICAL_PROMPT, add_special_tokens=True
+    )
     if token_ids != expected_token_ids:
-        raise ValueError("parity token IDs do not match the current canonical tokenizer")
+        raise ValueError(
+            "parity token IDs do not match the current canonical tokenizer"
+        )
     if payload.get("logit_shape") != [1, len(token_ids), 151936]:
-        raise ValueError("parity logit shape does not match canonical Qwen3-0.6B")
+        raise ValueError(
+            "parity logit shape does not match canonical Qwen3-0.6B"
+        )
     model_config = payload.get("model_config")
     checkpoint_config = json.loads((checkpoint / "config.json").read_text())
     if model_config != checkpoint_config:
-        raise ValueError("parity model config does not match checkpoint config.json")
+        raise ValueError(
+            "parity model config does not match checkpoint config.json"
+        )
     expected_model_config = {
         "variant": "tf",
         "vocab_size": 151936,
@@ -324,17 +377,24 @@ def validate_parity_evidence(
         "tie_embeddings": True,
     }
     if not isinstance(model_config, dict) or any(
-        model_config.get(key) != value for key, value in expected_model_config.items()
+        model_config.get(key) != value
+        for key, value in expected_model_config.items()
     ):
-        raise ValueError("parity model config does not match canonical Qwen3-0.6B TF")
+        raise ValueError(
+            "parity model config does not match canonical Qwen3-0.6B TF"
+        )
     if payload.get("torch_version") != torch.__version__:
-        raise ValueError("parity torch version does not match validator runtime")
+        raise ValueError(
+            "parity torch version does not match validator runtime"
+        )
     if payload.get("torch_cuda_version") != torch.version.cuda:
         raise ValueError("parity CUDA version does not match validator runtime")
     if payload.get("device") != "cuda":
         raise ValueError("parity device is not exactly CUDA")
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
-        raise ValueError("parity validation requires exactly one live CUDA device")
+        raise ValueError(
+            "parity validation requires exactly one live CUDA device"
+        )
     if payload.get("gpu_name") != torch.cuda.get_device_name(0):
         raise ValueError("parity GPU name does not match validator runtime")
     if "H100" not in str(payload.get("gpu_name")):
@@ -375,8 +435,13 @@ def validate_parity_evidence(
     source_state = payload.get("source_state")
     checkpoint_state = json.loads((checkpoint / "train_state.json").read_text())
     if source_state != checkpoint_state:
-        raise ValueError("parity source state does not match checkpoint train_state.json")
-    if not isinstance(source_state, dict) or source_state.get("dtype") != REQUIRED_DTYPE:
+        raise ValueError(
+            "parity source state does not match checkpoint train_state.json"
+        )
+    if (
+        not isinstance(source_state, dict)
+        or source_state.get("dtype") != REQUIRED_DTYPE
+    ):
         raise ValueError("parity checkpoint state dtype mismatch")
     if Path(str(source_state.get("source", ""))).resolve() != hf_path.resolve(
         strict=True
@@ -410,7 +475,9 @@ def main() -> None:
     try:
         source_revision = os.environ.get("SOURCE_REVISION")
         if not isinstance(source_revision, str) or len(source_revision) != 40:
-            raise RuntimeError("SOURCE_REVISION must be a 40-character Git revision")
+            raise RuntimeError(
+                "SOURCE_REVISION must be a 40-character Git revision"
+            )
         if not torch.cuda.is_available():
             raise RuntimeError("conversion parity requires CUDA")
         result = verify_hf_conversion(
@@ -441,7 +508,9 @@ def main() -> None:
     _atomic_write_new(args.out, result)
     print(json.dumps(result, sort_keys=True))
     if result["passed"] is not True:
-        raise RuntimeError("HF conversion parity thresholds failed; see persisted result")
+        raise RuntimeError(
+            "HF conversion parity thresholds failed; see persisted result"
+        )
 
 
 if __name__ == "__main__":

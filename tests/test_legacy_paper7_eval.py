@@ -21,7 +21,9 @@ def test_paper7_legacy_task_order_and_skip(monkeypatch):
     ]
 
     monkeypatch.setenv("GCW_EVAL_SKIP_TASKS", "theoremqa")
-    assert legacy.run_paper7_legacy_groups.__globals__["_filter_skipped_tasks"](legacy.PAPER7_RUNS) == [
+    assert legacy.run_paper7_legacy_groups.__globals__["_filter_skipped_tasks"](
+        legacy.PAPER7_RUNS
+    ) == [
         (["gsm8k_openmath"], 0),
         (["svamp"], 0),
         (["logiqa"], 0),
@@ -54,7 +56,9 @@ def test_legacy_generate_add_special_tokens_only_for_old_hf_families():
 
     assert legacy._legacy_generate_add_special_tokens(model("qwen3_5"))
     assert legacy._legacy_generate_add_special_tokens(model("gemma4"))
-    assert not legacy._legacy_generate_add_special_tokens(model("qwen3_5", False))
+    assert not legacy._legacy_generate_add_special_tokens(
+        model("qwen3_5", False)
+    )
     assert not legacy._legacy_generate_add_special_tokens(model("smollm"))
 
 
@@ -94,7 +98,10 @@ def test_legacy_chat_template_does_not_pass_thinking_kwarg(monkeypatch):
 
     lm = legacy.LegacyPaper7EvalLM(Model(), Tokenizer())
     assert lm.add_special_tokens_for_generate
-    assert lm.apply_chat_template([{"role": "user", "content": "hi"}]) == "rendered"
+    assert (
+        lm.apply_chat_template([{"role": "user", "content": "hi"}])
+        == "rendered"
+    )
     assert calls[0][1] == {"tokenize": False, "add_generation_prompt": True}
 
 
@@ -164,8 +171,12 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
         lambda **kwargs: (Model(), Tokenizer()),
     )
     monkeypatch.setattr(legacy, "_distributed_eval_state", lambda: (None, 0, 1))
-    monkeypatch.setattr(legacy, "_eval_device", lambda local_rank: torch.device("cpu"))
-    monkeypatch.setattr(legacy, "_write_progress", lambda progress, merged: None)
+    monkeypatch.setattr(
+        legacy, "_eval_device", lambda local_rank: torch.device("cpu")
+    )
+    monkeypatch.setattr(
+        legacy, "_write_progress", lambda progress, merged: None
+    )
     monkeypatch.setattr(legacy, "_write_partial_results", lambda merged: None)
 
     out = legacy.run_paper7_legacy("checkpoint", batch_size=16)
@@ -184,6 +195,13 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     assert first["confirm_run_unsafe_code"] is True
     assert first["apply_chat_template"] is True
     assert "configs/tasks_legacy/paper7" in task_manager_paths[0][0]
-    assert set(out) == {"results", "groups", "n-samples", "n-shot", "versions", "higher_is_better"}
+    assert set(out) == {
+        "results",
+        "groups",
+        "n-samples",
+        "n-shot",
+        "versions",
+        "higher_is_better",
+    }
     assert "gcw_protocol" not in out
     assert "gcw_runtime" not in out

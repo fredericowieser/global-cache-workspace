@@ -14,7 +14,9 @@ pytestmark = [pytest.mark.gpu, pytest.mark.performance]
 
 def _require_cuda_gate() -> None:
     if os.environ.get("GCW_RUN_PAIR_WAVE_CUDA_TESTS") != "1":
-        pytest.skip("set GCW_RUN_PAIR_WAVE_CUDA_TESTS=1 for pair-wave CUDA tests")
+        pytest.skip(
+            "set GCW_RUN_PAIR_WAVE_CUDA_TESTS=1 for pair-wave CUDA tests"
+        )
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
     if torch.cuda.get_device_capability() != (9, 0):
@@ -40,7 +42,9 @@ def _loss(weight: torch.nn.Parameter, pair: TrainingBatch) -> torch.Tensor:
 
 
 @pytest.mark.parametrize("wave_size", (2, 4))
-def test_overlapped_forward_source_ordered_backward_matches_serial(wave_size: int) -> None:
+def test_overlapped_forward_source_ordered_backward_matches_serial(
+    wave_size: int,
+) -> None:
     _require_cuda_gate()
     torch.manual_seed(24)
     pairs = _pairs()
@@ -61,6 +65,10 @@ def test_overlapped_forward_source_ordered_backward_matches_serial(wave_size: in
         )
     torch.cuda.synchronize()
 
-    torch.testing.assert_close(torch.stack(result.pair_losses), torch.stack(reference_losses))
+    torch.testing.assert_close(
+        torch.stack(result.pair_losses), torch.stack(reference_losses)
+    )
     assert reference.grad is not None and candidate.grad is not None
-    torch.testing.assert_close(candidate.grad, reference.grad, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(
+        candidate.grad, reference.grad, atol=0.0, rtol=0.0
+    )

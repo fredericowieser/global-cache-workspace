@@ -8,7 +8,11 @@ from gcw.models.backbones import Backbone, TF, build_backbone
 from gcw.models.cache_processors.base import CacheProcessorBase
 from gcw.models.cache_processors.diffusion import TaskDirectedDiffusion
 from gcw.models.cache_processors.flow import LatentFlow, set_flow_solver_steps
-from gcw.models.model import LanguageModel, build_cache_processor, build_language_model
+from gcw.models.model import (
+    LanguageModel,
+    build_cache_processor,
+    build_language_model,
+)
 
 
 def build_model(config: ModelConfig) -> Backbone | LanguageModel:

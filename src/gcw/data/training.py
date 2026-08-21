@@ -131,17 +131,31 @@ class FineWebBatchStream:
     def __next__(self) -> TrainingBatch:
         while True:
             shard = read_shard(self.shards[self._cursor.shard_index])
-            global_micro_tokens = self.batch_size * self.sequence_len * self.world_size
+            global_micro_tokens = (
+                self.batch_size * self.sequence_len * self.world_size
+            )
             steps = max(0, (len(shard) - 1) // global_micro_tokens)
             if self._cursor.step_in_shard >= steps:
                 self._advance_shard()
                 continue
             rank_offset = self.rank * self.batch_size * self.sequence_len
-            base = self._cursor.step_in_shard * global_micro_tokens + rank_offset
+            base = (
+                self._cursor.step_in_shard * global_micro_tokens + rank_offset
+            )
             length = self.batch_size * self.sequence_len
-            tokens = torch.from_numpy(shard[base : base + length + 1].astype("int64"))
-            x = tokens[:-1].view(self.batch_size, self.sequence_len).to(self.device)
-            y = tokens[1:].view(self.batch_size, self.sequence_len).to(self.device)
+            tokens = torch.from_numpy(
+                shard[base : base + length + 1].astype("int64")
+            )
+            x = (
+                tokens[:-1]
+                .view(self.batch_size, self.sequence_len)
+                .to(self.device)
+            )
+            y = (
+                tokens[1:]
+                .view(self.batch_size, self.sequence_len)
+                .to(self.device)
+            )
             self._cursor = FineWebCursor(
                 epoch=self._cursor.epoch,
                 shard_index=self._cursor.shard_index,
@@ -155,7 +169,9 @@ class FineWebBatchStream:
         if shard_index == len(self.shards):
             shard_index = 0
             epoch += 1
-        self._cursor = FineWebCursor(epoch=epoch, shard_index=shard_index, step_in_shard=0)
+        self._cursor = FineWebCursor(
+            epoch=epoch, shard_index=shard_index, step_in_shard=0
+        )
 
 
 class IndexedJSONL(Sequence[dict[str, Any]]):
@@ -184,7 +200,9 @@ class IndexedJSONL(Sequence[dict[str, Any]]):
 
     def __getitem__(self, index: int | slice):
         if isinstance(index, slice):
-            return [self[position] for position in range(*index.indices(len(self)))]
+            return [
+                self[position] for position in range(*index.indices(len(self)))
+            ]
         if index < 0:
             index += len(self)
         if index < 0 or index >= len(self):
@@ -213,7 +231,9 @@ class _RowSlice(Sequence[dict[str, Any]]):
 
     def __getitem__(self, index: int | slice):
         if isinstance(index, slice):
-            return [self[position] for position in range(*index.indices(len(self)))]
+            return [
+                self[position] for position in range(*index.indices(len(self)))
+            ]
         if index < 0:
             index += len(self)
         if index < 0 or index >= len(self):
@@ -251,7 +271,9 @@ class SFTBatchStream:
         self.world_size = world_size
         global_rows = batch_size * world_size
         if len(rows) < global_rows:
-            raise ValueError(f"SFT dataset has {len(rows)} rows but global batch requires {global_rows} disjoint rows")
+            raise ValueError(
+                f"SFT dataset has {len(rows)} rows but global batch requires {global_rows} disjoint rows"
+            )
         self.response_prefix = response_prefix
         self.prompt_suffix = prompt_suffix
         self.chat_template = chat_template
@@ -260,7 +282,9 @@ class SFTBatchStream:
         self.drop_last = drop_last
         self._cursor = cursor or SFTCursor()
         if self._cursor.row >= len(rows):
-            raise ValueError(f"SFT cursor row {self._cursor.row} exceeds dataset length {len(rows)}")
+            raise ValueError(
+                f"SFT cursor row {self._cursor.row} exceeds dataset length {len(rows)}"
+            )
 
     def close(self) -> None:
         close = getattr(self.rows, "close", None)
@@ -277,9 +301,15 @@ class SFTBatchStream:
             self._cursor = SFTCursor(epoch=self._cursor.epoch + 1, row=0)
         rank_start = self._cursor.row + self.rank * self.batch_size
         if self.drop_last:
-            batch_rows = [self.rows[rank_start + offset] for offset in range(self.batch_size)]
+            batch_rows = [
+                self.rows[rank_start + offset]
+                for offset in range(self.batch_size)
+            ]
         else:
-            batch_rows = [self.rows[(rank_start + offset) % len(self.rows)] for offset in range(self.batch_size)]
+            batch_rows = [
+                self.rows[(rank_start + offset) % len(self.rows)]
+                for offset in range(self.batch_size)
+            ]
         x, y, attention_mask = sft_batch(
             batch_rows,
             self.tokenizer,
@@ -313,7 +343,9 @@ def build_training_stream(
 ) -> TrainingBatchStream:
     if config.data.kind == "random":
         if cursor is not None and not isinstance(cursor, RandomCursor):
-            raise TypeError(f"expected RandomCursor, got {type(cursor).__name__}")
+            raise TypeError(
+                f"expected RandomCursor, got {type(cursor).__name__}"
+            )
         random_cursor = cursor if isinstance(cursor, RandomCursor) else None
         return RandomBatchStream(
             batch_size=config.batch_size,
@@ -330,18 +362,28 @@ def build_training_stream(
         tokenizer_name = config.data.tokenizer
         if tokenizer_name == "hf":
             if config.data.tokenizer_source is None:
-                raise ValueError("data.tokenizer_source is required when data.tokenizer='hf'")
+                raise ValueError(
+                    "data.tokenizer_source is required when data.tokenizer='hf'"
+                )
             tokenizer_name = f"hf:{config.data.tokenizer_source}"
-        source_rows: Sequence[dict[str, Any]] = IndexedJSONL(config.data.dataset)
+        source_rows: Sequence[dict[str, Any]] = IndexedJSONL(
+            config.data.dataset
+        )
         start = config.data.sft_skip_rows
         if start >= len(source_rows):
-            raise ValueError(f"data.sft_skip_rows={start} exceeds dataset length {len(source_rows)}")
+            raise ValueError(
+                f"data.sft_skip_rows={start} exceeds dataset length {len(source_rows)}"
+            )
         stop = (
             len(source_rows)
             if config.data.sft_take_rows is None
             else min(len(source_rows), start + config.data.sft_take_rows)
         )
-        rows = source_rows if start == 0 and stop == len(source_rows) else _RowSlice(source_rows, start, stop)
+        rows = (
+            source_rows
+            if start == 0 and stop == len(source_rows)
+            else _RowSlice(source_rows, start, stop)
+        )
         if cursor is not None and not isinstance(cursor, SFTCursor):
             raise TypeError(f"expected SFTCursor, got {type(cursor).__name__}")
         sft_cursor = cursor if isinstance(cursor, SFTCursor) else None
@@ -416,7 +458,9 @@ def training_data_identity(config: TrainConfig) -> dict[str, Any]:
             "sha256": _file_sha256(path),
         }
     data_dir = (
-        Path(config.data.data_dir).expanduser().resolve() if config.data.data_dir else default_data_dir().resolve()
+        Path(config.data.data_dir).expanduser().resolve()
+        if config.data.data_dir
+        else default_data_dir().resolve()
     )
     shards = [Path(path) for path in list_shards(data_dir, "train")]
     if not shards:
@@ -424,5 +468,7 @@ def training_data_identity(config: TrainConfig) -> dict[str, Any]:
     return {
         "kind": "fineweb",
         "path": str(data_dir),
-        "shards": [{"name": path.name, "size": path.stat().st_size} for path in shards],
+        "shards": [
+            {"name": path.name, "size": path.stat().st_size} for path in shards
+        ],
     }

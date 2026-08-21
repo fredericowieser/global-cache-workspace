@@ -12,12 +12,17 @@ import torch
 import torch.nn.functional as F
 
 from gcw.performance.config import ReferenceLossConfig
-from gcw.performance.losses import bounded_reference_loss, liger_fused_linear_cross_entropy_row_sum
+from gcw.performance.losses import (
+    bounded_reference_loss,
+    liger_fused_linear_cross_entropy_row_sum,
+)
 
 LossFn = Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
 
 
-def _reference(weight: torch.Tensor, hidden: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def _reference(
+    weight: torch.Tensor, hidden: torch.Tensor, targets: torch.Tensor
+) -> torch.Tensor:
     return bounded_reference_loss(
         lambda values: F.linear(values, weight),
         hidden,
@@ -27,7 +32,9 @@ def _reference(weight: torch.Tensor, hidden: torch.Tensor, targets: torch.Tensor
     )
 
 
-def _liger(weight: torch.Tensor, hidden: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def _liger(
+    weight: torch.Tensor, hidden: torch.Tensor, targets: torch.Tensor
+) -> torch.Tensor:
     return liger_fused_linear_cross_entropy_row_sum(weight, hidden, targets)
 
 
@@ -88,9 +95,15 @@ def main() -> None:
     if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
         raise RuntimeError("fused row-loss benchmark requires BF16 CUDA")
     torch.manual_seed(1129)
-    weight = torch.randn(args.vocab, args.hidden, device="cuda", dtype=torch.bfloat16).requires_grad_(True)
-    hidden = torch.randn(args.rows, args.tokens, args.hidden, device="cuda", dtype=torch.bfloat16).requires_grad_(True)
-    targets = torch.randint(0, args.vocab, (args.rows, args.tokens), device="cuda")
+    weight = torch.randn(
+        args.vocab, args.hidden, device="cuda", dtype=torch.bfloat16
+    ).requires_grad_(True)
+    hidden = torch.randn(
+        args.rows, args.tokens, args.hidden, device="cuda", dtype=torch.bfloat16
+    ).requires_grad_(True)
+    targets = torch.randint(
+        0, args.vocab, (args.rows, args.tokens), device="cuda"
+    )
     targets[:, ::17] = -100
     upstream = torch.linspace(0.75, 1.25, args.rows, device="cuda")
 
@@ -121,13 +134,19 @@ def main() -> None:
                 "schema": "gcw.fused_row_loss_benchmark.v1",
                 "device": torch.cuda.get_device_name(),
                 "torch_version": torch.__version__,
-                "shape": {"rows": args.rows, "tokens": args.tokens, "hidden": args.hidden, "vocab": args.vocab},
+                "shape": {
+                    "rows": args.rows,
+                    "tokens": args.tokens,
+                    "hidden": args.hidden,
+                    "vocab": args.vocab,
+                },
                 "warmup": args.warmup,
                 "iterations": args.iterations,
                 "reference": reference,
                 "fused": fused,
                 "speedup": reference_median / fused_median,
-                "peak_allocation_ratio": int(fused["peak_allocated_bytes"]) / int(reference["peak_allocated_bytes"]),
+                "peak_allocation_ratio": int(fused["peak_allocated_bytes"])
+                / int(reference["peak_allocated_bytes"]),
                 "wall_seconds": time.time() - started,
             },
             sort_keys=True,

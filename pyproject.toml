@@ -68,7 +68,7 @@ qwen35 = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11", "black>=26.5.1"]
 docs = [
     "furo>=2024.8",
     "myst-parser>=3.0",
@@ -140,3 +140,6 @@ line-length = 120
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
+
+[tool.black]
+line-length = 80

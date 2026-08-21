@@ -5,7 +5,11 @@ from dataclasses import replace
 import pytest
 import torch
 
-from gcw.config import CacheProcessorConfig, ModelConfig, WorkspaceFlowRefinementConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    ModelConfig,
+    WorkspaceFlowRefinementConfig,
+)
 from gcw.models import LanguageModel, build_model
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.windowed import WindowedCache
@@ -57,7 +61,9 @@ def _cache() -> WindowedCache:
     )
 
 
-def _workspace(processor: GlobalCacheProcessor, cache: WindowedCache, cycles: int):
+def _workspace(
+    processor: GlobalCacheProcessor, cache: WindowedCache, cycles: int
+):
     source = processor.encode_source(cache, select_all=True)
     workspace = processor.initialise_workspace(source)
     for _ in range(cycles):
@@ -94,7 +100,9 @@ def test_workspace_flow_preserves_k_and_solver_step_shapes(
 
 @pytest.mark.parametrize("solver", ["euler", "midpoint"])
 @pytest.mark.parametrize("solver_steps", [1, 2, 4, 8])
-def test_zero_output_workspace_field_is_exact_identity(solver: str, solver_steps: int) -> None:
+def test_zero_output_workspace_field_is_exact_identity(
+    solver: str, solver_steps: int
+) -> None:
     config = _config(
         refinement=WorkspaceFlowRefinementConfig(
             solver=solver,  # type: ignore[arg-type]
@@ -133,15 +141,24 @@ def test_workspace_flow_is_bounded_and_backpropagates() -> None:
     refined.square().mean().backward()
 
     assert (refined - workspace).abs().max().item() <= max_velocity + 1e-6
-    assert workspace.grad is not None and torch.count_nonzero(workspace.grad).item() > 0
-    assert source.merged.grad is not None and torch.count_nonzero(source.merged.grad).item() > 0
+    assert (
+        workspace.grad is not None
+        and torch.count_nonzero(workspace.grad).item() > 0
+    )
+    assert (
+        source.merged.grad is not None
+        and torch.count_nonzero(source.merged.grad).item() > 0
+    )
     assert any(
-        parameter.grad is not None and torch.count_nonzero(parameter.grad).item() > 0
+        parameter.grad is not None
+        and torch.count_nonzero(parameter.grad).item() > 0
         for parameter in processor.parameters()
     )
 
 
-def test_workspace_flow_keeps_frozen_backbone_frozen_and_processor_trainable() -> None:
+def test_workspace_flow_keeps_frozen_backbone_frozen_and_processor_trainable() -> (
+    None
+):
     model = build_model(
         _config(
             refinement=WorkspaceFlowRefinementConfig(
@@ -159,11 +176,16 @@ def test_workspace_flow_keeps_frozen_backbone_frozen_and_processor_trainable() -
     cache = _cache()
     source, workspace = _workspace(processor, cache, cycles=1)
 
-    processor.write_for_readout(cache, source, workspace).values.square().mean().backward()
+    processor.write_for_readout(
+        cache, source, workspace
+    ).values.square().mean().backward()
 
-    assert all(parameter.grad is None for parameter in model.backbone.parameters())
+    assert all(
+        parameter.grad is None for parameter in model.backbone.parameters()
+    )
     assert any(
-        parameter.grad is not None and torch.count_nonzero(parameter.grad).item() > 0
+        parameter.grad is not None
+        and torch.count_nonzero(parameter.grad).item() > 0
         for parameter in processor.parameters()
     )
 
@@ -186,8 +208,12 @@ def test_workspace_flow_parameter_count_is_invariant_to_solver_depth() -> None:
     )
     one_processor = GlobalCacheProcessor(one_step)
     eight_processor = GlobalCacheProcessor(eight_steps)
-    one_actual = sum(parameter.numel() for parameter in one_processor.parameters())
-    eight_actual = sum(parameter.numel() for parameter in eight_processor.parameters())
+    one_actual = sum(
+        parameter.numel() for parameter in one_processor.parameters()
+    )
+    eight_actual = sum(
+        parameter.numel() for parameter in eight_processor.parameters()
+    )
 
     assert one_actual == eight_actual
     assert processor_params(one_step) == one_actual
@@ -202,7 +228,9 @@ def test_workspace_flow_opt_out_preserves_existing_readout_semantics() -> None:
     assert processor.refine_workspace(workspace, source) is workspace
     branch = processor.write_for_readout(cache, source, workspace)
     expected_values = cache.values.clone()
-    expected_values[:, :, :, -1] = workspace.view(2, 2, 2, 8).permute(1, 0, 2, 3)
+    expected_values[:, :, :, -1] = workspace.view(2, 2, 2, 8).permute(
+        1, 0, 2, 3
+    )
 
     assert torch.equal(branch.keys, cache.keys)
     assert torch.equal(branch.scores, cache.scores)
@@ -219,7 +247,9 @@ def test_workspace_flow_opt_out_preserves_existing_readout_semantics() -> None:
         ({"max_velocity": float("inf")}, "max_velocity"),
     ],
 )
-def test_workspace_flow_config_rejects_invalid_values(kwargs: dict[str, object], message: str) -> None:
+def test_workspace_flow_config_rejects_invalid_values(
+    kwargs: dict[str, object], message: str
+) -> None:
     with pytest.raises(ValueError, match=message):
         WorkspaceFlowRefinementConfig(**kwargs)  # type: ignore[arg-type]
 

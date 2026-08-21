@@ -19,7 +19,9 @@ from scripts.run_math_experiments_full_single_seed import (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate one math-campaign arm on a dedicated GPU lane")
+    parser = argparse.ArgumentParser(
+        description="Evaluate one math-campaign arm on a dedicated GPU lane"
+    )
     parser.add_argument("--arm", required=True)
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--hf-model")
@@ -28,7 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--experiment-root", required=True)
     parser.add_argument("--record-root")
     parser.add_argument("--experiment", default=EXPERIMENT)
-    parser.add_argument("--evaluation-root", default=f"{EVALUATION_ROOT}-lrc-h100-v1")
+    parser.add_argument(
+        "--evaluation-root", default=f"{EVALUATION_ROOT}-lrc-h100-v1"
+    )
     parser.add_argument("--evaluation-lineage", default="lrc-h100-v1")
     parser.add_argument("--eval-batch-size", type=int, default=16)
     parser.add_argument("--expected-step", type=int, default=10_902)
@@ -114,7 +118,9 @@ def execute(args: argparse.Namespace) -> None:
     }
     destination = root / args.evaluation_root / args.arm / "COMPLETED.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(completion, indent=2, sort_keys=True) + "\n")
+    destination.write_text(
+        json.dumps(completion, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def main() -> None:

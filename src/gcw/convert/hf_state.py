@@ -3,14 +3,18 @@ from __future__ import annotations
 import torch
 
 
-def _first_existing(state: dict[str, torch.Tensor], keys: list[str]) -> str | None:
+def _first_existing(
+    state: dict[str, torch.Tensor], keys: list[str]
+) -> str | None:
     for key in keys:
         if key in state:
             return key
     return None
 
 
-def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llama") -> None:
+def load_hf_state(
+    native, hf_state: dict[str, torch.Tensor], family: str = "llama"
+) -> None:
     target = native.backbone if hasattr(native, "backbone") else native
     if family == "qwen3_5":
         return _load_qwen35_hf_state(target, hf_state)
@@ -43,8 +47,12 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
             f"{prefix}.mlp.down_proj.weight": f"{remote}.mlp.down_proj.weight",
         }
         if family == "qwen3":
-            names[f"{prefix}.self_attn.q_norm.weight"] = f"{remote}.self_attn.q_norm.weight"
-            names[f"{prefix}.self_attn.k_norm.weight"] = f"{remote}.self_attn.k_norm.weight"
+            names[f"{prefix}.self_attn.q_norm.weight"] = (
+                f"{remote}.self_attn.q_norm.weight"
+            )
+            names[f"{prefix}.self_attn.k_norm.weight"] = (
+                f"{remote}.self_attn.k_norm.weight"
+            )
         for local, key in names.items():
             if local in state and key in hf_state:
                 mapped[local] = hf_state[key]
@@ -52,12 +60,17 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
     for key, tensor in mapped.items():
         if merged[key].shape == tensor.shape:
             merged[key] = tensor
-        elif key in {"embed_tokens.weight", "lm_head.weight"} and merged[key].shape[1:] == tensor.shape[1:]:
+        elif (
+            key in {"embed_tokens.weight", "lm_head.weight"}
+            and merged[key].shape[1:] == tensor.shape[1:]
+        ):
             padded = merged[key].clone()
             padded[: tensor.shape[0]] = tensor
             merged[key] = padded
         else:
-            raise ValueError(f"shape mismatch for {key}: native {tuple(merged[key].shape)} vs HF {tuple(tensor.shape)}")
+            raise ValueError(
+                f"shape mismatch for {key}: native {tuple(merged[key].shape)} vs HF {tuple(tensor.shape)}"
+            )
     missing, unexpected = target.load_state_dict(merged, strict=False)
     missing = [m for m in missing if not m.startswith("rotary.")]
     if missing:
@@ -67,10 +80,16 @@ def load_hf_state(native, hf_state: dict[str, torch.Tensor], family: str = "llam
 
 
 def _qwen35_remote_candidates(remote_key: str) -> list[str]:
-    return [f"model.language_model.{remote_key}", f"language_model.{remote_key}", remote_key]
+    return [
+        f"model.language_model.{remote_key}",
+        f"language_model.{remote_key}",
+        remote_key,
+    ]
 
 
-def _map_qwen35_shared_hf_state(target, hf_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def _map_qwen35_shared_hf_state(
+    target, hf_state: dict[str, torch.Tensor]
+) -> dict[str, torch.Tensor]:
     state = target.state_dict()
     mapped: dict[str, torch.Tensor] = {}
     direct_pairs = {
@@ -86,7 +105,11 @@ def _map_qwen35_shared_hf_state(target, hf_state: dict[str, torch.Tensor]) -> di
             "model.norm.weight",
             "norm.weight",
         ],
-        "lm_head.weight": ["model.language_model.lm_head.weight", "language_model.lm_head.weight", "lm_head.weight"],
+        "lm_head.weight": [
+            "model.language_model.lm_head.weight",
+            "language_model.lm_head.weight",
+            "lm_head.weight",
+        ],
     }
     for local, remotes in direct_pairs.items():
         if local in state:
@@ -126,13 +149,17 @@ def _map_qwen35_shared_hf_state(target, hf_state: dict[str, torch.Tensor]) -> di
                 }
             )
         for local, remote_key in pairs.items():
-            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _qwen35_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
     return mapped
 
 
-def _load_mapped_qwen35_state(target, mapped: dict[str, torch.Tensor], missing_message: str) -> None:
+def _load_mapped_qwen35_state(
+    target, mapped: dict[str, torch.Tensor], missing_message: str
+) -> None:
     state = target.state_dict()
     optional = {"lm_head.weight"}
     missing = sorted(set(state) - set(mapped) - optional)
@@ -144,12 +171,18 @@ def _load_mapped_qwen35_state(target, mapped: dict[str, torch.Tensor], missing_m
         if expected.shape == tensor.shape:
             loadable[key] = tensor.to(dtype=expected.dtype)
             continue
-        if key in {"embed_tokens.weight", "lm_head.weight"} and expected.ndim == tensor.ndim == 2 and expected.shape[1:] == tensor.shape[1:]:
+        if (
+            key in {"embed_tokens.weight", "lm_head.weight"}
+            and expected.ndim == tensor.ndim == 2
+            and expected.shape[1:] == tensor.shape[1:]
+        ):
             padded = expected.clone()
             padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
             loadable[key] = padded
             continue
-        raise ValueError(f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}")
+        raise ValueError(
+            f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}"
+        )
     target.load_state_dict(loadable, strict=True)
 
 
@@ -163,13 +196,19 @@ def _load_qwen35_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             f"{prefix}.mlp.up_proj.weight": f"{remote}.up_proj.weight",
             f"{prefix}.mlp.down_proj.weight": f"{remote}.down_proj.weight",
         }.items():
-            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _qwen35_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
-    _load_mapped_qwen35_state(target, mapped, "missing Qwen3.5 HF text weights for native keys")
+    _load_mapped_qwen35_state(
+        target, mapped, "missing Qwen3.5 HF text weights for native keys"
+    )
 
 
-def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
+def _load_qwen35_moe_hf_state(
+    target, hf_state: dict[str, torch.Tensor]
+) -> None:
     mapped = _map_qwen35_shared_hf_state(target, hf_state)
     for i in range(target.config.num_layers):
         prefix = f"layers.{i}"
@@ -183,34 +222,58 @@ def _load_qwen35_moe_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None
             f"{prefix}.mlp.shared_expert.down_proj.weight": f"{remote}.shared_expert.down_proj.weight",
             f"{prefix}.mlp.shared_expert_gate.weight": f"{remote}.shared_expert_gate.weight",
         }.items():
-            key = _first_existing(hf_state, _qwen35_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _qwen35_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
-    _load_mapped_qwen35_state(target, mapped, "missing Qwen3.5-MoE HF text weights for native keys")
+    _load_mapped_qwen35_state(
+        target, mapped, "missing Qwen3.5-MoE HF text weights for native keys"
+    )
 
 
 def _gemma4_remote_candidates(remote_key: str) -> list[str]:
-    return [f"model.language_model.{remote_key}", f"language_model.{remote_key}", remote_key]
+    return [
+        f"model.language_model.{remote_key}",
+        f"language_model.{remote_key}",
+        remote_key,
+    ]
 
 
 def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
     state = target.state_dict()
     mapped: dict[str, torch.Tensor] = {}
     direct_pairs = {
-        "embed_tokens.weight": ["model.embed_tokens.weight", "embed_tokens.weight"],
+        "embed_tokens.weight": [
+            "model.embed_tokens.weight",
+            "embed_tokens.weight",
+        ],
         "norm.weight": ["model.norm.weight", "norm.weight"],
         "lm_head.weight": ["lm_head.weight"],
-        "embed_tokens_per_layer.weight": ["model.embed_tokens_per_layer.weight", "embed_tokens_per_layer.weight"],
+        "embed_tokens_per_layer.weight": [
+            "model.embed_tokens_per_layer.weight",
+            "embed_tokens_per_layer.weight",
+        ],
         "per_layer_model_projection.weight": [
             "model.per_layer_model_projection.weight",
             "per_layer_model_projection.weight",
         ],
-        "per_layer_projection_norm.weight": ["model.per_layer_projection_norm.weight", "per_layer_projection_norm.weight"],
+        "per_layer_projection_norm.weight": [
+            "model.per_layer_projection_norm.weight",
+            "per_layer_projection_norm.weight",
+        ],
     }
     for local, remotes in direct_pairs.items():
         if local not in state:
             continue
-        key = _first_existing(hf_state, [candidate for remote in remotes for candidate in _gemma4_remote_candidates(remote)])
+        key = _first_existing(
+            hf_state,
+            [
+                candidate
+                for remote in remotes
+                for candidate in _gemma4_remote_candidates(remote)
+            ],
+        )
         if key is not None:
             mapped[local] = hf_state[key]
     for i, layer in enumerate(target.layers):
@@ -230,10 +293,16 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             f"{prefix}.mlp.down_proj.weight": f"{remote}.mlp.down_proj.weight",
         }
         if not layer.self_attn.is_kv_shared_layer:
-            pairs[f"{prefix}.self_attn.k_proj.weight"] = f"{remote}.self_attn.k_proj.weight"
-            pairs[f"{prefix}.self_attn.k_norm.weight"] = f"{remote}.self_attn.k_norm.weight"
+            pairs[f"{prefix}.self_attn.k_proj.weight"] = (
+                f"{remote}.self_attn.k_proj.weight"
+            )
+            pairs[f"{prefix}.self_attn.k_norm.weight"] = (
+                f"{remote}.self_attn.k_norm.weight"
+            )
             if f"{prefix}.self_attn.v_proj.weight" in state:
-                pairs[f"{prefix}.self_attn.v_proj.weight"] = f"{remote}.self_attn.v_proj.weight"
+                pairs[f"{prefix}.self_attn.v_proj.weight"] = (
+                    f"{remote}.self_attn.v_proj.weight"
+                )
         if target.config.hidden_size_per_layer_input:
             pairs.update(
                 {
@@ -245,13 +314,20 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
         for local, remote_key in pairs.items():
             if local not in state:
                 continue
-            key = _first_existing(hf_state, _gemma4_remote_candidates(remote_key))
+            key = _first_existing(
+                hf_state, _gemma4_remote_candidates(remote_key)
+            )
             if key is not None:
                 mapped[local] = hf_state[key]
-    optional = {"lm_head.weight", *{f"layers.{i}.layer_scalar" for i in range(len(target.layers))}}
+    optional = {
+        "lm_head.weight",
+        *{f"layers.{i}.layer_scalar" for i in range(len(target.layers))},
+    }
     missing = sorted(set(state) - set(mapped) - optional)
     if missing:
-        raise KeyError(f"missing Gemma4 HF text weights for native keys: {missing[:8]}")
+        raise KeyError(
+            f"missing Gemma4 HF text weights for native keys: {missing[:8]}"
+        )
     loadable = {}
     for key, tensor in {**state, **mapped}.items():
         expected = state[key]
@@ -259,7 +335,12 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             loadable[key] = tensor.to(dtype=expected.dtype)
             continue
         if (
-            key in {"embed_tokens.weight", "lm_head.weight", "embed_tokens_per_layer.weight"}
+            key
+            in {
+                "embed_tokens.weight",
+                "lm_head.weight",
+                "embed_tokens_per_layer.weight",
+            }
             and expected.ndim == tensor.ndim == 2
             and expected.shape[1:] == tensor.shape[1:]
             and expected.shape[0] >= tensor.shape[0]
@@ -268,5 +349,7 @@ def _load_gemma4_hf_state(target, hf_state: dict[str, torch.Tensor]) -> None:
             padded[: tensor.shape[0]] = tensor.to(dtype=expected.dtype)
             loadable[key] = padded
             continue
-        raise ValueError(f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}")
+        raise ValueError(
+            f"shape mismatch for {key}: native {tuple(expected.shape)} vs HF {tuple(tensor.shape)}"
+        )
     target.load_state_dict(loadable, strict=True)

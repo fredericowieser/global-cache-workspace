@@ -67,13 +67,22 @@ class SourceSnapshot:
     def materialize(self, destination: Path) -> None:
         """Create a new source directory solely from captured member bytes."""
         if destination.exists() or destination.is_symlink():
-            raise QualificationInputError("source materialization destination already exists")
+            raise QualificationInputError(
+                "source materialization destination already exists"
+            )
         destination.mkdir(parents=True, mode=0o700)
         try:
             for member in self.members:
-                target = destination.joinpath(*PurePosixPath(member.relative_path).parts)
+                target = destination.joinpath(
+                    *PurePosixPath(member.relative_path).parts
+                )
                 target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                atomic_write_bytes(target, member.blob.content, mode=member.mode, exclusive=True)
+                atomic_write_bytes(
+                    target,
+                    member.blob.content,
+                    mode=member.mode,
+                    exclusive=True,
+                )
             fsync_directory(destination)
         except BaseException:
             # Preserve a partially staged tree for forensic inspection. A later
@@ -84,13 +93,19 @@ class SourceSnapshot:
 def capture_file(path: Path, *, role: str) -> CapturedBlob:
     """Read a regular non-symlink file once through one stable descriptor."""
     _validate_role(role)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        raise QualificationInputError(f"cannot open qualification input {path}") from exc
+        raise QualificationInputError(
+            f"cannot open qualification input {path}"
+        ) from exc
     try:
-        blob, _metadata = _capture_descriptor(descriptor, role=role, label=str(path))
+        blob, _metadata = _capture_descriptor(
+            descriptor, role=role, label=str(path)
+        )
         return blob
     finally:
         os.close(descriptor)
@@ -101,25 +116,41 @@ def capture_train_config(path: Path) -> ConfigSnapshot:
     authored = capture_file(path, role="train_config_authored")
     config = load_train_config_bytes(authored.content)
     resolved = canonical_json_bytes(to_dict(config))
-    return ConfigSnapshot(authored, resolved, hashlib.sha256(resolved).hexdigest())
+    return ConfigSnapshot(
+        authored, resolved, hashlib.sha256(resolved).hexdigest()
+    )
 
 
 def capture_source(root: Path, relative_paths: Iterable[str]) -> SourceSnapshot:
     """Capture a sorted, unique, closed set through one descriptor-rooted tree."""
-    normalized = tuple(sorted(_normalize_relative_path(value) for value in relative_paths))
+    normalized = tuple(
+        sorted(_normalize_relative_path(value) for value in relative_paths)
+    )
     if not normalized or len(set(normalized)) != len(normalized):
-        raise QualificationInputError("source member paths must be nonempty and unique")
+        raise QualificationInputError(
+            "source member paths must be nonempty and unique"
+        )
     root_flags = (
-        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0)
     )
     try:
         root_descriptor = os.open(root, root_flags)
     except OSError as exc:
-        raise QualificationInputError("source root must be a real directory") from exc
+        raise QualificationInputError(
+            "source root must be a real directory"
+        ) from exc
     try:
         if not stat.S_ISDIR(os.fstat(root_descriptor).st_mode):
-            raise QualificationInputError("source root must be a real directory")
-        members = [_capture_source_member(root_descriptor, relative) for relative in normalized]
+            raise QualificationInputError(
+                "source root must be a real directory"
+            )
+        members = [
+            _capture_source_member(root_descriptor, relative)
+            for relative in normalized
+        ]
     finally:
         os.close(root_descriptor)
     manifest = [
@@ -137,19 +168,27 @@ def capture_source(root: Path, relative_paths: Iterable[str]) -> SourceSnapshot:
 
 def _normalize_relative_path(value: str) -> str:
     if not isinstance(value, str) or not value:
-        raise QualificationInputError("source member path must be a nonempty string")
+        raise QualificationInputError(
+            "source member path must be a nonempty string"
+        )
     path = PurePosixPath(value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+    if path.is_absolute() or any(
+        part in {"", ".", ".."} for part in path.parts
+    ):
         raise QualificationInputError(f"unsafe source member path: {value!r}")
     normalized = path.as_posix()
     if normalized != value:
-        raise QualificationInputError(f"source member path is noncanonical: {value!r}")
+        raise QualificationInputError(
+            f"source member path is noncanonical: {value!r}"
+        )
     return normalized
 
 
 def _validate_role(role: str) -> None:
     if not isinstance(role, str) or not role:
-        raise QualificationInputError("captured blob role must be a nonempty string")
+        raise QualificationInputError(
+            "captured blob role must be a nonempty string"
+        )
 
 
 def _capture_descriptor(
@@ -161,7 +200,9 @@ def _capture_descriptor(
     _validate_role(role)
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
-        raise QualificationInputError(f"qualification input is not a regular file: {label}")
+        raise QualificationInputError(
+            f"qualification input is not a regular file: {label}"
+        )
     chunks: list[bytes] = []
     while True:
         chunk = os.read(descriptor, 8 * 1024 * 1024)
@@ -181,23 +222,33 @@ def _capture_descriptor(
         )
 
     if identity(before) != identity(after):
-        raise QualificationInputError(f"qualification input changed while being read: {label}")
+        raise QualificationInputError(
+            f"qualification input changed while being read: {label}"
+        )
     content = b"".join(chunks)
     if len(content) != before.st_size:
-        raise QualificationInputError(f"qualification input size changed while being read: {label}")
+        raise QualificationInputError(
+            f"qualification input size changed while being read: {label}"
+        )
     return (
         CapturedBlob(
-            BlobIdentity(role, len(content), hashlib.sha256(content).hexdigest()),
+            BlobIdentity(
+                role, len(content), hashlib.sha256(content).hexdigest()
+            ),
             content,
         ),
         before,
     )
 
 
-def _capture_source_member(root_descriptor: int, relative: str) -> SourceMemberSnapshot:
+def _capture_source_member(
+    root_descriptor: int, relative: str
+) -> SourceMemberSnapshot:
     parts = PurePosixPath(relative).parts
     directory = os.dup(root_descriptor)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         for component in parts[:-1]:
             try:
@@ -207,15 +258,21 @@ def _capture_source_member(root_descriptor: int, relative: str) -> SourceMemberS
                     dir_fd=directory,
                 )
             except OSError as exc:
-                raise QualificationInputError(f"source member traverses an unsafe component: {relative}") from exc
+                raise QualificationInputError(
+                    f"source member traverses an unsafe component: {relative}"
+                ) from exc
             os.close(directory)
             directory = child
             if not stat.S_ISDIR(os.fstat(directory).st_mode):
-                raise QualificationInputError(f"source member traverses a non-directory: {relative}")
+                raise QualificationInputError(
+                    f"source member traverses a non-directory: {relative}"
+                )
         try:
             descriptor = os.open(parts[-1], flags, dir_fd=directory)
         except OSError as exc:
-            raise QualificationInputError(f"source member is missing, unsafe, or symlinked: {relative}") from exc
+            raise QualificationInputError(
+                f"source member is missing, unsafe, or symlinked: {relative}"
+            ) from exc
         try:
             blob, metadata = _capture_descriptor(
                 descriptor,

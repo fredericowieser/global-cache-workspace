@@ -18,7 +18,9 @@ def _resolve_dtype(dtype: str):
     try:
         return getattr(torch, dtype)
     except AttributeError as exc:
-        raise ValueError(f"unsupported dtype {dtype!r}; use auto, bfloat16, float16, or float32") from exc
+        raise ValueError(
+            f"unsupported dtype {dtype!r}; use auto, bfloat16, float16, or float32"
+        ) from exc
 
 
 def _infer_model_dtype(model: torch.nn.Module) -> torch.dtype:
@@ -41,14 +43,20 @@ def _load_hf_model(model_id: str, *, torch_dtype, family: str):
             multimodal_model_cls = AutoModelForMultimodalLM
     if family == "qwen3_5_moe":
         if multimodal_model_cls is not None:
-            return multimodal_model_cls.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+            return multimodal_model_cls.from_pretrained(
+                model_id, torch_dtype=torch_dtype, trust_remote_code=False
+            )
     elif family == "gemma4":
         if multimodal_model_cls is not None:
             try:
-                return multimodal_model_cls.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+                return multimodal_model_cls.from_pretrained(
+                    model_id, torch_dtype=torch_dtype, trust_remote_code=False
+                )
             except ValueError:
                 pass
-    return AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch_dtype, trust_remote_code=False)
+    return AutoModelForCausalLM.from_pretrained(
+        model_id, torch_dtype=torch_dtype, trust_remote_code=False
+    )
 
 
 def convert_hf(
@@ -61,7 +69,9 @@ def convert_hf(
     try:
         from transformers import AutoConfig
     except ImportError as exc:
-        raise ImportError("Install the convert extra: uv sync --extra convert") from exc
+        raise ImportError(
+            "Install the convert extra: uv sync --extra convert"
+        ) from exc
 
     model_id = ALIASES.get(model_id.lower(), model_id)
     hf_cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=False)

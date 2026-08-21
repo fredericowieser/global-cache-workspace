@@ -7,8 +7,9 @@ from typing import Any, Callable
 
 import torch.nn as nn
 
-
-_RECOMPUTATION_ID: ContextVar[object | None] = ContextVar("gcw_cache_processor_recomputation_id", default=None)
+_RECOMPUTATION_ID: ContextVar[object | None] = ContextVar(
+    "gcw_cache_processor_recomputation_id", default=None
+)
 
 
 @contextmanager
@@ -47,7 +48,9 @@ class CacheProcessorBase(nn.Module, ABC):
         self._calls = 0
         return calls
 
-    def prepare_forward_execution(self) -> AbstractContextManager[Callable[..., Any]]:
+    def prepare_forward_execution(
+        self,
+    ) -> AbstractContextManager[Callable[..., Any]]:
         """Return the processor callable to use for one language-model forward.
 
         Most processors need no preparation and use their eager module call.

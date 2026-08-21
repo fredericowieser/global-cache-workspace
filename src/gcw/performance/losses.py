@@ -33,7 +33,9 @@ def _load_liger_factory() -> FusedLinearCrossEntropyFactory:
     try:
         from liger_kernel.transformers import LigerFusedLinearCrossEntropyLoss
     except (ImportError, OSError) as exc:
-        raise RuntimeError("loss_backend='liger' requires the CUDA GPU extra with liger-kernel==0.8.1") from exc
+        raise RuntimeError(
+            "loss_backend='liger' requires the CUDA GPU extra with liger-kernel==0.8.1"
+        ) from exc
     return LigerFusedLinearCrossEntropyLoss
 
 
@@ -48,9 +50,13 @@ def require_loss_backend(backend: LossBackend, device: torch.device) -> None:
     try:
         version = metadata.version("liger-kernel")
     except metadata.PackageNotFoundError as exc:
-        raise RuntimeError("loss_backend='liger' requires the CUDA GPU extra with liger-kernel==0.8.1") from exc
+        raise RuntimeError(
+            "loss_backend='liger' requires the CUDA GPU extra with liger-kernel==0.8.1"
+        ) from exc
     if version != LIGER_KERNEL_VERSION:
-        raise RuntimeError(f"loss_backend='liger' requires liger-kernel=={LIGER_KERNEL_VERSION}; found {version}")
+        raise RuntimeError(
+            f"loss_backend='liger' requires liger-kernel=={LIGER_KERNEL_VERSION}; found {version}"
+        )
     _load_liger_factory()
 
 
@@ -84,7 +90,9 @@ def loss_backend_metadata(backend: LossBackend) -> dict[str, Any]:
     return result
 
 
-def checkpoint_loss_backend(state: Mapping[str, Any], device: torch.device) -> LossBackend:
+def checkpoint_loss_backend(
+    state: Mapping[str, Any], device: torch.device
+) -> LossBackend:
     """Recover and validate the backend recorded by a final or training checkpoint."""
     recorded = state.get("loss_backend", "reference")
     name = recorded.get("name") if isinstance(recorded, dict) else recorded
@@ -94,12 +102,16 @@ def checkpoint_loss_backend(state: Mapping[str, Any], device: torch.device) -> L
     if backend == "liger" and isinstance(recorded, dict):
         version = recorded.get("package_version")
         if version != LIGER_KERNEL_VERSION:
-            raise RuntimeError(f"checkpoint requires liger-kernel=={LIGER_KERNEL_VERSION}; recorded {version!r}")
+            raise RuntimeError(
+                f"checkpoint requires liger-kernel=={LIGER_KERNEL_VERSION}; recorded {version!r}"
+            )
     require_loss_backend(backend, device)
     return backend
 
 
-def configure_reference_loss_execution(model: torch.nn.Module, config: ReferenceLossConfig) -> None:
+def configure_reference_loss_execution(
+    model: torch.nn.Module, config: ReferenceLossConfig
+) -> None:
     """Attach state-neutral reference-loss execution policy to the owning backbone."""
     backbone = getattr(model, "backbone", model)
     object.__setattr__(backbone, _REFERENCE_LOSS_EXECUTION_ATTRIBUTE, config)
@@ -111,11 +123,15 @@ def reference_loss_execution(model: torch.nn.Module) -> ReferenceLossConfig:
     if value is None:
         return ReferenceLossConfig()
     if not isinstance(value, ReferenceLossConfig):
-        raise TypeError("configured reference-loss execution policy has an invalid type")
+        raise TypeError(
+            "configured reference-loss execution policy has an invalid type"
+        )
     return value
 
 
-def reference_loss_execution_metadata(config: ReferenceLossConfig) -> dict[str, Any]:
+def reference_loss_execution_metadata(
+    config: ReferenceLossConfig,
+) -> dict[str, Any]:
     """Return authenticated provenance for non-scientific reference-loss execution."""
     execution = {
         "schema": "gcw.reference_loss_execution.v1",
@@ -151,13 +167,19 @@ def bounded_reference_loss(
     if config.mode != "bounded":
         raise ValueError("bounded_reference_loss requires mode='bounded'")
     if reduction not in {"mean", "sum", "none", "row_sum"}:
-        raise ValueError("reference loss reduction must be 'mean', 'sum', 'none', or 'row_sum'")
+        raise ValueError(
+            "reference loss reduction must be 'mean', 'sum', 'none', or 'row_sum'"
+        )
     if hidden.ndim != 3 or targets.shape != hidden.shape[:2]:
-        raise ValueError("reference loss requires hidden [rows, tokens, width] and matching targets")
+        raise ValueError(
+            "reference loss requires hidden [rows, tokens, width] and matching targets"
+        )
     if hidden.shape[0] == 0:
         raise ValueError("reference loss requires at least one physical row")
     if config.max_projected_positions < hidden.shape[0]:
-        raise ValueError("reference-loss max_projected_positions must be at least the physical batch row count")
+        raise ValueError(
+            "reference-loss max_projected_positions must be at least the physical batch row count"
+        )
 
     logical_chunk_size = 256 if hidden.is_cuda else 64
     physical_chunk_size = min(
@@ -180,14 +202,18 @@ def bounded_reference_loss(
             target_chunk = targets[:, start:end]
             if checkpoint_active:
                 chunk_loss = activation_checkpoint(
-                    lambda values, labels: _full_projection_loss_chunk(logits_from_hidden, values, labels),
+                    lambda values, labels: _full_projection_loss_chunk(
+                        logits_from_hidden, values, labels
+                    ),
                     hidden_chunk,
                     target_chunk,
                     use_reentrant=False,
                     preserve_rng_state=True,
                 )
             else:
-                chunk_loss = _full_projection_loss_chunk(logits_from_hidden, hidden_chunk, target_chunk)
+                chunk_loss = _full_projection_loss_chunk(
+                    logits_from_hidden, hidden_chunk, target_chunk
+                )
             logical_losses.append(chunk_loss)
             logical_valid.append(target_chunk >= 0)
 
@@ -234,9 +260,13 @@ def liger_fused_linear_cross_entropy_row_sum(
 ) -> torch.Tensor:
     """Return structured row sums through one fused Liger call per row."""
     if hidden.ndim != 3 or hidden.shape[:-1] != targets.shape:
-        raise ValueError("Liger row-sum loss requires hidden [rows, tokens, width] and matching targets")
+        raise ValueError(
+            "Liger row-sum loss requires hidden [rows, tokens, width] and matching targets"
+        )
     if weight.ndim != 2 or weight.shape[1] != hidden.shape[-1]:
-        raise ValueError("projection weight shape must be (vocab_size, hidden_size)")
+        raise ValueError(
+            "projection weight shape must be (vocab_size, hidden_size)"
+        )
     require_loss_backend("liger", hidden.device)
     criterion = _load_liger_factory()(
         ignore_index=-100,
@@ -248,7 +278,9 @@ def liger_fused_linear_cross_entropy_row_sum(
     for row in range(hidden.shape[0]):
         row_hidden = hidden[row].reshape(-1, hidden.shape[-1])
         row_targets = targets[row].reshape(-1)
-        normalized = torch.where(row_targets >= 0, row_targets, row_targets.new_full((), -100))
+        normalized = torch.where(
+            row_targets >= 0, row_targets, row_targets.new_full((), -100)
+        )
         # Sum reduction is well-defined for an all-ignored row and preserves
         # differentiable zero gradients without a host synchronization.
         row_sums.append(criterion(weight, row_hidden, normalized, None).float())
@@ -265,20 +297,29 @@ def liger_fused_linear_cross_entropy(
 ) -> torch.Tensor:
     """Apply Liger FLCE without selecting target rows or constructing full logits."""
     if reduction not in {"mean", "sum"}:
-        raise ValueError("Liger fused linear cross entropy supports only mean and sum in this wrapper")
+        raise ValueError(
+            "Liger fused linear cross entropy supports only mean and sum in this wrapper"
+        )
     if hidden.shape[:-1] != targets.shape:
         raise ValueError("hidden leading dimensions must match targets")
     if weight.ndim != 2 or weight.shape[1] != hidden.shape[-1]:
-        raise ValueError("projection weight shape must be (vocab_size, hidden_size)")
+        raise ValueError(
+            "projection weight shape must be (vocab_size, hidden_size)"
+        )
     require_loss_backend("liger", hidden.device)
     flat_hidden = hidden.reshape(-1, hidden.shape[-1])
     flat_targets = targets.reshape(-1)
-    normalized_targets = torch.where(flat_targets >= 0, flat_targets, flat_targets.new_full((), -100))
+    normalized_targets = torch.where(
+        flat_targets >= 0, flat_targets, flat_targets.new_full((), -100)
+    )
 
     # Liger 0.8.1 does not define this edge safely for mean. This synchronization is preferable
     # to a NaN and does not gather target indices or materialize vocabulary logits.
     if not bool(torch.any(normalized_targets != -100).item()):
-        return (flat_hidden.reshape(-1)[:1].float().sum() + weight.reshape(-1)[:1].float().sum()) * 0.0
+        return (
+            flat_hidden.reshape(-1)[:1].float().sum()
+            + weight.reshape(-1)[:1].float().sum()
+        ) * 0.0
 
     criterion = _load_liger_factory()(
         ignore_index=-100,

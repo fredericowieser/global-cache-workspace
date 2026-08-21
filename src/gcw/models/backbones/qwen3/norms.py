@@ -12,7 +12,9 @@ class Qwen35RMSNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = x.float() * torch.rsqrt(x.float().pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        y = x.float() * torch.rsqrt(
+            x.float().pow(2).mean(dim=-1, keepdim=True) + self.eps
+        )
         return (y * (1.0 + self.weight.float())).to(x.dtype)
 
 
@@ -23,7 +25,9 @@ class Qwen35RMSNormGated(nn.Module):
         self.eps = eps
 
     def forward(self, x: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
-        y = x.float() * torch.rsqrt(x.float().pow(2).mean(dim=-1, keepdim=True) + self.eps)
+        y = x.float() * torch.rsqrt(
+            x.float().pow(2).mean(dim=-1, keepdim=True) + self.eps
+        )
         y = self.weight.float() * y
         y = y * F.silu(gate.float())
         return y.to(x.dtype)

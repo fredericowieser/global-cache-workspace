@@ -20,7 +20,9 @@ def _sha256(path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the immutable math experiment launch manifest")
+    parser = argparse.ArgumentParser(
+        description="Build the immutable math experiment launch manifest"
+    )
     parser.add_argument("--config-dir", required=True)
     parser.add_argument("--data-manifest", required=True)
     parser.add_argument("--gates", required=True)
@@ -32,7 +34,9 @@ def main() -> None:
     arms: dict[str, Any] = {}
     for path in sorted(config_dir.glob("*.yaml")):
         config = load_train_config(path)
-        maximum_tokens = config.global_batch_rows * config.sequence_len * config.max_steps
+        maximum_tokens = (
+            config.global_batch_rows * config.sequence_len * config.max_steps
+        )
         arms[path.stem] = {
             "config": str(path),
             "config_sha256": _sha256(path),
@@ -40,7 +44,9 @@ def main() -> None:
             "max_steps": config.max_steps,
             "maximum_tokens": maximum_tokens,
             "processor_params": processor_params(config.model),
-            "total_training_flops": total_training_flops(config.model, maximum_tokens, config.sequence_len),
+            "total_training_flops": total_training_flops(
+                config.model, maximum_tokens, config.sequence_len
+            ),
             "output_dir": config.output_dir,
         }
     evidence = {}
@@ -59,7 +65,9 @@ def main() -> None:
         "evidence": evidence,
         "arms": arms,
     }
-    Path(args.out).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    Path(args.out).write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    )
 
 
 if __name__ == "__main__":

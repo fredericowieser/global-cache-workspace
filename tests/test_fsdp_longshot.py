@@ -6,7 +6,9 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from gcw.config import CacheProcessorConfig, ModelConfig, TrainConfig
-from gcw.performance.checkpointing import apply_fsdp_activation_checkpointing as _apply_activation_checkpointing
+from gcw.performance.checkpointing import (
+    apply_fsdp_activation_checkpointing as _apply_activation_checkpointing,
+)
 from gcw.training.distributed import _unwrap, _wrap_fsdp
 from gcw.training.model_setup import _build_training_model
 
@@ -79,16 +81,16 @@ def _run_longshot_fsdp(
             freeze_backbone=freeze_backbone,
             precision="bf16_mixed",
         )
-        model = _build_training_model(
-            config, device, rank=rank, use_fsdp=True
-        )
+        model = _build_training_model(config, device, rank=rank, use_fsdp=True)
         if freeze_backbone:
             for parameter in model.backbone.parameters():
                 parameter.requires_grad_(False)
         _apply_activation_checkpointing(model, family=config.model.family)
         model = _wrap_fsdp(model, config, device)
 
-        input_ids = torch.randint(0, config.model.vocab_size, (1, 9), device=device)
+        input_ids = torch.randint(
+            0, config.model.vocab_size, (1, 9), device=device
+        )
         loss = model(input_ids, input_ids)
         loss.backward()
         assert torch.isfinite(loss)

@@ -20,7 +20,9 @@ if TYPE_CHECKING:
 
 
 IcarusProcessorBackend = Literal["eager", "compile"]
-IcarusProcessorRunner = Callable[[nn.Module, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
+IcarusProcessorRunner = Callable[
+    [nn.Module, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+]
 
 _ICARUS_BACKEND_ENV = "GCW_ICARUS_PROCESSOR_BACKEND"
 _ICARUS_REJECTED_BENCHMARK_ENV = "GCW_ALLOW_REJECTED_ICARUS_COMPILE"
@@ -29,13 +31,17 @@ _COMPILE_OPTIONS = {
     "dynamic": True,
     "fullgraph": True,
 }
-_COMPILED_RUNNERS: WeakKeyDictionary[nn.Module, IcarusProcessorRunner] = WeakKeyDictionary()
+_COMPILED_RUNNERS: WeakKeyDictionary[nn.Module, IcarusProcessorRunner] = (
+    WeakKeyDictionary()
+)
 _COMPILED_RUNNERS_LOCK = RLock()
 _ADMITTED_BATCHES_ATTRIBUTE = "_gcw_icarus_admitted_training_batches"
 _ACTIVE_BATCH_ATTRIBUTE = "_gcw_icarus_active_training_batch"
 
 
-def resolve_icarus_processor_backend(model_config: ModelConfig) -> IcarusProcessorBackend:
+def resolve_icarus_processor_backend(
+    model_config: ModelConfig,
+) -> IcarusProcessorBackend:
     """Resolve and validate the narrow post-selection Icarus backend."""
     requested = os.environ.get(_ICARUS_BACKEND_ENV, "eager").strip().lower()
     if requested not in {"eager", "compile"}:
@@ -49,10 +55,17 @@ def resolve_icarus_processor_backend(model_config: ModelConfig) -> IcarusProcess
         )
     processor = model_config.cache_processor
     if processor is None or processor.processor_mode != "standard":
-        raise RuntimeError(f"{_ICARUS_BACKEND_ENV}=compile requires Icarus processor_mode='standard'")
+        raise RuntimeError(
+            f"{_ICARUS_BACKEND_ENV}=compile requires Icarus processor_mode='standard'"
+        )
     if processor.attention_dropout != 0.0:
-        raise RuntimeError(f"{_ICARUS_BACKEND_ENV}=compile requires attention_dropout=0")
-    if model_config.flow_processor is not None or model_config.diffusion_processor is not None:
+        raise RuntimeError(
+            f"{_ICARUS_BACKEND_ENV}=compile requires attention_dropout=0"
+        )
+    if (
+        model_config.flow_processor is not None
+        or model_config.diffusion_processor is not None
+    ):
         raise RuntimeError(
             f"{_ICARUS_BACKEND_ENV}=compile supports the ordinary Icarus transform only; "
             "Flow and Diffusion refinements are explicitly unsupported"
@@ -102,15 +115,27 @@ def icarus_processor_backend_metadata(
     backend: IcarusProcessorBackend | None = None,
 ) -> dict[str, object]:
     """Return provenance and an exact-resume fingerprint for Icarus execution."""
-    selected = resolve_icarus_processor_backend(model_config) if backend is None else backend
+    selected = (
+        resolve_icarus_processor_backend(model_config)
+        if backend is None
+        else backend
+    )
     execution: dict[str, object] = {
         "schema": "gcw.icarus_processor_backend.v2",
         "effective_backend": selected,
         "architecture": "icarus",
         "region": "gcw.performance.backends.icarus._run_icarus_post_selection",
-        "compile_options": dict(_COMPILE_OPTIONS) if selected == "compile" else None,
-        "scope": "admitted_training_forward_and_backward_only" if selected == "compile" else None,
-        "runner_ownership": "processor_module" if selected == "compile" else None,
+        "compile_options": (
+            dict(_COMPILE_OPTIONS) if selected == "compile" else None
+        ),
+        "scope": (
+            "admitted_training_forward_and_backward_only"
+            if selected == "compile"
+            else None
+        ),
+        "runner_ownership": (
+            "processor_module" if selected == "compile" else None
+        ),
         "selection_policy": "eager_fp32_exact_topk",
         "writeback_policy": "eager_exact",
         "direct_processor_calls": "eager",
@@ -131,7 +156,9 @@ def icarus_processor_backend_metadata(
         **execution,
         "requested_via": _ICARUS_BACKEND_ENV,
         "requested_value": os.environ.get(_ICARUS_BACKEND_ENV, "eager"),
-        "benchmark_override_value": os.environ.get(_ICARUS_REJECTED_BENCHMARK_ENV),
+        "benchmark_override_value": os.environ.get(
+            _ICARUS_REJECTED_BENCHMARK_ENV
+        ),
         "implementation_module": "gcw.performance.backends.icarus",
         "implementation_symbols": [
             "gcw.performance.backends.icarus.run_icarus_post_selection_region",
@@ -141,7 +168,9 @@ def icarus_processor_backend_metadata(
     }
 
 
-def configure_icarus_training_execution(model: nn.Module, admitted_batch_sizes: Sequence[int]) -> None:
+def configure_icarus_training_execution(
+    model: nn.Module, admitted_batch_sizes: Sequence[int]
+) -> None:
     """Configure admitted row counts on an already allocated Icarus model.
 
     API and topology admission happens before allocation. This function stores only
@@ -150,16 +179,24 @@ def configure_icarus_training_execution(model: nn.Module, admitted_batch_sizes: 
     """
     batches = tuple(sorted(set(int(size) for size in admitted_batch_sizes)))
     if not batches or any(size <= 0 for size in batches):
-        raise ValueError("compiled Icarus training requires positive admitted batch sizes")
+        raise ValueError(
+            "compiled Icarus training requires positive admitted batch sizes"
+        )
     processors = _compiled_icarus_processors(model)
     if not processors:
-        raise RuntimeError("compiled Icarus post-allocation configuration found no Icarus processor")
+        raise RuntimeError(
+            "compiled Icarus post-allocation configuration found no Icarus processor"
+        )
     for processor in processors:
-        object.__setattr__(processor.block, _ADMITTED_BATCHES_ATTRIBUTE, batches)
+        object.__setattr__(
+            processor.block, _ADMITTED_BATCHES_ATTRIBUTE, batches
+        )
 
 
 @contextmanager
-def icarus_training_execution(model: nn.Module, batch_size: int) -> Iterator[None]:
+def icarus_training_execution(
+    model: nn.Module, batch_size: int
+) -> Iterator[None]:
     """Activate compilation only for one admitted training forward/backward."""
     active: list[tuple[nn.Module, object]] = []
     for processor in _compiled_icarus_processors(model):
@@ -176,7 +213,9 @@ def icarus_training_execution(model: nn.Module, batch_size: int) -> Iterator[Non
             )
         previous = block.__dict__.get(_ACTIVE_BATCH_ATTRIBUTE)
         if previous is not None and previous != batch_size:
-            raise RuntimeError("nested compiled Icarus scopes must use the same batch size")
+            raise RuntimeError(
+                "nested compiled Icarus scopes must use the same batch size"
+            )
         active.append((block, previous))
         object.__setattr__(block, _ACTIVE_BATCH_ATTRIBUTE, batch_size)
     try:
@@ -202,18 +241,34 @@ def warmup_icarus_training_execution(
     if not processors:
         return
     cuda_devices = (
-        [device.index if device.index is not None else torch.cuda.current_device()] if device.type == "cuda" else []
+        [
+            (
+                device.index
+                if device.index is not None
+                else torch.cuda.current_device()
+            )
+        ]
+        if device.type == "cuda"
+        else []
     )
     with torch.random.fork_rng(devices=cuda_devices):
         for processor in processors:
             block = processor.block
             config: Any = processor.config
             cache_heads = int(processor.num_cache_heads)
-            selected_lengths = _training_selected_lengths(sequence_length, int(config.process_every), int(config.topk))
+            selected_lengths = _training_selected_lengths(
+                sequence_length, int(config.process_every), int(config.topk)
+            )
             selected_count = min(int(config.topk_heads), cache_heads)
             parameter = next(block.parameters())
-            input_dtype = torch.bfloat16 if bf16 and device.type == "cuda" else parameter.dtype
-            for batch_size in sorted(set(int(size) for size in admitted_batch_sizes), reverse=True):
+            input_dtype = (
+                torch.bfloat16
+                if bf16 and device.type == "cuda"
+                else parameter.dtype
+            )
+            for batch_size in sorted(
+                set(int(size) for size in admitted_batch_sizes), reverse=True
+            ):
                 for selected_length in sorted(selected_lengths, reverse=True):
                     x = torch.zeros(
                         batch_size,
@@ -234,7 +289,9 @@ def warmup_icarus_training_execution(
                         .clone()
                     )
                     selected_heads = (
-                        torch.arange(selected_count, device=device, dtype=torch.long)
+                        torch.arange(
+                            selected_count, device=device, dtype=torch.long
+                        )
                         .view(1, -1)
                         .expand(batch_size, -1)
                         .clone()
@@ -245,19 +302,35 @@ def warmup_icarus_training_execution(
                             dtype=torch.bfloat16,
                             enabled=bf16 and device.type == "cuda",
                         ):
-                            output = run_icarus_post_selection_region("compile", block, x, positions, selected_heads)
-                        trainable = tuple(parameter for parameter in block.parameters() if parameter.requires_grad)
-                        torch.autograd.grad(output.float().sum(), (x, *trainable), allow_unused=True)
+                            output = run_icarus_post_selection_region(
+                                "compile", block, x, positions, selected_heads
+                            )
+                        trainable = tuple(
+                            parameter
+                            for parameter in block.parameters()
+                            if parameter.requires_grad
+                        )
+                        torch.autograd.grad(
+                            output.float().sum(),
+                            (x, *trainable),
+                            allow_unused=True,
+                        )
         if device.type == "cuda":
             torch.cuda.synchronize(device)
 
 
-def _training_selected_lengths(sequence_length: int, process_every: int, topk: int) -> tuple[int, ...]:
+def _training_selected_lengths(
+    sequence_length: int, process_every: int, topk: int
+) -> tuple[int, ...]:
     if sequence_length <= 0 or process_every <= 0:
-        raise ValueError("Icarus warmup sequence_length and process_every must be positive")
+        raise ValueError(
+            "Icarus warmup sequence_length and process_every must be positive"
+        )
     lengths = {
         process_every + min(topk, cached_length - process_every)
-        for cached_length in range(process_every, sequence_length, process_every)
+        for cached_length in range(
+            process_every, sequence_length, process_every
+        )
     }
     return tuple(sorted(lengths))
 
@@ -331,7 +404,8 @@ def _compiled_icarus_processors(model: nn.Module) -> list[Any]:
     for module in model.modules():
         if (
             getattr(module, "execution_backend", None) == "compile"
-            and getattr(getattr(module, "_model_config", None), "variant", None) == "icarus"
+            and getattr(getattr(module, "_model_config", None), "variant", None)
+            == "icarus"
             and hasattr(module, "block")
         ):
             processors.append(module)
@@ -341,4 +415,7 @@ def _compiled_icarus_processors(model: nn.Module) -> list[Any]:
 def _is_non_reentrant_checkpoint_early_stop(error: Exception) -> bool:
     """Preserve checkpoint's private control flow without weakening fail-closed execution."""
     error_type = type(error)
-    return error_type.__module__ == "torch.utils.checkpoint" and error_type.__name__ == "_StopRecomputationError"
+    return (
+        error_type.__module__ == "torch.utils.checkpoint"
+        and error_type.__name__ == "_StopRecomputationError"
+    )

@@ -25,7 +25,7 @@ def _upgrade_qwen35_gated_delta_keys(
     for key in list(state):
         for legacy_suffix, current_suffix in suffixes.items():
             if key.endswith(legacy_suffix):
-                current_key = key[:-len(legacy_suffix)] + current_suffix
+                current_key = key[: -len(legacy_suffix)] + current_suffix
                 if current_key not in upgraded:
                     upgraded[current_key] = upgraded[key]
                 del upgraded[key]
@@ -45,8 +45,12 @@ def save_checkpoint(
     path.mkdir(parents=True, exist_ok=True)
     if not isinstance(model, dict):
         runtime_config = getattr(model, "config", None)
-        if isinstance(runtime_config, ModelConfig) and to_dict(runtime_config) != to_dict(model_config):
-            raise ValueError("checkpoint model_config does not match the model's runtime config")
+        if isinstance(runtime_config, ModelConfig) and to_dict(
+            runtime_config
+        ) != to_dict(model_config):
+            raise ValueError(
+                "checkpoint model_config does not match the model's runtime config"
+            )
     state = model if isinstance(model, dict) else model.state_dict()
     if cache_processor_only:
         state = {
@@ -77,9 +81,8 @@ def publish_final_checkpoint_manifest(
         ("final_processor_sha256", final_processor_sha256),
         ("initial_processor_sha256", initial_processor_sha256),
     ):
-        if (
-            len(digest) != 64
-            or any(character not in "0123456789abcdef" for character in digest)
+        if len(digest) != 64 or any(
+            character not in "0123456789abcdef" for character in digest
         ):
             raise ValueError(f"{name} must be a lowercase sha256 digest")
     required_files = (
@@ -102,7 +105,13 @@ def publish_final_checkpoint_manifest(
         "final_processor_sha256": final_processor_sha256,
     }
     encoded = (
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
         + "\n"
     ).encode("utf-8")
     with (path / "manifest.json").open("xb") as handle:
@@ -110,8 +119,6 @@ def publish_final_checkpoint_manifest(
         handle.flush()
         os.fsync(handle.fileno())
     return hashlib.sha256(encoded).hexdigest()
-
-
 
 
 def load_checkpoint_bytes(
@@ -136,7 +143,9 @@ def load_checkpoint_bytes(
     weights = _upgrade_qwen35_gated_delta_keys(weights)
     model = build_model(cfg)
     dtype_name = train_state.get("dtype")
-    if dtype_name == "mixed_bfloat16_backbone_float32_processor" and (dtype is None or dtype == "auto"):
+    if dtype_name == "mixed_bfloat16_backbone_float32_processor" and (
+        dtype is None or dtype == "auto"
+    ):
         backbone = getattr(model, "backbone", None)
         cache_processor = getattr(model, "cache_processor", None)
         if not isinstance(backbone, torch.nn.Module) or not isinstance(
@@ -148,9 +157,10 @@ def load_checkpoint_bytes(
         cast(torch.nn.Module, backbone).to(dtype=torch.bfloat16)
         cast(torch.nn.Module, cache_processor).to(dtype=torch.float32)
     else:
-        recorded_dtype = {"bfloat16": torch.bfloat16, "float32": torch.float32}.get(
-            dtype_name if isinstance(dtype_name, str) else ""
-        )
+        recorded_dtype = {
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32,
+        }.get(dtype_name if isinstance(dtype_name, str) else "")
         resolved = _resolve_dtype(dtype, weights) or recorded_dtype
         if resolved is not None:
             model.to(dtype=resolved)
@@ -161,7 +171,9 @@ def load_checkpoint_bytes(
         raise KeyError(f"unexpected checkpoint keys: {sorted(unexpected)[:8]}")
     missing = model_keys - weight_keys
     if missing:
-        backbone_keys = {key for key in model_keys if key.startswith("backbone.")}
+        backbone_keys = {
+            key for key in model_keys if key.startswith("backbone.")
+        }
         if not missing.issubset(backbone_keys):
             raise KeyError(f"missing checkpoint keys: {sorted(missing)[:8]}")
         backbone_checkpoint = train_state.get("backbone_checkpoint")
@@ -236,9 +248,17 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
     missing = []
     for key, expected in target_state.items():
         source_key = key if key in weights else f"backbone.{key}"
-        if source_key not in weights and key == "lm_head.weight" and "embed_tokens.weight" in weights:
+        if (
+            source_key not in weights
+            and key == "lm_head.weight"
+            and "embed_tokens.weight" in weights
+        ):
             source_key = "embed_tokens.weight"
-        if source_key not in weights and key == "lm_head.weight" and "backbone.embed_tokens.weight" in weights:
+        if (
+            source_key not in weights
+            and key == "lm_head.weight"
+            and "backbone.embed_tokens.weight" in weights
+        ):
             source_key = "backbone.embed_tokens.weight"
         if source_key not in weights:
             if key.endswith((".lora_a", ".lora_b")):
@@ -256,7 +276,9 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
         raise KeyError(f"missing backbone checkpoint keys: {missing[:8]}")
     incompatible = target.load_state_dict(loadable, strict=False)
     unexpected_missing = [
-        key for key in incompatible.missing_keys if not key.endswith((".lora_a", ".lora_b"))
+        key
+        for key in incompatible.missing_keys
+        if not key.endswith((".lora_a", ".lora_b"))
     ]
     if unexpected_missing or incompatible.unexpected_keys:
         raise RuntimeError(

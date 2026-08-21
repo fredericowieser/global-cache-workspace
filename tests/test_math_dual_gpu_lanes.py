@@ -20,14 +20,19 @@ def _write_checkpoint(path: Path, *, step: int = 10_902) -> None:
     files = {
         "config.json": b'{"model":{}}\n',
         "model.safetensors": b"fake-weights",
-        "train_state.json": json.dumps({"step": step, "dtype": "bfloat16"}).encode(),
+        "train_state.json": json.dumps(
+            {"step": step, "dtype": "bfloat16"}
+        ).encode(),
     }
     for name, content in files.items():
         (path / name).write_bytes(content)
     manifest = {
         "complete": True,
         "step": step,
-        "files": {name: hashlib.sha256(content).hexdigest() for name, content in files.items()},
+        "files": {
+            name: hashlib.sha256(content).hexdigest()
+            for name, content in files.items()
+        },
     }
     (path / "manifest.json").write_text(json.dumps(manifest))
 
@@ -53,8 +58,13 @@ def test_evaluation_bundle_is_minimal_authenticated_and_atomic(tmp_path):
         "model.safetensors",
         "train_state.json",
     }
-    assert manifest == verify_bundle(bundle, expected_arm="bt", expected_step=10_902)
-    assert manifest["files"]["model.safetensors"]["sha256"] == hashlib.sha256(b"fake-weights").hexdigest()
+    assert manifest == verify_bundle(
+        bundle, expected_arm="bt", expected_step=10_902
+    )
+    assert (
+        manifest["files"]["model.safetensors"]["sha256"]
+        == hashlib.sha256(b"fake-weights").hexdigest()
+    )
 
 
 def test_completed_full_sft_import_is_digest_bound(tmp_path, monkeypatch):
@@ -78,15 +88,23 @@ def test_completed_full_sft_import_is_digest_bound(tmp_path, monkeypatch):
         {
             "source_commit": generated["source_commit"],
             "training_config_sha256": generated["training_config_sha256"],
-            "source_checkpoint_manifest_sha256": generated["source_checkpoint_manifest_sha256"],
-            **{name: value["sha256"] for name, value in generated["files"].items()},
+            "source_checkpoint_manifest_sha256": generated[
+                "source_checkpoint_manifest_sha256"
+            ],
+            **{
+                name: value["sha256"]
+                for name, value in generated["files"].items()
+            },
         },
     )
 
     manifest = series._verify_full_sft_import(bundle)
 
     assert manifest["step"] == 10_902
-    assert manifest["training_config_sha256"] == hashlib.sha256(training_config.read_bytes()).hexdigest()
+    assert (
+        manifest["training_config_sha256"]
+        == hashlib.sha256(training_config.read_bytes()).hexdigest()
+    )
 
 
 def test_evaluation_bundle_rejects_tampering(tmp_path):

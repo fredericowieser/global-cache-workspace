@@ -43,7 +43,10 @@ from gcw.provenance import (
     tensor_state_sha256,
 )
 from gcw.performance.whole_model import maybe_compile_whole_model
-from gcw.training.model_setup import _apply_trainable_policy, _load_initial_model
+from gcw.training.model_setup import (
+    _apply_trainable_policy,
+    _load_initial_model,
+)
 from gcw.training.objectives import model_loss as _model_loss
 from gcw.training.optimizer import (
     _build_optimizer,
@@ -78,7 +81,9 @@ def timing_summary(raw_step_seconds: list[float]) -> dict[str, float]:
 
 
 def integrity_document(payload: dict[str, Any]) -> dict[str, Any]:
-    return _integrity_document(payload, schema=INTEGRITY_SCHEMA, kind=EVIDENCE_KIND)
+    return _integrity_document(
+        payload, schema=INTEGRITY_SCHEMA, kind=EVIDENCE_KIND
+    )
 
 
 def verify_integrity_document(document: dict[str, Any]) -> dict[str, Any]:
@@ -115,18 +120,26 @@ def device_identity(device: torch.device) -> dict[str, Any]:
         "cudnn": torch.backends.cudnn.version(),
     }
     if device.type == "cuda":
-        index = device.index if device.index is not None else torch.cuda.current_device()
+        index = (
+            device.index
+            if device.index is not None
+            else torch.cuda.current_device()
+        )
         properties = torch.cuda.get_device_properties(index)
         identity.update(
             {
                 "device_index": index,
                 "device_name": properties.name,
-                "compute_capability": list(torch.cuda.get_device_capability(index)),
+                "compute_capability": list(
+                    torch.cuda.get_device_capability(index)
+                ),
                 "total_memory_bytes": properties.total_memory,
             }
         )
     else:
-        identity.update({"device_index": None, "device_name": platform.processor() or "cpu"})
+        identity.update(
+            {"device_index": None, "device_name": platform.processor() or "cpu"}
+        )
     return identity
 
 
@@ -188,7 +201,9 @@ def _time_forward_operation(
     }
 
 
-def _build_configured_model(config: TrainConfig, device: torch.device) -> torch.nn.Module:
+def _build_configured_model(
+    config: TrainConfig, device: torch.device
+) -> torch.nn.Module:
     model = build_model(config.model).to(device)
     model.init_weights()
     if config.init_checkpoint:
@@ -201,15 +216,33 @@ def _build_configured_model(config: TrainConfig, device: torch.device) -> torch.
 def _cache_fixture(config: TrainConfig, device: torch.device) -> CacheState:
     processor = config.model.cache_processor
     if processor is None:
-        raise ValueError("cache-processor benchmarks require model.cache_processor")
-    cache_len = min(config.sequence_len, max(processor.process_every * 2, processor.process_every + processor.topk))
+        raise ValueError(
+            "cache-processor benchmarks require model.cache_processor"
+        )
+    cache_len = min(
+        config.sequence_len,
+        max(
+            processor.process_every * 2,
+            processor.process_every + processor.topk,
+        ),
+    )
     if cache_len <= processor.process_every:
-        raise ValueError("sequence_len must exceed cache_processor.process_every for a representative fixture")
+        raise ValueError(
+            "sequence_len must exceed cache_processor.process_every for a representative fixture"
+        )
     num_heads, head_dim = config.model.stored_cache_shape
     shape = (config.batch_size, num_heads, cache_len, head_dim)
-    keys = [torch.randn(shape, device=device) for _ in range(config.model.cache_num_layers)]
-    values = [torch.randn(shape, device=device) for _ in range(config.model.cache_num_layers)]
-    scores = torch.randn(config.batch_size, cache_len, device=device, dtype=torch.float32)
+    keys = [
+        torch.randn(shape, device=device)
+        for _ in range(config.model.cache_num_layers)
+    ]
+    values = [
+        torch.randn(shape, device=device)
+        for _ in range(config.model.cache_num_layers)
+    ]
+    scores = torch.randn(
+        config.batch_size, cache_len, device=device, dtype=torch.float32
+    )
     return CacheState(keys, values, scores)
 
 
@@ -222,7 +255,9 @@ def benchmark_processor_operations(
 ) -> list[dict[str, Any]]:
     variant = config.model.variant
     if variant not in {"bt", "bgt"}:
-        raise ValueError("maintained processor microbenchmarks support BT and BGT")
+        raise ValueError(
+            "maintained processor microbenchmarks support BT and BGT"
+        )
     torch.manual_seed(config.seed)
     model = _build_configured_model(config, device)
     model.eval()
@@ -241,18 +276,27 @@ def benchmark_processor_operations(
     if cp_config.update_stream == "v":
         if variant == "bt":
             processor_input = merge_layer_values(values)
-            transformed = run_batched_cache_processors(processor.blocks, processor_input, indices)
-            scattered_values = split_layer_values(transformed, values.shape[2], values.shape[4])
+            transformed = run_batched_cache_processors(
+                processor.blocks, processor_input, indices
+            )
+            scattered_values = split_layer_values(
+                transformed, values.shape[2], values.shape[4]
+            )
         else:
             processor_input = merge_global_values(values)
             transformed = processor.block(processor_input, indices)
             scattered_values = split_global_values(
-                transformed, processor.num_layers, processor.num_kv_heads, processor.head_dim
+                transformed,
+                processor.num_layers,
+                processor.num_kv_heads,
+                processor.head_dim,
             )
 
         def transform() -> torch.Tensor:
             if variant == "bt":
-                return run_batched_cache_processors(processor.blocks, processor_input, indices)
+                return run_batched_cache_processors(
+                    processor.blocks, processor_input, indices
+                )
             return processor.block(processor_input, indices)
 
         def scatter() -> CacheState:
@@ -261,22 +305,33 @@ def benchmark_processor_operations(
     else:
         if variant == "bt":
             processor_input = merge_layer_kv(keys, values)
-            transformed = run_batched_cache_processors(processor.blocks, processor_input, indices)
-            scattered_keys, scattered_values = split_layer_kv(transformed, keys.shape[2], keys.shape[4])
+            transformed = run_batched_cache_processors(
+                processor.blocks, processor_input, indices
+            )
+            scattered_keys, scattered_values = split_layer_kv(
+                transformed, keys.shape[2], keys.shape[4]
+            )
         else:
             processor_input = merge_global_kv(keys, values)
             transformed = processor.block(processor_input, indices)
             scattered_keys, scattered_values = split_global_kv(
-                transformed, processor.num_layers, processor.num_kv_heads, processor.head_dim
+                transformed,
+                processor.num_layers,
+                processor.num_kv_heads,
+                processor.head_dim,
             )
 
         def transform() -> torch.Tensor:
             if variant == "bt":
-                return run_batched_cache_processors(processor.blocks, processor_input, indices)
+                return run_batched_cache_processors(
+                    processor.blocks, processor_input, indices
+                )
             return processor.block(processor_input, indices)
 
         def scatter() -> CacheState:
-            return scatter_cache_layers(cache, indices, scattered_keys, scattered_values)
+            return scatter_cache_layers(
+                cache, indices, scattered_keys, scattered_values
+            )
 
     operations: list[tuple[str, Callable[[], object]]] = [
         ("select_indices", select),
@@ -286,7 +341,14 @@ def benchmark_processor_operations(
         ("processor_end_to_end", lambda: processor(cache)),
     ]
     return [
-        _time_forward_operation(name, operation, device=device, warmup=warmup, steps=steps, variant=variant)
+        _time_forward_operation(
+            name,
+            operation,
+            device=device,
+            warmup=warmup,
+            steps=steps,
+            variant=variant,
+        )
         for name, operation in operations
     ]
 
@@ -295,11 +357,15 @@ def _gradient_accumulation_steps(config: TrainConfig) -> int:
     micro_tokens = config.batch_size * config.sequence_len
     if config.global_batch_rows:
         if config.global_batch_rows % config.batch_size:
-            raise ValueError("global_batch_rows must be divisible by batch_size")
+            raise ValueError(
+                "global_batch_rows must be divisible by batch_size"
+            )
         return config.global_batch_rows // config.batch_size
     tokens = config.total_batch_size or micro_tokens
     if tokens % micro_tokens:
-        raise ValueError("total_batch_size must be divisible by batch_size * sequence_len")
+        raise ValueError(
+            "total_batch_size must be divisible by batch_size * sequence_len"
+        )
     return tokens // micro_tokens
 
 
@@ -314,12 +380,16 @@ def _training_fixture(
         stream.close()
 
 
-def _optimizer_tensor_state(optimizer: torch.optim.Optimizer) -> dict[str, torch.Tensor]:
+def _optimizer_tensor_state(
+    optimizer: torch.optim.Optimizer,
+) -> dict[str, torch.Tensor]:
     tensors: dict[str, torch.Tensor] = {}
     parameter_indices = {
         id(parameter): index
         for index, parameter in enumerate(
-            parameter for group in optimizer.param_groups for parameter in group["params"]
+            parameter
+            for group in optimizer.param_groups
+            for parameter in group["params"]
         )
     }
     for parameter, state in optimizer.state.items():
@@ -338,13 +408,17 @@ def benchmark_optimizer_step(
     steps: int,
 ) -> dict[str, Any]:
     if config.resume is not None:
-        raise ValueError("optimizer-step benchmarks do not restore resume state")
+        raise ValueError(
+            "optimizer-step benchmarks do not restore resume state"
+        )
     torch.manual_seed(config.seed)
     model = _build_configured_model(config, device)
     _apply_trainable_policy(model, config.trainable)
     model = maybe_compile_whole_model(model)
     model.train()
-    params = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    params = [
+        parameter for parameter in model.parameters() if parameter.requires_grad
+    ]
     optimizer = _build_optimizer(params, config)
     initial_trainable_parameters_sha256 = tensor_state_sha256(
         {
@@ -377,9 +451,15 @@ def benchmark_optimizer_step(
         _clip_grad_norm(model, params, config.grad_clip)
         schedule_step = benchmark_step % config.max_steps
         lr_scale = _wsd_lr(
-            schedule_step, config.max_steps, config.warmup_steps, config.warmdown_ratio, config.final_lr_frac
+            schedule_step,
+            config.max_steps,
+            config.warmup_steps,
+            config.warmdown_ratio,
+            config.final_lr_frac,
         )
-        weight_decay = _weight_decay(schedule_step, config.max_steps, config.weight_decay)
+        weight_decay = _weight_decay(
+            schedule_step, config.max_steps, config.weight_decay
+        )
         for group in optimizer.param_groups:
             group["lr"] = group["initial_lr"] * lr_scale
             if group.get("decay", False):
@@ -399,12 +479,18 @@ def benchmark_optimizer_step(
         _synchronize(device)
         raw.append(time.perf_counter() - start)
 
-    non_padding_per_microbatch = int(x.numel() if attention_mask is None else attention_mask.sum().item())
+    non_padding_per_microbatch = int(
+        x.numel() if attention_mask is None else attention_mask.sum().item()
+    )
     supervised_per_microbatch = int((y != -100).sum().item())
     batch_state = {"input_ids": x, "targets": y}
     if attention_mask is not None:
         batch_state["attention_mask"] = attention_mask
-    trainable_state = {name: parameter for name, parameter in model.named_parameters() if parameter.requires_grad}
+    trainable_state = {
+        name: parameter
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
     gradient_state = {
         name: parameter.grad
         for name, parameter in model.named_parameters()
@@ -420,16 +506,26 @@ def benchmark_optimizer_step(
         "gradient_accumulation_steps": accumulation,
         "training_batch_sha256": tensor_state_sha256(batch_state),
         "initial_trainable_parameters_sha256": initial_trainable_parameters_sha256,
-        "final_trainable_parameters_sha256": tensor_state_sha256(trainable_state),
+        "final_trainable_parameters_sha256": tensor_state_sha256(
+            trainable_state
+        ),
         "final_gradients_sha256": tensor_state_sha256(gradient_state),
-        "final_optimizer_tensors_sha256": tensor_state_sha256(optimizer_tensors),
+        "final_optimizer_tensors_sha256": tensor_state_sha256(
+            optimizer_tensors
+        ),
         "raw_step_seconds": raw,
         **timing_summary(raw),
         "peak_memory_bytes": _peak_memory(device),
-        "real_non_padding_tokens_per_step": non_padding_per_microbatch * accumulation,
-        "real_supervised_tokens_per_step": supervised_per_microbatch * accumulation,
-        "real_non_padding_tokens_total": non_padding_per_microbatch * accumulation * steps,
-        "real_supervised_tokens_total": supervised_per_microbatch * accumulation * steps,
+        "real_non_padding_tokens_per_step": non_padding_per_microbatch
+        * accumulation,
+        "real_supervised_tokens_per_step": supervised_per_microbatch
+        * accumulation,
+        "real_non_padding_tokens_total": non_padding_per_microbatch
+        * accumulation
+        * steps,
+        "real_supervised_tokens_total": supervised_per_microbatch
+        * accumulation
+        * steps,
     }
 
 
@@ -443,17 +539,27 @@ def run_benchmarks(
     steps: int,
 ) -> dict[str, Any]:
     if warmup < 0 or steps <= 0:
-        raise ValueError("warmup must be non-negative and steps must be positive")
+        raise ValueError(
+            "warmup must be non-negative and steps must be positive"
+        )
     if config.distributed != "none":
         raise ValueError("benchmark harness requires distributed='none'")
     require_loss_backend(config.loss_backend, device)
     repository = find_repository_root(Path(__file__))
-    source = repository_source_identity(repository, executed_files=(Path(__file__),), require_git=True)
+    source = repository_source_identity(
+        repository, executed_files=(Path(__file__),), require_git=True
+    )
     results: list[dict[str, Any]] = []
     if suite in {"processor", "all"}:
-        results.extend(benchmark_processor_operations(config, device, warmup=warmup, steps=steps))
+        results.extend(
+            benchmark_processor_operations(
+                config, device, warmup=warmup, steps=steps
+            )
+        )
     if suite in {"train-step", "all"}:
-        results.append(benchmark_optimizer_step(config, device, warmup=warmup, steps=steps))
+        results.append(
+            benchmark_optimizer_step(config, device, warmup=warmup, steps=steps)
+        )
     resolved_config = to_dict(config)
     return {
         "source_commit": source["git_commit"],
@@ -472,11 +578,19 @@ def run_benchmarks(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Benchmark GCW cache processors and complete optimizer steps")
+    parser = argparse.ArgumentParser(
+        description="Benchmark GCW cache processors and complete optimizer steps"
+    )
     parser.add_argument("--train-config", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--suite", choices=("processor", "train-step", "all"), default="all")
-    parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--suite", choices=("processor", "train-step", "all"), default="all"
+    )
+    parser.add_argument(
+        "--device",
+        choices=("cpu", "cuda"),
+        default="cuda" if torch.cuda.is_available() else "cpu",
+    )
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--steps", type=int, default=20)
     return parser

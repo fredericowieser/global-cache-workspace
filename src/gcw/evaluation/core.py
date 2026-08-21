@@ -7,7 +7,9 @@ import time
 import torch
 
 from gcw.runtime import base_dir
-from gcw.evaluation.bpb import run_fineweb  # noqa: F401  (re-exported for the CLI)
+from gcw.evaluation.bpb import (
+    run_fineweb,
+)  # noqa: F401  (re-exported for the CLI)
 from gcw.evaluation.lm_eval_adapter import (
     GCWEvalLM,
     HAS_LM_EVAL,
@@ -143,13 +145,17 @@ def run_task_groups(
     runs = _filter_skipped_tasks(runs)
     try:
         import certifi
+
         os.environ.setdefault("SSL_CERT_FILE", certifi.where())
         os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
     except ImportError:
         pass
-    os.environ.setdefault("HF_DATASETS_CACHE", str(base_dir() / "hf_datasets_eval_v3"))
+    os.environ.setdefault(
+        "HF_DATASETS_CACHE", str(base_dir() / "hf_datasets_eval_v3")
+    )
     import lm_eval
     from lm_eval.tasks import TaskManager, get_task_dict
+
     dist_state, local_rank, world_size = _distributed_eval_state()
     device = _eval_device(local_rank)
     model, tokenizer = _load_eval_target(
@@ -169,13 +175,25 @@ def run_task_groups(
         raise ValueError(f"unknown prompt mode: {prompt_mode}")
     lm.prompt_mode = prompt_mode
     apply_chat_template = _should_apply_chat_template(tokenizer, prompt_mode)
-    task_manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
+    task_manager = TaskManager(
+        include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR"
+    )
     merged = _load_partial_results(runs) or _empty_eval_results()
     _write_progress(_new_progress(runs), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
         progress = _update_progress(run_idx, "running", runs, merged)
         if _run_is_complete(tasks, merged):
-            _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress, skipped=True), merged)
+            _write_progress(
+                _update_progress(
+                    run_idx,
+                    "completed",
+                    runs,
+                    merged,
+                    progress=progress,
+                    skipped=True,
+                ),
+                merged,
+            )
             continue
         if world_size > 1 and dist_state is not None:
             with dist_state.main_process_first():
@@ -198,7 +216,17 @@ def run_task_groups(
                 apply_chat_template=apply_chat_template,
             )
         except BaseException as exc:
-            _write_progress(_update_progress(run_idx, "failed", runs, merged, progress=progress, error=str(exc)), merged)
+            _write_progress(
+                _update_progress(
+                    run_idx,
+                    "failed",
+                    runs,
+                    merged,
+                    progress=progress,
+                    error=str(exc),
+                ),
+                merged,
+            )
             raise
         if out is None:
             continue
@@ -219,11 +247,20 @@ def run_task_groups(
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
         _write_partial_results(merged)
-        _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress), merged)
+        _write_progress(
+            _update_progress(
+                run_idx, "completed", runs, merged, progress=progress
+            ),
+            merged,
+        )
     merged["gcw_protocol"] = {
         "name": "lm_eval_loglikelihood_v1",
         "prompt_mode": prompt_mode,
         "apply_chat_template": apply_chat_template,
-        "thinking_dimension": False if prompt_mode == "plain" else prompt_mode.startswith("thinking_"),
+        "thinking_dimension": (
+            False
+            if prompt_mode == "plain"
+            else prompt_mode.startswith("thinking_")
+        ),
     }
     return merged

@@ -33,12 +33,22 @@ from gcw.performance.adjacent_pairs import (
     plan_contiguous_pair_groups,
     reserve_adjacent_pairs,
 )
-from gcw.performance.config import AdaptiveBatchingConfig, PerformanceConfig, PhysicalBatchBandConfig
-from gcw.training.checkpoint import save_training_checkpoint as real_save_training_checkpoint
+from gcw.performance.config import (
+    AdaptiveBatchingConfig,
+    PerformanceConfig,
+    PhysicalBatchBandConfig,
+)
+from gcw.training.checkpoint import (
+    save_training_checkpoint as real_save_training_checkpoint,
+)
 from gcw.training.audit import _training_fingerprint
 from gcw.training.optimizer import _build_optimizer
 from gcw.training.core import train
-from gcw.training.objectives import adjacent_pair_loss_sum, adjacent_pair_loss_sum_from_rows, model_loss
+from gcw.training.objectives import (
+    adjacent_pair_loss_sum,
+    adjacent_pair_loss_sum_from_rows,
+    model_loss,
+)
 
 
 def _pair(pair_index: int, width: int) -> TrainingBatch:
@@ -69,7 +79,9 @@ def _enabled_policy(**kwargs: Any) -> AdaptiveBatchingConfig:
     return AdaptiveBatchingConfig(enabled=True, **kwargs)
 
 
-def test_adaptive_v2_has_no_admissible_production_config_until_exact_cuda_parity() -> None:
+def test_adaptive_v2_has_no_admissible_production_config_until_exact_cuda_parity() -> (
+    None
+):
     """A grouped V2 must not become configurable before the H200 parity blocker is resolved."""
     assert "adaptive_batching_v2" not in to_dict(PerformanceConfig())
     with pytest.raises(TypeError, match="adaptive_batching_v2"):
@@ -94,7 +106,15 @@ def test_planner_uses_exact_boundaries_and_keeps_contiguous_pairs() -> None:
 
     step = plan_contiguous_pair_groups(reservation, _enabled_policy())
 
-    assert [(group.pair_start, group.pair_stop, group.physical_rows, group.padded_tokens) for group in step.groups] == [
+    assert [
+        (
+            group.pair_start,
+            group.pair_stop,
+            group.physical_rows,
+            group.padded_tokens,
+        )
+        for group in step.groups
+    ] == [
         (0, 8, 16, 1024),
         (8, 12, 8, 2048),
         (12, 14, 4, 3072),
@@ -117,7 +137,9 @@ def test_width_one_over_each_boundary_falls_to_the_next_band() -> None:
 
 
 def test_planner_fails_closed_above_sequence_contract() -> None:
-    reservation = reserve_adjacent_pairs(_PairStream([4097] + [1] * (PAIRS_PER_STEP - 1)))
+    reservation = reserve_adjacent_pairs(
+        _PairStream([4097] + [1] * (PAIRS_PER_STEP - 1))
+    )
     with pytest.raises(ValueError, match="no physical band for pair 0"):
         plan_contiguous_pair_groups(reservation, _enabled_policy())
 
@@ -134,13 +156,20 @@ def test_collation_preserves_pair_and_row_order_with_right_padding() -> None:
         rows = physical.batch.x[pair_index * 2 : pair_index * 2 + 2]
         assert torch.equal(rows[:, 0], torch.full((2,), pair_index + 1))
         assert torch.all(rows[:, widths[pair_index] :] == 0)
-        assert torch.all(physical.batch.y[pair_index * 2 : pair_index * 2 + 2, widths[pair_index] :] == -100)
+        assert torch.all(
+            physical.batch.y[
+                pair_index * 2 : pair_index * 2 + 2, widths[pair_index] :
+            ]
+            == -100
+        )
         assert not physical.batch.attention_mask[
             pair_index * 2 : pair_index * 2 + 2, widths[pair_index] :
         ].any()
 
 
-def test_pair_loss_sum_weights_each_original_pair_by_its_own_token_count() -> None:
+def test_pair_loss_sum_weights_each_original_pair_by_its_own_token_count() -> (
+    None
+):
     row_sums = torch.tensor([2.0, 4.0, 3.0, 9.0, 10.0, 2.0])
     row_counts = torch.tensor([1.0, 2.0, 1.0, 3.0, 4.0, 2.0])
 
@@ -164,7 +193,9 @@ def test_adaptive_metadata_authenticates_every_policy_field() -> None:
     assert metadata["schema"] == "gcw.adaptive_pair_batching.v1"
     assert metadata["reserved_pairs"] == 32
     assert metadata["group_weighting"] == "adjacent_pair_loss_sum_divided_by_32"
-    assert metadata["fingerprint_sha256"] != changed_metadata["fingerprint_sha256"]
+    assert (
+        metadata["fingerprint_sha256"] != changed_metadata["fingerprint_sha256"]
+    )
 
 
 def _adaptive_config(**kwargs: Any) -> TrainConfig:
@@ -238,11 +269,16 @@ def test_performance_yaml_mappings_are_strictly_typed() -> None:
             }
         }
     )
-    assert config.performance.adaptive_batching.bands[0] == PhysicalBatchBandConfig(1024, 16)
+    assert config.performance.adaptive_batching.bands[
+        0
+    ] == PhysicalBatchBandConfig(1024, 16)
 
     with pytest.raises(ValueError, match="strictly decreasing"):
         AdaptiveBatchingConfig(
-            bands=(PhysicalBatchBandConfig(1024, 8), PhysicalBatchBandConfig(2048, 16))
+            bands=(
+                PhysicalBatchBandConfig(1024, 8),
+                PhysicalBatchBandConfig(2048, 16),
+            )
         )
 
 
@@ -276,7 +312,9 @@ def _mixed_policy() -> PerformanceConfig:
     )
 
 
-def test_adaptive_gradients_and_multistep_adamw_match_32_serial_pair_means() -> None:
+def test_adaptive_gradients_and_multistep_adamw_match_32_serial_pair_means() -> (
+    None
+):
     widths = [2] * 8 + [4] * 4 + [6] * 2 + [8] * 18
     pairs = [_pair(index, width) for index, width in enumerate(widths)]
     config = _adaptive_config(
@@ -306,7 +344,9 @@ def test_adaptive_gradients_and_multistep_adamw_match_32_serial_pair_means() -> 
             )
             (loss / PAIRS_PER_STEP).backward()
 
-        step = build_adaptive_pair_step(_PairStream(widths), config.performance.adaptive_batching)
+        step = build_adaptive_pair_step(
+            _PairStream(widths), config.performance.adaptive_batching
+        )
         for group in step.groups:
             batch = collate_pair_group(step, group).batch
             loss = adjacent_pair_loss_sum(
@@ -317,18 +357,29 @@ def test_adaptive_gradients_and_multistep_adamw_match_32_serial_pair_means() -> 
             )
             (loss / PAIRS_PER_STEP).backward()
 
-        for expected, actual in zip(serial.parameters(), adaptive.parameters(), strict=True):
+        for expected, actual in zip(
+            serial.parameters(), adaptive.parameters(), strict=True
+        ):
             assert expected.grad is not None
             assert actual.grad is not None
-            torch.testing.assert_close(actual.grad, expected.grad, atol=2e-7, rtol=2e-6)
+            torch.testing.assert_close(
+                actual.grad, expected.grad, atol=2e-7, rtol=2e-6
+            )
         serial_optimizer.step()
         adaptive_optimizer.step()
 
-    for expected, actual in zip(serial.parameters(), adaptive.parameters(), strict=True):
+    for expected, actual in zip(
+        serial.parameters(), adaptive.parameters(), strict=True
+    ):
         torch.testing.assert_close(actual, expected, atol=1e-6, rtol=2e-5)
         expected_state = serial_optimizer.state[expected]
         actual_state = adaptive_optimizer.state[actual]
-        torch.testing.assert_close(actual_state["exp_avg"], expected_state["exp_avg"], atol=2e-8, rtol=2e-6)
+        torch.testing.assert_close(
+            actual_state["exp_avg"],
+            expected_state["exp_avg"],
+            atol=2e-8,
+            rtol=2e-6,
+        )
         torch.testing.assert_close(
             actual_state["exp_avg_sq"],
             expected_state["exp_avg_sq"],
@@ -379,14 +430,28 @@ def test_training_integrates_adaptive_plan_and_reports_actual_groups(
     with torch.no_grad():
         for pair_index, width in enumerate(widths):
             pair = _pair(pair_index, width)
-            expected_loss += float(
-                model_loss(oracle, pair.x, pair.y, attention_mask=pair.attention_mask)
-            ) / PAIRS_PER_STEP
+            expected_loss += (
+                float(
+                    model_loss(
+                        oracle,
+                        pair.x,
+                        pair.y,
+                        attention_mask=pair.attention_mask,
+                    )
+                )
+                / PAIRS_PER_STEP
+            )
 
-    monkeypatch.setattr(assembly_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    monkeypatch.setattr(
+        assembly_module, "init_distributed", lambda _kind: torch.device("cpu")
+    )
     stream = _PairStream(widths)
     tracker = _Tracker()
-    monkeypatch.setattr(assembly_module, "build_training_stream", lambda *_args, **_kwargs: stream)
+    monkeypatch.setattr(
+        assembly_module,
+        "build_training_stream",
+        lambda *_args, **_kwargs: stream,
+    )
     monkeypatch.setattr(
         assembly_module.RunTracker,
         "for_training",
@@ -409,7 +474,9 @@ def test_training_integrates_adaptive_plan_and_reports_actual_groups(
     assert tracker.summary["adaptive_batching"]["enabled"] is True
 
 
-def test_adaptive_policy_is_fingerprinted_without_changing_the_objective_protocol(tmp_path) -> None:
+def test_adaptive_policy_is_fingerprinted_without_changing_the_objective_protocol(
+    tmp_path,
+) -> None:
     dataset = tmp_path / "train.jsonl"
     dataset.write_text("{}\n" * ROWS_PER_STEP)
     config = _adaptive_config(
@@ -441,7 +508,10 @@ def test_adaptive_policy_is_fingerprinted_without_changing_the_objective_protoco
     assert adaptive_fingerprint != changed_fingerprint
     _, model_receipt = resolve_model(config.model).require()
     experiment, _ = resolve_experiment(config, model_receipt).require()
-    assert experiment.objective_protocol == "gcw.sft.answer_only_ce.adjacent_pair_token_mean.v1"
+    assert (
+        experiment.objective_protocol
+        == "gcw.sft.answer_only_ce.adjacent_pair_token_mean.v1"
+    )
     assert "adaptive_adjacent_pair_batching" in experiment.capabilities
 
 
@@ -452,7 +522,9 @@ class _ResumeTokenizer:
         return [2 + ord(character) % 29 for character in text]
 
 
-def test_one_adaptive_step_leaves_the_same_sixteen_row_epoch_tail_unconsumed() -> None:
+def test_one_adaptive_step_leaves_the_same_sixteen_row_epoch_tail_unconsumed() -> (
+    None
+):
     rows = [{"prompt": f"Q{index}", "answer": "A"} for index in range(80)]
     stream = SFTBatchStream(
         rows,
@@ -484,8 +556,12 @@ def test_interrupted_adaptive_training_resumes_exactly(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
-    monkeypatch.setattr(training_data_module, "get_tokenizer", lambda _name: _ResumeTokenizer())
-    monkeypatch.setattr(assembly_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    monkeypatch.setattr(
+        training_data_module, "get_tokenizer", lambda _name: _ResumeTokenizer()
+    )
+    monkeypatch.setattr(
+        assembly_module, "init_distributed", lambda _kind: torch.device("cpu")
+    )
 
     def make_config(output_dir: str) -> TrainConfig:
         return _adaptive_config(
@@ -526,18 +602,31 @@ def test_interrupted_adaptive_training_resumes_exactly(
         if resume_state.step == 1 and str(path).endswith("checkpoint"):
             raise RuntimeError("simulated adaptive interruption")
 
-    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", save_then_interrupt)
+    monkeypatch.setattr(
+        "gcw.training.state.save_training_checkpoint", save_then_interrupt
+    )
     with pytest.raises(RuntimeError, match="simulated adaptive interruption"):
         train(interrupted)
 
-    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", real_save_training_checkpoint)
+    monkeypatch.setattr(
+        "gcw.training.state.save_training_checkpoint",
+        real_save_training_checkpoint,
+    )
     resumed = make_config(str(tmp_path / "resumed"))
     resumed.save_every = 1
-    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "resumed" / "checkpoint"))
+    resumed.resume = ResumeConfig(
+        checkpoint=str(tmp_path / "resumed" / "checkpoint")
+    )
     train(resumed)
 
-    baseline_model, _, baseline_state = load_checkpoint(tmp_path / "baseline" / "checkpoint")
-    resumed_model, _, resumed_state = load_checkpoint(tmp_path / "resumed" / "checkpoint")
+    baseline_model, _, baseline_state = load_checkpoint(
+        tmp_path / "baseline" / "checkpoint"
+    )
+    resumed_model, _, resumed_state = load_checkpoint(
+        tmp_path / "resumed" / "checkpoint"
+    )
     assert baseline_state["step"] == resumed_state["step"] == 2
-    for expected, actual in zip(baseline_model.parameters(), resumed_model.parameters(), strict=True):
+    for expected, actual in zip(
+        baseline_model.parameters(), resumed_model.parameters(), strict=True
+    ):
         assert torch.equal(expected, actual)

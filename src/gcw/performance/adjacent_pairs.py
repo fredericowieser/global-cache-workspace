@@ -15,7 +15,10 @@ import torch
 import torch.nn.functional as F
 
 from gcw.data.training import TrainingBatch, TrainingBatchStream
-from gcw.performance.config import AdaptiveBatchingConfig, PhysicalBatchBandConfig
+from gcw.performance.config import (
+    AdaptiveBatchingConfig,
+    PhysicalBatchBandConfig,
+)
 from gcw.provenance import canonical_json_sha256
 
 PAIRS_PER_STEP = 32
@@ -32,8 +35,13 @@ class ReservedAdjacentPairs:
     padded_lengths: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        if len(self.pairs) != PAIRS_PER_STEP or len(self.padded_lengths) != PAIRS_PER_STEP:
-            raise ValueError(f"adaptive batching must reserve exactly {PAIRS_PER_STEP} adjacent pairs")
+        if (
+            len(self.pairs) != PAIRS_PER_STEP
+            or len(self.padded_lengths) != PAIRS_PER_STEP
+        ):
+            raise ValueError(
+                f"adaptive batching must reserve exactly {PAIRS_PER_STEP} adjacent pairs"
+            )
 
 
 @dataclass(frozen=True)
@@ -60,16 +68,27 @@ class AdaptivePairStepPlan:
 
     def __post_init__(self) -> None:
         if not self.groups:
-            raise ValueError("adaptive pair step plan must contain physical groups")
+            raise ValueError(
+                "adaptive pair step plan must contain physical groups"
+            )
         cursor = 0
         for group in self.groups:
-            if group.pair_start != cursor or group.pair_stop <= group.pair_start:
-                raise ValueError("adaptive pair groups must be contiguous and ordered")
+            if (
+                group.pair_start != cursor
+                or group.pair_stop <= group.pair_start
+            ):
+                raise ValueError(
+                    "adaptive pair groups must be contiguous and ordered"
+                )
             if group.physical_rows != group.pair_count * ROWS_PER_PAIR:
-                raise ValueError("adaptive pair group row count does not match its pair range")
+                raise ValueError(
+                    "adaptive pair group row count does not match its pair range"
+                )
             cursor = group.pair_stop
         if cursor != PAIRS_PER_STEP:
-            raise ValueError(f"adaptive pair groups must cover exactly {PAIRS_PER_STEP} pairs")
+            raise ValueError(
+                f"adaptive pair groups must cover exactly {PAIRS_PER_STEP} pairs"
+            )
 
     def metrics(self) -> dict[str, float]:
         """Return per-step planning telemetry without model-dependent values."""
@@ -79,19 +98,35 @@ class AdaptivePairStepPlan:
             "train/adaptive_reserved_pairs": float(PAIRS_PER_STEP),
             "train/adaptive_reserved_rows": float(ROWS_PER_STEP),
             "train/adaptive_physical_groups": float(len(self.groups)),
-            "train/adaptive_physical_rows_min": float(min(group.physical_rows for group in self.groups)),
-            "train/adaptive_physical_rows_max": float(max(group.physical_rows for group in self.groups)),
-            "train/adaptive_padded_tokens_min": float(min(group.padded_tokens for group in self.groups)),
-            "train/adaptive_padded_tokens_max": float(max(group.padded_tokens for group in self.groups)),
+            "train/adaptive_physical_rows_min": float(
+                min(group.physical_rows for group in self.groups)
+            ),
+            "train/adaptive_physical_rows_max": float(
+                max(group.physical_rows for group in self.groups)
+            ),
+            "train/adaptive_padded_tokens_min": float(
+                min(group.padded_tokens for group in self.groups)
+            ),
+            "train/adaptive_padded_tokens_max": float(
+                max(group.padded_tokens for group in self.groups)
+            ),
             "train/adaptive_source_pair_padded_positions": float(
-                sum(length * ROWS_PER_PAIR for length in self.reservation.padded_lengths)
+                sum(
+                    length * ROWS_PER_PAIR
+                    for length in self.reservation.padded_lengths
+                )
             ),
             "train/adaptive_physical_padded_positions": float(
-                sum(group.physical_rows * group.padded_tokens for group in self.groups)
+                sum(
+                    group.physical_rows * group.padded_tokens
+                    for group in self.groups
+                )
             ),
         }
         for physical_rows in (2, 4, 8, 16):
-            result[f"train/adaptive_groups_rows_{physical_rows}"] = float(counts[physical_rows])
+            result[f"train/adaptive_groups_rows_{physical_rows}"] = float(
+                counts[physical_rows]
+            )
         return result
 
 
@@ -103,7 +138,9 @@ class AdaptivePhysicalBatch:
     plan: PairGroupPlan
 
 
-def reserve_adjacent_pairs(stream: TrainingBatchStream) -> ReservedAdjacentPairs:
+def reserve_adjacent_pairs(
+    stream: TrainingBatchStream,
+) -> ReservedAdjacentPairs:
     """Consume exactly 32 eager two-row batches without altering their order."""
     pairs: list[TrainingBatch] = []
     padded_lengths: list[int] = []
@@ -131,7 +168,9 @@ def plan_contiguous_pair_groups(
             pair_stop = pair_start + pair_count
             if pair_stop > PAIRS_PER_STEP:
                 continue
-            padded_tokens = max(reservation.padded_lengths[pair_start:pair_stop])
+            padded_tokens = max(
+                reservation.padded_lengths[pair_start:pair_stop]
+            )
             if padded_tokens <= band.max_padded_tokens:
                 selected = PairGroupPlan(
                     pair_start=pair_start,
@@ -151,22 +190,36 @@ def plan_contiguous_pair_groups(
     return AdaptivePairStepPlan(reservation=reservation, groups=tuple(groups))
 
 
-def collate_pair_group(step: AdaptivePairStepPlan, group: PairGroupPlan) -> AdaptivePhysicalBatch:
+def collate_pair_group(
+    step: AdaptivePairStepPlan, group: PairGroupPlan
+) -> AdaptivePhysicalBatch:
     """Right-pad and concatenate one planned contiguous pair range."""
     if group not in step.groups:
-        raise ValueError("pair group does not belong to the supplied adaptive step plan")
+        raise ValueError(
+            "pair group does not belong to the supplied adaptive step plan"
+        )
     pairs = step.reservation.pairs[group.pair_start : group.pair_stop]
-    x = torch.cat([_right_pad(pair.x, group.padded_tokens, 0) for pair in pairs], dim=0).contiguous()
-    y = torch.cat([_right_pad(pair.y, group.padded_tokens, -100) for pair in pairs], dim=0).contiguous()
+    x = torch.cat(
+        [_right_pad(pair.x, group.padded_tokens, 0) for pair in pairs], dim=0
+    ).contiguous()
+    y = torch.cat(
+        [_right_pad(pair.y, group.padded_tokens, -100) for pair in pairs], dim=0
+    ).contiguous()
     masks = [pair.attention_mask for pair in pairs]
     if any(mask is None for mask in masks):
         raise ValueError("adaptive pair collation requires attention masks")
     attention_mask = torch.cat(
-        [_right_pad(mask, group.padded_tokens, False) for mask in masks if mask is not None],
+        [
+            _right_pad(mask, group.padded_tokens, False)
+            for mask in masks
+            if mask is not None
+        ],
         dim=0,
     ).contiguous()
     if x.shape != y.shape or x.shape != attention_mask.shape:
-        raise RuntimeError("adaptive pair collation produced inconsistent tensor shapes")
+        raise RuntimeError(
+            "adaptive pair collation produced inconsistent tensor shapes"
+        )
     if x.shape != (group.physical_rows, group.padded_tokens):
         raise RuntimeError(
             "adaptive pair collation does not match its plan: "
@@ -221,22 +274,34 @@ def adaptive_batching_metadata(
 
 def _validate_source_pair(batch: TrainingBatch, pair_index: int) -> None:
     if batch.x.ndim != 2 or batch.y.ndim != 2 or batch.x.shape != batch.y.shape:
-        raise ValueError(f"adaptive source pair {pair_index} must have matching two-dimensional x and y")
+        raise ValueError(
+            f"adaptive source pair {pair_index} must have matching two-dimensional x and y"
+        )
     if batch.x.shape[0] != ROWS_PER_PAIR:
         raise ValueError(
             f"adaptive source pair {pair_index} must contain exactly {ROWS_PER_PAIR} rows; "
             f"got {batch.x.shape[0]}"
         )
     if batch.x.shape[1] <= 0:
-        raise ValueError(f"adaptive source pair {pair_index} must contain at least one token position")
+        raise ValueError(
+            f"adaptive source pair {pair_index} must contain at least one token position"
+        )
     mask = batch.attention_mask
     if mask is None or mask.shape != batch.x.shape:
-        raise ValueError(f"adaptive source pair {pair_index} requires an attention mask matching x")
+        raise ValueError(
+            f"adaptive source pair {pair_index} requires an attention mask matching x"
+        )
 
 
-def _right_pad(tensor: torch.Tensor, width: int, value: int | bool) -> torch.Tensor:
+def _right_pad(
+    tensor: torch.Tensor, width: int, value: int | bool
+) -> torch.Tensor:
     if tensor.ndim != 2:
-        raise ValueError("adaptive pair collation accepts only two-dimensional tensors")
+        raise ValueError(
+            "adaptive pair collation accepts only two-dimensional tensors"
+        )
     if tensor.shape[1] > width:
-        raise ValueError("adaptive pair collation cannot truncate a source pair")
+        raise ValueError(
+            "adaptive pair collation cannot truncate a source pair"
+        )
     return F.pad(tensor, (0, width - tensor.shape[1]), value=value)

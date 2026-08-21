@@ -25,7 +25,6 @@ from gcw.runtime import atomic_write_bytes
 from gcw.training.checkpoint import verify_training_checkpoint_files
 from scripts.generate_math_experiment_configs import generate
 
-
 EXPERIMENT = "qwen3-06b-instruct-math-full-single-seed-v2-matrix11"
 CANONICAL_CORE_TASKS = (
     "hellaswag",
@@ -132,9 +131,13 @@ _FORBIDDEN_PERFORMANCE_ENV = (
 
 
 def _reject_performance_overrides(env: dict[str, str]) -> None:
-    enabled = sorted(name for name in _FORBIDDEN_PERFORMANCE_ENV if env.get(name, "").strip())
+    enabled = sorted(
+        name for name in _FORBIDDEN_PERFORMANCE_ENV if env.get(name, "").strip()
+    )
     if enabled:
-        raise RuntimeError(f"canonical training forbids performance overrides: {enabled}")
+        raise RuntimeError(
+            f"canonical training forbids performance overrides: {enabled}"
+        )
 
 
 def _sha256(path: Path) -> str:
@@ -146,13 +149,19 @@ def _sha256(path: Path) -> str:
 
 
 def _source_commit(repository: Path) -> str:
-    return subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
+    return subprocess.check_output(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"], text=True
+    ).strip()
 
 
 def _require_clean_repository(repository: Path) -> None:
-    status = subprocess.check_output(["git", "-C", str(repository), "status", "--porcelain"], text=True)
+    status = subprocess.check_output(
+        ["git", "-C", str(repository), "status", "--porcelain"], text=True
+    )
     if status.strip():
-        raise RuntimeError("repository must contain no tracked changes or untracked import shadows")
+        raise RuntimeError(
+            "repository must contain no tracked changes or untracked import shadows"
+        )
 
 
 def _capture_jsonl_identity(path: Path) -> tuple[str, int]:
@@ -165,24 +174,36 @@ def _capture_jsonl_identity(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), rows
 
 
-def _validate_campaign_config(config: Any, *, arm: str, root: Path, experiment: str) -> None:
+def _validate_campaign_config(
+    config: Any, *, arm: str, root: Path, experiment: str
+) -> None:
     if arm not in TRAIN_ORDER:
         raise ValueError(f"unknown campaign arm {arm}")
-    if config.max_steps != MAX_STEPS or config.global_batch_rows != GLOBAL_BATCH_ROWS:
-        raise ValueError(f"{arm} does not preserve the full-epoch optimizer contract")
+    if (
+        config.max_steps != MAX_STEPS
+        or config.global_batch_rows != GLOBAL_BATCH_ROWS
+    ):
+        raise ValueError(
+            f"{arm} does not preserve the full-epoch optimizer contract"
+        )
     if config.sequence_len != SEQUENCE_LENGTH or config.seed != SEED:
         raise ValueError(f"{arm} does not preserve sequence length and seed")
     if config.learning_rate != PEAK_LEARNING_RATES[arm]:
         raise ValueError(f"{arm} has the wrong peak learning rate")
     if config.batch_size != MICRO_BATCH_ROWS[arm]:
         raise ValueError(f"{arm} has the wrong physical microbatch")
-    if config.metadata.get("arm") != arm or config.metadata.get("experiment") != experiment:
+    if (
+        config.metadata.get("arm") != arm
+        or config.metadata.get("experiment") != experiment
+    ):
         raise ValueError(f"{arm} metadata does not bind the campaign identity")
     expected_output = (root / "training-state" / arm).resolve()
     if Path(config.output_dir).resolve() != expected_output:
         raise ValueError(f"{arm} output directory is outside the campaign root")
     if config.backbone_chunk_backend != "eager":
-        raise ValueError(f"{arm} requests a rejected backbone execution backend")
+        raise ValueError(
+            f"{arm} requests a rejected backbone execution backend"
+        )
     performance = config.performance
     if (
         performance.adaptive_batching.enabled
@@ -198,17 +219,29 @@ def _validate_campaign_config(config: Any, *, arm: str, root: Path, experiment: 
         if config.trainable != "cache_processor":
             raise ValueError(f"{arm} must train only its CacheProcessor")
         if config.activation_checkpoint_windows != 4:
-            raise ValueError(f"{arm} must use the memory-safe four-window checkpoint oracle")
+            raise ValueError(
+                f"{arm} must use the memory-safe four-window checkpoint oracle"
+            )
         if config.activation_checkpoint_min_padded_sequence_length != 0:
-            raise ValueError(f"{arm} must checkpoint every eligible backbone window")
+            raise ValueError(
+                f"{arm} must checkpoint every eligible backbone window"
+            )
     elif config.activation_checkpoint_windows != 0:
-        raise ValueError(f"{arm} must not enable CacheProcessor checkpoint execution")
+        raise ValueError(
+            f"{arm} must not enable CacheProcessor checkpoint execution"
+        )
 
 
 def _load_data_manifest(args: argparse.Namespace) -> dict[str, Any]:
     payload = json.loads(Path(args.data_manifest).expanduser().read_text())
-    dataset = Path(args.dataset or payload["dataset_path"]).expanduser().resolve()
-    validation = Path(args.validation_dataset or payload["validation_path"]).expanduser().resolve()
+    dataset = (
+        Path(args.dataset or payload["dataset_path"]).expanduser().resolve()
+    )
+    validation = (
+        Path(args.validation_dataset or payload["validation_path"])
+        .expanduser()
+        .resolve()
+    )
     observed_rows: dict[str, int] = {}
     for name, path, expected in (
         ("dataset", dataset, payload["dataset_sha256"]),
@@ -218,34 +251,59 @@ def _load_data_manifest(args: argparse.Namespace) -> dict[str, Any]:
             raise FileNotFoundError(path)
         observed_sha256, observed_rows[name] = _capture_jsonl_identity(path)
         if observed_sha256 != expected:
-            raise ValueError(f"{name} sha256 does not match the authenticated data manifest")
+            raise ValueError(
+                f"{name} sha256 does not match the authenticated data manifest"
+            )
     if payload.get("schema") != "gcw.math_experiment_data.v1":
-        raise ValueError("math campaign requires the authenticated data-manifest schema")
-    if int(payload.get("rows", -1)) != DATASET_ROWS or observed_rows["dataset"] != DATASET_ROWS:
-        raise ValueError("math campaign training data must contain exactly 697,744 nonblank rows")
-    if int(payload.get("validation_rows", -1)) != 4096 or observed_rows["validation"] != 4096:
-        raise ValueError("math campaign validation data must contain exactly 4,096 nonblank rows")
-    if payload.get("seed") != SEED or payload.get("sequence_length") != SEQUENCE_LENGTH:
-        raise ValueError("math campaign data manifest has the wrong seed or sequence length")
+        raise ValueError(
+            "math campaign requires the authenticated data-manifest schema"
+        )
+    if (
+        int(payload.get("rows", -1)) != DATASET_ROWS
+        or observed_rows["dataset"] != DATASET_ROWS
+    ):
+        raise ValueError(
+            "math campaign training data must contain exactly 697,744 nonblank rows"
+        )
+    if (
+        int(payload.get("validation_rows", -1)) != 4096
+        or observed_rows["validation"] != 4096
+    ):
+        raise ValueError(
+            "math campaign validation data must contain exactly 4,096 nonblank rows"
+        )
+    if (
+        payload.get("seed") != SEED
+        or payload.get("sequence_length") != SEQUENCE_LENGTH
+    ):
+        raise ValueError(
+            "math campaign data manifest has the wrong seed or sequence length"
+        )
     payload["dataset_path"] = str(dataset)
     payload["validation_path"] = str(validation)
     return payload
 
 
-def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) -> dict[str, Any]:
+def _plan(
+    args: argparse.Namespace, data: dict[str, Any], source_commit: str
+) -> dict[str, Any]:
     rows = int(data["rows"])
     effective_rows = rows - rows % GLOBAL_BATCH_ROWS
     dropped_rows = rows - effective_rows
     max_steps = effective_rows // GLOBAL_BATCH_ROWS
     if effective_rows != EFFECTIVE_EPOCH_ROWS or max_steps != MAX_STEPS:
-        raise ValueError("math campaign epoch derivation differs from the approved contract")
+        raise ValueError(
+            "math campaign epoch derivation differs from the approved contract"
+        )
     return {
         "schema": "gcw.math_experiment_series.v2",
         "experiment": args.experiment,
         "source_commit": source_commit,
         "status": "planned_not_started",
         "backbone": str(Path(args.model).expanduser().resolve()),
-        "backbone_checkpoint": str(Path(args.backbone_checkpoint).expanduser().resolve()),
+        "backbone_checkpoint": str(
+            Path(args.backbone_checkpoint).expanduser().resolve()
+        ),
         "sequence_length": SEQUENCE_LENGTH,
         "global_batch_rows": GLOBAL_BATCH_ROWS,
         "seed": SEED,
@@ -272,7 +330,10 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
         },
         "learning_rates": PEAK_LEARNING_RATES,
         "micro_batch_rows": MICRO_BATCH_ROWS,
-        "validation": {"rows": VALIDATION_ROWS, "approximately_every_steps": max_steps // 20},
+        "validation": {
+            "rows": VALIDATION_ROWS,
+            "approximately_every_steps": max_steps // 20,
+        },
         "training_order": list(TRAINABLE_ARMS),
         "imported_arms": sorted(IMPORTED_ARMS),
         "evaluation_order": ["instruct-baseline", *TRAIN_ORDER],
@@ -308,19 +369,34 @@ def _plan(args: argparse.Namespace, data: dict[str, Any], source_commit: str) ->
 def _verify_full_sft_import(bundle: Path) -> dict[str, Any]:
     from scripts.math_evaluation_bundle import verify_bundle
 
-    manifest = verify_bundle(bundle, expected_arm="full-sft", expected_step=MAX_STEPS)
-    for field in ("source_commit", "training_config_sha256", "source_checkpoint_manifest_sha256"):
+    manifest = verify_bundle(
+        bundle, expected_arm="full-sft", expected_step=MAX_STEPS
+    )
+    for field in (
+        "source_commit",
+        "training_config_sha256",
+        "source_checkpoint_manifest_sha256",
+    ):
         if manifest.get(field) != FULL_SFT_IMPORT_IDENTITIES[field]:
             raise ValueError(f"imported full-SFT bundle has the wrong {field}")
     for name in ("config.json", "model.safetensors", "train_state.json"):
-        if manifest.get("files", {}).get(name, {}).get("sha256") != FULL_SFT_IMPORT_IDENTITIES[name]:
-            raise ValueError(f"imported full-SFT bundle has the wrong {name} identity")
+        if (
+            manifest.get("files", {}).get(name, {}).get("sha256")
+            != FULL_SFT_IMPORT_IDENTITIES[name]
+        ):
+            raise ValueError(
+                f"imported full-SFT bundle has the wrong {name} identity"
+            )
     return manifest
 
 
-def _write_import_manifest(args: argparse.Namespace, root: Path, source_commit: str) -> None:
+def _write_import_manifest(
+    args: argparse.Namespace, root: Path, source_commit: str
+) -> None:
     if args.import_full_sft_bundle is None:
-        raise ValueError("the additive matrix requires --import-full-sft-bundle")
+        raise ValueError(
+            "the additive matrix requires --import-full-sft-bundle"
+        )
     bundle = Path(args.import_full_sft_bundle).expanduser().resolve()
     manifest = _verify_full_sft_import(bundle)
     bundle_manifest = bundle / "bundle-manifest.json"
@@ -334,7 +410,9 @@ def _write_import_manifest(args: argparse.Namespace, root: Path, source_commit: 
                 "bundle_manifest_sha256": _sha256(bundle_manifest),
                 "training_source_commit": manifest["source_commit"],
                 "training_config_sha256": manifest["training_config_sha256"],
-                "source_checkpoint_manifest_sha256": manifest["source_checkpoint_manifest_sha256"],
+                "source_checkpoint_manifest_sha256": manifest[
+                    "source_checkpoint_manifest_sha256"
+                ],
                 "model_sha256": FULL_SFT_IMPORT_IDENTITIES["model.safetensors"],
                 "step": MAX_STEPS,
             }
@@ -344,14 +422,18 @@ def _write_import_manifest(args: argparse.Namespace, root: Path, source_commit: 
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
     if path.exists():
         if path.read_bytes() != encoded:
-            raise RuntimeError("refusing to replace a different immutable import manifest")
+            raise RuntimeError(
+                "refusing to replace a different immutable import manifest"
+            )
         return
     atomic_write_bytes(path, encoded, exclusive=True)
 
 
 def _wandb_id(experiment: str, name: str) -> str:
     prefix = re.sub(r"[^A-Za-z0-9_-]+", "-", experiment).strip("-")[:48]
-    suffix = hashlib.sha256(f"{experiment}:{name}:{SEED}".encode()).hexdigest()[:12]
+    suffix = hashlib.sha256(f"{experiment}:{name}:{SEED}".encode()).hexdigest()[
+        :12
+    ]
     return f"{prefix}-{suffix}"
 
 
@@ -366,24 +448,38 @@ def _prepare_configs(
         paths = {name: config_dir / f"{name}.yaml" for name in TRAIN_ORDER}
         missing = [str(path) for path in paths.values() if not path.is_file()]
         if missing:
-            raise FileNotFoundError(f"incomplete existing config directory: {missing}")
+            raise FileNotFoundError(
+                f"incomplete existing config directory: {missing}"
+            )
         existing_plan_path = root / "plan.json"
         if not existing_plan_path.is_file():
-            raise RuntimeError("existing campaign configs have no immutable launch plan")
+            raise RuntimeError(
+                "existing campaign configs have no immutable launch plan"
+            )
         existing_plan = json.loads(existing_plan_path.read_text())
         if existing_plan.get("source_commit") != plan["source_commit"]:
-            raise RuntimeError("existing campaign configs were prepared from another source commit")
+            raise RuntimeError(
+                "existing campaign configs were prepared from another source commit"
+            )
         if set(existing_plan.get("arms", {})) != set(TRAIN_ORDER):
-            raise RuntimeError("existing campaign plan has the wrong arm inventory")
+            raise RuntimeError(
+                "existing campaign plan has the wrong arm inventory"
+            )
         for arm, path in paths.items():
             config = load_train_config(path)
-            _validate_campaign_config(config, arm=arm, root=root, experiment=str(plan["experiment"]))
+            _validate_campaign_config(
+                config, arm=arm, root=root, experiment=str(plan["experiment"])
+            )
             if existing_plan["arms"][arm].get("config_sha256") != _sha256(path):
-                raise RuntimeError(f"existing campaign config digest differs for {arm}")
+                raise RuntimeError(
+                    f"existing campaign config digest differs for {arm}"
+                )
         return paths
 
     runtime_manifest = root / "data-manifest.json"
-    runtime_manifest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    runtime_manifest.write_text(
+        json.dumps(data, indent=2, sort_keys=True) + "\n"
+    )
     generated = generate(
         Namespace(
             model=args.model,
@@ -412,7 +508,9 @@ def _prepare_configs(
         payload = yaml.safe_load(path.read_text())
         micro_batch = MICRO_BATCH_ROWS[arm]
         if GLOBAL_BATCH_ROWS % micro_batch:
-            raise ValueError(f"microbatch for {arm} does not divide global batch")
+            raise ValueError(
+                f"microbatch for {arm} does not divide global batch"
+            )
         payload["batch_size"] = micro_batch
         payload["learning_rate"] = PEAK_LEARNING_RATES[arm]
         payload["warmup_steps"] = max(1, round(0.03 * plan["max_steps"]))
@@ -435,7 +533,13 @@ def _prepare_configs(
                 "group": args.experiment,
                 "id": _wandb_id(args.experiment, f"train-{arm}"),
                 "resume": "allow",
-                "tags": ["qwen3-0.6b", "math", "single-seed", "full-epoch", arm],
+                "tags": [
+                    "qwen3-0.6b",
+                    "math",
+                    "single-seed",
+                    "full-epoch",
+                    arm,
+                ],
             }
         )
         payload["metadata"].update(
@@ -465,11 +569,17 @@ def _completed_training(config_path: Path) -> bool:
     config = load_train_config(config_path)
     checkpoint = Path(config.output_dir) / "checkpoint"
     state = checkpoint / "train_state.json"
-    if not state.is_file() or int(json.loads(state.read_text()).get("step", -1)) != config.max_steps:
+    if (
+        not state.is_file()
+        or int(json.loads(state.read_text()).get("step", -1))
+        != config.max_steps
+    ):
         return False
     verified = verify_training_checkpoint_files(checkpoint)
     if int(verified["train_state"].get("step", -1)) != config.max_steps:
-        raise RuntimeError("verified checkpoint step differs from the configured final step")
+        raise RuntimeError(
+            "verified checkpoint step differs from the configured final step"
+        )
     return True
 
 
@@ -496,7 +606,13 @@ def _run(command: list[str], log: Path, env: dict[str, str]) -> None:
     with log.open("ab") as handle:
         handle.write(("\n$ " + " ".join(command) + "\n").encode())
         handle.flush()
-        subprocess.run(command, check=True, stdout=handle, stderr=subprocess.STDOUT, env=env)
+        subprocess.run(
+            command,
+            check=True,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
 
 
 def _deadline_reached(deadline: datetime) -> bool:
@@ -509,7 +625,9 @@ def _processor_states(arm: str) -> tuple[str, ...]:
 
 def _evaluation_cells(arm: str) -> tuple[tuple[str, str], ...]:
     return tuple(
-        (processor, thinking) for processor in _processor_states(arm) for thinking in ("thinking_off", "thinking_on")
+        (processor, thinking)
+        for processor in _processor_states(arm)
+        for thinking in ("thinking_off", "thinking_on")
     )
 
 
@@ -550,7 +668,15 @@ def _mirror_evaluation(
     cell_name = f"{protocol}-{thinking}" if thinking is not None else protocol
     lineage = _evaluation_lineage(args)
     run_name = f"{args.experiment}-eval-{lineage}-{arm}-{processor}-{cell_name}"
-    tags = ["qwen3-0.6b", "math", "single-seed", "evaluation", arm, processor, protocol]
+    tags = [
+        "qwen3-0.6b",
+        "math",
+        "single-seed",
+        "evaluation",
+        arm,
+        processor,
+        protocol,
+    ]
     if thinking is not None:
         tags.append(thinking)
     run = wandb.init(
@@ -559,7 +685,9 @@ def _mirror_evaluation(
         name=run_name,
         group=args.experiment,
         job_type="evaluation",
-        id=_wandb_id(args.experiment, f"eval-v3-{lineage}-{arm}-{processor}-{cell_name}"),
+        id=_wandb_id(
+            args.experiment, f"eval-v3-{lineage}-{arm}-{processor}-{cell_name}"
+        ),
         resume="allow",
         tags=[*tags, lineage],
         config={
@@ -572,7 +700,11 @@ def _mirror_evaluation(
             "batch_size": args.eval_batch_size,
             "evaluation_lineage": lineage,
             "evaluator_host": os.uname().nodename,
-            "evaluator_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
+            "evaluator_device": (
+                torch.cuda.get_device_name(0)
+                if torch.cuda.is_available()
+                else "cpu"
+            ),
         },
     )
     if run is None:
@@ -582,13 +714,19 @@ def _mirror_evaluation(
     artifact = wandb.Artifact(run_name, type="benchmark-results")
     artifact.add_file(str(result), name="result.json")
     for path in artifact_files:
-        artifact.add_file(str(path), name=f"tasks/{path.parent.name}/result.json")
+        artifact.add_file(
+            str(path), name=f"tasks/{path.parent.name}/result.json"
+        )
     run.log_artifact(artifact)
     run.finish()
 
 
 def _target_args(target: Path, *, hf_target: bool) -> list[str]:
-    return ["--hf-model", str(target)] if hf_target else ["--checkpoint", str(target)]
+    return (
+        ["--hf-model", str(target)]
+        if hf_target
+        else ["--checkpoint", str(target)]
+    )
 
 
 def _reuse_result(source: Path, target: Path, *, protocol: str) -> bool:
@@ -598,7 +736,9 @@ def _reuse_result(source: Path, target: Path, *, protocol: str) -> bool:
     shutil.copyfile(source, target)
     if _sha256(source) != _sha256(target):
         target.unlink()
-        raise RuntimeError(f"reused evaluation evidence changed while copying {source}")
+        raise RuntimeError(
+            f"reused evaluation evidence changed while copying {source}"
+        )
     marker = target.parent / "reused-evidence.json"
     marker.write_text(
         json.dumps(
@@ -620,11 +760,18 @@ def _reuse_result(source: Path, target: Path, *, protocol: str) -> bool:
 def _validate_canonical_result(result: Path, tasks: tuple[str, ...]) -> None:
     payload = json.loads(result.read_text())
     protocol = payload.get("gcw_protocol", {})
-    if protocol.get("prompt_mode") != "plain" or protocol.get("apply_chat_template") is not False:
-        raise ValueError(f"canonical result does not use the plain no-chat protocol: {result}")
+    if (
+        protocol.get("prompt_mode") != "plain"
+        or protocol.get("apply_chat_template") is not False
+    ):
+        raise ValueError(
+            f"canonical result does not use the plain no-chat protocol: {result}"
+        )
     missing = sorted(set(tasks) - set(payload.get("results", {})))
     if missing:
-        raise ValueError(f"canonical result is missing tasks {missing}: {result}")
+        raise ValueError(
+            f"canonical result is missing tasks {missing}: {result}"
+        )
 
 
 def _evaluate_canonical_group(
@@ -639,12 +786,32 @@ def _evaluate_canonical_group(
     hf_target: bool,
     env: dict[str, str],
 ) -> None:
-    cell = _evaluation_base(args, root) / arm / f"processor-{processor}" / "canonical-likelihood" / group
+    cell = (
+        _evaluation_base(args, root)
+        / arm
+        / f"processor-{processor}"
+        / "canonical-likelihood"
+        / group
+    )
     result = cell / "result.json"
     published = cell / "wandb-published.json"
-    if arm == "instruct-baseline" and processor == "on" and group == "core" and not result.exists():
-        legacy = root / LEGACY_EVALUATION_ROOT / arm / "processor-on" / "standard-general" / "result.json"
-        _reuse_result(legacy, result, protocol="canonical_plain_likelihood_core_v1")
+    if (
+        arm == "instruct-baseline"
+        and processor == "on"
+        and group == "core"
+        and not result.exists()
+    ):
+        legacy = (
+            root
+            / LEGACY_EVALUATION_ROOT
+            / arm
+            / "processor-on"
+            / "standard-general"
+            / "result.json"
+        )
+        _reuse_result(
+            legacy, result, protocol="canonical_plain_likelihood_core_v1"
+        )
     if not result.is_file():
         cell.mkdir(parents=True, exist_ok=True)
         cell_env = dict(env)
@@ -683,10 +850,17 @@ def _evaluate_canonical_group(
             thinking=None,
             tasks=tasks,
         )
-        published.write_text(json.dumps({"result_sha256": _sha256(result), "published": True}, indent=2) + "\n")
+        published.write_text(
+            json.dumps(
+                {"result_sha256": _sha256(result), "published": True}, indent=2
+            )
+            + "\n"
+        )
 
 
-def _numeric_summary(task_results: list[Path], *, arm: str, processor: str, thinking: str) -> dict[str, Any]:
+def _numeric_summary(
+    task_results: list[Path], *, arm: str, processor: str, thinking: str
+) -> dict[str, Any]:
     tasks: dict[str, Any] = {}
     for path in task_results:
         payload = json.loads(path.read_text())
@@ -713,12 +887,18 @@ def _numeric_summary(task_results: list[Path], *, arm: str, processor: str, thin
 def _validate_numeric_result(result: Path, task: str, thinking: str) -> None:
     payload = json.loads(result.read_text())
     if payload.get("mode") != thinking or payload.get("max_new_tokens") != 2048:
-        raise ValueError(f"numeric result has the wrong generation contract: {result}")
-    if set(payload.get("tasks", {})) != {task} or set(payload.get("datasets", {})) != {task}:
+        raise ValueError(
+            f"numeric result has the wrong generation contract: {result}"
+        )
+    if set(payload.get("tasks", {})) != {task} or set(
+        payload.get("datasets", {})
+    ) != {task}:
         raise ValueError(f"numeric result has the wrong task payload: {result}")
     rows = payload.get("rows", [])
     if not rows or any(row.get("target_kind") != "numeric" for row in rows):
-        raise ValueError(f"numeric result contains non-numeric or missing rows: {result}")
+        raise ValueError(
+            f"numeric result contains non-numeric or missing rows: {result}"
+        )
 
 
 def _evaluate_numeric_mode(
@@ -733,7 +913,13 @@ def _evaluate_numeric_mode(
     env: dict[str, str],
     deadline: datetime,
 ) -> bool:
-    cell = _evaluation_base(args, root) / arm / f"processor-{processor}" / "numeric-generation" / thinking
+    cell = (
+        _evaluation_base(args, root)
+        / arm
+        / f"processor-{processor}"
+        / "numeric-generation"
+        / thinking
+    )
     task_results: list[Path] = []
     for task in NUMERIC_MATH_TASKS:
         if _deadline_reached(deadline):
@@ -741,7 +927,11 @@ def _evaluate_numeric_mode(
         task_cell = cell / "tasks" / task
         task_result = task_cell / "result.json"
         task_results.append(task_result)
-        if arm == "instruct-baseline" and processor == "on" and not task_result.exists():
+        if (
+            arm == "instruct-baseline"
+            and processor == "on"
+            and not task_result.exists()
+        ):
             legacy = (
                 root
                 / LEGACY_EVALUATION_ROOT
@@ -753,7 +943,11 @@ def _evaluate_numeric_mode(
                 / task
                 / "result.json"
             )
-            _reuse_result(legacy, task_result, protocol="official_chat_template_numeric_last_v1")
+            _reuse_result(
+                legacy,
+                task_result,
+                protocol="official_chat_template_numeric_last_v1",
+            )
         if not task_result.is_file():
             task_cell.mkdir(parents=True, exist_ok=True)
             command = [
@@ -786,7 +980,12 @@ def _evaluate_numeric_mode(
         result.parent.mkdir(parents=True, exist_ok=True)
         result.write_text(
             json.dumps(
-                _numeric_summary(task_results, arm=arm, processor=processor, thinking=thinking),
+                _numeric_summary(
+                    task_results,
+                    arm=arm,
+                    processor=processor,
+                    thinking=thinking,
+                ),
                 indent=2,
                 sort_keys=True,
             )
@@ -803,7 +1002,12 @@ def _evaluate_numeric_mode(
             tasks=NUMERIC_MATH_TASKS,
             artifact_files=tuple(task_results),
         )
-        published.write_text(json.dumps({"result_sha256": _sha256(result), "published": True}, indent=2) + "\n")
+        published.write_text(
+            json.dumps(
+                {"result_sha256": _sha256(result), "published": True}, indent=2
+            )
+            + "\n"
+        )
     return True
 
 
@@ -858,28 +1062,45 @@ def _evaluate(
     return True
 
 
-def _preflight(args: argparse.Namespace, repository: Path, root: Path, env: dict[str, str]) -> None:
+def _preflight(
+    args: argparse.Namespace, repository: Path, root: Path, env: dict[str, str]
+) -> None:
     _require_clean_repository(repository)
     _reject_performance_overrides(env)
     ambient_stops = sorted(
-        name for name in ("GCW_STOP_AFTER_CHECKPOINT_STEP", "GCW_STOP_AFTER_CHECKPOINT_UTC") if env.get(name)
+        name
+        for name in (
+            "GCW_STOP_AFTER_CHECKPOINT_STEP",
+            "GCW_STOP_AFTER_CHECKPOINT_UTC",
+        )
+        if env.get(name)
     )
     if ambient_stops:
-        raise RuntimeError(f"monolithic campaign forbids ambient checkpoint stops: {ambient_stops}")
+        raise RuntimeError(
+            f"monolithic campaign forbids ambient checkpoint stops: {ambient_stops}"
+        )
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     device_name = torch.cuda.get_device_name(0)
     expected_gpu = str(getattr(args, "expected_gpu", "H200"))
     if expected_gpu not in device_name and not args.allow_other_gpu:
-        raise RuntimeError(f"expected one {expected_gpu}, found {device_name!r}")
+        raise RuntimeError(
+            f"expected one {expected_gpu}, found {device_name!r}"
+        )
     if torch.cuda.device_count() != 1:
-        raise RuntimeError(f"expected exactly one visible GPU, found {torch.cuda.device_count()}")
+        raise RuntimeError(
+            f"expected exactly one visible GPU, found {torch.cuda.device_count()}"
+        )
     usage = shutil.disk_usage(root.parent)
     if usage.free < args.minimum_free_gib * 1024**3:
-        raise RuntimeError(f"less than {args.minimum_free_gib} GiB free under {root.parent}")
+        raise RuntimeError(
+            f"less than {args.minimum_free_gib} GiB free under {root.parent}"
+        )
     hf_cli = Path(sys.executable).parent / "hf"
     if not hf_cli.is_file():
-        raise FileNotFoundError("Hugging Face CLI is missing; sync the project environment first")
+        raise FileNotFoundError(
+            "Hugging Face CLI is missing; sync the project environment first"
+        )
     subprocess.run([str(hf_cli), "auth", "whoami"], check=True, env=env)
     import wandb
 
@@ -906,24 +1127,32 @@ def _preflight(args: argparse.Namespace, repository: Path, root: Path, env: dict
     run.finish()
 
 
-def _write_plan_with_costs(plan: dict[str, Any], configs: dict[str, Path], path: Path) -> None:
+def _write_plan_with_costs(
+    plan: dict[str, Any], configs: dict[str, Path], path: Path
+) -> None:
     payload = deepcopy(plan)
     payload["status"] = "ready_not_started"
     payload["arms"] = {}
     for arm, config_path in configs.items():
         config = load_train_config(config_path)
-        maximum_tokens = config.global_batch_rows * config.sequence_len * config.max_steps
+        maximum_tokens = (
+            config.global_batch_rows * config.sequence_len * config.max_steps
+        )
         payload["arms"][arm] = {
             "config": str(config_path.resolve()),
             "config_sha256": _sha256(config_path),
             "processor_params": processor_params(config.model),
             "maximum_tokens": maximum_tokens,
-            "estimated_training_flops": total_training_flops(config.model, maximum_tokens, config.sequence_len),
+            "estimated_training_flops": total_training_flops(
+                config.model, maximum_tokens, config.sequence_len
+            ),
         }
     encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
     if path.exists():
         if path.read_bytes() != encoded:
-            raise RuntimeError("refusing to replace a different immutable campaign plan")
+            raise RuntimeError(
+                "refusing to replace a different immutable campaign plan"
+            )
         return
     atomic_write_bytes(path, encoded, exclusive=True)
 
@@ -946,7 +1175,12 @@ def execute(args: argparse.Namespace) -> None:
         configs = _prepare_configs(args, root, data, plan)
         _write_plan_with_costs(plan, configs, root / "plan.json")
         _write_import_manifest(args, root, source_commit)
-        print(json.dumps({"root": str(root), "plan": str(root / "plan.json")}, sort_keys=True))
+        print(
+            json.dumps(
+                {"root": str(root), "plan": str(root / "plan.json")},
+                sort_keys=True,
+            )
+        )
         return
     env = dict(os.environ)
     record_root = (
@@ -998,13 +1232,24 @@ def execute(args: argparse.Namespace) -> None:
         if not _completed_training(config_path):
             command_config = _resume_config(config_path, root)
             _run(
-                [sys.executable, "-m", "gcw.cli", "train", "--config", str(command_config)],
+                [
+                    sys.executable,
+                    "-m",
+                    "gcw.cli",
+                    "train",
+                    "--config",
+                    str(command_config),
+                ],
                 root / "logs" / f"train-{arm}.log",
                 env,
             )
-        checkpoint = Path(load_train_config(config_path).output_dir) / "checkpoint"
+        checkpoint = (
+            Path(load_train_config(config_path).output_dir) / "checkpoint"
+        )
         if not _completed_training(config_path):
-            raise RuntimeError(f"training did not reach the declared epoch for {arm}")
+            raise RuntimeError(
+                f"training did not reach the declared epoch for {arm}"
+            )
         if not _evaluate(
             args,
             root,
@@ -1024,18 +1269,34 @@ def execute(args: argparse.Namespace) -> None:
         "plan_sha256": _sha256(root / "plan.json"),
         "imports_sha256": _sha256(root / "imports.json"),
     }
-    (root / "completed.json").write_text(json.dumps(completion, indent=2, sort_keys=True) + "\n")
+    (root / "completed.json").write_text(
+        json.dumps(completion, indent=2, sort_keys=True) + "\n"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the single-seed full-epoch Qwen3 math training and evaluation series"
     )
-    parser.add_argument("--model", required=True, help="Authenticated local Qwen3-0.6B Instruct HF directory")
-    parser.add_argument("--backbone-checkpoint", required=True, help="Authenticated native GCW backbone")
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Authenticated local Qwen3-0.6B Instruct HF directory",
+    )
+    parser.add_argument(
+        "--backbone-checkpoint",
+        required=True,
+        help="Authenticated native GCW backbone",
+    )
     parser.add_argument("--data-manifest", required=True)
-    parser.add_argument("--dataset", help="Override the manifest training JSONL path without changing its hash")
-    parser.add_argument("--validation-dataset", help="Override the manifest validation JSONL path")
+    parser.add_argument(
+        "--dataset",
+        help="Override the manifest training JSONL path without changing its hash",
+    )
+    parser.add_argument(
+        "--validation-dataset",
+        help="Override the manifest validation JSONL path",
+    )
     parser.add_argument("--experiment-root", required=True)
     parser.add_argument("--import-full-sft-bundle")
     parser.add_argument("--record-root")
@@ -1047,8 +1308,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minimum-free-gib", type=int, default=200)
     parser.add_argument("--expected-gpu", default="H200")
     parser.add_argument("--allow-other-gpu", action="store_true")
-    parser.add_argument("--prepare-only", action="store_true", help="Create immutable configs and plan without CUDA")
-    parser.add_argument("--execute", action="store_true", help="Required to create artifacts or launch work")
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Create immutable configs and plan without CUDA",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Required to create artifacts or launch work",
+    )
     return parser
 
 

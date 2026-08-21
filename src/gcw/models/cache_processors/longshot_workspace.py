@@ -22,7 +22,9 @@ def validate_workspace_shape(
 ) -> None:
     expected_shape = source.merged[:, :, -1, -output_dim:].shape
     if workspace.shape != expected_shape:
-        raise ValueError(f"Longshot workspace shape must be {tuple(expected_shape)}, got {tuple(workspace.shape)}")
+        raise ValueError(
+            f"Longshot workspace shape must be {tuple(expected_shape)}, got {tuple(workspace.shape)}"
+        )
 
 
 def workspace_cycle_input(
@@ -43,7 +45,9 @@ def deliberate_workspace(
     source: Any,
 ) -> torch.Tensor:
     validate_workspace_shape(workspace, source, processor.block.output_dim)
-    cycle_input = workspace_cycle_input(workspace, source, processor.block.output_dim)
+    cycle_input = workspace_cycle_input(
+        workspace, source, processor.block.output_dim
+    )
     return processor.block(cycle_input, source.selected_heads)
 
 
@@ -62,9 +66,13 @@ def refine_workspace(
     for step in range(config.solver_steps):
         time = step * step_size
         if config.solver == "euler":
-            state = state + step_size * workspace_velocity(processor, state, time, source, config)
+            state = state + step_size * workspace_velocity(
+                processor, state, time, source, config
+            )
         else:
-            first_velocity = workspace_velocity(processor, state, time, source, config)
+            first_velocity = workspace_velocity(
+                processor, state, time, source, config
+            )
             midpoint = state + 0.5 * step_size * first_velocity
             midpoint_velocity = workspace_velocity(
                 processor,
@@ -84,9 +92,15 @@ def workspace_velocity(
     source: Any,
     config: WorkspaceFlowRefinementConfig,
 ) -> torch.Tensor:
-    time_condition = sinusoidal_time_embedding(time, workspace.shape[-1], workspace)
-    cycle_input = workspace_cycle_input(workspace + time_condition, source, processor.block.output_dim)
-    raw_velocity = processor.block.compute_update(cycle_input, source.selected_heads)
+    time_condition = sinusoidal_time_embedding(
+        time, workspace.shape[-1], workspace
+    )
+    cycle_input = workspace_cycle_input(
+        workspace + time_condition, source, processor.block.output_dim
+    )
+    raw_velocity = processor.block.compute_update(
+        cycle_input, source.selected_heads
+    )
     return config.max_velocity * torch.tanh(raw_velocity)
 
 
@@ -97,11 +111,15 @@ def write_workspace_for_readout(
     workspace: torch.Tensor,
 ) -> WindowedCache:
     if processor.config.update_stream != "v":
-        raise ValueError("Longshot workspace readout initially supports value-only writes")
+        raise ValueError(
+            "Longshot workspace readout initially supports value-only writes"
+        )
     if not isinstance(cache, WindowedCache):
         raise TypeError("Longshot workspace readout requires a WindowedCache")
     if cache.linear_states is not None:
-        raise ValueError("Longshot workspace readout does not support shared linear cache state")
+        raise ValueError(
+            "Longshot workspace readout does not support shared linear cache state"
+        )
     validate_workspace_shape(workspace, source, processor.block.output_dim)
     workspace = refine_workspace(processor, workspace, source)
     branch = WindowedCache(
@@ -117,5 +135,11 @@ def write_workspace_for_readout(
         processor.num_kv_heads,
         processor.head_dim,
     )
-    branch = cast(WindowedCache, _scatter_latest_values(branch, source.latest_indices, values))
-    return cast(WindowedCache, processor._refresh_kv_score_sidecar(branch, source.latest_indices))
+    branch = cast(
+        WindowedCache,
+        _scatter_latest_values(branch, source.latest_indices, values),
+    )
+    return cast(
+        WindowedCache,
+        processor._refresh_kv_score_sidecar(branch, source.latest_indices),
+    )

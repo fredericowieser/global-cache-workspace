@@ -15,8 +15,10 @@ from datasets import load_dataset
 from gcw.data.sft import iter_jsonl
 from gcw.data.tokenizers import get_tokenizer
 
-
-TRACE_RE = re.compile(r"^\s*<think>\s*(?P<reasoning>.*?)\s*</think>\s*(?P<answer>.+?)\s*$", re.DOTALL)
+TRACE_RE = re.compile(
+    r"^\s*<think>\s*(?P<reasoning>.*?)\s*</think>\s*(?P<answer>.+?)\s*$",
+    re.DOTALL,
+)
 DEFAULT_CAPS = (1024, 2048, 4096, 8192)
 BENCHMARK_DATASETS = (
     ("openai/gsm8k", "main", "test", ("question",)),
@@ -49,7 +51,9 @@ def _answer_tokens(tokenizer: Any, answer: str) -> list[int]:
     return tokenizer.encode(answer) + [tokenizer.eot_id]
 
 
-def _render_lengths(tokenizer: Any, rows: list[tuple[str, str, bool]]) -> list[tuple[int, int, int]]:
+def _render_lengths(
+    tokenizer: Any, rows: list[tuple[str, str, bool]]
+) -> list[tuple[int, int, int]]:
     encoder = getattr(tokenizer, "enc", None)
     if encoder is None:
         return [
@@ -70,7 +74,9 @@ def _render_lengths(tokenizer: Any, rows: list[tuple[str, str, bool]]) -> list[t
     output: list[tuple[int, int, int]] = []
     for start in range(0, len(rows), 512):
         batch = rows[start : start + 512]
-        messages = [[{"role": "user", "content": prompt}] for prompt, _, _ in batch]
+        messages = [
+            [{"role": "user", "content": prompt}] for prompt, _, _ in batch
+        ]
         prompt_ids = encoder.apply_chat_template(
             messages,
             tokenize=True,
@@ -78,7 +84,9 @@ def _render_lengths(tokenizer: Any, rows: list[tuple[str, str, bool]]) -> list[t
             enable_thinking=batch[0][2],
             return_dict=True,
         )["input_ids"]
-        answer_ids = encoder([answer for _, answer, _ in batch], add_special_tokens=False)["input_ids"]
+        answer_ids = encoder(
+            [answer for _, answer, _ in batch], add_special_tokens=False
+        )["input_ids"]
         output.extend(
             (len(prompt), len(answer) + 1, len(prompt) + len(answer) + 1)
             for prompt, answer in zip(prompt_ids, answer_ids, strict=True)
@@ -88,10 +96,14 @@ def _render_lengths(tokenizer: Any, rows: list[tuple[str, str, bool]]) -> list[t
 
 def _atomic_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> str:
     digest = hashlib.sha256()
-    with tempfile.NamedTemporaryFile("wb", dir=path.parent, delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        "wb", dir=path.parent, delete=False
+    ) as handle:
         temporary = Path(handle.name)
         for row in rows:
-            line = (json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode()
+            line = (
+                json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            ).encode()
             handle.write(line)
             digest.update(line)
     temporary.replace(path)
@@ -103,7 +115,9 @@ def _load_excluded_hashes(paths: list[str]) -> set[str]:
     for value in paths:
         path = Path(value)
         for row in iter_jsonl(path):
-            prompt = row.get("prompt") or row.get("question") or row.get("problem")
+            prompt = (
+                row.get("prompt") or row.get("question") or row.get("problem")
+            )
             if prompt:
                 excluded.add(_prompt_hash(prompt))
     return excluded
@@ -128,18 +142,32 @@ def _load_benchmark_hashes() -> tuple[set[str], dict[str, int]]:
 def _openmath_rows(path: Path) -> Iterable[tuple[str, str, str]]:
     for index, row in enumerate(iter_jsonl(path)):
         prompt = str(row.get("prompt") or row.get("problem") or "").strip()
-        answer = str(row.get("answer") or row.get("generated_solution") or "").strip()
+        answer = str(
+            row.get("answer") or row.get("generated_solution") or ""
+        ).strip()
         if prompt and answer:
-            yield prompt, answer, str(row.get("problem_sha256") or f"openmath:{index}")
+            yield prompt, answer, str(
+                row.get("problem_sha256") or f"openmath:{index}"
+            )
 
 
-def _verified_openr1_rows(repo: str, config: str, revision: str) -> Iterable[tuple[str, str, str]]:
-    dataset = load_dataset(repo, config, split="train", streaming=True, revision=revision)
+def _verified_openr1_rows(
+    repo: str, config: str, revision: str
+) -> Iterable[tuple[str, str, str]]:
+    dataset = load_dataset(
+        repo, config, split="train", streaming=True, revision=revision
+    )
     for row in dataset:
         prompt = str(row.get("problem") or "").strip()
         messages = row.get("messages")
-        assistant = messages[-1] if isinstance(messages, list) and messages else None
-        answer = str(assistant.get("content") or "") if isinstance(assistant, Mapping) else ""
+        assistant = (
+            messages[-1] if isinstance(messages, list) and messages else None
+        )
+        answer = (
+            str(assistant.get("content") or "")
+            if isinstance(assistant, Mapping)
+            else ""
+        )
         match = TRACE_RE.match(answer)
         if (
             prompt
@@ -173,7 +201,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         (
             "openr1",
             True,
-            _verified_openr1_rows(args.openr1_repo, args.openr1_config, args.openr1_revision),
+            _verified_openr1_rows(
+                args.openr1_repo, args.openr1_config, args.openr1_revision
+            ),
         ),
     )
     for source, thinking, source_rows in sources:
@@ -189,8 +219,13 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 continue
             candidate_hashes.add(prompt_hash)
             candidates.append((prompt, answer, source_id, prompt_hash))
-        rendered = _render_lengths(tokenizer, [(prompt, answer, thinking) for prompt, answer, _, _ in candidates])
-        for (prompt, answer, source_id, prompt_hash), lengths in zip(candidates, rendered, strict=True):
+        rendered = _render_lengths(
+            tokenizer,
+            [(prompt, answer, thinking) for prompt, answer, _, _ in candidates],
+        )
+        for (prompt, answer, source_id, prompt_hash), lengths in zip(
+            candidates, rendered, strict=True
+        ):
             prompt_tokens, target_tokens, total_tokens = lengths
             if total_tokens == 0:
                 total_tokens = prompt_tokens + target_tokens
@@ -199,7 +234,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 audit[cap][f"{source}:target_tokens"] += target_tokens
                 if total_tokens <= cap:
                     audit[cap][f"{source}:admitted_rows"] += 1
-                    audit[cap][f"{source}:admitted_target_tokens"] += target_tokens
+                    audit[cap][
+                        f"{source}:admitted_target_tokens"
+                    ] += target_tokens
             if total_tokens > args.sequence_length:
                 rejection[f"{source}:over_context"] += 1
                 continue
@@ -269,13 +306,17 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "rejection_counts": dict(rejection),
         "retention": {str(cap): dict(values) for cap, values in audit.items()},
     }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    (output / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    )
     print(json.dumps(manifest, indent=2, sort_keys=True))
     return manifest
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the authenticated Qwen math experiment dataset")
+    parser = argparse.ArgumentParser(
+        description="Build the authenticated Qwen math experiment dataset"
+    )
     parser.add_argument("--openmath", required=True)
     parser.add_argument("--tokenizer", required=True)
     parser.add_argument("--out-dir", required=True)
@@ -286,7 +327,9 @@ def main() -> None:
     parser.add_argument("--exclude-jsonl", action="append", default=[])
     parser.add_argument("--openr1-repo", default="open-r1/OpenR1-Math-220k")
     parser.add_argument("--openr1-config", default="all")
-    parser.add_argument("--openr1-revision", default="e4e141ec9dea9f8326f4d347be56105859b2bd68")
+    parser.add_argument(
+        "--openr1-revision", default="e4e141ec9dea9f8326f4d347be56105859b2bd68"
+    )
     build(parser.parse_args())
 
 

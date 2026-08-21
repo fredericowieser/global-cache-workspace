@@ -16,7 +16,6 @@ from typing import Literal, TypeVar
 import torch
 import torch.nn as nn
 
-
 CompileRegion = Literal["initial_full_window", "full_window_with_past"]
 _Result = TypeVar("_Result")
 _RECORDER_ATTRIBUTE = "_gcw_compile_acceptance_recorder"
@@ -26,7 +25,9 @@ _RECORDER_ATTRIBUTE = "_gcw_compile_acceptance_recorder"
 class _RegionEvidence:
     calls: int = 0
     signatures: set[tuple[int, ...]] = field(default_factory=set)
-    cold_call_seconds: dict[tuple[int, ...], float] = field(default_factory=dict)
+    cold_call_seconds: dict[tuple[int, ...], float] = field(
+        default_factory=dict
+    )
     graph_count: int | None = None
     recompile_count: int | None = None
 
@@ -34,10 +35,18 @@ class _RegionEvidence:
 class CompileAcceptanceRecorder:
     """Collect explicit compile evidence around an otherwise unchanged runner."""
 
-    def __init__(self, *, expected_static_batch_rows: tuple[int, ...] = (16, 8, 4, 2)) -> None:
-        if not expected_static_batch_rows or any(rows <= 0 for rows in expected_static_batch_rows):
-            raise ValueError("expected static batch rows must contain positive integers")
-        if len(set(expected_static_batch_rows)) != len(expected_static_batch_rows):
+    def __init__(
+        self, *, expected_static_batch_rows: tuple[int, ...] = (16, 8, 4, 2)
+    ) -> None:
+        if not expected_static_batch_rows or any(
+            rows <= 0 for rows in expected_static_batch_rows
+        ):
+            raise ValueError(
+                "expected static batch rows must contain positive integers"
+            )
+        if len(set(expected_static_batch_rows)) != len(
+            expected_static_batch_rows
+        ):
             raise ValueError("expected static batch rows must be unique")
         self.expected_static_batch_rows = expected_static_batch_rows
         self._regions = {
@@ -88,10 +97,14 @@ class CompileAcceptanceRecorder:
         for name, evidence in self._regions.items():
             regions[name] = {
                 "calls": evidence.calls,
-                "observed_signatures": [list(signature) for signature in sorted(evidence.signatures)],
+                "observed_signatures": [
+                    list(signature) for signature in sorted(evidence.signatures)
+                ],
                 "cold_call_seconds": {
                     ",".join(str(value) for value in signature): seconds
-                    for signature, seconds in sorted(evidence.cold_call_seconds.items())
+                    for signature, seconds in sorted(
+                        evidence.cold_call_seconds.items()
+                    )
                 },
                 "graph_count": evidence.graph_count,
                 "recompile_count": evidence.recompile_count,
@@ -99,10 +112,20 @@ class CompileAcceptanceRecorder:
         return {
             "schema": "gcw.compile_acceptance_telemetry.v1",
             "expected_static_batch_rows": list(self.expected_static_batch_rows),
-            "expected_initial_static_graphs": len(self.expected_static_batch_rows),
-            "expected_initial_shape_recompiles": len(self.expected_static_batch_rows) - 1,
-            "expected_past_batch_specializations": len(self.expected_static_batch_rows),
-            "expected_past_shape_recompiles": len(self.expected_static_batch_rows) - 1,
+            "expected_initial_static_graphs": len(
+                self.expected_static_batch_rows
+            ),
+            "expected_initial_shape_recompiles": len(
+                self.expected_static_batch_rows
+            )
+            - 1,
+            "expected_past_batch_specializations": len(
+                self.expected_static_batch_rows
+            ),
+            "expected_past_shape_recompiles": len(
+                self.expected_static_batch_rows
+            )
+            - 1,
             "dynamic_past_length_within_batch_specialization": True,
             "regions": regions,
         }
@@ -115,12 +138,16 @@ def install_compile_acceptance_recorder(
 ) -> CompileAcceptanceRecorder:
     """Attach opt-in telemetry to one unwrapped backbone instance."""
     backbone = getattr(model, "backbone", model)
-    recorder = CompileAcceptanceRecorder(expected_static_batch_rows=expected_static_batch_rows)
+    recorder = CompileAcceptanceRecorder(
+        expected_static_batch_rows=expected_static_batch_rows
+    )
     object.__setattr__(backbone, _RECORDER_ATTRIBUTE, recorder)
     return recorder
 
 
-def compile_acceptance_recorder(backbone: nn.Module) -> CompileAcceptanceRecorder | None:
+def compile_acceptance_recorder(
+    backbone: nn.Module,
+) -> CompileAcceptanceRecorder | None:
     """Return the recorder attached to this exact backbone, if any."""
     value = backbone.__dict__.get(_RECORDER_ATTRIBUTE)
     return value if isinstance(value, CompileAcceptanceRecorder) else None

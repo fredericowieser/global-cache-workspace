@@ -47,7 +47,9 @@ _STATES: WeakKeyDictionary[nn.Module, _OwnerState] = WeakKeyDictionary()
 _STATES_LOCK = threading.Lock()
 
 
-def tensor_graph_signature(region: str, tensors: tuple[torch.Tensor, ...]) -> TensorGraphSignature:
+def tensor_graph_signature(
+    region: str, tensors: tuple[torch.Tensor, ...]
+) -> TensorGraphSignature:
     """Return a closed shape/layout identity for one graph region."""
     if not region:
         raise ValueError("CUDA Graph region must be nonempty")
@@ -103,17 +105,25 @@ def run_graphed_callable(
             # Bound methods and partial objects are commonly recreated per call.
             # Region+owner+tensor signature remains authoritative, but changing
             # the underlying Python code object is not allowed.
-            if _operation_identity(entry.operation) != _operation_identity(operation):
-                raise RuntimeError("CUDA Graph region was rebound to a different operation")
+            if _operation_identity(entry.operation) != _operation_identity(
+                operation
+            ):
+                raise RuntimeError(
+                    "CUDA Graph region was rebound to a different operation"
+                )
         try:
             result = entry.runner(*args)
         except BaseException as exc:
-            raise RuntimeError(f"CUDA Graph replay failed for region {region!r}; eager fallback is disabled") from exc
+            raise RuntimeError(
+                f"CUDA Graph replay failed for region {region!r}; eager fallback is disabled"
+            ) from exc
         entry.replay_count += 1
         return result
 
 
-def cuda_graph_capture_stats(owner: nn.Module) -> tuple[CUDAGraphCaptureStats, ...]:
+def cuda_graph_capture_stats(
+    owner: nn.Module,
+) -> tuple[CUDAGraphCaptureStats, ...]:
     """Return observed capture records without creating owner state."""
     with _STATES_LOCK:
         state = _STATES.get(owner)
@@ -123,14 +133,19 @@ def cuda_graph_capture_stats(owner: nn.Module) -> tuple[CUDAGraphCaptureStats, .
         return tuple(entry.stats for entry in state.entries.values())
 
 
-def cuda_graph_replay_counts(owner: nn.Module) -> dict[TensorGraphSignature, int]:
+def cuda_graph_replay_counts(
+    owner: nn.Module,
+) -> dict[TensorGraphSignature, int]:
     """Return replay counts for qualification only."""
     with _STATES_LOCK:
         state = _STATES.get(owner)
     if state is None:
         return {}
     with state.lock:
-        return {signature: entry.replay_count for signature, entry in state.entries.items()}
+        return {
+            signature: entry.replay_count
+            for signature, entry in state.entries.items()
+        }
 
 
 def clear_cuda_graph_runtime(owner: nn.Module) -> None:
@@ -159,11 +174,16 @@ def _capture_entry(
     warmup_iterations: int,
 ) -> _GraphEntry:
     device = args[0].device
-    index = device.index if device.index is not None else torch.cuda.current_device()
+    index = (
+        device.index
+        if device.index is not None
+        else torch.cuda.current_device()
+    )
     cpu_rng = torch.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state(index)
     gradients = tuple(
-        None if parameter.grad is None else parameter.grad.detach().clone() for parameter in owner.parameters()
+        None if parameter.grad is None else parameter.grad.detach().clone()
+        for parameter in owner.parameters()
     )
     allocated_before = torch.cuda.memory_allocated(device)
     reserved_before = torch.cuda.memory_reserved(device)
@@ -172,7 +192,9 @@ def _capture_entry(
     # the legacy stream, invalidating CUDA stream capture. The graphed callable
     # later reconnects its input gradients to each real nonleaf argument.
     sample_args = tuple(
-        tensor.detach().clone(memory_format=torch.preserve_format).requires_grad_(tensor.requires_grad)
+        tensor.detach()
+        .clone(memory_format=torch.preserve_format)
+        .requires_grad_(tensor.requires_grad)
         for tensor in args
     )
     autocast_enabled = torch.is_autocast_enabled("cuda")
@@ -209,19 +231,29 @@ def _capture_entry(
     finally:
         torch.set_rng_state(cpu_rng)
         torch.cuda.set_rng_state(cuda_rng, index)
-        for parameter, gradient in zip(owner.parameters(), gradients, strict=True):
+        for parameter, gradient in zip(
+            owner.parameters(), gradients, strict=True
+        ):
             parameter.grad = gradient
     if not callable(runner):
         raise RuntimeError("CUDA Graph capture returned a non-callable runner")
     stats = CUDAGraphCaptureStats(
         signature=signature,
         capture_ordinal=ordinal,
-        allocated_growth_bytes=int(torch.cuda.memory_allocated(device) - allocated_before),
-        reserved_growth_bytes=int(torch.cuda.memory_reserved(device) - reserved_before),
+        allocated_growth_bytes=int(
+            torch.cuda.memory_allocated(device) - allocated_before
+        ),
+        reserved_growth_bytes=int(
+            torch.cuda.memory_reserved(device) - reserved_before
+        ),
     )
     return _GraphEntry(runner=runner, operation=operation, stats=stats)
 
 
-def _operation_identity(operation: TensorOperation) -> tuple[object, object | None]:
+def _operation_identity(
+    operation: TensorOperation,
+) -> tuple[object, object | None]:
     function = getattr(operation, "func", operation)
-    return getattr(function, "__code__", function), getattr(operation, "args", None)
+    return getattr(function, "__code__", function), getattr(
+        operation, "args", None
+    )

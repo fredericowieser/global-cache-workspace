@@ -9,7 +9,9 @@ from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig
 from gcw.models import build_model
 
 
-def _config(variant: str, *, flow: bool = False, iterations: int = 1) -> ModelConfig:
+def _config(
+    variant: str, *, flow: bool = False, iterations: int = 1
+) -> ModelConfig:
     processor = None
     if variant != "tf":
         processor = CacheProcessorConfig(

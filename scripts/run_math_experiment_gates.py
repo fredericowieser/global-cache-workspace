@@ -58,7 +58,9 @@ def _bypass_gate(config_path: Path, output: Path) -> dict[str, Any]:
     reference.eval()
     bypass.eval()
     torch.manual_seed(24)
-    input_ids = torch.randint(0, config.model.vocab_size, (1, 32), device="cuda")
+    input_ids = torch.randint(
+        0, config.model.vocab_size, (1, 32), device="cuda"
+    )
     with torch.no_grad():
         observed = bypass(input_ids)
         expected = reference(input_ids)
@@ -66,17 +68,23 @@ def _bypass_gate(config_path: Path, output: Path) -> dict[str, Any]:
     payload = {
         "applicable": True,
         "exact": exact,
-        "max_abs_error": float((observed.float() - expected.float()).abs().max()),
+        "max_abs_error": float(
+            (observed.float() - expected.float()).abs().max()
+        ),
         "config_sha256": _sha256(config_path),
     }
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     if not exact:
-        raise RuntimeError(f"processor bypass drift for {config_path.name}: {payload}")
+        raise RuntimeError(
+            f"processor bypass drift for {config_path.name}: {payload}"
+        )
     return payload
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run one-step CUDA and processor-bypass experiment gates")
+    parser = argparse.ArgumentParser(
+        description="Run one-step CUDA and processor-bypass experiment gates"
+    )
     parser.add_argument("--config-dir", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--source-commit", required=True)
@@ -111,7 +119,9 @@ def main() -> None:
         "source_commit": args.source_commit,
         "arms": summary,
     }
-    (output / "summary.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    (output / "summary.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n"
+    )
 
 
 if __name__ == "__main__":

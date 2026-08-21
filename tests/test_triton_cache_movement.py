@@ -8,7 +8,10 @@ import sys
 import pytest
 import torch
 
-from gcw.performance.triton import gather_per_cache_head_kv, require_triton_runtime
+from gcw.performance.triton import (
+    gather_per_cache_head_kv,
+    require_triton_runtime,
+)
 
 
 def test_triton_package_import_is_lazy() -> None:

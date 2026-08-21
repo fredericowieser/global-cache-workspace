@@ -9,7 +9,6 @@ import torch.nn.functional as F
 
 from gcw.config import LoRAConfig
 
-
 ModuleT = TypeVar("ModuleT", bound=nn.Module)
 
 
@@ -17,7 +16,9 @@ class LoRALinear(nn.Linear):
     """A linear layer with a zero-initialized low-rank residual."""
 
     def __init__(self, base: nn.Linear, config: LoRAConfig):
-        super().__init__(base.in_features, base.out_features, bias=base.bias is not None)
+        super().__init__(
+            base.in_features, base.out_features, bias=base.bias is not None
+        )
         self.weight = base.weight
         if base.bias is not None:
             self.bias = base.bias
@@ -29,7 +30,10 @@ class LoRALinear(nn.Linear):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base = F.linear(x, self.weight, self.bias)
-        adapted = F.linear(F.linear(F.dropout(x, self.dropout, self.training), self.lora_a), self.lora_b)
+        adapted = F.linear(
+            F.linear(F.dropout(x, self.dropout, self.training), self.lora_a),
+            self.lora_b,
+        )
         return base + adapted * self.scaling
 
 
@@ -40,6 +44,10 @@ def apply_lora(module: ModuleT, config: LoRAConfig | None) -> ModuleT:
     targets = set(config.targets)
     for parent in module.modules():
         for name, child in list(parent.named_children()):
-            if name in targets and isinstance(child, nn.Linear) and not isinstance(child, LoRALinear):
+            if (
+                name in targets
+                and isinstance(child, nn.Linear)
+                and not isinstance(child, LoRALinear)
+            ):
                 setattr(parent, name, LoRALinear(child, config))
     return module

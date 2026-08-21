@@ -87,27 +87,49 @@ def configure_kv_score_sidecar_execution(
             object.__delattr__(processor, _POLICY_ATTRIBUTE)
         return
     if context is None:
-        raise ValueError("enabled KV-score sidecar requires explicit execution context")
+        raise ValueError(
+            "enabled KV-score sidecar requires explicit execution context"
+        )
     if context.model_variant != "longshot":
-        raise ValueError("KV-score sidecar execution context requires model_variant='longshot'")
+        raise ValueError(
+            "KV-score sidecar execution context requires model_variant='longshot'"
+        )
     if context.model_family not in {"smollm", "llama", "qwen3"}:
-        raise ValueError("KV-score sidecar requires a dense WindowedCache-compatible model family")
+        raise ValueError(
+            "KV-score sidecar requires a dense WindowedCache-compatible model family"
+        )
     if context.physical_batch_size != 2:
-        raise ValueError("KV-score sidecar requires fixed physical batch size 2")
+        raise ValueError(
+            "KV-score sidecar requires fixed physical batch size 2"
+        )
     if context.distributed != "none":
-        raise ValueError("KV-score sidecar supports only single-process distributed='none'")
+        raise ValueError(
+            "KV-score sidecar supports only single-process distributed='none'"
+        )
     if context.backbone_chunk_backend != "eager":
-        raise ValueError("KV-score sidecar requires backbone_chunk_backend='eager'")
+        raise ValueError(
+            "KV-score sidecar requires backbone_chunk_backend='eager'"
+        )
     if context.adaptive_batching_enabled:
-        raise ValueError("KV-score sidecar does not compose with adaptive batching")
+        raise ValueError(
+            "KV-score sidecar does not compose with adaptive batching"
+        )
     if context.longshot_full_history_enabled:
-        raise ValueError("KV-score sidecar does not compose with Longshot full-history execution")
+        raise ValueError(
+            "KV-score sidecar does not compose with Longshot full-history execution"
+        )
     if context.whole_model_compile_requested:
-        raise ValueError("KV-score sidecar does not compose with whole-model compilation")
+        raise ValueError(
+            "KV-score sidecar does not compose with whole-model compilation"
+        )
     if context.activation_checkpointing != "none":
-        raise ValueError("KV-score sidecar supports Longshot native and segmented checkpointing only")
+        raise ValueError(
+            "KV-score sidecar supports Longshot native and segmented checkpointing only"
+        )
     if context.incompatible_refinement_enabled:
-        raise ValueError("KV-score sidecar does not compose with Flow, Diffusion, or workspace refinement")
+        raise ValueError(
+            "KV-score sidecar does not compose with Flow, Diffusion, or workspace refinement"
+        )
     if type(processor).__module__ != "gcw.models.cache_processors.longshot":
         raise ValueError("KV-score sidecar found no Longshot cache processor")
     composition = getattr(processor, "_gcw_longshot_model_composition", None)
@@ -118,54 +140,91 @@ def configure_kv_score_sidecar_execution(
         or type(composition[1]) is not str
         or any(type(value) is not bool for value in composition[2:])
     ):
-        raise RuntimeError("Longshot cache processor has no valid model-composition identity")
-    actual_variant, actual_family, has_flow, has_diffusion, has_workspace = composition
+        raise RuntimeError(
+            "Longshot cache processor has no valid model-composition identity"
+        )
+    actual_variant, actual_family, has_flow, has_diffusion, has_workspace = (
+        composition
+    )
     actual_incompatible_refinement = has_flow or has_diffusion or has_workspace
     if (
         context.model_variant != actual_variant
         or context.model_family != actual_family
-        or context.incompatible_refinement_enabled != actual_incompatible_refinement
+        or context.incompatible_refinement_enabled
+        != actual_incompatible_refinement
     ):
-        raise ValueError("KV-score sidecar execution context does not match the actual model composition")
-    if actual_variant != "longshot" or actual_family not in {"smollm", "llama", "qwen3"}:
-        raise ValueError("KV-score sidecar actual model composition is unsupported")
+        raise ValueError(
+            "KV-score sidecar execution context does not match the actual model composition"
+        )
+    if actual_variant != "longshot" or actual_family not in {
+        "smollm",
+        "llama",
+        "qwen3",
+    }:
+        raise ValueError(
+            "KV-score sidecar actual model composition is unsupported"
+        )
     if actual_incompatible_refinement:
-        raise ValueError("KV-score sidecar actual model has Flow, Diffusion, or workspace refinement")
+        raise ValueError(
+            "KV-score sidecar actual model has Flow, Diffusion, or workspace refinement"
+        )
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         if torch.distributed.get_world_size() != 1:
-            raise ValueError("KV-score sidecar cannot run in an initialized distributed process group")
+            raise ValueError(
+                "KV-score sidecar cannot run in an initialized distributed process group"
+            )
     processor_config = processor.config
     if processor_config.score != "kv_norm":
-        raise ValueError("KV-score sidecar requires cache_processor.score='kv_norm'")
+        raise ValueError(
+            "KV-score sidecar requires cache_processor.score='kv_norm'"
+        )
     if processor_config.attention_dropout != 0.0:
-        raise ValueError("KV-score sidecar requires cache_processor.attention_dropout=0")
+        raise ValueError(
+            "KV-score sidecar requires cache_processor.attention_dropout=0"
+        )
     if processor_config.linear_state_cache:
-        raise ValueError("KV-score sidecar rejects linear recurrent cache state")
+        raise ValueError(
+            "KV-score sidecar rejects linear recurrent cache state"
+        )
     backbone = getattr(model, "backbone", None)
-    configured_backend = getattr(backbone, "backbone_chunk_backend", context.backbone_chunk_backend)
+    configured_backend = getattr(
+        backbone, "backbone_chunk_backend", context.backbone_chunk_backend
+    )
     if configured_backend != context.backbone_chunk_backend:
-        raise RuntimeError("KV-score sidecar execution context does not match the configured backbone backend")
+        raise RuntimeError(
+            "KV-score sidecar execution context does not match the configured backbone backend"
+        )
     from gcw.performance.longshot_cache import longshot_full_history_execution
     from gcw.performance.whole_model import whole_model_compile_requested
 
     if longshot_full_history_execution(processor).enabled:
-        raise ValueError("KV-score sidecar cannot run with configured Longshot full-history execution")
+        raise ValueError(
+            "KV-score sidecar cannot run with configured Longshot full-history execution"
+        )
     if whole_model_compile_requested():
-        raise ValueError("KV-score sidecar cannot run with requested whole-model compilation")
+        raise ValueError(
+            "KV-score sidecar cannot run with requested whole-model compilation"
+        )
     object.__setattr__(processor, _POLICY_ATTRIBUTE, config)
 
 
-def kv_score_sidecar_execution(processor: torch.nn.Module) -> KVScoreSidecarConfig:
+def kv_score_sidecar_execution(
+    processor: torch.nn.Module,
+) -> KVScoreSidecarConfig:
     """Return the attached policy; absence preserves the eager oracle path."""
     value = getattr(processor, _POLICY_ATTRIBUTE, None)
     if value is None:
         return KVScoreSidecarConfig()
     if not isinstance(value, KVScoreSidecarConfig):
-        raise TypeError("configured KV-score sidecar policy has an invalid type")
+        raise TypeError(
+            "configured KV-score sidecar policy has an invalid type"
+        )
     return value
 
 
-def kv_score_sidecar_execution_metadata(config: KVScoreSidecarConfig, *, unrope_keys: bool) -> dict[str, Any]:
+def kv_score_sidecar_execution_metadata(
+    config: KVScoreSidecarConfig, *, unrope_keys: bool
+) -> dict[str, Any]:
     """Describe and authenticate the conservative selector-only execution."""
     execution = {
         "schema": _EXECUTION_SCHEMA,
@@ -222,11 +281,15 @@ def synchronize_kv_score_sidecar(
         _validate_state(state, keys, spec)
         prefix = state.scores.shape[2]
         if prefix > sequence:
-            raise RuntimeError("KV-score sidecar sequence is longer than its live cache")
+            raise RuntimeError(
+                "KV-score sidecar sequence is longer than its live cache"
+            )
         scores = state.scores
     if prefix == sequence:
         return KVScoreSidecarState(spec, scores.detach())
-    positions = torch.arange(prefix, sequence, dtype=torch.long, device=keys.device)
+    positions = torch.arange(
+        prefix, sequence, dtype=torch.long, device=keys.device
+    )
     positions = positions.unsqueeze(0).expand(keys.shape[1], -1)
     appended = score_kv_positions(keys, values, positions, spec)
     complete = appended if prefix == 0 else torch.cat([scores, appended], dim=2)
@@ -265,14 +328,24 @@ def score_kv_positions(
     layers, batch, heads, _, head_dim = keys.shape
     selected = positions.shape[1]
     if selected == 0:
-        return torch.empty(batch, layers * heads, 0, dtype=torch.float32, device=keys.device)
-    index = positions[None, :, None, :, None].expand(layers, batch, heads, selected, head_dim)
+        return torch.empty(
+            batch, layers * heads, 0, dtype=torch.float32, device=keys.device
+        )
+    index = positions[None, :, None, :, None].expand(
+        layers, batch, heads, selected, head_dim
+    )
     selected_keys = torch.gather(keys, dim=3, index=index)
     selected_values = torch.gather(values, dim=3, index=index)
     by_cache_head_shape = (batch, layers * heads, selected, head_dim)
-    selected_keys = selected_keys.permute(1, 0, 2, 3, 4).reshape(by_cache_head_shape)
-    selected_values = selected_values.permute(1, 0, 2, 3, 4).reshape(by_cache_head_shape)
-    expanded_positions = positions[:, None, :].expand(batch, layers * heads, selected)
+    selected_keys = selected_keys.permute(1, 0, 2, 3, 4).reshape(
+        by_cache_head_shape
+    )
+    selected_values = selected_values.permute(1, 0, 2, 3, 4).reshape(
+        by_cache_head_shape
+    )
+    expanded_positions = positions[:, None, :].expand(
+        batch, layers * heads, selected
+    )
     if spec.unrope_keys:
         selected_keys = rotate_cache_keys(
             selected_keys,
@@ -287,40 +360,83 @@ def score_kv_positions(
     return chunked_fp32_squared_l2(merged.contiguous()).detach()
 
 
-def _validate_cache_tensors(keys: torch.Tensor, values: torch.Tensor, spec: KVScoreSidecarSpec) -> None:
+def _validate_cache_tensors(
+    keys: torch.Tensor, values: torch.Tensor, spec: KVScoreSidecarSpec
+) -> None:
     if spec.schema != _SCHEMA:
         raise RuntimeError("KV-score sidecar spec has an unsupported schema")
     expected_prefix = (spec.num_layers, keys.shape[1], spec.num_kv_heads)
-    if keys.ndim != 5 or keys.shape[:3] != expected_prefix or keys.shape[-1] != spec.head_dim:
-        raise RuntimeError("KV-score sidecar spec does not match the live cache shape")
+    if (
+        keys.ndim != 5
+        or keys.shape[:3] != expected_prefix
+        or keys.shape[-1] != spec.head_dim
+    ):
+        raise RuntimeError(
+            "KV-score sidecar spec does not match the live cache shape"
+        )
     if keys.shape != values.shape:
-        raise RuntimeError("KV-score sidecar requires identical key and value shapes")
-    if keys.dtype != values.dtype or keys.device != values.device or not keys.is_floating_point():
-        raise RuntimeError("KV-score sidecar requires floating K/V with matching dtype and device")
+        raise RuntimeError(
+            "KV-score sidecar requires identical key and value shapes"
+        )
+    if (
+        keys.dtype != values.dtype
+        or keys.device != values.device
+        or not keys.is_floating_point()
+    ):
+        raise RuntimeError(
+            "KV-score sidecar requires floating K/V with matching dtype and device"
+        )
     if keys.shape[1] != 2:
-        raise RuntimeError("KV-score sidecar requires fixed physical batch size 2")
+        raise RuntimeError(
+            "KV-score sidecar requires fixed physical batch size 2"
+        )
     if keys.dtype not in {torch.float32, torch.bfloat16}:
-        raise RuntimeError("KV-score sidecar supports only FP32 or BF16 live cache tensors")
+        raise RuntimeError(
+            "KV-score sidecar supports only FP32 or BF16 live cache tensors"
+        )
     if not keys.is_contiguous() or not values.is_contiguous():
-        raise RuntimeError("KV-score sidecar requires contiguous dense WindowedCache storage")
+        raise RuntimeError(
+            "KV-score sidecar requires contiguous dense WindowedCache storage"
+        )
 
 
-def _validate_state(state: KVScoreSidecarState, keys: torch.Tensor, spec: KVScoreSidecarSpec) -> None:
+def _validate_state(
+    state: KVScoreSidecarState, keys: torch.Tensor, spec: KVScoreSidecarSpec
+) -> None:
     if not isinstance(state, KVScoreSidecarState) or state.spec != spec:
-        raise RuntimeError("KV-score sidecar state does not match the requested execution spec")
+        raise RuntimeError(
+            "KV-score sidecar state does not match the requested execution spec"
+        )
     expected_prefix = (keys.shape[1], spec.num_layers * spec.num_kv_heads)
     if state.scores.ndim != 3 or state.scores.shape[:2] != expected_prefix:
-        raise RuntimeError("KV-score sidecar score shape does not match the live cache")
-    if state.scores.dtype != torch.float32 or state.scores.device != keys.device:
-        raise RuntimeError("KV-score sidecar scores must be FP32 on the live cache device")
+        raise RuntimeError(
+            "KV-score sidecar score shape does not match the live cache"
+        )
+    if (
+        state.scores.dtype != torch.float32
+        or state.scores.device != keys.device
+    ):
+        raise RuntimeError(
+            "KV-score sidecar scores must be FP32 on the live cache device"
+        )
     if state.scores.requires_grad or state.scores.grad_fn is not None:
-        raise RuntimeError("KV-score sidecar scores must be detached selector-only data")
+        raise RuntimeError(
+            "KV-score sidecar scores must be detached selector-only data"
+        )
 
 
 def _validate_positions(positions: torch.Tensor, keys: torch.Tensor) -> None:
     if positions.ndim != 2 or positions.shape[0] != keys.shape[1]:
-        raise RuntimeError("KV-score sidecar positions must have shape (batch, selected)")
+        raise RuntimeError(
+            "KV-score sidecar positions must have shape (batch, selected)"
+        )
     if positions.dtype != torch.long or positions.device != keys.device:
-        raise RuntimeError("KV-score sidecar positions must be long tensors on the cache device")
-    if positions.numel() and (bool((positions < 0).any()) or bool((positions >= keys.shape[3]).any())):
-        raise RuntimeError("KV-score sidecar positions are outside the live cache")
+        raise RuntimeError(
+            "KV-score sidecar positions must be long tensors on the cache device"
+        )
+    if positions.numel() and (
+        bool((positions < 0).any()) or bool((positions >= keys.shape[3]).any())
+    ):
+        raise RuntimeError(
+            "KV-score sidecar positions are outside the live cache"
+        )

@@ -12,7 +12,9 @@ from gcw.runs import RunRecord
 class RunTracker:
     """Mirror one canonical local metric stream to optional W&B logging."""
 
-    def __init__(self, record: RunRecord, *, wandb_run: Any = None, log_every: int = 1):
+    def __init__(
+        self, record: RunRecord, *, wandb_run: Any = None, log_every: int = 1
+    ):
         self.record = record
         self.wandb_run = wandb_run
         self.log_every = max(1, log_every)
@@ -36,7 +38,9 @@ class RunTracker:
         run_metadata = dict(metadata)
         if model is not None:
             run_metadata["trainable_params"] = sum(
-                parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+                parameter.numel()
+                for parameter in model.parameters()
+                if parameter.requires_grad
             )
             run_metadata["lora_params"] = trainable_adapter_params(model)
         run = _start_wandb(config, run_metadata, record)
@@ -47,16 +51,22 @@ class RunTracker:
         )
         return cls(record, wandb_run=run, log_every=config.wandb.log_every)
 
-    def log(self, metrics: Mapping[str, Any], *, step: int, mirror: bool = True) -> None:
+    def log(
+        self, metrics: Mapping[str, Any], *, step: int, mirror: bool = True
+    ) -> None:
         """Persist a metric event locally, then mirror it when configured."""
-        compact = {key: value for key, value in metrics.items() if value is not None}
+        compact = {
+            key: value for key, value in metrics.items() if value is not None
+        }
         self.record.append_metrics(compact, step=step)
         self._last_metrics.update(compact)
         if mirror and self.wandb_run is not None and step % self.log_every == 0:
             try:
                 self.wandb_run.log(dict(compact), step=step)
             except Exception as error:  # W&B is a non-canonical remote sink.
-                self.record.append_log(f"W&B logging disabled after {type(error).__name__}: {error}")
+                self.record.append_log(
+                    f"W&B logging disabled after {type(error).__name__}: {error}"
+                )
                 if os.environ.get("GCW_WANDB_REQUIRED") == "1":
                     raise
                 self.wandb_run = None
@@ -65,7 +75,12 @@ class RunTracker:
         """Append a human-readable local log line."""
         self.record.append_log(message)
 
-    def finish(self, *, summary: Mapping[str, Any] | None = None, error: BaseException | None = None) -> None:
+    def finish(
+        self,
+        *,
+        summary: Mapping[str, Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
         """Finalize local status and close the optional remote run."""
         final = dict(self._last_metrics)
         if summary is not None:
@@ -73,20 +88,28 @@ class RunTracker:
         if self.wandb_run is not None:
             try:
                 if summary is not None:
-                    for key in ("completed_step", "planned_max_steps", "stopped_at_checkpoint"):
+                    for key in (
+                        "completed_step",
+                        "planned_max_steps",
+                        "stopped_at_checkpoint",
+                    ):
                         if key in summary:
                             self.wandb_run.summary[key] = summary[key]
                 self.wandb_run.finish(exit_code=1 if error is not None else 0)
             except TypeError:
                 self.wandb_run.finish()
             except Exception as finish_error:
-                self.record.append_log(f"W&B finish failed with {type(finish_error).__name__}: {finish_error}")
+                self.record.append_log(
+                    f"W&B finish failed with {type(finish_error).__name__}: {finish_error}"
+                )
                 if os.environ.get("GCW_WANDB_REQUIRED") == "1":
                     raise
         self.record.finish(summary=final, error=error)
 
 
-def _start_wandb(config: TrainConfig, metadata: Mapping[str, Any], record: RunRecord) -> Any:
+def _start_wandb(
+    config: TrainConfig, metadata: Mapping[str, Any], record: RunRecord
+) -> Any:
     if not config.wandb.enabled:
         return None
     try:
@@ -127,7 +150,9 @@ def _start_wandb(config: TrainConfig, metadata: Mapping[str, Any], record: RunRe
                 run.summary[key] = metadata[key]
         return run
     except Exception as error:
-        record.append_log(f"W&B initialization failed with {type(error).__name__}: {error}")
+        record.append_log(
+            f"W&B initialization failed with {type(error).__name__}: {error}"
+        )
         if os.environ.get("GCW_WANDB_REQUIRED") == "1":
             raise
         return None

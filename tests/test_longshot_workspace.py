@@ -47,7 +47,9 @@ def _cache() -> WindowedCache:
     )
 
 
-def test_workspace_cycle_preserves_source_and_writes_differentiable_values() -> None:
+def test_workspace_cycle_preserves_source_and_writes_differentiable_values() -> (
+    None
+):
     processor = _processor()
     cache = _cache()
     original_keys = cache.keys.clone()
@@ -67,6 +69,7 @@ def test_workspace_cycle_preserves_source_and_writes_differentiable_values() -> 
 
     branch.values.sum().backward()
     assert any(
-        parameter.grad is not None and torch.count_nonzero(parameter.grad).item() > 0
+        parameter.grad is not None
+        and torch.count_nonzero(parameter.grad).item() > 0
         for parameter in processor.parameters()
     )

@@ -61,7 +61,9 @@ def resolve_model(config: ModelConfig) -> ModelResolution:
         backbone_contract="gcw.native_causal_lm.v1",
         memory_domains=domains,
         processor_component=None if processor is None else processor.component,
-        processor_config_sha256=None if processor is None else processor.config_sha256,
+        processor_config_sha256=(
+            None if processor is None else processor.config_sha256
+        ),
         processor_pipeline=() if processor is None else processor.pipeline,
         generation_policy=assembly.generation_policy,
         checkpoint_abi=assembly.checkpoint_abi,
@@ -69,7 +71,9 @@ def resolve_model(config: ModelConfig) -> ModelResolution:
         capabilities=capabilities,
         receipt_sha256="",
     )
-    receipt = replace(unsigned, receipt_sha256=canonical_json_sha256(unsigned.payload()))
+    receipt = replace(
+        unsigned, receipt_sha256=canonical_json_sha256(unsigned.payload())
+    )
     return ModelResolution(assembly, receipt, report)
 
 
@@ -79,8 +83,14 @@ def resolve_experiment(
 ) -> ExperimentResolution:
     model_resolution = resolve_model(config.model)
     issues = list(model_resolution.report.issues)
-    expected_model_digest = canonical_json_sha256(_config_payload(config.model)) if not issues else None
-    if model_receipt.receipt_sha256 != canonical_json_sha256(model_receipt.payload()):
+    expected_model_digest = (
+        canonical_json_sha256(_config_payload(config.model))
+        if not issues
+        else None
+    )
+    if model_receipt.receipt_sha256 != canonical_json_sha256(
+        model_receipt.payload()
+    ):
         issues.append(
             CompatibilityIssue(
                 "model_receipt_digest",
@@ -88,7 +98,10 @@ def resolve_experiment(
                 "model_receipt.receipt_sha256",
             )
         )
-    if model_resolution.receipt is not None and model_receipt != model_resolution.receipt:
+    if (
+        model_resolution.receipt is not None
+        and model_receipt != model_resolution.receipt
+    ):
         issues.append(
             CompatibilityIssue(
                 "model_receipt_noncanonical",
@@ -96,7 +109,10 @@ def resolve_experiment(
                 "model_receipt",
             )
         )
-    if expected_model_digest is not None and model_receipt.model_config_sha256 != expected_model_digest:
+    if (
+        expected_model_digest is not None
+        and model_receipt.model_config_sha256 != expected_model_digest
+    ):
         issues.append(
             CompatibilityIssue(
                 "model_receipt_mismatch",
@@ -114,7 +130,9 @@ def resolve_experiment(
     objective_protocol = _objective_protocol(config)
     parameter_policy, trainable_ownership = _parameter_policy(config, model)
     schedule = _intervention_schedule(config, model)
-    capabilities = tuple(sorted(set(model.capabilities) | _experiment_capabilities(config)))
+    capabilities = tuple(
+        sorted(set(model.capabilities) | _experiment_capabilities(config))
+    )
     experiment = ResolvedExperiment(
         model=model,
         data_protocol=data_protocol,
@@ -126,7 +144,11 @@ def resolve_experiment(
         capabilities=capabilities,
     )
     processor = config.model.cache_processor
-    recurrence_plan = "none" if processor is None else f"{processor.iteration_mode}:{processor.iterations}"
+    recurrence_plan = (
+        "none"
+        if processor is None
+        else f"{processor.iteration_mode}:{processor.iterations}"
+    )
     if config.model.diffusion_processor is not None:
         flow_plan = f"task_directed_diffusion:{config.model.diffusion_processor.num_steps}"
     elif config.model.flow_processor is not None:
@@ -150,11 +172,16 @@ def resolve_experiment(
         recurrence_plan=recurrence_plan,
         flow_plan=flow_plan,
         checkpoint_contracts=tuple(checkpoint_contracts),
-        provenance_contracts=("gcw.source_code_identity.v2", "gcw.composition.v1"),
+        provenance_contracts=(
+            "gcw.source_code_identity.v2",
+            "gcw.composition.v1",
+        ),
         capabilities=capabilities,
         receipt_sha256="",
     )
-    receipt = replace(unsigned, receipt_sha256=canonical_json_sha256(unsigned.payload()))
+    receipt = replace(
+        unsigned, receipt_sha256=canonical_json_sha256(unsigned.payload())
+    )
     return ExperimentResolution(experiment, receipt, report)
 
 
@@ -163,7 +190,9 @@ def _processor_assembly(config: ModelConfig) -> ProcessorAssembly | None:
         return None
     processor = config.cache_processor
     if processor is None:
-        raise RuntimeError("admitted processed model has no processor configuration")
+        raise RuntimeError(
+            "admitted processed model has no processor configuration"
+        )
     components = {
         "bt": "gcw.processor.per_layer.v1",
         "bgt": "gcw.processor.global.v1",
@@ -182,9 +211,11 @@ def _processor_assembly(config: ModelConfig) -> ProcessorAssembly | None:
         flow_solver_steps=(
             config.diffusion_processor.num_steps
             if config.diffusion_processor is not None
-            else 0
-            if config.flow_processor is None
-            else config.flow_processor.num_steps
+            else (
+                0
+                if config.flow_processor is None
+                else config.flow_processor.num_steps
+            )
         ),
     )
 
@@ -195,7 +226,11 @@ def _memory_domains(
 ) -> tuple[MemoryDomainDescriptor, ...]:
     writable = processor is not None
     kv_writes: tuple[str, ...] = ("keys", "values") if writable else ()
-    if processor is not None and config.cache_processor is not None and config.cache_processor.update_stream == "v":
+    if (
+        processor is not None
+        and config.cache_processor is not None
+        and config.cache_processor.update_stream == "v"
+    ):
         kv_writes = ("values",)
     domains: list[MemoryDomainDescriptor] = [
         MemoryDomainDescriptor(
@@ -249,7 +284,9 @@ def _memory_domains(
                     differentiable=True,
                     allowed_writes=(
                         ("additive_learned_perturbation",)
-                        if writable and config.cache_processor is not None and config.cache_processor.linear_state_cache
+                        if writable
+                        and config.cache_processor is not None
+                        and config.cache_processor.linear_state_cache
                         else ()
                     ),
                 ),
@@ -276,7 +313,12 @@ def _model_capabilities(
     processor: ProcessorAssembly | None,
     domains: tuple[MemoryDomainDescriptor, ...],
 ) -> tuple[str, ...]:
-    capabilities = {"causal_lm", "native_generate", "native_generate_fast", "strict_checkpoint"}
+    capabilities = {
+        "causal_lm",
+        "native_generate",
+        "native_generate_fast",
+        "strict_checkpoint",
+    }
     if processor is not None:
         capabilities.update({"cache_intervention", "processor_training"})
     if config.flow_processor is not None:
@@ -310,7 +352,11 @@ def _parameter_policy(
         return "processor_only", ("cache_processor",)
     if config.trainable == "backbone":
         return "backbone_only", ("backbone",)
-    return "full_model", ("backbone",) if model.processor is None else ("backbone", "cache_processor")
+    return "full_model", (
+        ("backbone",)
+        if model.processor is None
+        else ("backbone", "cache_processor")
+    )
 
 
 def _intervention_schedule(
@@ -322,16 +368,26 @@ def _intervention_schedule(
     processor = config.model.cache_processor
     schedule = [f"cache_every:{processor.process_every}"]
     if processor.iterations > 1:
-        schedule.append(f"recurrence:{processor.iteration_mode}:{processor.iterations}")
+        schedule.append(
+            f"recurrence:{processor.iteration_mode}:{processor.iterations}"
+        )
     if config.model.flow_processor is not None:
-        schedule.append(f"latent_flow_steps:{config.model.flow_processor.num_steps}")
+        schedule.append(
+            f"latent_flow_steps:{config.model.flow_processor.num_steps}"
+        )
     if config.model.diffusion_processor is not None:
-        schedule.append(f"task_directed_diffusion_steps:{config.model.diffusion_processor.num_steps}")
+        schedule.append(
+            f"task_directed_diffusion_steps:{config.model.diffusion_processor.num_steps}"
+        )
     return tuple(schedule)
 
 
 def _experiment_capabilities(config: TrainConfig) -> set[str]:
-    capabilities = {f"data:{config.data.kind}", f"mode:{config.mode}", f"execution:{config.distributed}"}
+    capabilities = {
+        f"data:{config.data.kind}",
+        f"mode:{config.mode}",
+        f"execution:{config.distributed}",
+    }
     if config.resume is not None:
         capabilities.add("exact_resume")
     if config.data.canonical_execution:

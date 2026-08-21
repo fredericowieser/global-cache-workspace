@@ -8,7 +8,9 @@ import pytest
 from gcw.runs import RunRecord
 
 
-def test_run_record_writes_logs_and_keeps_state_external(tmp_path: Path) -> None:
+def test_run_record_writes_logs_and_keeps_state_external(
+    tmp_path: Path,
+) -> None:
     state = tmp_path / "mutable" / "checkpoint"
     record = RunRecord.create(
         kind="training",
@@ -22,7 +24,9 @@ def test_run_record_writes_logs_and_keeps_state_external(tmp_path: Path) -> None
 
     record.append_metrics({"train/loss": 1.25}, step=1)
     record.append_log("step 1")
-    record.bind_wandb(run_id="abc", url="https://wandb.invalid/abc", mode="offline")
+    record.bind_wandb(
+        run_id="abc", url="https://wandb.invalid/abc", mode="offline"
+    )
     record.finish(summary={"train/loss": 1.25})
 
     assert record.paths.root.name == "tiny-experiment--attempt-1"
@@ -30,13 +34,20 @@ def test_run_record_writes_logs_and_keeps_state_external(tmp_path: Path) -> None
     assert "seed: 24" in yaml_text
     assert json.loads(record.paths.metrics_stream.read_text())["step"] == 1
     assert json.loads(record.paths.status.read_text())["state"] == "succeeded"
-    assert json.loads(record.paths.state.read_text())["mutable_state_path"] == str(state)
-    assert not any(path.suffix in {".pt", ".bin", ".safetensors"} for path in record.paths.root.rglob("*"))
+    assert json.loads(record.paths.state.read_text())[
+        "mutable_state_path"
+    ] == str(state)
+    assert not any(
+        path.suffix in {".pt", ".bin", ".safetensors"}
+        for path in record.paths.root.rglob("*")
+    )
     with pytest.raises(RuntimeError, match="finalized"):
         record.append_log("late")
 
 
-def test_run_record_rejects_collisions_and_normalizes_non_finite_metrics(tmp_path: Path) -> None:
+def test_run_record_rejects_collisions_and_normalizes_non_finite_metrics(
+    tmp_path: Path,
+) -> None:
     kwargs = {
         "kind": "evaluation",
         "experiment_name": "eval",

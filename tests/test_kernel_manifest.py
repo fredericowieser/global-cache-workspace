@@ -34,4 +34,7 @@ def test_kernel_manifest_is_closed_deterministic_and_autotune_free() -> None:
         CACHE_COPY_BLOCK,
     }
     assert {spec.num_warps for spec in KERNEL_LAUNCHES} == {CACHE_NUM_WARPS}
-    assert kernel_manifest_sha256() == "02f46571ce4668a800298dd826011bdf9550794ef224371c9337d21b5977ea03"
+    assert (
+        kernel_manifest_sha256()
+        == "02f46571ce4668a800298dd826011bdf9550794ef224371c9337d21b5977ea03"
+    )

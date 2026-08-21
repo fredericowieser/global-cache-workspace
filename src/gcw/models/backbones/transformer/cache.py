@@ -24,7 +24,9 @@ class WindowedCacheLayout:
     linear_states: LinearStateLayout = ()
 
 
-def _flatten_windowed_cache(cache: WindowedCache | None) -> tuple[tuple[torch.Tensor, ...], WindowedCacheLayout]:
+def _flatten_windowed_cache(
+    cache: WindowedCache | None,
+) -> tuple[tuple[torch.Tensor, ...], WindowedCacheLayout]:
     if cache is None:
         return (), WindowedCacheLayout()
     tensors = [cache.keys, cache.values, cache.scores]
@@ -40,33 +42,49 @@ def _flatten_windowed_cache(cache: WindowedCache | None) -> tuple[tuple[torch.Te
         tensors.append(recurrent)
         if convolution is not None:
             tensors.append(convolution)
-    return tuple(tensors), WindowedCacheLayout(sidecar_spec, tuple(linear_layout))
+    return tuple(tensors), WindowedCacheLayout(
+        sidecar_spec, tuple(linear_layout)
+    )
 
 
-def _unflatten_windowed_cache(tensors: tuple[torch.Tensor, ...], layout: WindowedCacheLayout) -> WindowedCache:
+def _unflatten_windowed_cache(
+    tensors: tuple[torch.Tensor, ...], layout: WindowedCacheLayout
+) -> WindowedCache:
     if len(tensors) < 3:
-        raise ValueError("a flattened WindowedCache boundary requires keys, values, and scores")
+        raise ValueError(
+            "a flattened WindowedCache boundary requires keys, values, and scores"
+        )
     position = 3
     sidecar = None
     if layout.sidecar_spec is not None:
         if position >= len(tensors):
-            raise ValueError("flattened WindowedCache is missing KV-score sidecar state")
+            raise ValueError(
+                "flattened WindowedCache is missing KV-score sidecar state"
+            )
         from gcw.performance.kv_score_sidecar import KVScoreSidecarState
 
-        sidecar = KVScoreSidecarState(layout.sidecar_spec, tensors[position].detach())
+        sidecar = KVScoreSidecarState(
+            layout.sidecar_spec, tensors[position].detach()
+        )
         position += 1
     linear_states: dict[int, tuple[torch.Tensor, torch.Tensor | None]] = {}
     for layer_idx, has_convolution in layout.linear_states:
         if position >= len(tensors):
-            raise ValueError("flattened WindowedCache is missing a recurrent state tensor")
+            raise ValueError(
+                "flattened WindowedCache is missing a recurrent state tensor"
+            )
         recurrent = tensors[position]
         position += 1
         convolution = tensors[position] if has_convolution else None
         position += int(has_convolution)
         linear_states[layer_idx] = (recurrent, convolution)
     if position != len(tensors):
-        raise ValueError("flattened WindowedCache contains unexpected state tensors")
-    return WindowedCache(tensors[0], tensors[1], tensors[2], linear_states or None, sidecar)
+        raise ValueError(
+            "flattened WindowedCache contains unexpected state tensors"
+        )
+    return WindowedCache(
+        tensors[0], tensors[1], tensors[2], linear_states or None, sidecar
+    )
 
 
 def _window_checkpoint_contexts():

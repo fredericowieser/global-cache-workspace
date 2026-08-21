@@ -22,7 +22,10 @@ from gcw.models.backbones.transformer.cache import (
     _unflatten_windowed_cache,
     _window_checkpoint_contexts,
 )
-from gcw.models.backbones.transformer.generation import generate_fast_tf, generate_tf
+from gcw.models.backbones.transformer.generation import (
+    generate_fast_tf,
+    generate_tf,
+)
 from gcw.models.backbones.transformer.losses import (
     answer_only_loss_from_hidden as _answer_only_loss_from_hidden,
     loss_from_hidden_reference as _loss_from_hidden_reference,
@@ -46,15 +49,25 @@ class TF(Backbone):
     def __init__(self, config: ModelConfig, pad_vocab_size_to: int = 128):
         super().__init__()
         self.config = replace(config, variant="tf")
-        vocab = ((config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to) * pad_vocab_size_to
+        vocab = (
+            (config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to
+        ) * pad_vocab_size_to
         self.padded_vocab_size = vocab
         self.embed_tokens = nn.Embedding(vocab, config.hidden_size)
-        self.layers = nn.ModuleList(Block(config, i) for i in range(config.num_layers))
+        self.layers = nn.ModuleList(
+            Block(config, i) for i in range(config.num_layers)
+        )
         self.norm = RMSNorm(config.hidden_size, config.norm_eps)
         if config.head_dim is None:
             raise ValueError("transformer requires a resolved model head_dim")
-        self.rotary = RotaryCache(config.sequence_len, config.head_dim, config.rope_theta)
-        self.lm_head = None if config.tie_embeddings else Linear(config.hidden_size, vocab, bias=False)
+        self.rotary = RotaryCache(
+            config.sequence_len, config.head_dim, config.rope_theta
+        )
+        self.lm_head = (
+            None
+            if config.tie_embeddings
+            else Linear(config.hidden_size, vocab, bias=False)
+        )
         self.backbone_chunk_backend: Qwen3BackboneChunkBackend = "eager"
 
     @torch.no_grad()
@@ -101,10 +114,16 @@ class TF(Backbone):
                 "loss_backend": loss_backend,
             }
             if activation_checkpoint_windows:
-                kwargs["activation_checkpoint_windows"] = activation_checkpoint_windows
-                kwargs["processor_execution_factory"] = processor_execution_factory
+                kwargs["activation_checkpoint_windows"] = (
+                    activation_checkpoint_windows
+                )
+                kwargs["processor_execution_factory"] = (
+                    processor_execution_factory
+                )
             return self.forward_windowed_loss(input_ids, targets, **kwargs)
-        logits, _ = self.forward_windowed(input_ids, processor=processor, process_every=process_every)
+        logits, _ = self.forward_windowed(
+            input_ids, processor=processor, process_every=process_every
+        )
         return logits
 
     def forward_full(
@@ -116,12 +135,19 @@ class TF(Backbone):
         loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         x = self.embed_tokens(input_ids)
-        cos_sin = self.rotary.get_range(0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype)
+        cos_sin = self.rotary.get_range(
+            0,
+            input_ids.shape[1],
+            input_ids.device,
+            _autocast_dtype(x.device) or x.dtype,
+        )
         for layer in self.layers:
             x, _, _, _ = cast(Block, layer)(x, cos_sin, None)
         x = self.norm(x)
         if targets is not None:
-            return self.loss_from_hidden(x, targets, loss_reduction, loss_backend)
+            return self.loss_from_hidden(
+                x, targets, loss_reduction, loss_backend
+            )
         return self.logits_from_hidden(x)
 
     def logits_from_hidden(self, x: torch.Tensor) -> torch.Tensor:
@@ -129,7 +155,9 @@ class TF(Backbone):
             logits = F.linear(x, self.embed_tokens.weight.to(x.dtype))
         else:
             if self.lm_head is None:
-                raise RuntimeError("untied transformer has no language-model head")
+                raise RuntimeError(
+                    "untied transformer has no language-model head"
+                )
             logits = self.lm_head(x)
         return logits[..., : self.config.vocab_size].float()
 
@@ -141,12 +169,18 @@ class TF(Backbone):
         loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         if loss_reduction not in {"mean", "sum", "none", "row_sum"}:
-            raise ValueError("loss_reduction must be 'mean', 'sum', 'none', or 'row_sum'")
+            raise ValueError(
+                "loss_reduction must be 'mean', 'sum', 'none', or 'row_sum'"
+            )
         if loss_backend == "reference":
             execution = tf_pkg.reference_loss_execution(self)
             if execution.mode == "legacy":
-                return self.loss_from_hidden_reference(x, targets, loss_reduction)
-            return tf_pkg.bounded_reference_loss(self.logits_from_hidden, x, targets, loss_reduction, execution)
+                return self.loss_from_hidden_reference(
+                    x, targets, loss_reduction
+                )
+            return tf_pkg.bounded_reference_loss(
+                self.logits_from_hidden, x, targets, loss_reduction, execution
+            )
         if loss_backend == "target_only":
             return self.answer_only_loss_from_hidden(x, targets, loss_reduction)
         if loss_reduction in {"none", "row_sum"}:
@@ -166,11 +200,15 @@ class TF(Backbone):
             weight = self.embed_tokens.weight
         else:
             if self.lm_head is None:
-                raise RuntimeError("untied transformer has no language-model head")
+                raise RuntimeError(
+                    "untied transformer has no language-model head"
+                )
             weight = self.lm_head.weight
         return weight[: self.config.vocab_size]
 
-    def answer_only_loss_from_hidden(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
+    def answer_only_loss_from_hidden(
+        self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str
+    ) -> torch.Tensor:
         """Compute loss without projecting prompt or padding positions through the vocabulary head."""
         return _answer_only_loss_from_hidden(
             self.logits_from_hidden,
@@ -182,9 +220,13 @@ class TF(Backbone):
             lm_head=self.lm_head,
         )
 
-    def loss_from_hidden_reference(self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str) -> torch.Tensor:
+    def loss_from_hidden_reference(
+        self, x: torch.Tensor, targets: torch.Tensor, loss_reduction: str
+    ) -> torch.Tensor:
         """Eager loss oracle which projects every position, including ignored positions."""
-        return _loss_from_hidden_reference(self.logits_from_hidden, x, targets, loss_reduction)
+        return _loss_from_hidden_reference(
+            self.logits_from_hidden, x, targets, loss_reduction
+        )
 
     def forward_windowed_loss(
         self,
@@ -201,17 +243,31 @@ class TF(Backbone):
     ) -> torch.Tensor:
         del attention_mask
         if activation_checkpoint_windows < 0:
-            raise ValueError("activation_checkpoint_windows must be non-negative")
-        cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+            raise ValueError(
+                "activation_checkpoint_windows must be non-negative"
+            )
+        cache: CacheLike = CacheState(
+            [],
+            [],
+            input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32),
+        )
         hidden_chunks: list[torch.Tensor] = []
-        checkpoint_active = activation_checkpoint_windows > 0 and self.training and torch.is_grad_enabled()
-        windows_per_segment = activation_checkpoint_windows if checkpoint_active else 1
+        checkpoint_active = (
+            activation_checkpoint_windows > 0
+            and self.training
+            and torch.is_grad_enabled()
+        )
+        windows_per_segment = (
+            activation_checkpoint_windows if checkpoint_active else 1
+        )
         segment_span = windows_per_segment * process_every
         for segment_start in range(0, input_ids.shape[1], segment_span):
             segment_end = min(segment_start + segment_span, input_ids.shape[1])
             if checkpoint_active:
                 if processor_execution_factory is None:
-                    raise RuntimeError("checkpointed window segments require a processor execution factory")
+                    raise RuntimeError(
+                        "checkpointed window segments require a processor execution factory"
+                    )
                 hidden, cache = self._checkpointed_window_segment(
                     input_ids[:, segment_start:segment_end],
                     segment_start,
@@ -233,7 +289,12 @@ class TF(Backbone):
                     cache_format="windowed",
                 )
                 hidden_chunks.append(hidden)
-        return self.loss_from_hidden(torch.cat(hidden_chunks, dim=1), targets, loss_reduction, loss_backend)
+        return self.loss_from_hidden(
+            torch.cat(hidden_chunks, dim=1),
+            targets,
+            loss_reduction,
+            loss_backend,
+        )
 
     def _checkpointed_window_segment(
         self,
@@ -248,9 +309,13 @@ class TF(Backbone):
         input_tensors, input_layout = _flatten_windowed_cache(boundary_cache)
         output_layout: list[WindowedCacheLayout] = []
 
-        def run_segment(ids: torch.Tensor, *flat_cache: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        def run_segment(
+            ids: torch.Tensor, *flat_cache: torch.Tensor
+        ) -> tuple[torch.Tensor, ...]:
             if boundary_cache is None:
-                current: CacheLike = CacheState([], [], ids.new_empty(ids.shape[0], 0, dtype=torch.float32))
+                current: CacheLike = CacheState(
+                    [], [], ids.new_empty(ids.shape[0], 0, dtype=torch.float32)
+                )
             else:
                 current = _unflatten_windowed_cache(flat_cache, input_layout)
             segment_hidden: list[torch.Tensor] = []
@@ -268,7 +333,9 @@ class TF(Backbone):
                     )
                     segment_hidden.append(hidden)
             if not isinstance(current, WindowedCache):
-                raise TypeError("checkpointed window segment requires WindowedCache output")
+                raise TypeError(
+                    "checkpointed window segment requires WindowedCache output"
+                )
             flat_output, layout = _flatten_windowed_cache(current)
             if cache_processor_recomputation_id() is None:
                 output_layout[:] = [layout]
@@ -283,10 +350,16 @@ class TF(Backbone):
             context_fn=_window_checkpoint_contexts,
         )
         if not isinstance(outputs, tuple) or len(outputs) < 4:
-            raise RuntimeError("checkpointed window segment returned an invalid tensor boundary")
+            raise RuntimeError(
+                "checkpointed window segment returned an invalid tensor boundary"
+            )
         if len(output_layout) != 1:
-            raise RuntimeError("checkpointed window segment did not record its cache layout")
-        return outputs[0], _unflatten_windowed_cache(outputs[1:], output_layout[0])
+            raise RuntimeError(
+                "checkpointed window segment did not record its cache layout"
+            )
+        return outputs[0], _unflatten_windowed_cache(
+            outputs[1:], output_layout[0]
+        )
 
     def forward_windowed(
         self,
@@ -294,12 +367,18 @@ class TF(Backbone):
         processor: ProcessorFn | None = None,
         process_every: int = 64,
     ) -> tuple[torch.Tensor, CacheLike]:
-        cache: CacheLike = CacheState([], [], input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32))
+        cache: CacheLike = CacheState(
+            [],
+            [],
+            input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32),
+        )
         logits = []
         for start in range(0, input_ids.shape[1], process_every):
             if start > 0 and processor is not None:
                 cache = cast(CacheLike, processor(cache))
-            chunk_logits, cache = self.forward_chunk(input_ids[:, start : start + process_every], start, cache)
+            chunk_logits, cache = self.forward_chunk(
+                input_ids[:, start : start + process_every], start, cache
+            )
             logits.append(chunk_logits)
         return torch.cat(logits, dim=1), cache
 
@@ -330,22 +409,34 @@ class TF(Backbone):
         cache_format: str = "list",
     ) -> tuple[torch.Tensor, CacheLike]:
         if inputs_embeds.ndim != 3:
-            raise ValueError("inputs_embeds must have shape (batch, steps, hidden_size)")
+            raise ValueError(
+                "inputs_embeds must have shape (batch, steps, hidden_size)"
+            )
         if inputs_embeds.shape[-1] != self.config.hidden_size:
-            raise ValueError(f"inputs_embeds width must be {self.config.hidden_size}, got {inputs_embeds.shape[-1]}")
+            raise ValueError(
+                f"inputs_embeds width must be {self.config.hidden_size}, got {inputs_embeds.shape[-1]}"
+            )
         if inputs_embeds.shape[1] == 0:
-            raise ValueError("inputs_embeds must contain at least one causal position")
+            raise ValueError(
+                "inputs_embeds must contain at least one causal position"
+            )
         if not inputs_embeds.is_floating_point():
             raise TypeError("inputs_embeds must be floating point")
         if inputs_embeds.device != self.embed_tokens.weight.device:
             raise ValueError("inputs_embeds must be on the transformer device")
-        if cache is not None and cache.scores.shape[0] != inputs_embeds.shape[0]:
+        if (
+            cache is not None
+            and cache.scores.shape[0] != inputs_embeds.shape[0]
+        ):
             raise ValueError("inputs_embeds and cache batch sizes must match")
 
         has_past = cache is not None and cache.scores.numel() > 0
-        full_qwen3_window = self.config.family == "qwen3" and inputs_embeds.shape[1] == 64
+        full_qwen3_window = (
+            self.config.family == "qwen3" and inputs_embeds.shape[1] == 64
+        )
         if (
-            self.backbone_chunk_backend in {"compile_full_windows", "cuda_graph"}
+            self.backbone_chunk_backend
+            in {"compile_full_windows", "cuda_graph"}
             and full_qwen3_window
             and not has_past
             and start_pos == 0
@@ -358,12 +449,17 @@ class TF(Backbone):
                 cache_format=cache_format,
             )
         if (
-            self.backbone_chunk_backend in {"compile", "compile_full_windows", "cuda_graph"}
+            self.backbone_chunk_backend
+            in {"compile", "compile_full_windows", "cuda_graph"}
             and full_qwen3_window
             and has_past
         ):
             return self._forward_compiled_embedding_chunk(
-                inputs_embeds, start_pos, cache, logits=logits, cache_format=cache_format
+                inputs_embeds,
+                start_pos,
+                cache,
+                logits=logits,
+                cache_format=cache_format,
             )
 
         x = inputs_embeds
@@ -387,15 +483,25 @@ class TF(Backbone):
         out = self.logits_from_hidden(x) if logits else x
         chunk_scores = torch.stack(layer_scores).mean(dim=0)
         old_scores = (
-            inputs_embeds.new_empty(inputs_embeds.shape[0], 0, dtype=torch.float32) if cache is None else cache.scores
+            inputs_embeds.new_empty(
+                inputs_embeds.shape[0], 0, dtype=torch.float32
+            )
+            if cache is None
+            else cache.scores
         )
-        new_scores = chunk_scores if old_scores.numel() == 0 else torch.cat([old_scores, chunk_scores], dim=1)
+        new_scores = (
+            chunk_scores
+            if old_scores.numel() == 0
+            else torch.cat([old_scores, chunk_scores], dim=1)
+        )
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
             return out, WindowedCache.from_lists(
                 keys,
                 values,
                 new_scores,
-                kv_score_sidecar=None if cache is None else cache.kv_score_sidecar,
+                kv_score_sidecar=(
+                    None if cache is None else cache.kv_score_sidecar
+                ),
             )
         return out, CacheState(
             keys,
@@ -414,20 +520,26 @@ class TF(Backbone):
         cache_format: str,
     ) -> tuple[torch.Tensor, CacheLike]:
         if start_pos != 0:
-            raise RuntimeError("compiled initial Qwen3 chunks require start_pos=0")
+            raise RuntimeError(
+                "compiled initial Qwen3 chunks require start_pos=0"
+            )
         cos, sin = self.rotary.get_range(
             start_pos,
             inputs_embeds.shape[1],
             inputs_embeds.device,
             _autocast_dtype(inputs_embeds.device) or inputs_embeds.dtype,
         )
-        hidden, keys, values, chunk_scores = run_qwen3_initial_backbone_chunk_region(
-            self, self.backbone_chunk_backend, inputs_embeds, cos, sin
+        hidden, keys, values, chunk_scores = (
+            run_qwen3_initial_backbone_chunk_region(
+                self, self.backbone_chunk_backend, inputs_embeds, cos, sin
+            )
         )
         out = self.logits_from_hidden(hidden) if logits else hidden
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
             return out, WindowedCache(keys, values, chunk_scores)
-        return out, CacheState(list(keys.unbind(0)), list(values.unbind(0)), chunk_scores)
+        return out, CacheState(
+            list(keys.unbind(0)), list(values.unbind(0)), chunk_scores
+        )
 
     def _forward_compiled_embedding_chunk(
         self,
@@ -445,15 +557,21 @@ class TF(Backbone):
             _autocast_dtype(inputs_embeds.device) or inputs_embeds.dtype,
         )
         if cache is None or cache.scores.numel() == 0:
-            raise RuntimeError("compiled Qwen3 backbone chunks require non-empty past cache tensors")
+            raise RuntimeError(
+                "compiled Qwen3 backbone chunks require non-empty past cache tensors"
+            )
         if isinstance(cache, WindowedCache):
             past_keys, past_values = cache.keys, cache.values
         else:
             past_keys = torch.stack(cache.keys)
             past_values = torch.stack(cache.values)
-        attention_bias, is_causal = _causal_chunk_bias(inputs_embeds.shape[1], past_keys.shape[3], inputs_embeds.device)
+        attention_bias, is_causal = _causal_chunk_bias(
+            inputs_embeds.shape[1], past_keys.shape[3], inputs_embeds.device
+        )
         if attention_bias is None or is_causal:
-            raise RuntimeError("compiled Qwen3 backbone chunks require a lower-right causal attention bias")
+            raise RuntimeError(
+                "compiled Qwen3 backbone chunks require a lower-right causal attention bias"
+            )
         hidden, keys, values, chunk_scores = run_qwen3_backbone_chunk_region(
             self,
             self.backbone_chunk_backend,
@@ -471,7 +589,9 @@ class TF(Backbone):
                 keys,
                 values,
                 new_scores,
-                kv_score_sidecar=None if cache is None else cache.kv_score_sidecar,
+                kv_score_sidecar=(
+                    None if cache is None else cache.kv_score_sidecar
+                ),
             )
         return out, CacheState(
             list(keys.unbind(0)),
@@ -494,7 +614,9 @@ class TF(Backbone):
         cos_sin = self.rotary.get(pos, x.dtype)
         layer_scores: list[torch.Tensor] = []
         for layer in self.layers:
-            x, scores = cast(Block, layer).forward_static(x, cos_sin, cache, start_pos, end_pos)
+            x, scores = cast(Block, layer).forward_static(
+                x, cos_sin, cache, start_pos, end_pos
+            )
             layer_scores.append(scores)
         x = self.norm(x)
         out = self.logits_from_hidden(x) if logits else x

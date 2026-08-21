@@ -10,7 +10,6 @@ from typing import Any
 
 import torch
 
-
 SourceMember = tuple[str, bytes]
 PackageManifest = dict[str, dict[str, int | str]]
 
@@ -69,13 +68,21 @@ def tensor_state_sha256(state: dict[str, torch.Tensor]) -> str:
     for name, tensor in sorted(state.items()):
         value = tensor.detach().cpu().contiguous()
         metadata = json.dumps(
-            {"name": name, "dtype": str(value.dtype), "shape": list(value.shape)},
+            {
+                "name": name,
+                "dtype": str(value.dtype),
+                "shape": list(value.shape),
+            },
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
         digest.update(len(metadata).to_bytes(8, "big"))
         digest.update(metadata)
-        byte_view = value.reshape(1).view(torch.uint8) if value.ndim == 0 else value.view(torch.uint8)
+        byte_view = (
+            value.reshape(1).view(torch.uint8)
+            if value.ndim == 0
+            else value.view(torch.uint8)
+        )
         digest.update(byte_view.numpy().tobytes())
     return digest.hexdigest()
 
@@ -97,11 +104,15 @@ def repository_state(
     if git is None:
         return None, False
     try:
-        revision = check_output(
-            [git, "rev-parse", "HEAD"],
-            cwd=repository,
-            stderr=subprocess.DEVNULL,
-        ).decode("ascii").strip()
+        revision = (
+            check_output(
+                [git, "rev-parse", "HEAD"],
+                cwd=repository,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("ascii")
+            .strip()
+        )
         dirty = check_output(
             [git, "status", "--porcelain"],
             cwd=repository,
@@ -121,7 +132,9 @@ def _logical_path(path: str) -> str:
         or any(part in ("", ".", "..") for part in logical.parts)
         or logical.as_posix() != path
     ):
-        raise ValueError(f"source path must be a normalized relative POSIX path: {path!r}")
+        raise ValueError(
+            f"source path must be a normalized relative POSIX path: {path!r}"
+        )
     return path
 
 
@@ -154,7 +167,11 @@ def package_source_members(package_root: Path) -> tuple[SourceMember, ...]:
     package_name = package_root.name
     members: list[SourceMember] = []
     for path in sorted(package_root.rglob("*")):
-        if not path.is_file() or "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+        if (
+            not path.is_file()
+            or "__pycache__" in path.parts
+            or path.suffix in {".pyc", ".pyo"}
+        ):
             continue
         relative = path.relative_to(package_root).as_posix()
         members.append((f"{package_name}/{relative}", path.read_bytes()))
@@ -171,12 +188,16 @@ def package_member_manifest(package_root: Path) -> PackageManifest:
     }
 
 
-def verify_package_member_manifest(package_root: Path, expected: PackageManifest) -> None:
+def verify_package_member_manifest(
+    package_root: Path, expected: PackageManifest
+) -> None:
     actual = package_member_manifest(package_root)
     if set(actual) != set(expected):
         missing = sorted(set(expected) - set(actual))
         extra = sorted(set(actual) - set(expected))
-        raise ValueError(f"package member set differs: missing={missing}, extra={extra}")
+        raise ValueError(
+            f"package member set differs: missing={missing}, extra={extra}"
+        )
     for path in sorted(expected):
         if actual[path] != expected[path]:
             raise ValueError(f"package member differs: {path}")
@@ -187,7 +208,9 @@ def find_repository_root(start: Path) -> Path:
     if current.is_file():
         current = current.parent
     for candidate in (current, *current.parents):
-        if (candidate / "pyproject.toml").is_file() and (candidate / "uv.lock").is_file():
+        if (candidate / "pyproject.toml").is_file() and (
+            candidate / "uv.lock"
+        ).is_file():
             return candidate
     raise ValueError(f"could not find GCW repository root from: {start}")
 
@@ -196,7 +219,9 @@ def repository_package_root(repository: Path) -> Path:
     roots = (repository / "src" / "gcw", repository / "gcw")
     existing = [path for path in roots if path.is_dir()]
     if len(existing) != 1:
-        raise ValueError(f"repository must contain exactly one GCW package root: {existing}")
+        raise ValueError(
+            f"repository must contain exactly one GCW package root: {existing}"
+        )
     return existing[0]
 
 
@@ -206,7 +231,9 @@ def _relative_file(repository: Path, path: Path) -> tuple[str, bytes]:
     try:
         relative = resolved.relative_to(resolved_repository).as_posix()
     except ValueError as error:
-        raise ValueError(f"source file is outside repository: {path}") from error
+        raise ValueError(
+            f"source file is outside repository: {path}"
+        ) from error
     if not resolved.is_file():
         raise ValueError(f"source path is not a file: {path}")
     return _logical_path(relative), resolved.read_bytes()
@@ -232,22 +259,38 @@ def _git_identity(
             raise RuntimeError("canonical execution requires Git provenance")
         return None, None
     try:
-        commit = check_output(
-            [git, "rev-parse", "HEAD"],
-            cwd=repository,
-            stderr=subprocess.DEVNULL,
-        ).decode("ascii").strip()
+        commit = (
+            check_output(
+                [git, "rev-parse", "HEAD"],
+                cwd=repository,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("ascii")
+            .strip()
+        )
         status = check_output(
-            [git, "status", "--porcelain=v1", "--untracked-files=all", "--", *status_paths],
+            [
+                git,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                *status_paths,
+            ],
             cwd=repository,
             stderr=subprocess.DEVNULL,
         )
-    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as error:
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        UnicodeDecodeError,
+    ) as error:
         if require_git:
-            raise RuntimeError("canonical execution requires Git provenance") from error
+            raise RuntimeError(
+                "canonical execution requires Git provenance"
+            ) from error
         return None, None
     return commit, status
-
 
 
 def repository_source_identity(
@@ -265,8 +308,14 @@ def repository_source_identity(
     if missing:
         raise ValueError(f"repository identity source is missing: {missing[0]}")
 
-    declared = tuple(_relative_file(repository, path) for path in executed_files)
-    members = package_members + tuple(_relative_file(repository, path) for path in required) + declared
+    declared = tuple(
+        _relative_file(repository, path) for path in executed_files
+    )
+    members = (
+        package_members
+        + tuple(_relative_file(repository, path) for path in required)
+        + declared
+    )
     package_status_path = package_root.relative_to(repository).as_posix()
     status_paths = (
         package_status_path,
@@ -286,10 +335,14 @@ def repository_source_identity(
         "schema": "gcw.source_code_identity.v2",
         "source_tree_sha256": source_tree_sha256(members),
         "package_tree_sha256": source_tree_sha256(package_members),
-        "package_manifest_sha256": hashlib.sha256(package_manifest_bytes).hexdigest(),
+        "package_manifest_sha256": hashlib.sha256(
+            package_manifest_bytes
+        ).hexdigest(),
         "package_manifest": manifest,
         "executed_files": [path for path, _ in declared],
         "git_commit": commit,
         "git_dirty": None if status is None else bool(status),
-        "git_status_sha256": None if status is None else hashlib.sha256(status).hexdigest(),
+        "git_status_sha256": (
+            None if status is None else hashlib.sha256(status).hexdigest()
+        ),
     }

@@ -35,11 +35,20 @@ TASK_FEWSHOT = {
 def _should_apply_chat_template(tokenizer: Any, prompt_mode: str) -> bool:
     if prompt_mode == "plain":
         return False
-    return bool(getattr(tokenizer, "chat_template", None) or getattr(tokenizer, "default_chat_template", None))
+    return bool(
+        getattr(tokenizer, "chat_template", None)
+        or getattr(tokenizer, "default_chat_template", None)
+    )
 
 
-def _filter_skipped_tasks(runs: list[tuple[list[str], int]]) -> list[tuple[list[str], int]]:
-    skip = {task.strip() for task in os.environ.get("GCW_EVAL_SKIP_TASKS", "").split(",") if task.strip()}
+def _filter_skipped_tasks(
+    runs: list[tuple[list[str], int]],
+) -> list[tuple[list[str], int]]:
+    skip = {
+        task.strip()
+        for task in os.environ.get("GCW_EVAL_SKIP_TASKS", "").split(",")
+        if task.strip()
+    }
     if not skip:
         return runs
     filtered = []

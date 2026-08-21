@@ -11,7 +11,10 @@ from gcw.performance.triton.cache_movement import (
     scatter_shared_kv,
 )
 from gcw.performance.triton.processor import fused_processor_silu_mul
-from gcw.performance.triton.runtime import TritonRuntimeIdentity, require_triton_runtime
+from gcw.performance.triton.runtime import (
+    TritonRuntimeIdentity,
+    require_triton_runtime,
+)
 
 __all__ = (
     "TritonRuntimeIdentity",

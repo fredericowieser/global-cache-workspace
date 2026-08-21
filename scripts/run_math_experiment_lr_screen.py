@@ -10,7 +10,6 @@ import sys
 
 import yaml
 
-
 DEFAULT_GRIDS = {
     "backbone": (5e-6, 1e-5, 2e-5),
     "lora": (5e-5, 1e-4, 2e-4),
@@ -28,7 +27,9 @@ def _kind(payload: dict) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run bounded held-out-loss learning-rate screens")
+    parser = argparse.ArgumentParser(
+        description="Run bounded held-out-loss learning-rate screens"
+    )
     parser.add_argument("--config-dir", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--steps", type=int, default=64)
@@ -60,16 +61,29 @@ def main() -> None:
             payload["eval_on_start"] = True
             payload["output_dir"] = str(run / "state")
             payload["wandb"]["enabled"] = False
-            contract = deepcopy(json.loads(Path(payload["data"]["experiment_manifest"]).read_text()))
+            contract = deepcopy(
+                json.loads(
+                    Path(payload["data"]["experiment_manifest"]).read_text()
+                )
+            )
             contract["max_steps"] = args.steps
             contract_path = run / "experiment.json"
-            contract_path.write_text(json.dumps(contract, indent=2, sort_keys=True) + "\n")
+            contract_path.write_text(
+                json.dumps(contract, indent=2, sort_keys=True) + "\n"
+            )
             payload["data"]["experiment_manifest"] = str(contract_path)
             config = run / "config.yaml"
             config.write_text(yaml.safe_dump(payload, sort_keys=False))
             with (run / "train.log").open("wb") as log:
                 subprocess.run(
-                    [sys.executable, "-m", "gcw.cli", "train", "--config", str(config)],
+                    [
+                        sys.executable,
+                        "-m",
+                        "gcw.cli",
+                        "train",
+                        "--config",
+                        str(config),
+                    ],
                     check=True,
                     stdout=log,
                     stderr=subprocess.STDOUT,

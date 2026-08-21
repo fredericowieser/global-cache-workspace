@@ -22,17 +22,27 @@ class Tokenizer:
         return "1" * 64
 
 
-def test_experiment_builder_filters_overlap_length_and_shuffles_deterministically(tmp_path, monkeypatch):
+def test_experiment_builder_filters_overlap_length_and_shuffles_deterministically(
+    tmp_path, monkeypatch
+):
     source = tmp_path / "openmath.jsonl"
     source.write_text(
         "\n".join(
             json.dumps({"prompt": prompt, "answer": answer})
-            for prompt, answer in (("keep one", "a"), ("benchmark", "b"), ("too long prompt", "a b c d"))
+            for prompt, answer in (
+                ("keep one", "a"),
+                ("benchmark", "b"),
+                ("too long prompt", "a b c d"),
+            )
         )
         + "\n"
     )
     monkeypatch.setattr(experiment, "get_tokenizer", lambda _name: Tokenizer())
-    monkeypatch.setattr(experiment, "_load_benchmark_hashes", lambda: ({experiment._prompt_hash("benchmark")}, {"x": 1}))
+    monkeypatch.setattr(
+        experiment,
+        "_load_benchmark_hashes",
+        lambda: ({experiment._prompt_hash("benchmark")}, {"x": 1}),
+    )
     monkeypatch.setattr(
         experiment,
         "_verified_openr1_rows",
@@ -53,7 +63,10 @@ def test_experiment_builder_filters_overlap_length_and_shuffles_deterministicall
     )
 
     manifest = experiment.build(args)
-    rows = [json.loads(line) for line in (tmp_path / "out/train.jsonl").read_text().splitlines()]
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "out/train.jsonl").read_text().splitlines()
+    ]
 
     assert manifest["rows"] == 2
     assert manifest["source_counts"] == {"openmath": 1, "openr1": 1}

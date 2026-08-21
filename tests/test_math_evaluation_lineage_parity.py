@@ -12,13 +12,34 @@ from scripts.run_math_experiments_full_single_seed import (
 
 
 def _write_lineage(root: Path, arm: str) -> None:
-    for group, tasks in (("core", CANONICAL_CORE_TASKS), ("reasoning", CANONICAL_REASONING_TASKS)):
-        path = root / arm / "processor-on" / "canonical-likelihood" / group / "result.json"
+    for group, tasks in (
+        ("core", CANONICAL_CORE_TASKS),
+        ("reasoning", CANONICAL_REASONING_TASKS),
+    ):
+        path = (
+            root
+            / arm
+            / "processor-on"
+            / "canonical-likelihood"
+            / group
+            / "result.json"
+        )
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"results": {task: {"acc,none": 0.5} for task in tasks}}))
+        path.write_text(
+            json.dumps({"results": {task: {"acc,none": 0.5} for task in tasks}})
+        )
     for thinking in ("thinking_off", "thinking_on"):
         for task in NUMERIC_MATH_TASKS:
-            path = root / arm / "processor-on" / "numeric-generation" / thinking / "tasks" / task / "result.json"
+            path = (
+                root
+                / arm
+                / "processor-on"
+                / "numeric-generation"
+                / thinking
+                / "tasks"
+                / task
+                / "result.json"
+            )
             path.parent.mkdir(parents=True)
             path.write_text(
                 json.dumps(

@@ -6,7 +6,15 @@ from typing import Any
 from gcw.data.training import LoaderCursor
 
 FORMAT_VERSION = 2
-PAYLOAD_FILES = frozenset({"model.safetensors", "optimizer.pt", "rng.pt", "config.json", "train_state.json"})
+PAYLOAD_FILES = frozenset(
+    {
+        "model.safetensors",
+        "optimizer.pt",
+        "rng.pt",
+        "config.json",
+        "train_state.json",
+    }
+)
 INITIAL_PROCESSOR_FILE = "initial_processor.safetensors"
 OPTIONAL_PAYLOAD_FILES = frozenset({INITIAL_PROCESSOR_FILE})
 

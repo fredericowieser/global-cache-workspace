@@ -21,7 +21,9 @@ from gcw.data.training import build_training_stream
 from gcw.data.sft import sft_batch
 from gcw.models import build_model
 from gcw.models.lora import LoRALinear
-from gcw.performance.checkpointing import transformer_layer_classes as _transformer_layer_classes
+from gcw.performance.checkpointing import (
+    transformer_layer_classes as _transformer_layer_classes,
+)
 from gcw.training.objectives import model_loss as _model_loss
 from gcw.training.audit import (
     _checkpoint_metadata,
@@ -38,7 +40,9 @@ from gcw.training.optimizer import _build_optimizer, _wsd_lr
 from gcw.training.precision import _uses_bf16_autocast
 from gcw.training.core import train
 from gcw.training.checkpoint import CheckpointCompatibilityError
-from gcw.training.checkpoint import save_training_checkpoint as real_save_training_checkpoint
+from gcw.training.checkpoint import (
+    save_training_checkpoint as real_save_training_checkpoint,
+)
 
 
 class FakeRun:
@@ -102,7 +106,13 @@ def tiny_train_config(tmp_path):
         eval_every=1,
         eval_batches=1,
         eval_on_start=True,
-        wandb=WandbConfig(enabled=True, project="test-project", name="tiny", mode="offline", log_every=1),
+        wandb=WandbConfig(
+            enabled=True,
+            project="test-project",
+            name="tiny",
+            mode="offline",
+            log_every=1,
+        ),
     )
 
 
@@ -122,10 +132,19 @@ def test_lora_trainable_policy_freezes_base_weights():
 
     _apply_trainable_policy(model, "lora")
 
-    adapters = [module for module in model.modules() if isinstance(module, LoRALinear)]
-    adapter_ids = {id(parameter) for module in adapters for parameter in (module.lora_a, module.lora_b)}
+    adapters = [
+        module for module in model.modules() if isinstance(module, LoRALinear)
+    ]
+    adapter_ids = {
+        id(parameter)
+        for module in adapters
+        for parameter in (module.lora_a, module.lora_b)
+    }
     assert adapters
-    assert all(parameter.requires_grad == (id(parameter) in adapter_ids) for parameter in model.parameters())
+    assert all(
+        parameter.requires_grad == (id(parameter) in adapter_ids)
+        for parameter in model.parameters()
+    )
 
 
 def test_wsd_reaches_peak_then_exact_final_rate():
@@ -149,17 +168,29 @@ def test_trainable_policy_selects_backbone_processor_or_both():
             num_heads=2,
             num_kv_heads=1,
             head_dim=8,
-            cache_processor=CacheProcessorConfig(hidden_size=8, intermediate_size=16, num_heads=1),
+            cache_processor=CacheProcessorConfig(
+                hidden_size=8, intermediate_size=16, num_heads=1
+            ),
         )
     )
 
     _apply_trainable_policy(model, "cache_processor")
-    assert not any(parameter.requires_grad for parameter in model.backbone.parameters())
-    assert all(parameter.requires_grad for parameter in model.cache_processor.parameters())
+    assert not any(
+        parameter.requires_grad for parameter in model.backbone.parameters()
+    )
+    assert all(
+        parameter.requires_grad
+        for parameter in model.cache_processor.parameters()
+    )
 
     _apply_trainable_policy(model, "backbone")
-    assert all(parameter.requires_grad for parameter in model.backbone.parameters())
-    assert not any(parameter.requires_grad for parameter in model.cache_processor.parameters())
+    assert all(
+        parameter.requires_grad for parameter in model.backbone.parameters()
+    )
+    assert not any(
+        parameter.requires_grad
+        for parameter in model.cache_processor.parameters()
+    )
 
     _apply_trainable_policy(model, "all")
     assert all(parameter.requires_grad for parameter in model.parameters())
@@ -182,7 +213,9 @@ def test_train_logs_wandb_train_and_validation_metrics(monkeypatch, tmp_path):
     assert all("train/tokens" in metrics for _, metrics in logs[1:])
 
 
-def test_train_writes_flow_pilot_gradient_and_runtime_audit(monkeypatch, tmp_path):
+def test_train_writes_flow_pilot_gradient_and_runtime_audit(
+    monkeypatch, tmp_path
+):
     cfg = tiny_train_config(tmp_path)
     cfg.model = ModelConfig(
         variant="bgt",
@@ -281,10 +314,16 @@ def test_train_logs_longshot_iteration_overlap_metrics(monkeypatch, tmp_path):
 
     _, metrics = fake.run.logs[0]
     assert "cache_processor/selected_head_overlap_after_iter_1" in metrics
-    assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
+    assert (
+        0.0
+        <= metrics["cache_processor/selected_head_overlap_after_iter_1"]
+        <= 1.0
+    )
 
 
-def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp_path):
+def test_train_logs_longshot_external_iteration_overlap_metrics(
+    monkeypatch, tmp_path
+):
     fake = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake)
     cfg = tiny_train_config(tmp_path)
@@ -321,7 +360,11 @@ def test_train_logs_longshot_external_iteration_overlap_metrics(monkeypatch, tmp
 
     _, metrics = fake.run.logs[0]
     assert "cache_processor/selected_head_overlap_after_iter_1" in metrics
-    assert 0.0 <= metrics["cache_processor/selected_head_overlap_after_iter_1"] <= 1.0
+    assert (
+        0.0
+        <= metrics["cache_processor/selected_head_overlap_after_iter_1"]
+        <= 1.0
+    )
 
 
 def test_train_precision_defaults_and_legacy_bf16_alias():
@@ -343,7 +386,9 @@ def test_train_precision_rejects_invalid_or_conflicting_values():
 def test_full_bf16_uses_bf16_model_gradients_and_optimizer_moments(tmp_path):
     cfg = tiny_train_config(tmp_path)
     cfg.precision = "bf16"
-    model = _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=False)
+    model = _build_training_model(
+        cfg, torch.device("cpu"), rank=0, use_fsdp=False
+    )
     floating_tensors = [
         *model.parameters(),
         *(buffer for buffer in model.buffers() if buffer.is_floating_point()),
@@ -358,7 +403,9 @@ def test_full_bf16_uses_bf16_model_gradients_and_optimizer_moments(tmp_path):
     loss = model(x, y)
     assert loss.dtype == torch.float32
     loss.backward()
-    assert {param.grad.dtype for param in params if param.grad is not None} == {torch.bfloat16}
+    assert {param.grad.dtype for param in params if param.grad is not None} == {
+        torch.bfloat16
+    }
     optimizer.step()
     moment_dtypes = {
         value.dtype
@@ -390,17 +437,23 @@ def test_full_bf16_training_run_keeps_bf16_parameters(tmp_path):
 def test_mixed_and_fp32_precisions_keep_float32_parameters(tmp_path, precision):
     cfg = tiny_train_config(tmp_path)
     cfg.precision = precision
-    model = _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=False)
+    model = _build_training_model(
+        cfg, torch.device("cpu"), rank=0, use_fsdp=False
+    )
     assert {param.dtype for param in model.parameters()} == {torch.float32}
 
 
 @pytest.mark.parametrize("use_fsdp", [False, True])
-def test_full_bf16_draws_initial_weights_in_float32_before_casting(tmp_path, use_fsdp):
+def test_full_bf16_draws_initial_weights_in_float32_before_casting(
+    tmp_path, use_fsdp
+):
     cfg = tiny_train_config(tmp_path)
     cfg.precision = "bf16"
 
     torch.manual_seed(cfg.seed)
-    built = _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=use_fsdp)
+    built = _build_training_model(
+        cfg, torch.device("cpu"), rank=0, use_fsdp=use_fsdp
+    )
 
     torch.manual_seed(cfg.seed)
     reference = build_model(cfg.model)
@@ -410,7 +463,10 @@ def test_full_bf16_draws_initial_weights_in_float32_before_casting(tmp_path, use
     built_state = built.state_dict()
     reference_state = reference.state_dict()
     assert built_state.keys() == reference_state.keys()
-    assert all(torch.equal(built_state[key], tensor) for key, tensor in reference_state.items())
+    assert all(
+        torch.equal(built_state[key], tensor)
+        for key, tensor in reference_state.items()
+    )
 
 
 def test_supported_precisions_match_the_declared_type():
@@ -428,7 +484,9 @@ def test_supported_precisions_match_the_declared_type():
     ("precision", "expected"),
     [("fp32", "float32"), ("bf16_mixed", "float32"), ("bf16", "bfloat16")],
 )
-def test_checkpoint_metadata_records_precision_and_the_real_parameter_dtype(tmp_path, precision, expected):
+def test_checkpoint_metadata_records_precision_and_the_real_parameter_dtype(
+    tmp_path, precision, expected
+):
     from gcw.training.audit import _checkpoint_metadata
 
     cfg = tiny_train_config(tmp_path)
@@ -439,7 +497,9 @@ def test_checkpoint_metadata_records_precision_and_the_real_parameter_dtype(tmp_
     assert metadata["dtype"] == expected
 
 
-def test_training_fingerprint_records_precision_and_separates_the_bf16_modes(tmp_path):
+def test_training_fingerprint_records_precision_and_separates_the_bf16_modes(
+    tmp_path,
+):
     from gcw.training.audit import _training_fingerprint
 
     fingerprints = {}
@@ -485,7 +545,9 @@ def test_qwen35_fsdp_wraps_gated_delta_dynamics_separately():
 def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
     cfg = tiny_train_config(tmp_path)
 
-    model = _build_training_model(cfg, torch.device("cpu"), rank=1, use_fsdp=True)
+    model = _build_training_model(
+        cfg, torch.device("cpu"), rank=1, use_fsdp=True
+    )
 
     assert all(param.is_meta for param in model.parameters())
 
@@ -495,7 +557,9 @@ def test_loader_uses_configured_batch_size_for_random_data(tmp_path):
     cfg.batch_size = 5
     cfg.sequence_len = 7
 
-    batch = next(build_training_stream(cfg, torch.device("cpu"), rank=0, world_size=1))
+    batch = next(
+        build_training_stream(cfg, torch.device("cpu"), rank=0, world_size=1)
+    )
 
     assert batch.x.shape == (5, 7)
     assert batch.y.shape == (5, 7)
@@ -516,7 +580,9 @@ def test_validate_train_batch_rejects_batch_size_mismatch(tmp_path):
         raise AssertionError("expected batch size mismatch to fail")
 
 
-def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step(monkeypatch, tmp_path):
+def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step(
+    monkeypatch, tmp_path
+):
     cfg = tiny_train_config(tmp_path)
     cfg.wandb.enabled = False
     cfg.eval_every = 0
@@ -524,7 +590,9 @@ def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step
     cfg.save_every = 1
     calls = []
 
-    def fake_save(path, model, optimizer, config, resume_state, fingerprint, rank):
+    def fake_save(
+        path, model, optimizer, config, resume_state, fingerprint, rank
+    ):
         calls.append((path, resume_state.step, rank))
 
     monkeypatch.setattr("gcw.training.state._save_training_state", fake_save)
@@ -632,9 +700,13 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
     assert all(key.startswith("cache_processor.") for key in weights)
     trained, _, _ = load_checkpoint(trained_checkpoint)
     trained_state = trained.state_dict()
-    assert all(torch.equal(trained_state[key], tensor) for key, tensor in weights.items())
+    assert all(
+        torch.equal(trained_state[key], tensor)
+        for key, tensor in weights.items()
+    )
     assert torch.allclose(
-        trained.backbone.embed_tokens.weight, torch.full_like(trained.backbone.embed_tokens.weight, 0.123)
+        trained.backbone.embed_tokens.weight,
+        torch.full_like(trained.backbone.embed_tokens.weight, 0.123),
     )
 
 
@@ -648,7 +720,9 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
         num_heads=2,
         num_kv_heads=1,
         head_dim=8,
-        cache_processor=CacheProcessorConfig(hidden_size=8, intermediate_size=16, num_heads=1),
+        cache_processor=CacheProcessorConfig(
+            hidden_size=8, intermediate_size=16, num_heads=1
+        ),
     )
     source = build_model(config)
     source.init_weights()
@@ -661,7 +735,9 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
     target.init_weights()
     _load_initial_model(target, checkpoint)
 
-    for expected, actual in zip(source.parameters(), target.parameters(), strict=True):
+    for expected, actual in zip(
+        source.parameters(), target.parameters(), strict=True
+    ):
         assert torch.equal(expected, actual)
 
 
@@ -674,7 +750,9 @@ def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
         tokenizer="hf",
         tokenizer_source="/models/llama-3.2-1b-tokenizer",
     )
-    cfg.backbone_checkpoint = "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf"
+    cfg.backbone_checkpoint = (
+        "/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf"
+    )
 
     state = _checkpoint_metadata(cfg, {"step": 0, "world_size": 1})
 
@@ -691,10 +769,18 @@ def test_checkpoint_state_drops_runtime_loader_tensors():
     state = _checkpoint_state(
         {"world_size": 1},
         5,
-        {"kind": "sft", "row": 7, "attention_mask": torch.ones(1, 2, dtype=torch.bool)},
+        {
+            "kind": "sft",
+            "row": 7,
+            "attention_mask": torch.ones(1, 2, dtype=torch.bool),
+        },
     )
 
-    assert state == {"world_size": 1, "step": 5, "loader": {"kind": "sft", "row": 7}}
+    assert state == {
+        "world_size": 1,
+        "step": 5,
+        "loader": {"kind": "sft", "row": 7},
+    }
 
 
 def test_sft_batch_uses_next_token_targets():
@@ -709,7 +795,9 @@ def test_sft_batch_uses_next_token_targets():
     assert y.tolist() == [[-100, 5, 3, 4, 0, -100]]
 
 
-def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_path):
+def test_interrupted_training_resumes_to_identical_parameters(
+    monkeypatch, tmp_path
+):
     baseline = tiny_train_config(tmp_path)
     baseline.output_dir = str(tmp_path / "baseline")
     baseline.max_steps = 4
@@ -746,11 +834,18 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
         if resume_state.step == 2 and str(path).endswith("checkpoint"):
             raise RuntimeError("simulated interruption")
 
-    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", save_then_interrupt, raising=False)
+    monkeypatch.setattr(
+        "gcw.training.state.save_training_checkpoint",
+        save_then_interrupt,
+        raising=False,
+    )
     with pytest.raises(RuntimeError, match="simulated interruption"):
         train(interrupted)
 
-    monkeypatch.setattr("gcw.training.state.save_training_checkpoint", real_save_training_checkpoint)
+    monkeypatch.setattr(
+        "gcw.training.state.save_training_checkpoint",
+        real_save_training_checkpoint,
+    )
     resumed = tiny_train_config(tmp_path)
     resumed.output_dir = str(tmp_path / "resumed")
     resumed.max_steps = 4
@@ -758,17 +853,27 @@ def test_interrupted_training_resumes_to_identical_parameters(monkeypatch, tmp_p
     resumed.eval_every = 0
     resumed.eval_on_start = False
     resumed.wandb.enabled = False
-    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "resumed" / "checkpoint"))
+    resumed.resume = ResumeConfig(
+        checkpoint=str(tmp_path / "resumed" / "checkpoint")
+    )
     train(resumed)
 
-    baseline_model, _, baseline_state = load_checkpoint(tmp_path / "baseline" / "checkpoint")
-    resumed_model, _, resumed_state = load_checkpoint(tmp_path / "resumed" / "checkpoint")
+    baseline_model, _, baseline_state = load_checkpoint(
+        tmp_path / "baseline" / "checkpoint"
+    )
+    resumed_model, _, resumed_state = load_checkpoint(
+        tmp_path / "resumed" / "checkpoint"
+    )
     assert baseline_state["step"] == resumed_state["step"] == 4
-    for expected, actual in zip(baseline_model.parameters(), resumed_model.parameters(), strict=True):
+    for expected, actual in zip(
+        baseline_model.parameters(), resumed_model.parameters(), strict=True
+    ):
         assert torch.equal(expected, actual)
 
 
-def test_resume_with_backbone_checkpoint_preserves_fingerprint_and_continues(monkeypatch, tmp_path):
+def test_resume_with_backbone_checkpoint_preserves_fingerprint_and_continues(
+    monkeypatch, tmp_path
+):
     # A resume config must retain the original backbone_checkpoint so the
     # training fingerprint matches, while the architecture validation allows
     # backbone_checkpoint + resume together (resume wins model restoration).
@@ -827,15 +932,29 @@ def test_resume_with_backbone_checkpoint_preserves_fingerprint_and_continues(mon
     monkeypatch.setenv("GCW_STOP_AFTER_CHECKPOINT_STEP", "2")
     train(first)
     monkeypatch.delenv("GCW_STOP_AFTER_CHECKPOINT_STEP")
-    assert json.loads((tmp_path / "run" / "checkpoint" / "train_state.json").read_text())["step"] == 2
+    assert (
+        json.loads(
+            (tmp_path / "run" / "checkpoint" / "train_state.json").read_text()
+        )["step"]
+        == 2
+    )
 
     resumed = bt_config(str(tmp_path / "run"))
-    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "run" / "checkpoint"))
+    resumed.resume = ResumeConfig(
+        checkpoint=str(tmp_path / "run" / "checkpoint")
+    )
     train(resumed)
-    assert json.loads((tmp_path / "run" / "checkpoint" / "train_state.json").read_text())["step"] == 4
+    assert (
+        json.loads(
+            (tmp_path / "run" / "checkpoint" / "train_state.json").read_text()
+        )["step"]
+        == 4
+    )
 
 
-def test_training_can_stop_cleanly_at_an_authenticated_checkpoint(monkeypatch, tmp_path):
+def test_training_can_stop_cleanly_at_an_authenticated_checkpoint(
+    monkeypatch, tmp_path
+):
     config = tiny_train_config(tmp_path)
     config.max_steps = 4
     config.save_every = 2
@@ -847,8 +966,13 @@ def test_training_can_stop_cleanly_at_an_authenticated_checkpoint(monkeypatch, t
     train(config)
 
     checkpoint = tmp_path / "run" / "checkpoint"
-    assert json.loads((checkpoint / "manifest.json").read_text())["complete"] is True
-    assert json.loads((checkpoint / "train_state.json").read_text())["step"] == 3
+    assert (
+        json.loads((checkpoint / "manifest.json").read_text())["complete"]
+        is True
+    )
+    assert (
+        json.loads((checkpoint / "train_state.json").read_text())["step"] == 3
+    )
 
     resumed = tiny_train_config(tmp_path)
     resumed.max_steps = 4
@@ -858,10 +982,14 @@ def test_training_can_stop_cleanly_at_an_authenticated_checkpoint(monkeypatch, t
     resumed.wandb.enabled = False
     resumed.resume = ResumeConfig(checkpoint=str(checkpoint))
     train(resumed)
-    assert json.loads((checkpoint / "train_state.json").read_text())["step"] == 3
+    assert (
+        json.loads((checkpoint / "train_state.json").read_text())["step"] == 3
+    )
 
 
-def test_checkpoint_stop_policy_rejects_malformed_step_before_training(monkeypatch, tmp_path):
+def test_checkpoint_stop_policy_rejects_malformed_step_before_training(
+    monkeypatch, tmp_path
+):
     config = tiny_train_config(tmp_path)
     config.wandb.enabled = False
     config.save_every = 1
@@ -882,7 +1010,9 @@ def test_resume_at_max_steps_exits_without_retraining(capsys, tmp_path):
     resumed.wandb.enabled = False
     resumed.eval_every = 0
     resumed.eval_on_start = False
-    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "run" / "checkpoint"))
+    resumed.resume = ResumeConfig(
+        checkpoint=str(tmp_path / "run" / "checkpoint")
+    )
     train(resumed)
 
     assert "checkpoint already completed max_steps=2" in capsys.readouterr().out
@@ -900,7 +1030,9 @@ def test_resume_rejects_changed_training_dynamics(tmp_path):
     resumed.eval_every = 0
     resumed.eval_on_start = False
     resumed.learning_rate *= 2
-    resumed.resume = ResumeConfig(checkpoint=str(tmp_path / "run" / "checkpoint"))
+    resumed.resume = ResumeConfig(
+        checkpoint=str(tmp_path / "run" / "checkpoint")
+    )
 
     with pytest.raises(CheckpointCompatibilityError, match="optimizer"):
         train(resumed)
@@ -923,13 +1055,22 @@ def test_sft_chat_template_applies_suffix_to_message_rows():
 
     tokenizer = ChatTokenizer()
     sft_batch(
-        [{"messages": [{"role": "user", "content": "problem"}, {"role": "assistant", "content": "answer"}]}],
+        [
+            {
+                "messages": [
+                    {"role": "user", "content": "problem"},
+                    {"role": "assistant", "content": "answer"},
+                ]
+            }
+        ],
         tokenizer,
         8,
         prompt_suffix="return boxed",
         chat_template=True,
     )
-    assert tokenizer.messages == [{"role": "user", "content": "problem\n\nreturn boxed"}]
+    assert tokenizer.messages == [
+        {"role": "user", "content": "problem\n\nreturn boxed"}
+    ]
 
 
 def test_sft_full_sequence_loss_includes_prompt_tokens():
@@ -962,7 +1103,10 @@ def test_sft_batch_can_return_attention_mask():
 
     assert x.tolist() == [[1, 2, 0, 0], [1, 2, 3, 0]]
     assert y.tolist() == [[2, 0, -100, -100], [-100, 3, 0, -100]]
-    assert attention_mask.tolist() == [[True, True, True, False], [True, True, True, True]]
+    assert attention_mask.tolist() == [
+        [True, True, True, False],
+        [True, True, True, True],
+    ]
 
 
 def test_model_loss_forwards_attention_mask():
@@ -972,7 +1116,14 @@ def test_model_loss_forwards_attention_mask():
             self.seen_mask = None
             self.seen_loss_backend = None
 
-        def forward(self, input_ids, targets, loss_reduction="mean", attention_mask=None, loss_backend="reference"):
+        def forward(
+            self,
+            input_ids,
+            targets,
+            loss_reduction="mean",
+            attention_mask=None,
+            loss_backend="reference",
+        ):
             self.seen_mask = attention_mask
             self.seen_loss_backend = loss_backend
             return input_ids.float().sum() + targets.float().sum()

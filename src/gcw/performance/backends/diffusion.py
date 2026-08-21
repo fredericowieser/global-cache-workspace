@@ -17,7 +17,10 @@ from weakref import WeakKeyDictionary
 import torch
 import torch.nn as nn
 
-from gcw.models.cache_processors.diffusion import DiffusionField, TaskDirectedDiffusion
+from gcw.models.cache_processors.diffusion import (
+    DiffusionField,
+    TaskDirectedDiffusion,
+)
 from gcw.performance._compile import (
     is_non_reentrant_checkpoint_early_stop,
     require_torch_compile,
@@ -59,9 +62,9 @@ class _CompiledRunnerState:
     execution_lock: LockType = dataclass_field(default_factory=Lock, repr=False)
 
 
-_compiled_runner_states: WeakKeyDictionary[TaskDirectedDiffusion, _CompiledRunnerState] = (
-    WeakKeyDictionary()
-)
+_compiled_runner_states: WeakKeyDictionary[
+    TaskDirectedDiffusion, _CompiledRunnerState
+] = WeakKeyDictionary()
 
 
 def configure_noisy_diffusion_recurrence_backend(
@@ -71,7 +74,11 @@ def configure_noisy_diffusion_recurrence_backend(
 ) -> NoisyDiffusionRecurrenceBackend:
     """Apply a state-neutral recurrence backend after model construction."""
     selected = policy.recurrence_backend
-    modules = [module for module in model.modules() if isinstance(module, TaskDirectedDiffusion)]
+    modules = [
+        module
+        for module in model.modules()
+        if isinstance(module, TaskDirectedDiffusion)
+    ]
     if selected == "compile":
         variant = getattr(model_config, "variant", None)
         diffusion = getattr(model_config, "diffusion_processor", None)
@@ -90,7 +97,9 @@ def configure_noisy_diffusion_recurrence_backend(
             raise RuntimeError(
                 "compiled noisy-Diffusion recurrence requires exactly one TaskDirectedDiffusion module"
             )
-        require_torch_compile("performance.noisy_diffusion.recurrence_backend=compile")
+        require_torch_compile(
+            "performance.noisy_diffusion.recurrence_backend=compile"
+        )
     for module in modules:
         module.recurrence_backend = selected
         with _compiled_recurrence_lock:
@@ -111,14 +120,18 @@ def noisy_diffusion_recurrence_backend_metadata(
     execution = {
         "schema": "gcw.noisy_diffusion_recurrence_backend.v1",
         "effective_backend": selected,
-        "architecture": "noisy_diffusion_bgt" if diffusion is not None else None,
+        "architecture": (
+            "noisy_diffusion_bgt" if diffusion is not None else None
+        ),
         "region": (
             "gcw.models.cache_processors.diffusion."
             "TaskDirectedDiffusion.deterministic_recurrence"
         ),
         "noise_boundary": "eager_torch_randn_like_before_recurrence_dispatch",
         "runner_ownership": "per_task_directed_diffusion_module",
-        "compile_options": dict(_COMPILE_OPTIONS) if selected == "compile" else None,
+        "compile_options": (
+            dict(_COMPILE_OPTIONS) if selected == "compile" else None
+        ),
         "torch_version": str(torch.__version__),
     }
     return {
@@ -208,7 +221,9 @@ def run_noisy_diffusion_recurrence(
     if backend == "eager":
         return diffusion.deterministic_recurrence(state, bottleneck, field)
     if backend != "compile":
-        raise ValueError(f"unsupported noisy-Diffusion recurrence backend: {backend}")
+        raise ValueError(
+            f"unsupported noisy-Diffusion recurrence backend: {backend}"
+        )
     runner_state = _get_or_create_compiled_recurrence_state(diffusion)
     # Dynamo/Inductor lazy specialization is not safe under concurrent first calls.
     # Serialize materialization and dispatch per diffusion module, while unrelated

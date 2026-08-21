@@ -21,11 +21,15 @@ def _json_safe(payload: dict) -> dict:
 
 def _payload_sha256(payload: dict) -> str:
     return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
     ).hexdigest()
 
 
-def _atomic_write_authenticated_json(path: Path, *, kind: str, payload: dict) -> None:
+def _atomic_write_authenticated_json(
+    path: Path, *, kind: str, payload: dict
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     safe = _json_safe(payload)
     document = {
@@ -63,7 +67,10 @@ def _load_authenticated_json(path: Path, *, kind: str) -> dict:
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"authenticated {kind} JSON is unreadable") from exc
     if not isinstance(document, dict) or set(document) != {
-        "schema_version", "kind", "payload", "payload_sha256"
+        "schema_version",
+        "kind",
+        "payload",
+        "payload_sha256",
     }:
         raise ValueError(f"authenticated {kind} JSON schema differs")
     payload = document.get("payload")
@@ -102,15 +109,24 @@ def _empty_eval_results() -> dict:
     }
 
 
-def _validate_partial_results(payload: dict, runs: list[tuple[list[str], int]]) -> dict:
+def _validate_partial_results(
+    payload: dict, runs: list[tuple[list[str], int]]
+) -> dict:
     expected_keys = set(_empty_eval_results())
-    if set(payload) != expected_keys or any(not isinstance(payload[key], dict) for key in expected_keys):
+    if set(payload) != expected_keys or any(
+        not isinstance(payload[key], dict) for key in expected_keys
+    ):
         raise ValueError("authenticated partial results schema differs")
     requested = {task for tasks, _fewshot in runs for task in tasks}
     for section in ("results", "groups"):
         for task in payload[section]:
-            if not any(task == requested_task or task.startswith(f"{requested_task}_") for requested_task in requested):
-                raise ValueError(f"authenticated partial results contain unexpected task: {task}")
+            if not any(
+                task == requested_task or task.startswith(f"{requested_task}_")
+                for requested_task in requested
+            ):
+                raise ValueError(
+                    f"authenticated partial results contain unexpected task: {task}"
+                )
     return payload
 
 
@@ -121,7 +137,9 @@ def _load_partial_results(runs: list[tuple[list[str], int]]) -> dict | None:
     path = Path(partial_dir) / "partial.json"
     if not path.exists():
         return None
-    payload = _load_authenticated_json(path, kind="flow_math_eval_partial_results")
+    payload = _load_authenticated_json(
+        path, kind="flow_math_eval_partial_results"
+    )
     return _validate_partial_results(payload, runs)
 
 
@@ -133,29 +151,60 @@ def _progress_path() -> Path | None:
     return None
 
 
-def _validate_progress(payload: dict, runs: list[tuple[list[str], int]]) -> dict:
+def _validate_progress(
+    payload: dict, runs: list[tuple[list[str], int]]
+) -> dict:
     if set(payload) != {
-        "started_at", "started_time", "updated_at", "total_runs", "completed_runs",
-        "completed_tasks", "elapsed_sec", "eta_sec", "runs",
+        "started_at",
+        "started_time",
+        "updated_at",
+        "total_runs",
+        "completed_runs",
+        "completed_tasks",
+        "elapsed_sec",
+        "eta_sec",
+        "runs",
     }:
         raise ValueError("authenticated progress schema differs")
     entries = payload.get("runs")
     if not isinstance(entries, list) or len(entries) != len(runs):
         raise ValueError("authenticated progress run list differs")
     allowed_entry_keys = {
-        "tasks", "fewshot", "status", "start_time", "end_time", "started_at",
-        "ended_at", "duration_sec", "skipped", "error",
+        "tasks",
+        "fewshot",
+        "status",
+        "start_time",
+        "end_time",
+        "started_at",
+        "ended_at",
+        "duration_sec",
+        "skipped",
+        "error",
     }
-    expected_runs = [{"tasks": tasks, "fewshot": fewshot} for tasks, fewshot in runs]
+    expected_runs = [
+        {"tasks": tasks, "fewshot": fewshot} for tasks, fewshot in runs
+    ]
     actual_runs = []
     for entry in entries:
-        if not isinstance(entry, dict) or not set(entry).issubset(allowed_entry_keys):
+        if not isinstance(entry, dict) or not set(entry).issubset(
+            allowed_entry_keys
+        ):
             raise ValueError("authenticated progress entry schema differs")
-        if not {"tasks", "fewshot", "status", "start_time", "end_time"}.issubset(entry):
+        if not {
+            "tasks",
+            "fewshot",
+            "status",
+            "start_time",
+            "end_time",
+        }.issubset(entry):
             raise ValueError("authenticated progress entry is incomplete")
-        actual_runs.append({"tasks": entry["tasks"], "fewshot": entry["fewshot"]})
+        actual_runs.append(
+            {"tasks": entry["tasks"], "fewshot": entry["fewshot"]}
+        )
     if payload.get("total_runs") != len(runs) or actual_runs != expected_runs:
-        raise ValueError("authenticated progress does not match requested evaluation runs")
+        raise ValueError(
+            "authenticated progress does not match requested evaluation runs"
+        )
     return payload
 
 
@@ -168,9 +217,13 @@ def _estimate_eta(progress: dict) -> float | None:
     completed = [
         float(item["duration_sec"])
         for item in runs
-        if item.get("status") == "completed" and not item.get("skipped") and item.get("duration_sec")
+        if item.get("status") == "completed"
+        and not item.get("skipped")
+        and item.get("duration_sec")
     ]
-    remaining = sum(1 for item in runs if item.get("status") not in {"completed", "failed"})
+    remaining = sum(
+        1 for item in runs if item.get("status") not in {"completed", "failed"}
+    )
     if not completed or remaining <= 0:
         return None
     return sum(completed) / len(completed) * remaining
@@ -192,7 +245,13 @@ def _new_progress(runs: list[tuple[list[str], int]]) -> dict:
         "elapsed_sec": 0.0,
         "eta_sec": None,
         "runs": [
-            {"tasks": tasks, "fewshot": fewshot, "status": "pending", "start_time": None, "end_time": None}
+            {
+                "tasks": tasks,
+                "fewshot": fewshot,
+                "status": "pending",
+                "start_time": None,
+                "end_time": None,
+            }
             for tasks, fewshot in runs
         ],
     }
@@ -223,9 +282,13 @@ def _update_progress(
         entry["ended_at"] = _format_time(now)
         entry["duration_sec"] = max(0.0, now - float(entry["start_time"]))
     progress["updated_at"] = _format_time(now)
-    progress["completed_runs"] = sum(1 for item in progress["runs"] if item.get("status") == "completed")
+    progress["completed_runs"] = sum(
+        1 for item in progress["runs"] if item.get("status") == "completed"
+    )
     progress["completed_tasks"] = sorted(merged.get("results", {}))
-    progress["elapsed_sec"] = max(0.0, now - float(progress.get("started_time", now)))
+    progress["elapsed_sec"] = max(
+        0.0, now - float(progress.get("started_time", now))
+    )
     progress["eta_sec"] = _estimate_eta(progress)
     return progress
 
@@ -237,4 +300,6 @@ def _write_progress(progress: dict, merged: dict) -> None:
     if path is None:
         return
     progress["completed_tasks"] = sorted(merged.get("results", {}))
-    _atomic_write_authenticated_json(path, kind="flow_math_eval_progress", payload=progress)
+    _atomic_write_authenticated_json(
+        path, kind="flow_math_eval_progress", payload=progress
+    )

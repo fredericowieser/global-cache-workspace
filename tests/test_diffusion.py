@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import torch
 
-from gcw.config import CacheProcessorConfig, DiffusionProcessorConfig, ModelConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    DiffusionProcessorConfig,
+    ModelConfig,
+)
 from gcw.models import build_model
 from gcw.models.cache_processors.diffusion import TaskDirectedDiffusion
 from gcw.params import processor_params
@@ -30,13 +34,17 @@ def tiny_diffusion_config() -> ModelConfig:
             num_heads=1,
             num_kv_heads=1,
         ),
-        diffusion_processor=DiffusionProcessorConfig(num_steps=4, noise_scale=0.15),
+        diffusion_processor=DiffusionProcessorConfig(
+            num_steps=4, noise_scale=0.15
+        ),
         processor_generation_mode="post_prefill_relative",
     )
 
 
 def test_diffusion_is_stochastic_during_training_and_deterministic_for_eval():
-    processor = TaskDirectedDiffusion(4, DiffusionProcessorConfig(num_steps=2, noise_scale=0.25))
+    processor = TaskDirectedDiffusion(
+        4, DiffusionProcessorConfig(num_steps=2, noise_scale=0.25)
+    )
     state = torch.zeros(1, 2, 4)
 
     def field(value: torch.Tensor, _time: float) -> torch.Tensor:
@@ -79,11 +87,17 @@ def test_diffusion_bgt_forward_backward_and_accounting():
     loss = model(tokens, tokens)
     loss.backward()
 
-    diffusion = next(module for module in model.modules() if isinstance(module, TaskDirectedDiffusion))
+    diffusion = next(
+        module
+        for module in model.modules()
+        if isinstance(module, TaskDirectedDiffusion)
+    )
     assert diffusion.refinement_gate.grad is not None
     assert torch.isfinite(loss)
     assert config.architecture_name == "diffusion_bgt"
-    assert processor_params(config) == sum(parameter.numel() for parameter in model.cache_processor.parameters())
+    assert processor_params(config) == sum(
+        parameter.numel() for parameter in model.cache_processor.parameters()
+    )
 
 
 def test_flow_and_diffusion_are_mutually_exclusive():

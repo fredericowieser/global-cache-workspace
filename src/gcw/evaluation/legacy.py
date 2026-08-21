@@ -38,9 +38,13 @@ PAPER7_RUNS = [([task], 0) for task in PAPER7_TASKS]
 class LegacyPaper7EvalLM(GCWEvalLM):
     def __init__(self, model, tokenizer, batch_size: int = 8):
         super().__init__(model, tokenizer, batch_size=batch_size)
-        self.add_special_tokens_for_generate = _legacy_generate_add_special_tokens(model)
+        self.add_special_tokens_for_generate = (
+            _legacy_generate_add_special_tokens(model)
+        )
 
-    def apply_chat_template(self, chat_history: list[dict[str, str]], add_generation_prompt=True) -> str:
+    def apply_chat_template(
+        self, chat_history: list[dict[str, str]], add_generation_prompt=True
+    ) -> str:
         return self.tokenizer.apply_chat_template(
             chat_history,
             tokenize=False,
@@ -51,7 +55,9 @@ class LegacyPaper7EvalLM(GCWEvalLM):
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         if _legacy_bottleneck_cache_eval(self.model):
             return self._loglikelihood_tokens_legacy_boundary(requests)
-        return super()._loglikelihood_tokens(requests, disable_tqdm=disable_tqdm)
+        return super()._loglikelihood_tokens(
+            requests, disable_tqdm=disable_tqdm
+        )
 
     @torch.no_grad()
     def _loglikelihood_tokens_legacy_boundary(self, requests):
@@ -67,19 +73,34 @@ class LegacyPaper7EvalLM(GCWEvalLM):
                 out[i] = (0.0, True)
                 continue
 
-            ctx, cont = truncate_context_continuation(ctx, cont, self.max_length)
-            ctx_ids = torch.tensor(ctx, dtype=torch.long, device=device).unsqueeze(0)
-            cont_ids = torch.tensor(cont, dtype=torch.long, device=device).unsqueeze(0)
+            ctx, cont = truncate_context_continuation(
+                ctx, cont, self.max_length
+            )
+            ctx_ids = torch.tensor(
+                ctx, dtype=torch.long, device=device
+            ).unsqueeze(0)
+            cont_ids = torch.tensor(
+                cont, dtype=torch.long, device=device
+            ).unsqueeze(0)
 
             empty_scores = ctx_ids.new_empty(1, 0, dtype=torch.float32)
-            ctx_logits, cache = self.model.backbone.forward_chunk(ctx_ids, 0, CacheState([], [], empty_scores))
+            ctx_logits, cache = self.model.backbone.forward_chunk(
+                ctx_ids, 0, CacheState([], [], empty_scores)
+            )
             cache = self.model.cache_processor(cache, select_all=True)
-            cont_logits, _ = self.model.backbone.forward_chunk(cont_ids, len(ctx), cache)
-            logits = torch.cat([ctx_logits[:, -1:, :], cont_logits[:, :-1, :]], dim=1)
+            cont_logits, _ = self.model.backbone.forward_chunk(
+                cont_ids, len(ctx), cache
+            )
+            logits = torch.cat(
+                [ctx_logits[:, -1:, :], cont_logits[:, :-1, :]], dim=1
+            )
             logp = torch.log_softmax(logits[0], dim=-1)
             target = cont_ids[0]
             vals = logp.gather(-1, target[:, None]).squeeze(-1)
-            out[i] = (float(vals.sum().item()), bool((logits[0].argmax(-1) == target).all().item()))
+            out[i] = (
+                float(vals.sum().item()),
+                bool((logits[0].argmax(-1) == target).all().item()),
+            )
         return out
 
 
@@ -115,7 +136,9 @@ def run_paper7_legacy_groups(
         os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
     except ImportError:
         pass
-    os.environ.setdefault("HF_DATASETS_CACHE", str(base_dir() / "hf_datasets_eval_v3"))
+    os.environ.setdefault(
+        "HF_DATASETS_CACHE", str(base_dir() / "hf_datasets_eval_v3")
+    )
     import lm_eval
     from lm_eval.tasks import TaskManager, get_task_dict
 
@@ -137,12 +160,25 @@ def run_paper7_legacy_groups(
         include_path=str(Path("configs/tasks_legacy/paper7").resolve()),
         verbosity="ERROR",
     )
-    merged = _legacy_empty_results(_load_partial_results(runs)) or _legacy_empty_results()
+    merged = (
+        _legacy_empty_results(_load_partial_results(runs))
+        or _legacy_empty_results()
+    )
     _write_progress(_new_progress(runs), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
         progress = _update_progress(run_idx, "running", runs, merged)
         if _run_is_complete(tasks, merged):
-            _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress, skipped=True), merged)
+            _write_progress(
+                _update_progress(
+                    run_idx,
+                    "completed",
+                    runs,
+                    merged,
+                    progress=progress,
+                    skipped=True,
+                ),
+                merged,
+            )
             continue
         if world_size > 1 and dist_state is not None:
             with dist_state.main_process_first():
@@ -162,7 +198,17 @@ def run_paper7_legacy_groups(
                 apply_chat_template=apply_chat_template,
             )
         except BaseException as exc:
-            _write_progress(_update_progress(run_idx, "failed", runs, merged, progress=progress, error=str(exc)), merged)
+            _write_progress(
+                _update_progress(
+                    run_idx,
+                    "failed",
+                    runs,
+                    merged,
+                    progress=progress,
+                    error=str(exc),
+                ),
+                merged,
+            )
             raise
         if out is None:
             continue
@@ -170,7 +216,12 @@ def run_paper7_legacy_groups(
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
         _write_partial_results({**_empty_eval_results(), **merged})
-        _write_progress(_update_progress(run_idx, "completed", runs, merged, progress=progress), merged)
+        _write_progress(
+            _update_progress(
+                run_idx, "completed", runs, merged, progress=progress
+            ),
+            merged,
+        )
     return merged
 
 

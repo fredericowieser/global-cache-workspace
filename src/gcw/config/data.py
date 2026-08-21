@@ -29,13 +29,22 @@ class DataConfig:
     experiment_manifest: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.sft_chat_template, bool) or not isinstance(self.sft_enable_thinking, bool):
+        if not isinstance(self.sft_chat_template, bool) or not isinstance(
+            self.sft_enable_thinking, bool
+        ):
             raise ValueError("SFT chat-template controls must be booleans")
         if self.sft_chat_template and self.response_prefix:
-            raise ValueError("data.response_prefix must be empty with sft_chat_template")
+            raise ValueError(
+                "data.response_prefix must be empty with sft_chat_template"
+            )
         if self.sft_loss_scope not in {"answer_only", "full_sequence"}:
-            raise ValueError("data.sft_loss_scope must be 'answer_only' or 'full_sequence'")
-        hashes = (self.expected_artifact_sha256, self.expected_source_ids_sha256)
+            raise ValueError(
+                "data.sft_loss_scope must be 'answer_only' or 'full_sequence'"
+            )
+        hashes = (
+            self.expected_artifact_sha256,
+            self.expected_source_ids_sha256,
+        )
         authenticated = all(
             isinstance(value, str)
             and len(value) == 64
@@ -44,4 +53,6 @@ class DataConfig:
             for value in hashes
         )
         if self.canonical_execution and not authenticated:
-            raise ValueError("canonical data requires authenticated artifact and source-ID sha256 hashes")
+            raise ValueError(
+                "canonical data requires authenticated artifact and source-ID sha256 hashes"
+            )

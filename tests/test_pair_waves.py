@@ -10,10 +10,13 @@ from gcw.performance.adjacent_pairs import PAIRS_PER_STEP
 from gcw.performance.pair_waves import PairWaveRuntime, plan_pair_waves
 
 
-def _pairs(device: torch.device = torch.device("cpu")) -> tuple[TrainingBatch, ...]:
+def _pairs(
+    device: torch.device = torch.device("cpu"),
+) -> tuple[TrainingBatch, ...]:
     return tuple(
         TrainingBatch(
-            x=torch.arange(8, device=device, dtype=torch.float32).reshape(2, 4) + index,
+            x=torch.arange(8, device=device, dtype=torch.float32).reshape(2, 4)
+            + index,
             y=torch.full((2, 4), float(index), device=device),
             attention_mask=torch.ones(2, 4, device=device, dtype=torch.bool),
         )
@@ -21,7 +24,9 @@ def _pairs(device: torch.device = torch.device("cpu")) -> tuple[TrainingBatch, .
     )
 
 
-def _pair_loss(weight: torch.nn.Parameter, _index: int, pair: TrainingBatch) -> torch.Tensor:
+def _pair_loss(
+    weight: torch.nn.Parameter, _index: int, pair: TrainingBatch
+) -> torch.Tensor:
     prediction = pair.x * weight
     return (prediction - pair.y).square().mean()
 
@@ -30,9 +35,9 @@ def test_pair_wave_plan_is_contiguous_and_complete() -> None:
     for width, expected_waves in ((1, 32), (2, 16), (4, 8)):
         plan = plan_pair_waves(width)
         assert len(plan.waves) == expected_waves
-        assert tuple(index for wave in plan.waves for index in wave.pair_indices) == tuple(
-            range(PAIRS_PER_STEP)
-        )
+        assert tuple(
+            index for wave in plan.waves for index in wave.pair_indices
+        ) == tuple(range(PAIRS_PER_STEP))
     with pytest.raises(ValueError, match="1, 2, or 4"):
         plan_pair_waves(8)
 
@@ -66,7 +71,9 @@ def test_serial_pair_wave_uses_ordinary_source_ordered_backward() -> None:
         )
 
     assert result.forward_replays == result.backward_replays == PAIRS_PER_STEP
-    assert torch.equal(torch.stack(result.pair_losses), torch.stack(reference_losses))
+    assert torch.equal(
+        torch.stack(result.pair_losses), torch.stack(reference_losses)
+    )
     assert candidate.grad is not None and reference.grad is not None
     assert torch.equal(candidate.grad, reference.grad)
     assert [entry for entry in contexts if entry[0] == "enter"] == [

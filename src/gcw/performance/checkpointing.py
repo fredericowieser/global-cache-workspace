@@ -14,7 +14,9 @@ import torch
 
 from gcw.config import TrainConfig
 from gcw.models.backbones.transformer import Block
-from gcw.models.cache_processors.longshot import longshot_gradient_checkpointing_override
+from gcw.models.cache_processors.longshot import (
+    longshot_gradient_checkpointing_override,
+)
 
 
 def configure_native_activation_checkpointing(
@@ -24,16 +26,24 @@ def configure_native_activation_checkpointing(
     """Apply processor-layer checkpointing without changing state-dict names."""
     from gcw.models.cache_processors.standard import CacheProcessor
 
-    processors = [module for module in model.modules() if isinstance(module, CacheProcessor)]
+    processors = [
+        module
+        for module in model.modules()
+        if isinstance(module, CacheProcessor)
+    ]
     enabled = policy == "standard_processor_layers"
     if enabled and not processors:
-        raise ValueError("activation_checkpointing='standard_processor_layers' found no standard processor layers")
+        raise ValueError(
+            "activation_checkpointing='standard_processor_layers' found no standard processor layers"
+        )
     for processor in processors:
         processor.activation_checkpointing = enabled
     layer_boundaries = sum(len(processor.layers) for processor in processors)
     return {
         "policy": policy,
-        "implementation": "torch.utils.checkpoint.checkpoint" if enabled else "eager",
+        "implementation": (
+            "torch.utils.checkpoint.checkpoint" if enabled else "eager"
+        ),
         "boundary": "standard_processor_layer" if enabled else None,
         "use_reentrant": False if enabled else None,
         "preserve_rng_state": True if enabled else None,
@@ -62,17 +72,23 @@ def longshot_gradient_checkpointing_context(
     return longshot_gradient_checkpointing_override(decision)
 
 
-def longshot_gradient_checkpointing_metadata(config: TrainConfig) -> dict[str, Any] | None:
+def longshot_gradient_checkpointing_metadata(
+    config: TrainConfig,
+) -> dict[str, Any] | None:
     """Describe the configured Longshot processor-layer checkpoint policy."""
     if config.model.variant != "longshot":
         return None
     processor = config.model.cache_processor
     if processor is None:
-        raise RuntimeError("Longshot runtime metadata requires a cache processor")
+        raise RuntimeError(
+            "Longshot runtime metadata requires a cache processor"
+        )
     threshold = config.longshot_gradient_checkpointing_seq_len_threshold
     adaptive = threshold is not None
     return {
-        "policy": "padded_sequence_length_threshold" if adaptive else "model_config",
+        "policy": (
+            "padded_sequence_length_threshold" if adaptive else "model_config"
+        ),
         "model_config_gradient_checkpointing": processor.gradient_checkpointing,
         "padded_sequence_length_threshold": threshold,
         "checkpoint_when": (
@@ -83,7 +99,9 @@ def longshot_gradient_checkpointing_metadata(config: TrainConfig) -> dict[str, A
         "short_microbatches": "eager" if adaptive else None,
         "long_microbatches": "checkpointed" if adaptive else None,
         "implementation": (
-            "torch.utils.checkpoint.checkpoint" if adaptive or processor.gradient_checkpointing else "eager"
+            "torch.utils.checkpoint.checkpoint"
+            if adaptive or processor.gradient_checkpointing
+            else "eager"
         ),
         "boundary": "longshot_processor_layer",
         "use_reentrant": False,
@@ -104,11 +122,20 @@ def longshot_gradient_checkpointing_step_metrics(
     checkpointed = sum(decisions)
     total = len(decisions)
     return {
-        "cache_processor/longshot_checkpointed_microbatches": float(checkpointed),
-        "cache_processor/longshot_eager_microbatches": float(total - checkpointed),
-        "cache_processor/longshot_checkpointed_microbatch_fraction": checkpointed / total,
-        "cache_processor/longshot_padded_sequence_length_min": float(min(padded_sequence_lengths)),
-        "cache_processor/longshot_padded_sequence_length_max": float(max(padded_sequence_lengths)),
+        "cache_processor/longshot_checkpointed_microbatches": float(
+            checkpointed
+        ),
+        "cache_processor/longshot_eager_microbatches": float(
+            total - checkpointed
+        ),
+        "cache_processor/longshot_checkpointed_microbatch_fraction": checkpointed
+        / total,
+        "cache_processor/longshot_padded_sequence_length_min": float(
+            min(padded_sequence_lengths)
+        ),
+        "cache_processor/longshot_padded_sequence_length_max": float(
+            max(padded_sequence_lengths)
+        ),
     }
 
 
@@ -127,11 +154,15 @@ def transformer_layer_classes(family: str) -> set[type[torch.nn.Module]]:
     return classes
 
 
-def apply_fsdp_activation_checkpointing(model: torch.nn.Module, *, family: str) -> None:
+def apply_fsdp_activation_checkpointing(
+    model: torch.nn.Module, *, family: str
+) -> None:
     """Apply the existing opt-out FSDP layer checkpoint policy."""
     import os
 
-    enabled = os.environ.get("GCW_FSDP_ACTIVATION_CHECKPOINTING", "1").lower() in {
+    enabled = os.environ.get(
+        "GCW_FSDP_ACTIVATION_CHECKPOINTING", "1"
+    ).lower() in {
         "1",
         "true",
         "yes",
@@ -148,7 +179,9 @@ def apply_fsdp_activation_checkpointing(model: torch.nn.Module, *, family: str) 
     except ImportError:
         return
     layer_classes = transformer_layer_classes(family)
-    wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
+    wrapper = partial(
+        checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT
+    )
     apply_activation_checkpointing(
         model,
         checkpoint_wrapper_fn=wrapper,

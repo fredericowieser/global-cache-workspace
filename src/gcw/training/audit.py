@@ -23,8 +23,13 @@ from gcw.performance.backends.icarus import (
 )
 from gcw.performance.backends.qwen3 import qwen3_backbone_chunk_backend_metadata
 from gcw.performance.kv_score_sidecar import kv_score_sidecar_execution_metadata
-from gcw.performance.longshot_cache import longshot_full_history_execution_metadata
-from gcw.performance.losses import loss_backend_metadata, reference_loss_execution_metadata
+from gcw.performance.longshot_cache import (
+    longshot_full_history_execution_metadata,
+)
+from gcw.performance.losses import (
+    loss_backend_metadata,
+    reference_loss_execution_metadata,
+)
 from gcw.performance.triton.execution import triton_cache_movement_metadata
 from gcw.training.checkpoint import ResumeState
 from gcw.training.distributed import _unwrap
@@ -55,11 +60,17 @@ def _checkpoint_metadata(
     if config.data.tokenizer_source is not None:
         state["source"] = config.data.tokenizer_source
         state["tokenizer_source"] = config.data.tokenizer_source
-    state["admission"] = admission if admission is not None else admission_receipt_metadata(config)
+    state["admission"] = (
+        admission
+        if admission is not None
+        else admission_receipt_metadata(config)
+    )
     return state
 
 
-def _checkpoint_state(base: dict[str, Any], step: int, loader: dict[str, Any] | None = None) -> dict[str, Any]:
+def _checkpoint_state(
+    base: dict[str, Any], step: int, loader: dict[str, Any] | None = None
+) -> dict[str, Any]:
     from gcw.training.state import _json_safe_loader_state
 
     state = {**base, "step": step}
@@ -83,16 +94,22 @@ def _training_fingerprint(
         "mode": config.mode,
         "distributed": config.distributed,
         "bt_processor_backend_fingerprint": (
-            bt_processor_backend_metadata()["fingerprint_sha256"] if config.model.variant == "bt" else None
+            bt_processor_backend_metadata()["fingerprint_sha256"]
+            if config.model.variant == "bt"
+            else None
         ),
         "qwen3_backbone_chunk_backend_fingerprint": qwen3_backbone_chunk_backend_metadata(
             config.backbone_chunk_backend
-        )["fingerprint_sha256"],
+        )[
+            "fingerprint_sha256"
+        ],
         **(
             {
                 "triton_cache_movement_fingerprint": triton_cache_movement_metadata(
                     config.performance.triton_cache_movement
-                )["fingerprint_sha256"]
+                )[
+                    "fingerprint_sha256"
+                ]
             }
             if config.performance.triton_cache_movement.enabled
             else {}
@@ -105,21 +122,27 @@ def _training_fingerprint(
         **(
             {
                 "noisy_diffusion_recurrence_backend_fingerprint": (
-                    noisy_diffusion_recurrence_backend_metadata(config.model, config.performance.noisy_diffusion)[
-                        "fingerprint_sha256"
-                    ]
+                    noisy_diffusion_recurrence_backend_metadata(
+                        config.model, config.performance.noisy_diffusion
+                    )["fingerprint_sha256"]
                 )
             }
-            if config.performance.noisy_diffusion.recurrence_backend == "compile"
+            if config.performance.noisy_diffusion.recurrence_backend
+            == "compile"
             else {}
         ),
         **(
             {
-                "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(config.model)[
+                "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(
+                    config.model
+                )[
                     "fingerprint_sha256"
                 ]
             }
-            if (config.model.variant == "icarus" and resolve_icarus_processor_backend(config.model) == "compile")
+            if (
+                config.model.variant == "icarus"
+                and resolve_icarus_processor_backend(config.model) == "compile"
+            )
             else {}
         ),
         "initialization": {
@@ -129,7 +152,9 @@ def _training_fingerprint(
         "trainable": config.trainable,
         "activation_checkpointing": config.activation_checkpointing,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
-        "activation_checkpoint_min_padded_sequence_length": (config.activation_checkpoint_min_padded_sequence_length),
+        "activation_checkpoint_min_padded_sequence_length": (
+            config.activation_checkpoint_min_padded_sequence_length
+        ),
         "loss_backend": config.loss_backend,
         **(
             {
@@ -142,7 +167,11 @@ def _training_fingerprint(
             else {}
         ),
         **(
-            {"reference_loss_execution": reference_loss_execution_metadata(config.performance.reference_loss)}
+            {
+                "reference_loss_execution": reference_loss_execution_metadata(
+                    config.performance.reference_loss
+                )
+            }
             if config.performance.reference_loss.mode != "legacy"
             else {}
         ),
@@ -150,7 +179,10 @@ def _training_fingerprint(
             {
                 "longshot_full_history_execution": longshot_full_history_execution_metadata(
                     config.performance.longshot_full_history,
-                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
+                    unrope_keys=bool(
+                        config.model.cache_processor
+                        and config.model.cache_processor.unrope_keys
+                    ),
                 )
             }
             if config.performance.longshot_full_history.enabled
@@ -160,7 +192,10 @@ def _training_fingerprint(
             {
                 "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(
                     config.performance.kv_score_sidecar,
-                    unrope_keys=bool(config.model.cache_processor and config.model.cache_processor.unrope_keys),
+                    unrope_keys=bool(
+                        config.model.cache_processor
+                        and config.model.cache_processor.unrope_keys
+                    ),
                 )
             }
             if config.performance.kv_score_sidecar.enabled
@@ -172,15 +207,18 @@ def _training_fingerprint(
                     config.longshot_gradient_checkpointing_seq_len_threshold
                 )
             }
-            if config.longshot_gradient_checkpointing_seq_len_threshold is not None
+            if config.longshot_gradient_checkpointing_seq_len_threshold
+            is not None
             else {}
         ),
         "objective": (
             "adjacent_pair_token_mean_answer_only_ce"
             if config.logical_pair_grouping
-            else f"{config.data.sft_loss_scope}_ce"
-            if config.mode == "sft"
-            else "next_token_ce"
+            else (
+                f"{config.data.sft_loss_scope}_ce"
+                if config.mode == "sft"
+                else "next_token_ce"
+            )
         ),
         "checkpoint_format": config.checkpoint_format,
         "precision": config.precision,
@@ -205,7 +243,11 @@ def _training_fingerprint(
             "tokens_per_step": tokens_per_step,
             "global_batch_rows": config.global_batch_rows,
             "logical_pair_grouping": config.logical_pair_grouping,
-            "logical_pairs_per_step": config.global_batch_rows // 2 if config.logical_pair_grouping else None,
+            "logical_pairs_per_step": (
+                config.global_batch_rows // 2
+                if config.logical_pair_grouping
+                else None
+            ),
             "grad_accum_steps": grad_accum_steps,
         },
     }
@@ -232,18 +274,31 @@ def _processor_state(model: torch.nn.Module) -> dict[str, torch.Tensor] | None:
     processor = getattr(model, "cache_processor", None)
     if not isinstance(processor, torch.nn.Module):
         return None
-    return {name: tensor.detach().cpu().clone() for name, tensor in processor.state_dict().items()}
+    return {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in processor.state_dict().items()
+    }
 
 
-def _validate_train_batch(x: torch.Tensor, y: torch.Tensor, config: TrainConfig) -> None:
+def _validate_train_batch(
+    x: torch.Tensor, y: torch.Tensor, config: TrainConfig
+) -> None:
     if x.shape != y.shape:
-        raise ValueError(f"input and target batch shapes must match; got x={tuple(x.shape)} y={tuple(y.shape)}")
+        raise ValueError(
+            f"input and target batch shapes must match; got x={tuple(x.shape)} y={tuple(y.shape)}"
+        )
     if x.ndim != 2:
-        raise ValueError(f"training batches must be 2D token tensors; got shape={tuple(x.shape)}")
+        raise ValueError(
+            f"training batches must be 2D token tensors; got shape={tuple(x.shape)}"
+        )
     if x.shape[0] != config.batch_size:
-        raise ValueError(f"loader batch size {x.shape[0]} does not match config.batch_size {config.batch_size}")
+        raise ValueError(
+            f"loader batch size {x.shape[0]} does not match config.batch_size {config.batch_size}"
+        )
     if x.shape[1] > config.sequence_len:
-        raise ValueError(f"loader sequence length {x.shape[1]} exceeds config.sequence_len {config.sequence_len}")
+        raise ValueError(
+            f"loader sequence length {x.shape[1]} exceeds config.sequence_len {config.sequence_len}"
+        )
 
 
 def _audit_training_step(model: torch.nn.Module) -> dict[str, Any]:
@@ -286,12 +341,16 @@ def _write_training_audit(path: Path, payload: dict[str, Any]) -> None:
     if not isinstance(payload.get("source_commit"), str) or not isinstance(
         payload.get("experiment_manifest_sha256"), str
     ):
-        raise ValueError("training audit requires source and manifest identities")
+        raise ValueError(
+            "training audit requires source and manifest identities"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
+            json.dump(
+                payload, handle, indent=2, sort_keys=True, allow_nan=False
+            )
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())

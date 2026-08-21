@@ -55,10 +55,18 @@ def _head_weight(model: TF) -> torch.Tensor:
     return model.lm_head.weight
 
 
-def _install_fake_liger(monkeypatch: pytest.MonkeyPatch, calls: list[dict[str, Any]]) -> None:
-    monkeypatch.setattr(transformer_module, "require_loss_backend", lambda backend, device: None)
-    monkeypatch.setattr(losses_module, "require_loss_backend", lambda backend, device: None)
-    monkeypatch.setattr(losses_module.metadata, "version", lambda package: LIGER_KERNEL_VERSION)
+def _install_fake_liger(
+    monkeypatch: pytest.MonkeyPatch, calls: list[dict[str, Any]]
+) -> None:
+    monkeypatch.setattr(
+        transformer_module, "require_loss_backend", lambda backend, device: None
+    )
+    monkeypatch.setattr(
+        losses_module, "require_loss_backend", lambda backend, device: None
+    )
+    monkeypatch.setattr(
+        losses_module.metadata, "version", lambda package: LIGER_KERNEL_VERSION
+    )
 
     class FakeLiger:
         def __init__(self, **kwargs: Any) -> None:
@@ -94,7 +102,9 @@ def _install_fake_liger(monkeypatch: pytest.MonkeyPatch, calls: list[dict[str, A
     monkeypatch.setattr(losses_module, "_load_liger_factory", lambda: FakeLiger)
 
 
-@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize(
+    "dtype", [torch.float32, torch.bfloat16], ids=["fp32", "bf16"]
+)
 @pytest.mark.parametrize("tied", [True, False], ids=["tied", "untied"])
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
 def test_fake_liger_matches_reference_with_vocab_truncation_and_gradients(
@@ -115,7 +125,9 @@ def test_fake_liger_matches_reference_with_vocab_truncation_and_gradients(
         assert model.lm_head is not None
         head = model.lm_head.weight
     reference_hidden = hidden.detach().clone().requires_grad_(True)
-    reference = model.loss_from_hidden(reference_hidden, targets, reduction, "reference")
+    reference = model.loss_from_hidden(
+        reference_hidden, targets, reduction, "reference"
+    )
     reference.backward()
     assert reference_hidden.grad is not None
     assert head.grad is not None
@@ -130,7 +142,10 @@ def test_fake_liger_matches_reference_with_vocab_truncation_and_gradients(
     torch.testing.assert_close(liger, reference)
     torch.testing.assert_close(liger_hidden.grad, reference_hidden_grad)
     torch.testing.assert_close(head.grad, reference_head_grad)
-    assert calls[0]["weight_shape"] == (model.config.vocab_size, model.config.hidden_size)
+    assert calls[0]["weight_shape"] == (
+        model.config.vocab_size,
+        model.config.hidden_size,
+    )
     assert calls[0]["kwargs"] == {
         "ignore_index": -100,
         "reduction": reduction,
@@ -142,7 +157,9 @@ def test_fake_liger_matches_reference_with_vocab_truncation_and_gradients(
     assert torch.count_nonzero(head.grad[model.config.vocab_size :]) == 0
 
 
-def test_fake_liger_receives_gemma_logit_softcap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fake_liger_receives_gemma_logit_softcap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, Any]] = []
     _install_fake_liger(monkeypatch, calls)
     config = ModelConfig(
@@ -183,7 +200,9 @@ def test_benchmark_only_liger_row_sum_helper_uses_one_fused_sum_per_row(
     targets = torch.tensor([[1, -1, 2, 3, 4], [3, 4, -100, 5, 6]])
     reference_hidden = hidden.detach().clone().requires_grad_(True)
     actual_hidden = hidden.detach().clone().requires_grad_(True)
-    reference = model.loss_from_hidden(reference_hidden, targets, "row_sum", "reference")
+    reference = model.loss_from_hidden(
+        reference_hidden, targets, "row_sum", "reference"
+    )
     actual = liger_fused_linear_cross_entropy_row_sum(
         model.output_weight(),
         actual_hidden,
@@ -200,13 +219,20 @@ def test_benchmark_only_liger_row_sum_helper_uses_one_fused_sum_per_row(
     torch.testing.assert_close(_head_weight(model).grad, reference_weight_grad)
     assert len(calls) == 2
     assert all(call["kwargs"]["reduction"] == "sum" for call in calls)
-    assert all(call["hidden_shape"] == (5, model.config.hidden_size) for call in calls)
+    assert all(
+        call["hidden_shape"] == (5, model.config.hidden_size) for call in calls
+    )
     provenance = loss_backend_metadata("liger")
     assert provenance["reduction_row_sum"]["effective_backend"] == "target_only"
-    assert "failed the performance retention gate" in provenance["reduction_row_sum"]["reason"]
+    assert (
+        "failed the performance retention gate"
+        in provenance["reduction_row_sum"]["reason"]
+    )
 
 
-def test_liger_none_uses_explicit_target_only_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_liger_none_uses_explicit_target_only_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, Any]] = []
     _install_fake_liger(monkeypatch, calls)
     model = _model(tied=True)
@@ -245,7 +271,9 @@ def test_fake_liger_all_ignored_is_zero_and_differentiable(
     assert calls == []
 
 
-def test_liger_fails_closed_for_cpu_missing_and_wrong_version(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_liger_fails_closed_for_cpu_missing_and_wrong_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with pytest.raises(RuntimeError, match="CUDA device"):
         require_loss_backend("liger", torch.device("cpu"))
 
@@ -261,7 +289,9 @@ def test_liger_fails_closed_for_cpu_missing_and_wrong_version(monkeypatch: pytes
         require_loss_backend("liger", torch.device("cuda"))
 
 
-def test_backend_is_state_dict_neutral_and_in_runtime_provenance(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_backend_is_state_dict_neutral_and_in_runtime_provenance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
     model = _model(tied=True)
     keys = tuple(model.state_dict())
     config = TrainConfig(
@@ -277,19 +307,33 @@ def test_backend_is_state_dict_neutral_and_in_runtime_provenance(monkeypatch: py
     assert tuple(model.state_dict()) == keys
     assert fingerprint["loss_backend"] == "target_only"
     assert checkpoint["loss_backend"]["name"] == "target_only"
-    assert TrainConfig(model=model.config, data=DataConfig(kind="random")).loss_backend == "reference"
-    assert checkpoint_loss_backend(checkpoint, torch.device("cpu")) == "target_only"
+    assert (
+        TrainConfig(
+            model=model.config, data=DataConfig(kind="random")
+        ).loss_backend
+        == "reference"
+    )
+    assert (
+        checkpoint_loss_backend(checkpoint, torch.device("cpu"))
+        == "target_only"
+    )
 
 
 @pytest.mark.parametrize("tied", [True, False], ids=["tied", "untied"])
 @pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
-def test_bounded_reference_loss_matches_legacy_values_and_gradients(tied: bool, reduction: str) -> None:
+def test_bounded_reference_loss_matches_legacy_values_and_gradients(
+    tied: bool, reduction: str
+) -> None:
     model = _model(tied=tied)
     hidden = torch.randn(2, 9, model.config.hidden_size)
-    targets = torch.tensor([[0, 1, -100, 10, 2, 3, -1, 4, 5], [3, -100, 4, 5, 6, 7, 8, 9, 10]])
+    targets = torch.tensor(
+        [[0, 1, -100, 10, 2, 3, -1, 4, 5], [3, -100, 4, 5, 6, 7, 8, 9, 10]]
+    )
 
     legacy_hidden = hidden.detach().clone().requires_grad_(True)
-    legacy = model.loss_from_hidden(legacy_hidden, targets, reduction, "reference")
+    legacy = model.loss_from_hidden(
+        legacy_hidden, targets, reduction, "reference"
+    )
     legacy.sum().backward()
     legacy_hidden_grad = legacy_hidden.grad.detach().clone()
     legacy_head_grad = _head_weight(model).grad.detach().clone()
@@ -300,15 +344,23 @@ def test_bounded_reference_loss_matches_legacy_values_and_gradients(tied: bool, 
         ReferenceLossConfig(mode="bounded", max_projected_positions=3),
     )
     bounded_hidden = hidden.detach().clone().requires_grad_(True)
-    bounded = model.loss_from_hidden(bounded_hidden, targets, reduction, "reference")
+    bounded = model.loss_from_hidden(
+        bounded_hidden, targets, reduction, "reference"
+    )
     bounded.sum().backward()
 
     torch.testing.assert_close(bounded, legacy, rtol=1e-5, atol=1e-6)
-    torch.testing.assert_close(bounded_hidden.grad, legacy_hidden_grad, rtol=1e-5, atol=1e-6)
-    torch.testing.assert_close(_head_weight(model).grad, legacy_head_grad, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(
+        bounded_hidden.grad, legacy_hidden_grad, rtol=1e-5, atol=1e-6
+    )
+    torch.testing.assert_close(
+        _head_weight(model).grad, legacy_head_grad, rtol=1e-5, atol=1e-6
+    )
 
 
-def test_bounded_reference_loss_caps_projected_positions_and_preserves_masked_shape() -> None:
+def test_bounded_reference_loss_caps_projected_positions_and_preserves_masked_shape() -> (
+    None
+):
     hidden = torch.randn(4, 11, 8, requires_grad=True)
     targets = torch.arange(44).reshape(4, 11) % 13
     targets[:, 3] = -100
@@ -328,21 +380,30 @@ def test_bounded_reference_loss_caps_projected_positions_and_preserves_masked_sh
 
     assert losses.shape == targets.shape
     assert torch.count_nonzero(losses[:, 3]) == 0
-    assert sum(shape[0] * shape[1] for shape in projected_shapes) == targets.numel()
+    assert (
+        sum(shape[0] * shape[1] for shape in projected_shapes)
+        == targets.numel()
+    )
     assert max(shape[0] * shape[1] for shape in projected_shapes) <= 9
 
 
-def test_checkpointed_bounded_reference_loss_matches_uncheckpointed_gradients() -> None:
+def test_checkpointed_bounded_reference_loss_matches_uncheckpointed_gradients() -> (
+    None
+):
     model = _model(tied=True)
     hidden = torch.randn(2, 9, model.config.hidden_size)
-    targets = torch.tensor([[0, 1, -100, 10, 2, 3, -1, 4, 5], [3, -100, 4, 5, 6, 7, 8, 9, 10]])
+    targets = torch.tensor(
+        [[0, 1, -100, 10, 2, 3, -1, 4, 5], [3, -100, 4, 5, 6, 7, 8, 9, 10]]
+    )
 
     configure_reference_loss_execution(
         model,
         ReferenceLossConfig(mode="bounded", max_projected_positions=4),
     )
     eager_hidden = hidden.detach().clone().requires_grad_(True)
-    eager = model.loss_from_hidden(eager_hidden, targets, "row_sum", "reference")
+    eager = model.loss_from_hidden(
+        eager_hidden, targets, "row_sum", "reference"
+    )
     eager.sum().backward()
     eager_hidden_grad = eager_hidden.grad.detach().clone()
     eager_head_grad = _head_weight(model).grad.detach().clone()
@@ -350,10 +411,14 @@ def test_checkpointed_bounded_reference_loss_matches_uncheckpointed_gradients() 
     model.zero_grad(set_to_none=True)
     configure_reference_loss_execution(
         model,
-        ReferenceLossConfig(mode="bounded", max_projected_positions=4, checkpoint_chunks=True),
+        ReferenceLossConfig(
+            mode="bounded", max_projected_positions=4, checkpoint_chunks=True
+        ),
     )
     checkpointed_hidden = hidden.detach().clone().requires_grad_(True)
-    checkpointed = model.loss_from_hidden(checkpointed_hidden, targets, "row_sum", "reference")
+    checkpointed = model.loss_from_hidden(
+        checkpointed_hidden, targets, "row_sum", "reference"
+    )
     checkpointed.sum().backward()
 
     torch.testing.assert_close(checkpointed, eager)
@@ -362,7 +427,9 @@ def test_checkpointed_bounded_reference_loss_matches_uncheckpointed_gradients() 
 
 
 @pytest.mark.parametrize("tied", [True, False], ids=["tied", "untied"])
-@pytest.mark.parametrize("checkpoint_chunks", [False, True], ids=["eager", "checkpointed"])
+@pytest.mark.parametrize(
+    "checkpoint_chunks", [False, True], ids=["eager", "checkpointed"]
+)
 @pytest.mark.parametrize("reduction", ["mean", "sum", "none", "row_sum"])
 def test_bounded_reference_all_masked_is_zero_and_differentiable(
     tied: bool,
@@ -390,13 +457,21 @@ def test_bounded_reference_all_masked_is_zero_and_differentiable(
     assert torch.count_nonzero(_head_weight(model).grad) == 0
 
 
-def test_reference_loss_execution_is_state_neutral_and_conditionally_fingerprinted(tmp_path) -> None:
+def test_reference_loss_execution_is_state_neutral_and_conditionally_fingerprinted(
+    tmp_path,
+) -> None:
     model = _model(tied=True)
     state_keys = tuple(model.state_dict())
-    bounded = ReferenceLossConfig(mode="bounded", max_projected_positions=512, checkpoint_chunks=True)
+    bounded = ReferenceLossConfig(
+        mode="bounded", max_projected_positions=512, checkpoint_chunks=True
+    )
     configure_reference_loss_execution(model, bounded)
 
-    default_config = TrainConfig(model=model.config, data=DataConfig(kind="random"), output_dir=str(tmp_path))
+    default_config = TrainConfig(
+        model=model.config,
+        data=DataConfig(kind="random"),
+        output_dir=str(tmp_path),
+    )
     bounded_config = TrainConfig(
         model=model.config,
         data=DataConfig(kind="random"),
@@ -410,12 +485,20 @@ def test_reference_loss_execution_is_state_neutral_and_conditionally_fingerprint
     metadata = reference_loss_execution_metadata(bounded)
 
     assert tuple(model.state_dict()) == state_keys
-    assert isinstance(default_payload, dict) and isinstance(bounded_payload, dict)
+    assert isinstance(default_payload, dict) and isinstance(
+        bounded_payload, dict
+    )
     assert "reference_loss" not in default_payload["performance"]
     assert bounded_payload["performance"]["reference_loss"]["mode"] == "bounded"
     assert "reference_loss_execution" not in default_fingerprint
-    assert bounded_fingerprint["reference_loss_execution"]["schema"] == "gcw.reference_loss_execution.v1"
-    assert metadata["fingerprint_sha256"] == bounded_fingerprint["reference_loss_execution"]["fingerprint_sha256"]
+    assert (
+        bounded_fingerprint["reference_loss_execution"]["schema"]
+        == "gcw.reference_loss_execution.v1"
+    )
+    assert (
+        metadata["fingerprint_sha256"]
+        == bounded_fingerprint["reference_loss_execution"]["fingerprint_sha256"]
+    )
 
 
 def test_reference_loss_configuration_fails_closed(tmp_path) -> None:
@@ -429,16 +512,22 @@ def test_reference_loss_configuration_fails_closed(tmp_path) -> None:
             data=DataConfig(kind="random"),
             output_dir=str(tmp_path),
             loss_backend="target_only",
-            performance=PerformanceConfig(reference_loss=ReferenceLossConfig(mode="bounded")),
+            performance=PerformanceConfig(
+                reference_loss=ReferenceLossConfig(mode="bounded")
+            ),
         )
-    with pytest.raises(ValueError, match="must cover the maximum physical rows"):
+    with pytest.raises(
+        ValueError, match="must cover the maximum physical rows"
+    ):
         TrainConfig(
             model=_model(tied=True).config,
             data=DataConfig(kind="random"),
             output_dir=str(tmp_path),
             batch_size=2,
             performance=PerformanceConfig(
-                reference_loss=ReferenceLossConfig(mode="bounded", max_projected_positions=1)
+                reference_loss=ReferenceLossConfig(
+                    mode="bounded", max_projected_positions=1
+                )
             ),
         )
     with pytest.raises(ValueError, match="supports only distributed='none'"):
@@ -447,7 +536,9 @@ def test_reference_loss_configuration_fails_closed(tmp_path) -> None:
             data=DataConfig(kind="random"),
             output_dir=str(tmp_path),
             distributed="ddp",
-            performance=PerformanceConfig(reference_loss=ReferenceLossConfig(mode="bounded")),
+            performance=PerformanceConfig(
+                reference_loss=ReferenceLossConfig(mode="bounded")
+            ),
         )
 
 
@@ -463,7 +554,9 @@ def test_training_configures_bounded_reference_execution(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(transformer_module, "bounded_reference_loss", record)
-    monkeypatch.setattr(assembly_module, "init_distributed", lambda _kind: torch.device("cpu"))
+    monkeypatch.setattr(
+        assembly_module, "init_distributed", lambda _kind: torch.device("cpu")
+    )
     config = TrainConfig(
         model=_model(tied=True).config,
         data=DataConfig(kind="random"),
@@ -474,7 +567,11 @@ def test_training_configures_bounded_reference_execution(
         save_final=False,
         eval_every=0,
         eval_on_start=False,
-        performance=PerformanceConfig(reference_loss=ReferenceLossConfig(mode="bounded", max_projected_positions=4)),
+        performance=PerformanceConfig(
+            reference_loss=ReferenceLossConfig(
+                mode="bounded", max_projected_positions=4
+            )
+        ),
     )
 
     training_module.train(config)
@@ -498,13 +595,19 @@ def test_liger_cuda_bfloat16_forward_backward_parity_smoke() -> None:
     assert metadata.version("liger-kernel") == LIGER_KERNEL_VERSION
 
     model = _model(tied=False, dtype=torch.bfloat16).cuda()
-    hidden = torch.randn(2, 5, model.config.hidden_size, device="cuda", dtype=torch.bfloat16)
-    targets = torch.tensor([[0, 1, -100, 10, 2], [3, -1, 4, 5, 6]], device="cuda")
+    hidden = torch.randn(
+        2, 5, model.config.hidden_size, device="cuda", dtype=torch.bfloat16
+    )
+    targets = torch.tensor(
+        [[0, 1, -100, 10, 2], [3, -1, 4, 5, 6]], device="cuda"
+    )
 
     assert model.lm_head is not None
     head = model.lm_head.weight
     reference_hidden = hidden.detach().clone().requires_grad_(True)
-    reference = model.loss_from_hidden(reference_hidden, targets, "mean", "reference")
+    reference = model.loss_from_hidden(
+        reference_hidden, targets, "mean", "reference"
+    )
     reference.backward()
     assert reference_hidden.grad is not None
     assert head.grad is not None
@@ -517,13 +620,19 @@ def test_liger_cuda_bfloat16_forward_backward_parity_smoke() -> None:
     liger.backward()
 
     torch.testing.assert_close(liger, reference, atol=3e-2, rtol=3e-2)
-    torch.testing.assert_close(liger_hidden.grad, reference_hidden_grad, atol=3e-2, rtol=3e-2)
-    torch.testing.assert_close(head.grad, reference_head_grad, atol=3e-2, rtol=3e-2)
+    torch.testing.assert_close(
+        liger_hidden.grad, reference_hidden_grad, atol=3e-2, rtol=3e-2
+    )
+    torch.testing.assert_close(
+        head.grad, reference_head_grad, atol=3e-2, rtol=3e-2
+    )
 
     model.zero_grad(set_to_none=True)
     upstream = torch.tensor([0.25, 1.75], device="cuda")
     reference_hidden = hidden.detach().clone().requires_grad_(True)
-    reference_rows = model.loss_from_hidden(reference_hidden, targets, "row_sum", "reference")
+    reference_rows = model.loss_from_hidden(
+        reference_hidden, targets, "row_sum", "reference"
+    )
     reference_rows.backward(upstream)
     assert reference_hidden.grad is not None and head.grad is not None
     reference_hidden_grad = reference_hidden.grad.detach().clone()
@@ -531,8 +640,14 @@ def test_liger_cuda_bfloat16_forward_backward_parity_smoke() -> None:
 
     model.zero_grad(set_to_none=True)
     liger_hidden = hidden.detach().clone().requires_grad_(True)
-    liger_rows = liger_fused_linear_cross_entropy_row_sum(model.output_weight(), liger_hidden, targets)
+    liger_rows = liger_fused_linear_cross_entropy_row_sum(
+        model.output_weight(), liger_hidden, targets
+    )
     liger_rows.backward(upstream)
     torch.testing.assert_close(liger_rows, reference_rows, atol=3e-2, rtol=3e-2)
-    torch.testing.assert_close(liger_hidden.grad, reference_hidden_grad, atol=3e-2, rtol=3e-2)
-    torch.testing.assert_close(head.grad, reference_head_grad, atol=3e-2, rtol=3e-2)
+    torch.testing.assert_close(
+        liger_hidden.grad, reference_hidden_grad, atol=3e-2, rtol=3e-2
+    )
+    torch.testing.assert_close(
+        head.grad, reference_head_grad, atol=3e-2, rtol=3e-2
+    )

@@ -98,19 +98,30 @@ class RunRecord:
             ValueError: If a name or identity cannot form a safe path.
         """
         clean_name = _safe_component(experiment_name, "experiment_name")
-        attempt = _safe_component(execution_id or os.environ.get("GCW_EXECUTION_ID") or uuid4().hex[:12], "execution_id")
+        attempt = _safe_component(
+            execution_id
+            or os.environ.get("GCW_EXECUTION_ID")
+            or uuid4().hex[:12],
+            "execution_id",
+        )
         now = datetime.now(timezone.utc)
         domain = "training-runs" if kind == "training" else "eval-runs"
         base = Path(data_root or os.environ.get("GCW_DATA_ROOT", "data"))
-        root = base / domain / now.date().isoformat() / f"{clean_name}--{attempt}"
+        root = (
+            base / domain / now.date().isoformat() / f"{clean_name}--{attempt}"
+        )
         root.parent.mkdir(parents=True, exist_ok=True)
         root.mkdir(exist_ok=False)
         paths = RunPaths.under(root)
         record = cls(paths, kind=kind, execution_id=attempt)
         resolved = to_dict(config)
-        paths.config.write_text(yaml.safe_dump(resolved, sort_keys=True), encoding="utf-8")
+        paths.config.write_text(
+            yaml.safe_dump(resolved, sort_keys=True), encoding="utf-8"
+        )
         atomic_write_text(paths.logs, "")
-        atomic_write_json(paths.environment, _environment_payload(), indent=2, allow_nan=False)
+        atomic_write_json(
+            paths.environment, _environment_payload(), indent=2, allow_nan=False
+        )
         source = _source_identity(repository)
         commit = source.get("git_commit") if source is not None else None
         atomic_write_text(root / "git_hash.txt", f"{commit or 'unavailable'}\n")
@@ -129,24 +140,42 @@ class RunRecord:
         )
         atomic_write_json(
             paths.state,
-            {"schema": _RUN_SCHEMA, "mutable_state_path": None if state_path is None else str(Path(state_path))},
+            {
+                "schema": _RUN_SCHEMA,
+                "mutable_state_path": (
+                    None if state_path is None else str(Path(state_path))
+                ),
+            },
             indent=2,
             allow_nan=False,
         )
         atomic_write_json(
             paths.status,
-            {"schema": _RUN_SCHEMA, "state": "running", "updated_at": now.isoformat()},
+            {
+                "schema": _RUN_SCHEMA,
+                "state": "running",
+                "updated_at": now.isoformat(),
+            },
             indent=2,
             allow_nan=False,
         )
         fsync_directory(root)
         return record
 
-    def append_metrics(self, metrics: Mapping[str, Any], *, step: int | None = None) -> None:
+    def append_metrics(
+        self, metrics: Mapping[str, Any], *, step: int | None = None
+    ) -> None:
         """Append one finite JSON metric event and fsync it."""
         self._require_open()
-        payload = {"step": step, **dict(metrics)} if step is not None else dict(metrics)
-        encoded = json.dumps(_json_safe(payload), sort_keys=True, allow_nan=False) + "\n"
+        payload = (
+            {"step": step, **dict(metrics)}
+            if step is not None
+            else dict(metrics)
+        )
+        encoded = (
+            json.dumps(_json_safe(payload), sort_keys=True, allow_nan=False)
+            + "\n"
+        )
         with self.paths.metrics_stream.open("a", encoding="utf-8") as handle:
             handle.write(encoded)
             handle.flush()
@@ -161,7 +190,9 @@ class RunRecord:
             handle.flush()
             os.fsync(handle.fileno())
 
-    def bind_wandb(self, *, run_id: str | None, url: str | None, mode: str | None) -> None:
+    def bind_wandb(
+        self, *, run_id: str | None, url: str | None, mode: str | None
+    ) -> None:
         """Bind this local execution to its optional W&B mirror."""
         self._require_open()
         atomic_write_json(
@@ -171,10 +202,17 @@ class RunRecord:
             allow_nan=False,
         )
 
-    def finish(self, *, summary: Mapping[str, Any], error: BaseException | None = None) -> None:
+    def finish(
+        self, *, summary: Mapping[str, Any], error: BaseException | None = None
+    ) -> None:
         """Finalize metrics and status without deleting the event stream."""
         self._require_open()
-        atomic_write_json(self.paths.metrics_summary, _json_safe(dict(summary)), indent=2, allow_nan=False)
+        atomic_write_json(
+            self.paths.metrics_summary,
+            _json_safe(dict(summary)),
+            indent=2,
+            allow_nan=False,
+        )
         now = datetime.now(timezone.utc).isoformat()
         status: dict[str, Any] = {
             "schema": _RUN_SCHEMA,
@@ -208,17 +246,29 @@ def _environment_payload() -> dict[str, Any]:
         "torch": torch.__version__,
         "cuda_available": cuda_available,
         "cuda_runtime": torch.version.cuda,
-        "cuda_devices": [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())]
-        if cuda_available
-        else [],
+        "cuda_devices": (
+            [
+                torch.cuda.get_device_name(index)
+                for index in range(torch.cuda.device_count())
+            ]
+            if cuda_available
+            else []
+        ),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "world_size": int(os.environ.get("WORLD_SIZE", "1")),
     }
 
 
 def _source_identity(repository: str | Path | None) -> dict[str, Any] | None:
-    root = Path(repository).resolve() if repository is not None else Path.cwd().resolve()
-    if not (root / "pyproject.toml").is_file() or not (root / "src" / "gcw").is_dir():
+    root = (
+        Path(repository).resolve()
+        if repository is not None
+        else Path.cwd().resolve()
+    )
+    if (
+        not (root / "pyproject.toml").is_file()
+        or not (root / "src" / "gcw").is_dir()
+    ):
         return None
     try:
         return repository_source_identity(root, require_git=False)

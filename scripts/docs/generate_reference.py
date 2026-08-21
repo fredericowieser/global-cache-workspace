@@ -49,7 +49,12 @@ CONFIG_TYPES = (
 
 
 def _display_type(value: Any) -> str:
-    return str(value).replace("typing.", "").replace("<class '", "").replace("'>", "")
+    return (
+        str(value)
+        .replace("typing.", "")
+        .replace("<class '", "")
+        .replace("'>", "")
+    )
 
 
 def _display_default(field: Any) -> str:
@@ -70,17 +75,30 @@ def generate_configuration() -> str:
         "",
     ]
     for config_type in CONFIG_TYPES:
-        lines.extend([f"## `{config_type.__name__}`", "", "| Field | Type | Default |", "|---|---|---|"])
+        lines.extend(
+            [
+                f"## `{config_type.__name__}`",
+                "",
+                "| Field | Type | Default |",
+                "|---|---|---|",
+            ]
+        )
         hints = get_type_hints(config_type)
         for field in fields(config_type):
-            field_type = _display_type(hints.get(field.name, field.type)).replace("|", "\\|")
-            default = _display_default(field).replace("|", "\\|").replace("\n", " ")
+            field_type = _display_type(
+                hints.get(field.name, field.type)
+            ).replace("|", "\\|")
+            default = (
+                _display_default(field).replace("|", "\\|").replace("\n", " ")
+            )
             lines.append(f"| `{field.name}` | `{field_type}` | `{default}` |")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _subcommands(parser: argparse.ArgumentParser) -> list[tuple[tuple[str, ...], argparse.ArgumentParser]]:
+def _subcommands(
+    parser: argparse.ArgumentParser,
+) -> list[tuple[tuple[str, ...], argparse.ArgumentParser]]:
     found: list[tuple[tuple[str, ...], argparse.ArgumentParser]] = []
 
     def visit(path: tuple[str, ...], current: argparse.ArgumentParser) -> None:
@@ -105,11 +123,15 @@ def _action_contract(action: argparse.Action) -> str:
     if getattr(action, "required", False):
         values.append("required")
     if action.choices is not None:
-        values.append("choices: " + ", ".join(f"`{choice}`" for choice in action.choices))
+        values.append(
+            "choices: " + ", ".join(f"`{choice}`" for choice in action.choices)
+        )
     if action.default is not None and action.default is not argparse.SUPPRESS:
         values.append(f"default: `{action.default}`")
     if action.type is not None:
-        values.append(f"type: `{getattr(action.type, '__name__', str(action.type))}`")
+        values.append(
+            f"type: `{getattr(action.type, '__name__', str(action.type))}`"
+        )
     return "; ".join(values) or "flag"
 
 
@@ -126,16 +148,28 @@ def generate_cli() -> str:
         actions = [
             action
             for action in parser._actions
-            if action.dest != "help" and not isinstance(action, argparse._SubParsersAction)
+            if action.dest != "help"
+            and not isinstance(action, argparse._SubParsersAction)
         ]
         if len(path) == 1:
             continue
         command = " ".join(path)
-        lines.extend([f"## `{command}`", "", "```text", parser.format_usage().strip(), "```", ""])
+        lines.extend(
+            [
+                f"## `{command}`",
+                "",
+                "```text",
+                parser.format_usage().strip(),
+                "```",
+                "",
+            ]
+        )
         if actions:
             lines.extend(["| Argument | Contract |", "|---|---|"])
             for action in actions:
-                lines.append(f"| {_action_name(action)} | {_action_contract(action)} |")
+                lines.append(
+                    f"| {_action_name(action)} | {_action_contract(action)} |"
+                )
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

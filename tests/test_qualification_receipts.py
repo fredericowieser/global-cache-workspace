@@ -33,10 +33,14 @@ def _key() -> QualificationHMACKey:
 
 
 def _receipt() -> bytes:
-    return issue_receipt(_PAYLOAD, schema=_SCHEMA, kind=_KIND, context=_CONTEXT, key=_key())
+    return issue_receipt(
+        _PAYLOAD, schema=_SCHEMA, kind=_KIND, context=_CONTEXT, key=_key()
+    )
 
 
-def test_authenticated_receipt_is_canonical_context_bound_and_single_read(tmp_path: Path) -> None:
+def test_authenticated_receipt_is_canonical_context_bound_and_single_read(
+    tmp_path: Path,
+) -> None:
     receipt = _receipt()
     path = tmp_path / "receipt.json"
     write_receipt(path, receipt)
@@ -54,9 +58,14 @@ def test_authenticated_receipt_is_canonical_context_bound_and_single_read(tmp_pa
 
     forged = json.loads(receipt)
     forged["payload"]["steps"] = 4
-    forged_bytes = json.dumps(forged, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    forged_bytes = (
+        json.dumps(forged, sort_keys=True, separators=(",", ":")).encode()
+        + b"\n"
+    )
     path.write_bytes(forged_bytes)
-    with pytest.raises(QualificationReceiptError, match="authentication failed"):
+    with pytest.raises(
+        QualificationReceiptError, match="authentication failed"
+    ):
         load_and_verify_receipt(
             path,
             expected_schema=_SCHEMA,
@@ -66,7 +75,9 @@ def test_authenticated_receipt_is_canonical_context_bound_and_single_read(tmp_pa
         )
 
 
-def test_receipt_rejects_context_transplant_key_change_and_noncanonical_bytes() -> None:
+def test_receipt_rejects_context_transplant_key_change_and_noncanonical_bytes() -> (
+    None
+):
     receipt = _receipt()
     with pytest.raises(QualificationReceiptError, match="context differs"):
         verify_receipt_bytes(
@@ -105,12 +116,26 @@ def test_receipt_rejects_duplicate_keys_floats_and_oversized_integers() -> None:
             key=_key(),
         )
     with pytest.raises(QualificationReceiptError, match="unsupported"):
-        issue_receipt({"metric": 1.5}, schema=_SCHEMA, kind=_KIND, context=_CONTEXT, key=_key())
+        issue_receipt(
+            {"metric": 1.5},
+            schema=_SCHEMA,
+            kind=_KIND,
+            context=_CONTEXT,
+            key=_key(),
+        )
     with pytest.raises(QualificationReceiptError, match="out of range"):
-        issue_receipt({"counter": 2**63}, schema=_SCHEMA, kind=_KIND, context=_CONTEXT, key=_key())
+        issue_receipt(
+            {"counter": 2**63},
+            schema=_SCHEMA,
+            kind=_KIND,
+            context=_CONTEXT,
+            key=_key(),
+        )
 
 
-def test_private_key_capture_rejects_permissions_symlinks_and_hardlinks(tmp_path: Path) -> None:
+def test_private_key_capture_rejects_permissions_symlinks_and_hardlinks(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "key.bin"
     path.write_bytes(os.urandom(32))
     path.chmod(0o600)

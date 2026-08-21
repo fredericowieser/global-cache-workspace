@@ -98,7 +98,12 @@ def test_convert_hf_accepts_qwen35_family(monkeypatch):
         ]
     )
 
-    assert calls == [(("tiny", "out"), {"family": "qwen3_5", "variant": "tf", "dtype": "bfloat16"})]
+    assert calls == [
+        (
+            ("tiny", "out"),
+            {"family": "qwen3_5", "variant": "tf", "dtype": "bfloat16"},
+        )
+    ]
 
 
 def test_convert_hf_accepts_gemma4_family(monkeypatch):
@@ -122,4 +127,9 @@ def test_convert_hf_accepts_gemma4_family(monkeypatch):
         ]
     )
 
-    assert calls == [(("tiny", "out"), {"family": "gemma4", "variant": "tf", "dtype": "bfloat16"})]
+    assert calls == [
+        (
+            ("tiny", "out"),
+            {"family": "gemma4", "variant": "tf", "dtype": "bfloat16"},
+        )
+    ]

@@ -35,13 +35,18 @@ SCHEMA_VERSION = 1
 EVIDENCE_KIND = "hf_to_gcw_conversion_diagnosis"
 POLICY_ID = "qwen3-06b-layerwise-distribution-diagnosis-v1"
 PARENT_PARITY_POLICY = "qwen3-06b-bf16-parameters-fp32-comparison-v2"
-PARENT_PARITY_SHA256 = "1aca29e6db3099d652d8635d57f8f79a9acccfbec915a378c0477e7104b86216"
+PARENT_PARITY_SHA256 = (
+    "1aca29e6db3099d652d8635d57f8f79a9acccfbec915a378c0477e7104b86216"
+)
 REQUIRED_DTYPE = "bfloat16"
 FIXED_PROMPTS: tuple[tuple[str, str], ...] = (
     ("parent_parity", CANONICAL_PROMPT),
     ("short", "Hello, world."),
     ("arithmetic", "Calculate 17 times 23, then state only the result."),
-    ("reasoning", "If every glorp is blue and no blue object is square, can a glorp be square? Explain briefly."),
+    (
+        "reasoning",
+        "If every glorp is blue and no blue object is square, can a glorp be square? Explain briefly.",
+    ),
     ("unicode", "Résumé: naïve café — 你好，世界。"),
 )
 DISTRIBUTION_METRIC_KEYS = {
@@ -76,7 +81,9 @@ def _finite(value: torch.Tensor, name: str) -> None:
         raise FloatingPointError(f"non-finite {name}")
 
 
-def distribution_metrics(hf_logits: torch.Tensor, native_logits: torch.Tensor) -> dict[str, float]:
+def distribution_metrics(
+    hf_logits: torch.Tensor, native_logits: torch.Tensor
+) -> dict[str, float]:
     """Compare [batch, tokens, vocabulary] logits in a common FP32 representation."""
     if hf_logits.shape != native_logits.shape or hf_logits.ndim != 3:
         raise ValueError(
@@ -103,7 +110,9 @@ def distribution_metrics(hf_logits: torch.Tensor, native_logits: torch.Tensor) -
     kl_raw = (hf_prob * (hf_logp - native_logp)).sum(dim=-1)
     minimum_kl = float(kl_raw.min().item())
     if minimum_kl < -1e-10:
-        raise FloatingPointError(f"FP64 KL cancellation exceeded tolerance: {minimum_kl}")
+        raise FloatingPointError(
+            f"FP64 KL cancellation exceeded tolerance: {minimum_kl}"
+        )
     kl = kl_raw.clamp_min(0.0)
     total_variation = 0.5 * (hf_prob - native_prob).abs().sum(dim=-1)
     logprob_delta = (native_logp - hf_logp).abs()
@@ -130,12 +139,21 @@ def distribution_metrics(hf_logits: torch.Tensor, native_logits: torch.Tensor) -
         "kl_hf_to_native_min": float(kl.min().item()),
         "total_variation_max": float(total_variation.max().item()),
         "total_variation_mean": float(total_variation.mean().item()),
-        "top1_match_fraction": float((hf.argmax(dim=-1) == native.argmax(dim=-1)).float().mean().item()),
-        "final_top1_match": float((hf[:, -1].argmax(dim=-1) == native[:, -1].argmax(dim=-1)).float().mean().item()),
+        "top1_match_fraction": float(
+            (hf.argmax(dim=-1) == native.argmax(dim=-1)).float().mean().item()
+        ),
+        "final_top1_match": float(
+            (hf[:, -1].argmax(dim=-1) == native[:, -1].argmax(dim=-1))
+            .float()
+            .mean()
+            .item()
+        ),
     }
 
 
-def hidden_metrics(hf_hidden: torch.Tensor, native_hidden: torch.Tensor) -> dict[str, float]:
+def hidden_metrics(
+    hf_hidden: torch.Tensor, native_hidden: torch.Tensor
+) -> dict[str, float]:
     """Compare aligned hidden tensors in FP32."""
     if hf_hidden.shape != native_hidden.shape:
         raise ValueError(
@@ -151,10 +169,17 @@ def hidden_metrics(hf_hidden: torch.Tensor, native_hidden: torch.Tensor) -> dict
     native_flat = native.reshape(-1).double()
     delta_flat = native_flat - hf_flat
     hf_norm = torch.linalg.vector_norm(hf_flat)
-    relative = torch.linalg.vector_norm(delta_flat) / hf_norm.clamp_min(torch.finfo(torch.float64).tiny)
+    relative = torch.linalg.vector_norm(delta_flat) / hf_norm.clamp_min(
+        torch.finfo(torch.float64).tiny
+    )
     cosine_raw = F.cosine_similarity(hf_flat, native_flat, dim=0)
-    if float(cosine_raw.item()) < -1.0 - 1e-12 or float(cosine_raw.item()) > 1.0 + 1e-12:
-        raise FloatingPointError(f"FP64 cosine outside mathematical range: {float(cosine_raw.item())}")
+    if (
+        float(cosine_raw.item()) < -1.0 - 1e-12
+        or float(cosine_raw.item()) > 1.0 + 1e-12
+    ):
+        raise FloatingPointError(
+            f"FP64 cosine outside mathematical range: {float(cosine_raw.item())}"
+        )
     cosine = cosine_raw.clamp(-1.0, 1.0)
     return {
         "max_abs_error": float(delta.abs().max().item()),
@@ -173,14 +198,25 @@ def _capture_forward(
     hf_model: bool,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, str], str]:
     core = getattr(model, "model", None) if hf_model else model
-    if core is None or not hasattr(core, "embed_tokens") or not hasattr(core, "layers") or not hasattr(core, "norm"):
-        raise TypeError(f"unsupported model structure for layer capture: {type(model)!r}")
+    if (
+        core is None
+        or not hasattr(core, "embed_tokens")
+        or not hasattr(core, "layers")
+        or not hasattr(core, "norm")
+    ):
+        raise TypeError(
+            f"unsupported model structure for layer capture: {type(model)!r}"
+        )
     layers = list(core.layers)
     captures: dict[str, torch.Tensor] = {}
     dtypes: dict[str, str] = {}
 
-    def hook(name: str) -> Callable[[torch.nn.Module, tuple[Any, ...], Any], None]:
-        def capture(_module: torch.nn.Module, _inputs: tuple[Any, ...], output: Any) -> None:
+    def hook(
+        name: str,
+    ) -> Callable[[torch.nn.Module, tuple[Any, ...], Any], None]:
+        def capture(
+            _module: torch.nn.Module, _inputs: tuple[Any, ...], output: Any
+        ) -> None:
             tensor = output[0] if isinstance(output, tuple) else output
             if not isinstance(tensor, torch.Tensor):
                 raise TypeError(f"capture {name!r} did not produce a tensor")
@@ -192,7 +228,10 @@ def _capture_forward(
         return capture
 
     handles = [core.embed_tokens.register_forward_hook(hook("embedding"))]
-    handles.extend(layer.register_forward_hook(hook(f"layer_{index:02d}")) for index, layer in enumerate(layers))
+    handles.extend(
+        layer.register_forward_hook(hook(f"layer_{index:02d}"))
+        for index, layer in enumerate(layers)
+    )
     handles.append(core.norm.register_forward_hook(hook("final_norm")))
     try:
         with torch.inference_mode():
@@ -203,9 +242,15 @@ def _capture_forward(
     finally:
         for handle in handles:
             handle.remove()
-    expected = ["embedding", *(f"layer_{index:02d}" for index in range(len(layers))), "final_norm"]
+    expected = [
+        "embedding",
+        *(f"layer_{index:02d}" for index in range(len(layers))),
+        "final_norm",
+    ]
     if list(captures) != expected:
-        raise RuntimeError(f"capture closure mismatch: got={list(captures)!r}, expected={expected!r}")
+        raise RuntimeError(
+            f"capture closure mismatch: got={list(captures)!r}, expected={expected!r}"
+        )
     logits_dtype = str(output.dtype).removeprefix("torch.")
     return output.detach().float().cpu(), captures, dtypes, logits_dtype
 
@@ -221,7 +266,9 @@ def _checkpoint_model_config(checkpoint: Path) -> dict[str, object]:
 
 
 def _source_revision(repo: Path) -> str:
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+    ).strip()
 
 
 def _scriptfile_sha256() -> str:
@@ -233,7 +280,9 @@ def _prompt_payload(tokenizer: Any) -> list[dict[str, object]]:
     for name, text in FIXED_PROMPTS:
         token_ids = tokenizer.encode(text, add_special_tokens=True)
         if len(token_ids) < 2:
-            raise ValueError(f"diagnostic prompt {name!r} encoded to fewer than two tokens")
+            raise ValueError(
+                f"diagnostic prompt {name!r} encoded to fewer than two tokens"
+            )
         payload.append(
             {
                 "name": name,
@@ -255,15 +304,23 @@ def _metric_number(row: dict[str, object], key: str) -> float:
 
 
 def _require_range(
-    row: dict[str, object], key: str, *, minimum: float, maximum: float | None = None
+    row: dict[str, object],
+    key: str,
+    *,
+    minimum: float,
+    maximum: float | None = None,
 ) -> float:
     value = _metric_number(row, key)
     if value < minimum or (maximum is not None and value > maximum):
-        raise ValueError(f"diagnostic metric {key!r} outside [{minimum}, {maximum}]: {value}")
+        raise ValueError(
+            f"diagnostic metric {key!r} outside [{minimum}, {maximum}]: {value}"
+        )
     return value
 
 
-def _aggregate(per_prompt: list[dict[str, object]], layer_order: list[str]) -> dict[str, object]:
+def _aggregate(
+    per_prompt: list[dict[str, object]], layer_order: list[str]
+) -> dict[str, object]:
     first_distribution = per_prompt[0].get("distribution")
     if not isinstance(first_distribution, dict):
         raise TypeError("diagnostic distribution row is malformed")
@@ -283,18 +340,31 @@ def _aggregate(per_prompt: list[dict[str, object]], layer_order: list[str]) -> d
         rows: list[dict[str, object]] = []
         for item in per_prompt:
             hidden = item.get("hidden_states")
-            if not isinstance(hidden, dict) or not isinstance(hidden.get(name), dict):
+            if not isinstance(hidden, dict) or not isinstance(
+                hidden.get(name), dict
+            ):
                 raise TypeError("diagnostic hidden-state row is malformed")
             rows.append(hidden[name])
         layers.append(
             {
                 "name": name,
-                "prompt_mean_relative_l2_error": sum(_metric_number(row, "relative_l2_error") for row in rows)
+                "prompt_mean_relative_l2_error": sum(
+                    _metric_number(row, "relative_l2_error") for row in rows
+                )
                 / len(rows),
-                "prompt_max_relative_l2_error": max(_metric_number(row, "relative_l2_error") for row in rows),
-                "prompt_mean_mean_abs_error": sum(_metric_number(row, "mean_abs_error") for row in rows) / len(rows),
-                "prompt_max_max_abs_error": max(_metric_number(row, "max_abs_error") for row in rows),
-                "prompt_mean_cosine_similarity": sum(_metric_number(row, "cosine_similarity") for row in rows)
+                "prompt_max_relative_l2_error": max(
+                    _metric_number(row, "relative_l2_error") for row in rows
+                ),
+                "prompt_mean_mean_abs_error": sum(
+                    _metric_number(row, "mean_abs_error") for row in rows
+                )
+                / len(rows),
+                "prompt_max_max_abs_error": max(
+                    _metric_number(row, "max_abs_error") for row in rows
+                ),
+                "prompt_mean_cosine_similarity": sum(
+                    _metric_number(row, "cosine_similarity") for row in rows
+                )
                 / len(rows),
             }
         )
@@ -309,16 +379,25 @@ def _validate_parent_binding(
     hf_manifest: dict[str, dict[str, object]],
     checkpoint_manifest: dict[str, dict[str, object]],
 ) -> None:
-    if parent.get("passed") is not False or parent.get("policy_id") != PARENT_PARITY_POLICY:
-        raise ValueError("parent evidence is not the approved failed parity result")
+    if (
+        parent.get("passed") is not False
+        or parent.get("policy_id") != PARENT_PARITY_POLICY
+    ):
+        raise ValueError(
+            "parent evidence is not the approved failed parity result"
+        )
     if Path(str(parent.get("hf_path"))).resolve(strict=True) != hf_path:
         raise ValueError("diagnostic HF path is not bound to parent parity")
     if Path(str(parent.get("checkpoint"))).resolve(strict=True) != checkpoint:
-        raise ValueError("diagnostic checkpoint path is not bound to parent parity")
+        raise ValueError(
+            "diagnostic checkpoint path is not bound to parent parity"
+        )
     if parent.get("hf_files") != hf_manifest:
         raise ValueError("diagnostic HF manifest differs from parent parity")
     if parent.get("checkpoint_files") != checkpoint_manifest:
-        raise ValueError("diagnostic checkpoint manifest differs from parent parity")
+        raise ValueError(
+            "diagnostic checkpoint manifest differs from parent parity"
+        )
 
 
 def run_diagnosis(
@@ -357,37 +436,52 @@ def run_diagnosis(
     hf.eval()
     hf_parameter_dtypes = _dtype_names(hf.parameters())
     if hf_parameter_dtypes != [REQUIRED_DTYPE]:
-        raise TypeError(f"HF parameters are not uniformly BF16: {hf_parameter_dtypes!r}")
+        raise TypeError(
+            f"HF parameters are not uniformly BF16: {hf_parameter_dtypes!r}"
+        )
     hf_results: dict[
         str, tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, str], str]
     ] = {}
     for prompt in prompts:
-        tokens = torch.tensor([prompt["token_ids"]], dtype=torch.long, device=device)
-        hf_results[str(prompt["name"])] = _capture_forward(hf, tokens, hf_model=True)
+        tokens = torch.tensor(
+            [prompt["token_ids"]], dtype=torch.long, device=device
+        )
+        hf_results[str(prompt["name"])] = _capture_forward(
+            hf, tokens, hf_model=True
+        )
     del hf
     gc.collect()
     torch.cuda.empty_cache()
 
     native, config, state = load_checkpoint(checkpoint, device=device)
     if not isinstance(native, TF):
-        raise TypeError(f"converted checkpoint is not a TF model: {type(native)!r}")
+        raise TypeError(
+            f"converted checkpoint is not a TF model: {type(native)!r}"
+        )
     if state.get("dtype") != REQUIRED_DTYPE:
         raise TypeError("converted checkpoint state is not BF16")
     native_parameter_dtypes = _dtype_names(native.parameters())
     if native_parameter_dtypes != [REQUIRED_DTYPE]:
-        raise TypeError(f"native parameters are not uniformly BF16: {native_parameter_dtypes!r}")
+        raise TypeError(
+            f"native parameters are not uniformly BF16: {native_parameter_dtypes!r}"
+        )
     native.eval()
 
     per_prompt: list[dict[str, object]] = []
     layer_order: list[str] | None = None
     for prompt in prompts:
         name = str(prompt["name"])
-        tokens = torch.tensor([prompt["token_ids"]], dtype=torch.long, device=device)
-        native_logits, native_hidden, native_dtypes, native_logits_dtype = _capture_forward(
-            native, tokens, hf_model=False
+        tokens = torch.tensor(
+            [prompt["token_ids"]], dtype=torch.long, device=device
+        )
+        native_logits, native_hidden, native_dtypes, native_logits_dtype = (
+            _capture_forward(native, tokens, hf_model=False)
         )
         hf_logits, hf_hidden, hf_dtypes, hf_logits_dtype = hf_results[name]
-        if hf_logits_dtype != REQUIRED_DTYPE or native_logits_dtype != "float32":
+        if (
+            hf_logits_dtype != REQUIRED_DTYPE
+            or native_logits_dtype != "float32"
+        ):
             raise TypeError(
                 f"diagnostic raw-logit dtype mismatch for {name}: "
                 f"hf={hf_logits_dtype!r}, native={native_logits_dtype!r}"
@@ -400,7 +494,9 @@ def run_diagnosis(
         if layer_order is None:
             layer_order = list(hf_hidden)
         elif layer_order != list(hf_hidden):
-            raise RuntimeError("hidden-state capture order changed across prompts")
+            raise RuntimeError(
+                "hidden-state capture order changed across prompts"
+            )
         per_prompt.append(
             {
                 **prompt,
@@ -408,7 +504,10 @@ def run_diagnosis(
                 "hf_logits_dtype": hf_logits_dtype,
                 "native_logits_dtype": native_logits_dtype,
                 "hidden_states": {
-                    stage: hidden_metrics(hf_hidden[stage], native_hidden[stage]) for stage in layer_order
+                    stage: hidden_metrics(
+                        hf_hidden[stage], native_hidden[stage]
+                    )
+                    for stage in layer_order
                 },
                 "hf_hidden_dtypes": hf_dtypes,
                 "native_hidden_dtypes": native_dtypes,
@@ -420,9 +519,13 @@ def run_diagnosis(
     hf_after = _file_manifest(hf_path, HF_PARITY_FILES)
     checkpoint_after = _file_manifest(checkpoint, CHECKPOINT_PARITY_FILES)
     if hf_before != hf_after or checkpoint_before != checkpoint_after:
-        raise RuntimeError("model/tokenizer/checkpoint artifacts changed during diagnosis")
+        raise RuntimeError(
+            "model/tokenizer/checkpoint artifacts changed during diagnosis"
+        )
     if torch.cuda.device_count() != 1:
-        raise RuntimeError(f"diagnosis requires exactly one visible GPU, got {torch.cuda.device_count()}")
+        raise RuntimeError(
+            f"diagnosis requires exactly one visible GPU, got {torch.cuda.device_count()}"
+        )
     gpu_name = torch.cuda.get_device_name(device)
     if "H100" not in gpu_name:
         raise RuntimeError(f"diagnosis requires an H100, got {gpu_name!r}")
@@ -491,7 +594,9 @@ def validate_diagnostic_evidence(
         "slurm_job_id",
     }
     if set(payload) != expected:
-        raise ValueError(f"diagnostic evidence field closure mismatch: {sorted(set(payload) ^ expected)!r}")
+        raise ValueError(
+            f"diagnostic evidence field closure mismatch: {sorted(set(payload) ^ expected)!r}"
+        )
     fixed = {
         "schema_version": SCHEMA_VERSION,
         "kind": EVIDENCE_KIND,
@@ -513,9 +618,13 @@ def validate_diagnostic_evidence(
         raise ValueError("diagnostic checkpoint path mismatch")
     if payload["hf_files"] != _file_manifest(hf_path, HF_PARITY_FILES):
         raise ValueError("diagnostic HF manifest mismatch")
-    if payload["checkpoint_files"] != _file_manifest(checkpoint, CHECKPOINT_PARITY_FILES):
+    if payload["checkpoint_files"] != _file_manifest(
+        checkpoint, CHECKPOINT_PARITY_FILES
+    ):
         raise ValueError("diagnostic checkpoint manifest mismatch")
-    if payload["parent_parity_path"] != str((checkpoint / "parity.json").resolve(strict=True)):
+    if payload["parent_parity_path"] != str(
+        (checkpoint / "parity.json").resolve(strict=True)
+    ):
         raise ValueError("diagnostic parent parity path mismatch")
     if file_sha256(checkpoint / "parity.json") != PARENT_PARITY_SHA256:
         raise ValueError("diagnostic parent parity bytes changed")
@@ -527,7 +636,9 @@ def validate_diagnostic_evidence(
         hf_path=hf_path,
         checkpoint=checkpoint,
         hf_manifest=cast(dict[str, dict[str, object]], payload["hf_files"]),
-        checkpoint_manifest=cast(dict[str, dict[str, object]], payload["checkpoint_files"]),
+        checkpoint_manifest=cast(
+            dict[str, dict[str, object]], payload["checkpoint_files"]
+        ),
     )
     if payload.get("hf_parameter_dtypes") != [REQUIRED_DTYPE]:
         raise ValueError("diagnostic HF parameter dtype mismatch")
@@ -540,9 +651,17 @@ def validate_diagnostic_evidence(
     if payload.get("model_config") != checkpoint_config:
         raise ValueError("diagnostic model config mismatch")
     num_layers = checkpoint_config.get("num_layers")
-    if isinstance(num_layers, bool) or not isinstance(num_layers, int) or num_layers <= 0:
+    if (
+        isinstance(num_layers, bool)
+        or not isinstance(num_layers, int)
+        or num_layers <= 0
+    ):
         raise ValueError("diagnostic model layer count is invalid")
-    layer_order = ["embedding", *(f"layer_{index:02d}" for index in range(num_layers)), "final_norm"]
+    layer_order = [
+        "embedding",
+        *(f"layer_{index:02d}" for index in range(num_layers)),
+        "final_norm",
+    ]
 
     prompts = payload.get("prompts")
     if not isinstance(prompts, list) or len(prompts) != len(FIXED_PROMPTS):
@@ -572,7 +691,9 @@ def validate_diagnostic_evidence(
         if item.get("text_sha256") != hashlib.sha256(text.encode()).hexdigest():
             raise ValueError("diagnostic prompt text hash mismatch")
         token_ids = item.get("token_ids")
-        if not isinstance(token_ids, list) or not all(type(value) is int for value in token_ids):
+        if not isinstance(token_ids, list) or not all(
+            type(value) is int for value in token_ids
+        ):
             raise ValueError("diagnostic token IDs malformed")
         if token_ids != tokenizer.encode(text, add_special_tokens=True):
             raise ValueError("diagnostic tokenizer replay mismatch")
@@ -580,14 +701,22 @@ def validate_diagnostic_evidence(
             raise ValueError("diagnostic token count mismatch")
         if item.get("token_ids_sha256") != _token_ids_sha256(token_ids):
             raise ValueError("diagnostic token hash mismatch")
-        if item.get("hf_logits_dtype") != REQUIRED_DTYPE or item.get("native_logits_dtype") != "float32":
+        if (
+            item.get("hf_logits_dtype") != REQUIRED_DTYPE
+            or item.get("native_logits_dtype") != "float32"
+        ):
             raise ValueError("diagnostic raw-logit dtype mismatch")
         distribution = item.get("distribution")
-        if not isinstance(distribution, dict) or set(distribution) != DISTRIBUTION_METRIC_KEYS:
+        if (
+            not isinstance(distribution, dict)
+            or set(distribution) != DISTRIBUTION_METRIC_KEYS
+        ):
             raise ValueError("diagnostic distribution metric closure mismatch")
         for key in DISTRIBUTION_METRIC_KEYS:
             if not math.isfinite(_metric_number(distribution, key)):
-                raise ValueError(f"diagnostic distribution metric {key!r} is non-finite")
+                raise ValueError(
+                    f"diagnostic distribution metric {key!r} is non-finite"
+                )
         for key in (
             "raw_max_abs_error",
             "raw_mean_abs_error",
@@ -602,7 +731,12 @@ def validate_diagnostic_evidence(
             "kl_hf_to_native_min",
         ):
             _require_range(distribution, key, minimum=0.0)
-        for key in ("total_variation_max", "total_variation_mean", "top1_match_fraction", "final_top1_match"):
+        for key in (
+            "total_variation_max",
+            "total_variation_mean",
+            "top1_match_fraction",
+            "final_top1_match",
+        ):
             _require_range(distribution, key, minimum=0.0, maximum=1.0)
         for mean_key, max_key in (
             ("raw_mean_abs_error", "raw_max_abs_error"),
@@ -612,8 +746,12 @@ def validate_diagnostic_evidence(
             ("kl_hf_to_native_mean", "kl_hf_to_native_max"),
             ("total_variation_mean", "total_variation_max"),
         ):
-            if _metric_number(distribution, mean_key) > _metric_number(distribution, max_key):
-                raise ValueError(f"diagnostic mean {mean_key!r} exceeds {max_key!r}")
+            if _metric_number(distribution, mean_key) > _metric_number(
+                distribution, max_key
+            ):
+                raise ValueError(
+                    f"diagnostic mean {mean_key!r} exceeds {max_key!r}"
+                )
         if not (
             _metric_number(distribution, "kl_hf_to_native_min")
             <= _metric_number(distribution, "kl_hf_to_native_mean")
@@ -621,15 +759,21 @@ def validate_diagnostic_evidence(
         ):
             raise ValueError("diagnostic KL min/mean/max ordering mismatch")
         hidden_states = item.get("hidden_states")
-        if not isinstance(hidden_states, dict) or set(hidden_states) != set(layer_order):
+        if not isinstance(hidden_states, dict) or set(hidden_states) != set(
+            layer_order
+        ):
             raise ValueError("diagnostic hidden-state stage closure mismatch")
         for stage in layer_order:
             row = hidden_states.get(stage)
             if not isinstance(row, dict) or set(row) != HIDDEN_METRIC_KEYS:
-                raise ValueError(f"diagnostic hidden metric closure mismatch at {stage}")
+                raise ValueError(
+                    f"diagnostic hidden metric closure mismatch at {stage}"
+                )
             for key in HIDDEN_METRIC_KEYS:
                 if not math.isfinite(_metric_number(row, key)):
-                    raise ValueError(f"diagnostic hidden metric {stage}.{key} is non-finite")
+                    raise ValueError(
+                        f"diagnostic hidden metric {stage}.{key} is non-finite"
+                    )
             for key in (
                 "max_abs_error",
                 "mean_abs_error",
@@ -639,26 +783,43 @@ def validate_diagnostic_evidence(
             ):
                 _require_range(row, key, minimum=0.0)
             _require_range(row, "cosine_similarity", minimum=-1.0, maximum=1.0)
-            if _metric_number(row, "mean_abs_error") > _metric_number(row, "max_abs_error"):
-                raise ValueError(f"diagnostic hidden mean exceeds max at {stage}")
+            if _metric_number(row, "mean_abs_error") > _metric_number(
+                row, "max_abs_error"
+            ):
+                raise ValueError(
+                    f"diagnostic hidden mean exceeds max at {stage}"
+                )
         for dtype_field in ("hf_hidden_dtypes", "native_hidden_dtypes"):
             dtypes = item.get(dtype_field)
             if not isinstance(dtypes, dict) or set(dtypes) != set(layer_order):
                 raise ValueError(f"diagnostic {dtype_field} closure mismatch")
             if set(dtypes.values()) != {REQUIRED_DTYPE}:
-                raise ValueError(f"diagnostic {dtype_field} is not uniformly BF16")
+                raise ValueError(
+                    f"diagnostic {dtype_field} is not uniformly BF16"
+                )
     recomputed_aggregate = _aggregate(prompts, layer_order)
     if payload.get("aggregate") != recomputed_aggregate:
-        raise ValueError("diagnostic aggregate does not match prompt-level evidence")
+        raise ValueError(
+            "diagnostic aggregate does not match prompt-level evidence"
+        )
     if payload.get("device") != "cuda" or payload.get("cuda_device_count") != 1:
         raise ValueError("diagnostic CUDA runtime metadata mismatch")
-    if payload.get("torch_version") != torch.__version__ or payload.get("torch_cuda_version") != torch.version.cuda:
+    if (
+        payload.get("torch_version") != torch.__version__
+        or payload.get("torch_cuda_version") != torch.version.cuda
+    ):
         raise ValueError("diagnostic PyTorch/CUDA version mismatch")
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
-        raise ValueError("diagnostic validator requires the live one-GPU allocation")
+        raise ValueError(
+            "diagnostic validator requires the live one-GPU allocation"
+        )
     gpu_name = payload.get("gpu_name")
     live_gpu_name = torch.cuda.get_device_name(0)
-    if not isinstance(gpu_name, str) or "H100" not in gpu_name or gpu_name != live_gpu_name:
+    if (
+        not isinstance(gpu_name, str)
+        or "H100" not in gpu_name
+        or gpu_name != live_gpu_name
+    ):
         raise ValueError("diagnostic GPU metadata does not match the live H100")
     slurm_job_id = payload.get("slurm_job_id")
     if not isinstance(slurm_job_id, str) or not slurm_job_id.isdigit():
@@ -712,10 +873,20 @@ def main() -> None:
             checkpoint=args.checkpoint,
             source_revision=args.source_revision,
         )
-        print(json.dumps({"status": "validated", "output": str(args.output.resolve(strict=True))}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "status": "validated",
+                    "output": str(args.output.resolve(strict=True)),
+                },
+                sort_keys=True,
+            )
+        )
         return
     if args.output.exists():
-        raise FileExistsError(f"refusing to overwrite diagnostic output: {args.output}")
+        raise FileExistsError(
+            f"refusing to overwrite diagnostic output: {args.output}"
+        )
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     device = torch.device("cuda")

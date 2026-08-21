@@ -11,7 +11,11 @@ import torch
 import triton
 import triton.language as tl
 
-from gcw.performance.kernel_manifest import CACHE_COPY_BLOCK, CACHE_FEATURE_BLOCK, CACHE_NUM_WARPS
+from gcw.performance.kernel_manifest import (
+    CACHE_COPY_BLOCK,
+    CACHE_FEATURE_BLOCK,
+    CACHE_NUM_WARPS,
+)
 
 
 @triton.jit
@@ -40,14 +44,23 @@ def _gather_per_cache_head_bits_kernel(
     head = cache_head % HEADS
 
     source_position = tl.load(
-        indices + batch * index_stride_batch + cache_head * index_stride_head + selected_index * index_stride_selected
+        indices
+        + batch * index_stride_batch
+        + cache_head * index_stride_head
+        + selected_index * index_stride_selected
     )
     features = feature_block * BLOCK + tl.arange(0, BLOCK)
     valid = features < 2 * HEAD_DIM
     dimension = features % HEAD_DIM
-    source_offset = (((layer * BATCH + batch) * HEADS + head) * history + source_position) * HEAD_DIM + dimension
-    key_bits = tl.load(keys + source_offset, mask=valid & (features < HEAD_DIM), other=0)
-    value_bits = tl.load(values + source_offset, mask=valid & (features >= HEAD_DIM), other=0)
+    source_offset = (
+        ((layer * BATCH + batch) * HEADS + head) * history + source_position
+    ) * HEAD_DIM + dimension
+    key_bits = tl.load(
+        keys + source_offset, mask=valid & (features < HEAD_DIM), other=0
+    )
+    value_bits = tl.load(
+        values + source_offset, mask=valid & (features >= HEAD_DIM), other=0
+    )
     bits = tl.where(features < HEAD_DIM, key_bits, value_bits)
     output_offset = row * (2 * HEAD_DIM) + features
     tl.store(output + output_offset, bits, mask=valid)
@@ -90,9 +103,15 @@ def _gather_shared_kv_bits_kernel(
     head = within_stream // HEAD_DIM
     dimension = within_stream % HEAD_DIM
     source_position = tl.load(indices + batch * SELECTED + selected_index)
-    source_offset = (((layer * BATCH + batch) * HEADS + head) * history + source_position) * HEAD_DIM + dimension
-    key_bits = tl.load(keys + source_offset, mask=valid & (stream == 0), other=0)
-    value_bits = tl.load(values + source_offset, mask=valid & (stream == 1), other=0)
+    source_offset = (
+        ((layer * BATCH + batch) * HEADS + head) * history + source_position
+    ) * HEAD_DIM + dimension
+    key_bits = tl.load(
+        keys + source_offset, mask=valid & (stream == 0), other=0
+    )
+    value_bits = tl.load(
+        values + source_offset, mask=valid & (stream == 1), other=0
+    )
     bits = tl.where(stream == 0, key_bits, value_bits)
     if GLOBAL_LAYOUT:
         output_offset = row * (LAYERS * 2 * HEADS * HEAD_DIM) + features
@@ -102,11 +121,26 @@ def _gather_shared_kv_bits_kernel(
 
 
 @triton.jit
-def _copy_kv_bits_kernel(source_keys, source_values, target_keys, target_values, elements, BLOCK: tl.constexpr):
+def _copy_kv_bits_kernel(
+    source_keys,
+    source_values,
+    target_keys,
+    target_values,
+    elements,
+    BLOCK: tl.constexpr,
+):
     offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     valid = offsets < elements
-    tl.store(target_keys + offsets, tl.load(source_keys + offsets, mask=valid, other=0), mask=valid)
-    tl.store(target_values + offsets, tl.load(source_values + offsets, mask=valid, other=0), mask=valid)
+    tl.store(
+        target_keys + offsets,
+        tl.load(source_keys + offsets, mask=valid, other=0),
+        mask=valid,
+    )
+    tl.store(
+        target_values + offsets,
+        tl.load(source_values + offsets, mask=valid, other=0),
+        mask=valid,
+    )
 
 
 @triton.jit
@@ -149,7 +183,9 @@ def _scatter_shared_update_bits_kernel(
     head = within_stream // HEAD_DIM
     dimension = within_stream % HEAD_DIM
     target_position = tl.load(indices + batch * SELECTED + selected_index)
-    cache_offset = (((layer * BATCH + batch) * HEADS + head) * history + target_position) * HEAD_DIM + dimension
+    cache_offset = (
+        ((layer * BATCH + batch) * HEADS + head) * history + target_position
+    ) * HEAD_DIM + dimension
     bits = 0 if ZERO else tl.load(update + update_offset, mask=valid, other=0)
     tl.store(target_keys + cache_offset, bits, mask=valid & (stream == 0))
     tl.store(target_values + cache_offset, bits, mask=valid & (stream == 1))
@@ -194,7 +230,9 @@ def _scatter_shared_update_kernel(
     head = within_stream // HEAD_DIM
     dimension = within_stream % HEAD_DIM
     target_position = tl.load(indices + batch * SELECTED + selected_index)
-    cache_offset = (((layer * BATCH + batch) * HEADS + head) * history + target_position) * HEAD_DIM + dimension
+    cache_offset = (
+        ((layer * BATCH + batch) * HEADS + head) * history + target_position
+    ) * HEAD_DIM + dimension
     value = tl.load(update + update_offset, mask=valid, other=0.0)
     tl.store(target_keys + cache_offset, value, mask=valid & (stream == 0))
     tl.store(target_values + cache_offset, value, mask=valid & (stream == 1))
@@ -239,7 +277,9 @@ def _scatter_shared_kv_grad_bits_kernel(
     head = within_stream // HEAD_DIM
     dimension = within_stream % HEAD_DIM
     source_position = tl.load(indices + batch * SELECTED + selected_index)
-    cache_offset = (((layer * BATCH + batch) * HEADS + head) * history + source_position) * HEAD_DIM + dimension
+    cache_offset = (
+        ((layer * BATCH + batch) * HEADS + head) * history + source_position
+    ) * HEAD_DIM + dimension
     bits = tl.load(grad_output + output_offset, mask=valid, other=0)
     tl.store(grad_keys + cache_offset, bits, mask=valid & (stream == 0))
     tl.store(grad_values + cache_offset, bits, mask=valid & (stream == 1))
@@ -271,13 +311,20 @@ def _scatter_per_cache_head_grad_bits_kernel(
     head = cache_head % HEADS
 
     source_position = tl.load(
-        indices + batch * index_stride_batch + cache_head * index_stride_head + selected_index * index_stride_selected
+        indices
+        + batch * index_stride_batch
+        + cache_head * index_stride_head
+        + selected_index * index_stride_selected
     )
     dimensions = feature_block * BLOCK + tl.arange(0, BLOCK)
     valid = dimensions < HEAD_DIM
-    cache_offset = (((layer * BATCH + batch) * HEADS + head) * history + source_position) * HEAD_DIM + dimensions
+    cache_offset = (
+        ((layer * BATCH + batch) * HEADS + head) * history + source_position
+    ) * HEAD_DIM + dimensions
     output_row_offset = row * (2 * HEAD_DIM)
-    key_bits = tl.load(grad_output + output_row_offset + dimensions, mask=valid, other=0)
+    key_bits = tl.load(
+        grad_output + output_row_offset + dimensions, mask=valid, other=0
+    )
     value_bits = tl.load(
         grad_output + output_row_offset + HEAD_DIM + dimensions,
         mask=valid,
@@ -359,7 +406,9 @@ def scatter_shared_update_bits(
     layers, batch, heads, history, head_dim = target_keys.shape
     selected = indices.shape[1]
     block = CACHE_FEATURE_BLOCK
-    features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    features = (
+        layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    )
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
     _scatter_shared_update_bits_kernel[grid](
@@ -392,7 +441,9 @@ def scatter_shared_update(
     layers, batch, heads, history, head_dim = target_keys.shape
     selected = indices.shape[1]
     block = CACHE_FEATURE_BLOCK
-    features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    features = (
+        layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    )
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
     _scatter_shared_update_kernel[grid](
@@ -429,7 +480,9 @@ def gather_shared_kv_bits(
     )
     output = torch.empty(shape, dtype=torch.int16, device=keys.device)
     block = CACHE_FEATURE_BLOCK
-    features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    features = (
+        layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    )
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
     _gather_shared_kv_bits_kernel[grid](
@@ -460,10 +513,14 @@ def scatter_shared_kv_grad_bits(
     """Launch inverse raw-bit movement for BT/BGT gather backward."""
     layers, batch, heads, history, head_dim = cache_shape
     selected = indices.shape[1]
-    grad_keys = torch.zeros(cache_shape, dtype=torch.int16, device=grad_output.device)
+    grad_keys = torch.zeros(
+        cache_shape, dtype=torch.int16, device=grad_output.device
+    )
     grad_values = torch.zeros_like(grad_keys)
     block = CACHE_FEATURE_BLOCK
-    features = layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    features = (
+        layers * 2 * heads * head_dim if global_layout else 2 * heads * head_dim
+    )
     rows = batch * selected if global_layout else layers * batch * selected
     grid = (triton.cdiv(features, block), rows)
     _scatter_shared_kv_grad_bits_kernel[grid](
@@ -492,7 +549,9 @@ def scatter_per_cache_head_grad_bits(
     """Launch the inverse raw-bit movement used by gather backward."""
     layers, batch, heads, history, head_dim = cache_shape
     selected = indices.shape[2]
-    grad_keys = torch.zeros(cache_shape, dtype=torch.int16, device=grad_output.device)
+    grad_keys = torch.zeros(
+        cache_shape, dtype=torch.int16, device=grad_output.device
+    )
     grad_values = torch.zeros_like(grad_keys)
     block = CACHE_FEATURE_BLOCK
     grid = (triton.cdiv(head_dim, block), batch * layers * heads * selected)

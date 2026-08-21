@@ -24,7 +24,13 @@ from scripts.benchmarks.adaptive_trace import (
     active_trace_scope,
     trace_cache_events,
 )
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, ResumeConfig, TrainConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    ModelConfig,
+    ResumeConfig,
+    TrainConfig,
+)
 from gcw.data.training import SFTCursor, TrainingBatch
 from gcw.models.cache_processors import standard as standard_module
 from gcw.models.cache_processors.base import cache_processor_recomputation
@@ -52,14 +58,22 @@ class _PairStream:
         pair = self.calls
         x = torch.stack(
             (
-                torch.arange(width, dtype=torch.long).add(pair + 1).remainder(29).add(1),
-                torch.arange(width, dtype=torch.long).add(pair + 3).remainder(29).add(1),
+                torch.arange(width, dtype=torch.long)
+                .add(pair + 1)
+                .remainder(29)
+                .add(1),
+                torch.arange(width, dtype=torch.long)
+                .add(pair + 3)
+                .remainder(29)
+                .add(1),
             )
         )
         y = x.clone()
         y[:, : max(1, width // 2)] = -100
         self.calls += 1
-        return TrainingBatch(x=x, y=y, attention_mask=torch.ones_like(x, dtype=torch.bool))
+        return TrainingBatch(
+            x=x, y=y, attention_mask=torch.ones_like(x, dtype=torch.bool)
+        )
 
 
 class _TracedPairModel(torch.nn.Module):
@@ -76,14 +90,26 @@ class _TracedPairModel(torch.nn.Module):
 
         for boundary in range(2, batch.x.shape[1], 2):
 
-            def cache_region(values: torch.Tensor, end: int = boundary) -> torch.Tensor:
+            def cache_region(
+                values: torch.Tensor, end: int = boundary
+            ) -> torch.Tensor:
                 prefix = values[:, :end]
                 cache_values = prefix[:, None, :, None]
-                scores = torch.arange(end, dtype=torch.float32, device=values.device).expand(values.shape[0], -1)
-                cache = CacheState(keys=[cache_values * 0.5], values=[cache_values], scores=scores)
+                scores = torch.arange(
+                    end, dtype=torch.float32, device=values.device
+                ).expand(values.shape[0], -1)
+                cache = CacheState(
+                    keys=[cache_values * 0.5],
+                    values=[cache_values],
+                    scores=scores,
+                )
                 indices = cache.select_indices(process_every=2, topk=1)
-                selected = torch.gather(cache.values[0], 2, indices[:, None, :, None])
-                cache = standard_module.scatter_cache_values(cache, indices, (selected + self.scale).unsqueeze(0))
+                selected = torch.gather(
+                    cache.values[0], 2, indices[:, None, :, None]
+                )
+                cache = standard_module.scatter_cache_values(
+                    cache, indices, (selected + self.scale).unsqueeze(0)
+                )
                 return cache.values[0].sum(dim=(1, 2, 3))
 
             update = checkpoint(
@@ -91,9 +117,14 @@ class _TracedPairModel(torch.nn.Module):
                 signal,
                 use_reentrant=False,
                 preserve_rng_state=True,
-                context_fn=lambda: (nullcontext(), cache_processor_recomputation()),
+                context_fn=lambda: (
+                    nullcontext(),
+                    cache_processor_recomputation(),
+                ),
             )
-            has_future_source_tokens = batch.attention_mask[:, boundary:].any(dim=1)
+            has_future_source_tokens = batch.attention_mask[:, boundary:].any(
+                dim=1
+            )
             row_values = row_values + update * has_future_source_tokens * 0.001
 
         target = batch.y.clamp_min(0).float().sum(dim=1) * 0.01
@@ -124,7 +155,9 @@ def _run_tiny(widths: list[int], *, steps: int = 1) -> dict[str, object]:
         ),
         reserved_steps=reservations,
         pair_loss=lambda model, batch: model(batch),
-        optimizer_factory=lambda model: torch.optim.AdamW(model.parameters(), lr=3e-4),
+        optimizer_factory=lambda model: torch.optim.AdamW(
+            model.parameters(), lr=3e-4
+        ),
         adaptive_policy=_policy(),
         process_every=2,
         required_event_operations=("select", "write_v"),
@@ -132,7 +165,9 @@ def _run_tiny(widths: list[int], *, steps: int = 1) -> dict[str, object]:
     )
 
 
-def test_trace_context_restores_symbols_and_aligns_checkpoint_recomputation() -> None:
+def test_trace_context_restores_symbols_and_aligns_checkpoint_recomputation() -> (
+    None
+):
     original_select = CacheState.select_indices
     original_scatter = standard_module.scatter_cache_values
     model = _TracedPairModel()
@@ -148,7 +183,11 @@ def test_trace_context_restores_symbols_and_aligns_checkpoint_recomputation() ->
     )
     recorder.expect_scope(scope)
 
-    with trace_cache_events(recorder), recorder.bind_scope(scope), active_trace_scope(scope):
+    with (
+        trace_cache_events(recorder),
+        recorder.bind_scope(scope),
+        active_trace_scope(scope),
+    ):
         model(batch).sum().backward()
 
     assert CacheState.select_indices is original_select
@@ -180,7 +219,10 @@ def test_trace_records_triton_writeback_at_exact_cache_boundary(
     monkeypatch.setattr(
         standard_module,
         "triton_scatter_shared_kv",
-        lambda old_keys, old_values, _indices, _update, **_kwargs: (old_keys, old_values),
+        lambda old_keys, old_values, _indices, _update, **_kwargs: (
+            old_keys,
+            old_values,
+        ),
     )
     with trace_cache_events(recorder), recorder.bind_scope(scope):
         recorder.record("select", cache, indices)
@@ -194,7 +236,9 @@ def test_trace_records_triton_writeback_at_exact_cache_boundary(
     assert recorder.coverage()["complete"] is True
 
 
-def test_recorder_local_scope_is_independent_of_contextvar_propagation() -> None:
+def test_recorder_local_scope_is_independent_of_contextvar_propagation() -> (
+    None
+):
     recorder = CacheEventRecorder(("select", "write_v"))
     scope = TraceScope(
         step=0,
@@ -212,7 +256,9 @@ def test_recorder_local_scope_is_independent_of_contextvar_propagation() -> None
         recorder.record("select", cache, destinations)
         recorder.record("write_v", cache, destinations)
     assert recorder.coverage()["complete"] is True
-    with pytest.raises(RuntimeError, match="outside an active parity trace scope"):
+    with pytest.raises(
+        RuntimeError, match="outside an active parity trace scope"
+    ):
         recorder.record("select", cache, destinations)
 
 
@@ -222,7 +268,9 @@ def test_group_shape_selection_mismatch_is_an_unconditional_parity_failure(
     """Numeric tolerances can never admit changed semantic cache decisions."""
     original_select = CacheState.select_indices
 
-    def shape_sensitive_select(state: CacheState, process_every: int = 64, topk: int = 32) -> torch.Tensor:
+    def shape_sensitive_select(
+        state: CacheState, process_every: int = 64, topk: int = 32
+    ) -> torch.Tensor:
         indices = original_select(state, process_every=process_every, topk=topk)
         if state.scores.shape[0] > 2:
             indices = indices.clone()
@@ -240,7 +288,9 @@ def test_group_shape_selection_mismatch_is_an_unconditional_parity_failure(
         assert comparison["passed"] is False
 
 
-def test_variable_width_group_padding_is_classified_trimmed_and_semantically_aligned() -> None:
+def test_variable_width_group_padding_is_classified_trimmed_and_semantically_aligned() -> (
+    None
+):
     torch.manual_seed(92)
     widths = [4, 8] * 16
     report = _run_tiny(widths)
@@ -255,23 +305,39 @@ def test_variable_width_group_padding_is_classified_trimmed_and_semantically_ali
     padding = [event for event in candidate_events if event["padding_only"]]
     assert padding
     assert all(event["destinations"] == () for event in padding)
-    assert all(event["cache_boundary"] >= event["source_padded_width"] for event in padding)
+    assert all(
+        event["cache_boundary"] >= event["source_padded_width"]
+        for event in padding
+    )
     json.dumps(report, allow_nan=False)
 
 
-def test_checkpoint_replays_align_by_boundary_when_backward_order_is_reversed() -> None:
+def test_checkpoint_replays_align_by_boundary_when_backward_order_is_reversed() -> (
+    None
+):
     report = _run_tiny([8] * 32)
     recomputation = report["variants"][0]["steps"][0]["recomputation"]
     assert recomputation["passed"] is True
-    assert recomputation["expected_replay_count"] == recomputation["actual_replay_count"]
+    assert (
+        recomputation["expected_replay_count"]
+        == recomputation["actual_replay_count"]
+    )
     replay_events = [
         event
         for event in report["variants"][0]["steps"][0]["events"]
-        if event["phase"] == "recomputation" and event["row_key"].endswith("pair-00/row-0")
+        if event["phase"] == "recomputation"
+        and event["row_key"].endswith("pair-00/row-0")
     ]
-    boundaries = [event["cache_boundary"] for event in replay_events if event["operation"] == "select"]
+    boundaries = [
+        event["cache_boundary"]
+        for event in replay_events
+        if event["operation"] == "select"
+    ]
     assert boundaries == sorted(boundaries, reverse=True)
-    assert all(event["recomputation_of"] == event["stable_event_id"] for event in replay_events)
+    assert all(
+        event["recomputation_of"] == event["stable_event_id"]
+        for event in replay_events
+    )
 
 
 def test_no_recomputation_only_passes_when_not_expected() -> None:
@@ -297,7 +363,12 @@ def test_no_recomputation_only_passes_when_not_expected() -> None:
 
 
 def test_near_zero_wrong_gradient_fails_strict_absolute_gate() -> None:
-    tolerance = VectorTolerance(relative_l2=1.0, minimum_cosine=-1.0, near_zero_norm=1e-10, near_zero_atol=1e-9)
+    tolerance = VectorTolerance(
+        relative_l2=1.0,
+        minimum_cosine=-1.0,
+        near_zero_norm=1e-10,
+        near_zero_atol=1e-9,
+    )
     comparison = _compare_vector_family(
         {"zero_grad": torch.zeros(8)},
         {"zero_grad": torch.full((8,), 1e-6)},
@@ -359,19 +430,31 @@ def _real_cli_config(variant: str) -> TrainConfig:
 
 
 @pytest.mark.parametrize("variant", ["bt", "bgt"])
-@pytest.mark.parametrize("variant_set", ["adaptive", "fixed_regional", "checkpoint_threshold", "triton_cache"])
+@pytest.mark.parametrize(
+    "variant_set",
+    ["adaptive", "fixed_regional", "checkpoint_threshold", "triton_cache"],
+)
 def test_real_tiny_bt_bgt_cli_integration(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, variant: str, variant_set: str
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    variant: str,
+    variant_set: str,
 ) -> None:
     config = _real_cli_config(variant)
-    if variant_set in {"fixed_regional", "checkpoint_threshold", "triton_cache"}:
+    if variant_set in {
+        "fixed_regional",
+        "checkpoint_threshold",
+        "triton_cache",
+    }:
         config.performance = PerformanceConfig()
     if variant_set == "checkpoint_threshold":
         config.activation_checkpoint_windows = 2
         config.activation_checkpoint_min_padded_sequence_length = 4
     config_path = tmp_path / f"{variant}-{variant_set}.yaml"
     config_path.write_text("test: integration\n", encoding="utf-8")
-    monkeypatch.setattr(parity_module, "load_train_config", lambda _path: config)
+    monkeypatch.setattr(
+        parity_module, "load_train_config", lambda _path: config
+    )
     monkeypatch.setattr(
         parity_module,
         "repository_source_identity",
@@ -388,9 +471,19 @@ def test_real_tiny_bt_bgt_cli_integration(
     )
     # CPU integration exercises the real model and CLI wiring while substituting
     # eager regions for CUDA compilation, which remains the opt-in GPU gate.
-    monkeypatch.setattr(parity_module, "_temporary_environment", lambda _updates: nullcontext())
-    monkeypatch.setattr(parity_module, "configure_qwen3_backbone_chunk_backend", lambda *_args: None)
-    monkeypatch.setattr(parity_module, "configure_triton_cache_movement", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        parity_module, "_temporary_environment", lambda _updates: nullcontext()
+    )
+    monkeypatch.setattr(
+        parity_module,
+        "configure_qwen3_backbone_chunk_backend",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        parity_module,
+        "configure_triton_cache_movement",
+        lambda *_args, **_kwargs: None,
+    )
     payload = _real_model_cli(
         argparse.Namespace(
             train_config=config_path,
@@ -399,7 +492,9 @@ def test_real_tiny_bt_bgt_cli_integration(
             device="cpu",
             require_resume_evidence=False,
             variant_set=variant_set,
-            candidate_checkpoint_min_padded_sequence_length=(9 if variant_set == "checkpoint_threshold" else None),
+            candidate_checkpoint_min_padded_sequence_length=(
+                9 if variant_set == "checkpoint_threshold" else None
+            ),
         )
     )
     assert payload["passed"] is True
@@ -408,21 +503,32 @@ def test_real_tiny_bt_bgt_cli_integration(
     if variant_set == "adaptive":
         expected_candidates = ["adaptive_eager", "adaptive_compiled"]
     elif variant_set == "fixed_regional":
-        expected_candidates = ["fixed_batch2_compiled", "fixed_batch2_compile_full_windows"]
+        expected_candidates = [
+            "fixed_batch2_compiled",
+            "fixed_batch2_compile_full_windows",
+        ]
     elif variant_set == "triton_cache":
         expected_candidates = ["fixed_batch2_triton_cache"]
     else:
         expected_candidates = ["fixed_batch2_checkpoint_candidate"]
-    assert [comparison["candidate"] for comparison in payload["comparisons"]] == expected_candidates
+    assert [
+        comparison["candidate"] for comparison in payload["comparisons"]
+    ] == expected_candidates
     assert payload["production_resume_gate"]["available"] is False
-    assert payload["comparisons"][0]["steps"][0]["cache_events"]["reference_coverage"]["complete"]
+    assert payload["comparisons"][0]["steps"][0]["cache_events"][
+        "reference_coverage"
+    ]["complete"]
 
 
-def test_cli_fail_closed_resume_request_and_step_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cli_fail_closed_resume_request_and_step_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = _real_cli_config("bt")
     config_path = tmp_path / "bt.yaml"
     config_path.write_text("test: validation\n", encoding="utf-8")
-    monkeypatch.setattr(parity_module, "load_train_config", lambda _path: config)
+    monkeypatch.setattr(
+        parity_module, "load_train_config", lambda _path: config
+    )
     monkeypatch.setattr(
         parity_module,
         "repository_source_identity",
@@ -432,15 +538,23 @@ def test_cli_fail_closed_resume_request_and_step_limit(monkeypatch: pytest.Monke
             "source_tree_sha256": "1" * 64,
         },
     )
-    base = dict(train_config=config_path, output=tmp_path / "out.json", device="cpu")
+    base = dict(
+        train_config=config_path, output=tmp_path / "out.json", device="cpu"
+    )
     with pytest.raises(ValueError, match="resume evidence is unavailable"):
-        _real_model_cli(argparse.Namespace(**base, steps=1, require_resume_evidence=True))
+        _real_model_cli(
+            argparse.Namespace(**base, steps=1, require_resume_evidence=True)
+        )
     with pytest.raises(ValueError, match="no greater than train max_steps"):
-        _real_model_cli(argparse.Namespace(**base, steps=2, require_resume_evidence=False))
+        _real_model_cli(
+            argparse.Namespace(**base, steps=2, require_resume_evidence=False)
+        )
 
     config.resume = ResumeConfig(checkpoint="unused")
     with pytest.raises(ValueError, match="rejects training resume configs"):
-        _real_model_cli(argparse.Namespace(**base, steps=1, require_resume_evidence=False))
+        _real_model_cli(
+            argparse.Namespace(**base, steps=1, require_resume_evidence=False)
+        )
     config.resume = None
     monkeypatch.setattr(
         parity_module,
@@ -452,7 +566,9 @@ def test_cli_fail_closed_resume_request_and_step_limit(monkeypatch: pytest.Monke
         },
     )
     with pytest.raises(ValueError, match="clean source tree"):
-        _real_model_cli(argparse.Namespace(**base, steps=1, require_resume_evidence=False))
+        _real_model_cli(
+            argparse.Namespace(**base, steps=1, require_resume_evidence=False)
+        )
 
 
 def test_formal_harness_fails_closed_on_ambiguous_variants() -> None:

@@ -15,7 +15,9 @@ from gcw.performance.cuda_graphs import (
 )
 
 
-def test_tensor_graph_signature_binds_shape_stride_dtype_device_and_grad() -> None:
+def test_tensor_graph_signature_binds_shape_stride_dtype_device_and_grad() -> (
+    None
+):
     contiguous = torch.zeros(2, 3, requires_grad=True)
     transposed = torch.zeros(3, 2).t()
     first = tensor_graph_signature("region", (contiguous,))
@@ -52,5 +54,9 @@ def test_cuda_graph_runtime_is_external_to_copy_and_state_dict() -> None:
     owner = nn.Linear(3, 2)
     copied = copy.deepcopy(owner)
     assert owner.state_dict().keys() == copied.state_dict().keys()
-    assert cuda_graph_capture_stats(owner) == cuda_graph_capture_stats(copied) == ()
+    assert (
+        cuda_graph_capture_stats(owner)
+        == cuda_graph_capture_stats(copied)
+        == ()
+    )
     clear_cuda_graph_runtime(owner)

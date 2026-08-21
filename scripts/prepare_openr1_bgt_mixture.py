@@ -15,8 +15,10 @@ from datasets import load_dataset
 from gcw.data.sft import iter_jsonl
 from gcw.data.tokenizers import get_tokenizer
 
-
-TRACE_RE = re.compile(r"^\s*<think>\s*(?P<reasoning>.*?)\s*</think>\s*(?P<answer>.+?)\s*$", re.DOTALL)
+TRACE_RE = re.compile(
+    r"^\s*<think>\s*(?P<reasoning>.*?)\s*</think>\s*(?P<answer>.+?)\s*$",
+    re.DOTALL,
+)
 
 
 def sha256_bytes(payload: bytes) -> str:
@@ -33,7 +35,9 @@ def canonical_prompt(value: object) -> str:
 
 def _atomic_replace(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=f".{path.name}.", delete=False
+    ) as handle:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
@@ -60,11 +64,17 @@ def _first_flag(value: object) -> bool | None:
 def _load_exclusion_hashes(path: Path | None) -> set[str]:
     if path is None:
         return set()
-    payload = json.loads(path.read_text(encoding="utf-8")) if path.suffix == ".json" else None
+    payload = (
+        json.loads(path.read_text(encoding="utf-8"))
+        if path.suffix == ".json"
+        else None
+    )
     hashes: set[str] = set()
     if isinstance(payload, dict):
         for row in payload.get("sample_manifest", []):
-            if isinstance(row, Mapping) and isinstance(row.get("prompt_hash"), str):
+            if isinstance(row, Mapping) and isinstance(
+                row.get("prompt_hash"), str
+            ):
                 hashes.add(row["prompt_hash"])
         for value in payload.get("prompt_hashes", []):
             if isinstance(value, str):
@@ -81,14 +91,20 @@ def _load_exclusion_hashes(path: Path | None) -> set[str]:
         if isinstance(row, str):
             hashes.add(row)
         elif isinstance(row, Mapping):
-            for key in ("prompt_hash", "normalized_prompt_text_sha256", "problem_sha256"):
+            for key in (
+                "prompt_hash",
+                "normalized_prompt_text_sha256",
+                "problem_sha256",
+            ):
                 value = row.get(key)
                 if isinstance(value, str):
                     hashes.add(value)
     return hashes
 
 
-def _render_lengths(tokenizer: Any, prompt: str, answer: str, *, enable_thinking: bool) -> tuple[int, int, int]:
+def _render_lengths(
+    tokenizer: Any, prompt: str, answer: str, *, enable_thinking: bool
+) -> tuple[int, int, int]:
     prompt_ids = tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}],
         tokenize=True,
@@ -99,13 +115,17 @@ def _render_lengths(tokenizer: Any, prompt: str, answer: str, *, enable_thinking
     return len(prompt_ids), len(answer_ids), len(prompt_ids) + len(answer_ids)
 
 
-def _batch_encode(tokenizer: Any, texts: list[str], *, batch_size: int = 512) -> list[list[int]]:
+def _batch_encode(
+    tokenizer: Any, texts: list[str], *, batch_size: int = 512
+) -> list[list[int]]:
     encoder = getattr(tokenizer, "enc", None)
     backend = getattr(encoder, "backend_tokenizer", None)
     encoded: list[list[int]] = []
     if backend is not None:
         for start in range(0, len(texts), batch_size):
-            values = backend.encode_batch(texts[start : start + batch_size], add_special_tokens=False)
+            values = backend.encode_batch(
+                texts[start : start + batch_size], add_special_tokens=False
+            )
             encoded.extend([list(item.ids) for item in values])
         return encoded
     if callable(encoder):
@@ -115,7 +135,9 @@ def _batch_encode(tokenizer: Any, texts: list[str], *, batch_size: int = 512) ->
                 add_special_tokens=False,
                 return_attention_mask=False,
             )
-            values = result["input_ids"] if isinstance(result, Mapping) else result
+            values = (
+                result["input_ids"] if isinstance(result, Mapping) else result
+            )
             encoded.extend([list(ids) for ids in values])
         return encoded
     return [tokenizer.encode(text) for text in texts]
@@ -135,15 +157,21 @@ def _openmath_records(
         if index >= limit:
             break
         prompt = canonical_prompt(row.get("prompt") or row.get("problem"))
-        answer = str(row.get("answer") or row.get("generated_solution") or "").strip()
+        answer = str(
+            row.get("answer") or row.get("generated_solution") or ""
+        ).strip()
         if not prompt or not answer:
             counts["missing_prompt_or_answer"] += 1
             continue
         prompt_hash = sha256_text(prompt)
         hashes.add(prompt_hash)
         raw_records.append((index, row, prompt, answer, prompt_hash))
-    answer_token_ids = _batch_encode(tokenizer, [item[3] for item in raw_records])
-    for (index, row, prompt, answer, prompt_hash), answer_ids in zip(raw_records, answer_token_ids):
+    answer_token_ids = _batch_encode(
+        tokenizer, [item[3] for item in raw_records]
+    )
+    for (index, row, prompt, answer, prompt_hash), answer_ids in zip(
+        raw_records, answer_token_ids
+    ):
         answer_tokens = len(answer_ids) + 1
         record = dict(row)
         record.update(
@@ -167,13 +195,20 @@ def _openmath_records(
     return records, hashes, dict(counts)
 
 
-def _trace_record(row: Mapping[str, Any]) -> tuple[str, str, str] | tuple[None, str, str]:
+def _trace_record(
+    row: Mapping[str, Any],
+) -> tuple[str, str, str] | tuple[None, str, str]:
     messages = row.get("messages")
     if not isinstance(messages, list) or len(messages) < 2:
         return None, "missing_messages", ""
     user = messages[-2] if isinstance(messages[-2], Mapping) else None
     assistant = messages[-1] if isinstance(messages[-1], Mapping) else None
-    if not user or user.get("role") != "user" or not assistant or assistant.get("role") != "assistant":
+    if (
+        not user
+        or user.get("role") != "user"
+        or not assistant
+        or assistant.get("role") != "assistant"
+    ):
         return None, "invalid_message_roles", ""
     content = str(assistant.get("content") or "")
     match = TRACE_RE.match(content)
@@ -196,7 +231,9 @@ def _iter_openr1(
     config: str,
     revision: str,
 ) -> Iterable[Mapping[str, Any]]:
-    dataset = load_dataset(repo, config, split="train", streaming=True, revision=revision)
+    dataset = load_dataset(
+        repo, config, split="train", streaming=True, revision=revision
+    )
     yield from dataset
 
 
@@ -229,7 +266,9 @@ def _interleave_by_token_mass(
     return output
 
 
-def _admission_policy(cot_target_mass: int, direct_target_mass: int, *, allow_underfilled: bool) -> str:
+def _admission_policy(
+    cot_target_mass: int, direct_target_mass: int, *, allow_underfilled: bool
+) -> str:
     if cot_target_mass >= direct_target_mass:
         return "balanced"
     if allow_underfilled and cot_target_mass > 0:
@@ -251,7 +290,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         Path(args.exclude_prompt_hashes) if args.exclude_prompt_hashes else None
     )
     if len(direct) != args.openmath_rows:
-        raise RuntimeError(f"OpenMath admitted {len(direct)} rows, expected exact slice {args.openmath_rows}")
+        raise RuntimeError(
+            f"OpenMath admitted {len(direct)} rows, expected exact slice {args.openmath_rows}"
+        )
 
     direct_target_mass = sum(int(row["target_tokens"]) for row in direct)
     cot_path = out_dir / "openr1_admitted.jsonl"
@@ -260,7 +301,11 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     rejection_counts: Counter[str] = Counter()
     scanned = 0
     cot_target_mass = 0
-    for row in _iter_openr1(repo=args.openr1_repo, config=args.openr1_config, revision=args.openr1_revision):
+    for row in _iter_openr1(
+        repo=args.openr1_repo,
+        config=args.openr1_config,
+        revision=args.openr1_revision,
+    ):
         scanned += 1
         prompt = canonical_prompt(row.get("problem"))
         prompt_hash = sha256_text(prompt) if prompt else ""
@@ -296,7 +341,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "problem_type": row.get("problem_type"),
             "question_type": row.get("question_type"),
             "source_is_reasoning_complete": row.get("is_reasoning_complete"),
-            "source_correctness_math_verify": row.get("correctness_math_verify"),
+            "source_correctness_math_verify": row.get(
+                "correctness_math_verify"
+            ),
             "source_correctness_llama": row.get("correctness_llama"),
             "source_finish_reasons": row.get("finish_reasons"),
             "terminal_reason": reason,
@@ -324,15 +371,30 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     direct_path = out_dir / "openmath_slice.jsonl"
     _atomic_replace(
         direct_path,
-        ("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in direct)).encode("utf-8"),
+        (
+            "".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                for row in direct
+            )
+        ).encode("utf-8"),
     )
     _atomic_replace(
         cot_path,
-        ("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in cot)).encode("utf-8"),
+        (
+            "".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                for row in cot
+            )
+        ).encode("utf-8"),
     )
     _atomic_replace(
         combined_path,
-        ("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in combined)).encode("utf-8"),
+        (
+            "".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                for row in combined
+            )
+        ).encode("utf-8"),
     )
 
     if len(combined) < args.training_rows_for_audit:
@@ -344,7 +406,12 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     prefix = combined[:train_prefix_rows]
     _atomic_replace(
         training_path,
-        ("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in prefix)).encode("utf-8"),
+        (
+            "".join(
+                json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+                for row in prefix
+            )
+        ).encode("utf-8"),
     )
     prefix_counts = Counter(row["source_arm"] for row in prefix)
     prefix_mass = Counter()
@@ -382,7 +449,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "source_id_policy": "uuid_or_sha256_prompt",
         "external_cot_not_native_qwen": True,
     }
-    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+    manifest_bytes = (
+        json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    ).encode("utf-8")
     _atomic_replace(out_dir / "manifest.json", manifest_bytes)
     return manifest
 
@@ -399,7 +468,9 @@ def main() -> None:
     parser.add_argument("--exclude-prompt-hashes", default=None)
     parser.add_argument("--openr1-repo", default="open-r1/OpenR1-Math-220k")
     parser.add_argument("--openr1-config", default="all")
-    parser.add_argument("--openr1-revision", default="e4e141ec9dea9f8326f4d347be56105859b2bd68")
+    parser.add_argument(
+        "--openr1-revision", default="e4e141ec9dea9f8326f4d347be56105859b2bd68"
+    )
     args = parser.parse_args()
     manifest = build(args)
     print(json.dumps(manifest, indent=2, sort_keys=True))

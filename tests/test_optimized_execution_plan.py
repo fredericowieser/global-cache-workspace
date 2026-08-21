@@ -15,7 +15,11 @@ from gcw.performance.execution_plan import (
     optimized_step_receipt_context,
     require_optimized_step_admission,
 )
-from gcw.qualification.receipts import QualificationHMACKey, issue_receipt, write_receipt
+from gcw.qualification.receipts import (
+    QualificationHMACKey,
+    issue_receipt,
+    write_receipt,
+)
 
 
 def _authority() -> OptimizedStepAuthority:
@@ -41,7 +45,10 @@ def test_combined_plan_is_closed_default_off_and_records_rejections() -> None:
     assert "regional_cuda_graphs" in payload["excluded"]
     assert "pair_waves" in payload["excluded"]
     assert "triton_processor_pointwise" in payload["excluded"]
-    assert combined_v1_plan_sha256() == "c7b26243b0b414a6e5f3c148c82bfe081c63b8a22c41e9130881145f71189b85"
+    assert (
+        combined_v1_plan_sha256()
+        == "c7b26243b0b414a6e5f3c148c82bfe081c63b8a22c41e9130881145f71189b85"
+    )
     assert require_optimized_step_admission(OptimizedStepConfig()) is None
     with pytest.raises(ValueError, match="requires receipt_path"):
         OptimizedStepConfig(enabled=True)

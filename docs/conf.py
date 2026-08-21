@@ -22,7 +22,13 @@ extensions = [
     "sphinxcontrib.mermaid",
 ]
 
-myst_enable_extensions = ["colon_fence", "deflist", "dollarmath", "fieldlist", "substitution"]
+myst_enable_extensions = [
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "fieldlist",
+    "substitution",
+]
 myst_heading_anchors = 3
 autosummary_generate = False
 autodoc_typehints = "description"

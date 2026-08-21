@@ -21,17 +21,35 @@ from scripts.benchmarks.harness import _build_configured_model, device_identity
 
 
 def _validate(config: TrainConfig) -> None:
-    if config.distributed != "none" or config.batch_size != 2 or config.global_batch_rows != 64:
-        raise ValueError("pair-wave timing requires single-device fixed batch-2 and exactly 64 global rows")
-    if config.model.family != "qwen3" or config.model.variant not in {"bt", "bgt", "longshot", "icarus"}:
-        raise ValueError("pair-wave timing supports Qwen3 BT/BGT/Longshot/Icarus")
-    if config.performance.adaptive_batching.enabled or config.logical_pair_grouping:
+    if (
+        config.distributed != "none"
+        or config.batch_size != 2
+        or config.global_batch_rows != 64
+    ):
+        raise ValueError(
+            "pair-wave timing requires single-device fixed batch-2 and exactly 64 global rows"
+        )
+    if config.model.family != "qwen3" or config.model.variant not in {
+        "bt",
+        "bgt",
+        "longshot",
+        "icarus",
+    }:
+        raise ValueError(
+            "pair-wave timing supports Qwen3 BT/BGT/Longshot/Icarus"
+        )
+    if (
+        config.performance.adaptive_batching.enabled
+        or config.logical_pair_grouping
+    ):
         raise ValueError("pair-wave timing rejects grouped execution")
     if config.model.diffusion_processor is not None:
         raise ValueError("pair-wave timing does not admit diffusion RNG")
 
 
-def _reserve(config: TrainConfig, device: torch.device) -> tuple[TrainingBatch, ...]:
+def _reserve(
+    config: TrainConfig, device: torch.device
+) -> tuple[TrainingBatch, ...]:
     stream = build_training_stream(config, device, rank=0, world_size=1)
     try:
         pairs = tuple(next(stream) for _ in range(PAIRS_PER_STEP))
@@ -42,7 +60,9 @@ def _reserve(config: TrainConfig, device: torch.device) -> tuple[TrainingBatch, 
     return pairs
 
 
-def _pair_loss(model: torch.nn.Module, config: TrainConfig, pair: TrainingBatch) -> torch.Tensor:
+def _pair_loss(
+    model: torch.nn.Module, config: TrainConfig, pair: TrainingBatch
+) -> torch.Tensor:
     with torch.autocast("cuda", dtype=torch.bfloat16, enabled=config.bf16):
         return _model_loss(
             model,
@@ -51,7 +71,9 @@ def _pair_loss(model: torch.nn.Module, config: TrainConfig, pair: TrainingBatch)
             loss_backend=config.loss_backend,
             attention_mask=pair.attention_mask,
             activation_checkpoint_windows=config.activation_checkpoint_windows,
-            activation_checkpoint_min_padded_sequence_length=(config.activation_checkpoint_min_padded_sequence_length),
+            activation_checkpoint_min_padded_sequence_length=(
+                config.activation_checkpoint_min_padded_sequence_length
+            ),
         )
 
 
@@ -68,13 +90,21 @@ def _serial(
     return tuple(losses)
 
 
-def _gradient_clones(parameters: tuple[torch.nn.Parameter, ...]) -> tuple[torch.Tensor, ...]:
+def _gradient_clones(
+    parameters: tuple[torch.nn.Parameter, ...],
+) -> tuple[torch.Tensor, ...]:
     if any(parameter.grad is None for parameter in parameters):
         raise RuntimeError("pair-wave timing found a missing gradient")
-    return tuple(parameter.grad.detach().clone() for parameter in parameters if parameter.grad is not None)
+    return tuple(
+        parameter.grad.detach().clone()
+        for parameter in parameters
+        if parameter.grad is not None
+    )
 
 
-def _measure(operation: Callable[[], None], *, warmup: int, steps: int) -> dict[str, object]:
+def _measure(
+    operation: Callable[[], None], *, warmup: int, steps: int
+) -> dict[str, object]:
     for _ in range(warmup):
         operation()
     torch.cuda.synchronize()
@@ -96,7 +126,9 @@ def _measure(operation: Callable[[], None], *, warmup: int, steps: int) -> dict[
 
 def run(args: argparse.Namespace) -> dict[str, object]:
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
-        raise RuntimeError("pair-wave timing requires exactly one visible CUDA GPU")
+        raise RuntimeError(
+            "pair-wave timing requires exactly one visible CUDA GPU"
+        )
     config = load_train_config(args.train_config)
     _validate(config)
     device = torch.device("cuda")
@@ -104,7 +136,9 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     model = _build_configured_model(config, device)
     _apply_trainable_policy(model, config.trainable)
     model.train()
-    parameters = tuple(parameter for parameter in model.parameters() if parameter.requires_grad)
+    parameters = tuple(
+        parameter for parameter in model.parameters() if parameter.requires_grad
+    )
     pairs = _reserve(config, device)
     runtime = PairWaveRuntime(device, args.wave_size)
 
@@ -119,11 +153,16 @@ def run(args: argparse.Namespace) -> dict[str, object]:
     )
     torch.cuda.synchronize()
     wave_gradients = _gradient_clones(parameters)
-    torch.testing.assert_close(torch.stack(wave_result.pair_losses), torch.stack(serial_losses))
+    torch.testing.assert_close(
+        torch.stack(wave_result.pair_losses), torch.stack(serial_losses)
+    )
     if len(serial_gradients) != len(wave_gradients) or any(
-        not torch.equal(reference, candidate) for reference, candidate in zip(serial_gradients, wave_gradients)
+        not torch.equal(reference, candidate)
+        for reference, candidate in zip(serial_gradients, wave_gradients)
     ):
-        raise RuntimeError("pair-wave gradients differ bitwise from serial execution")
+        raise RuntimeError(
+            "pair-wave gradients differ bitwise from serial execution"
+        )
 
     def serial_step() -> None:
         model.zero_grad(set_to_none=True)
@@ -170,8 +209,12 @@ def main() -> None:
     args = parser.parse_args()
     result = run(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, sort_keys=True, allow_nan=False) + "\n")
-    print(json.dumps({"output": str(args.output), "speedup": result["speedup"]}))
+    args.output.write_text(
+        json.dumps(result, sort_keys=True, allow_nan=False) + "\n"
+    )
+    print(
+        json.dumps({"output": str(args.output), "speedup": result["speedup"]})
+    )
 
 
 if __name__ == "__main__":

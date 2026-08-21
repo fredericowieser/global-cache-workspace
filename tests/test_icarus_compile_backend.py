@@ -14,10 +14,22 @@ from scripts.benchmarks.parity import (
     cache_objective,
     clone_cache,
 )
-from gcw.config import CacheProcessorConfig, DataConfig, FlowProcessorConfig, ModelConfig, TrainConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    FlowProcessorConfig,
+    ModelConfig,
+    TrainConfig,
+)
 from gcw.models import build_model
-from gcw.models.cache_processors.icarus import GlobalCacheProcessor, _select_heads_from_merged
-from gcw.models.cache_processors.ops import expand_cache_head_indices, gather_per_cache_head_kv
+from gcw.models.cache_processors.icarus import (
+    GlobalCacheProcessor,
+    _select_heads_from_merged,
+)
+from gcw.models.cache_processors.ops import (
+    expand_cache_head_indices,
+    gather_per_cache_head_kv,
+)
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.model import LanguageModel
 from gcw.performance.backends import icarus as backend_module
@@ -93,11 +105,17 @@ def _cache(
     generator = torch.Generator(device=device).manual_seed(9000 + batch + seq)
     num_heads, head_dim = config.stored_cache_shape
     shape = (batch, num_heads, seq, head_dim)
-    keys = [torch.randn(shape, generator=generator, device=device, dtype=dtype) for _ in range(config.cache_num_layers)]
-    values = [
-        torch.randn(shape, generator=generator, device=device, dtype=dtype) for _ in range(config.cache_num_layers)
+    keys = [
+        torch.randn(shape, generator=generator, device=device, dtype=dtype)
+        for _ in range(config.cache_num_layers)
     ]
-    scores = torch.randn((batch, seq), generator=generator, device=device, dtype=torch.float32)
+    values = [
+        torch.randn(shape, generator=generator, device=device, dtype=dtype)
+        for _ in range(config.cache_num_layers)
+    ]
+    scores = torch.randn(
+        (batch, seq), generator=generator, device=device, dtype=torch.float32
+    )
     return CacheState(keys, values, scores)
 
 
@@ -108,7 +126,9 @@ def _expected_selection(
     select_all: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if processor.config.score == "kv_norm" and not select_all:
-        all_indices = expand_cache_head_indices(cache.all_indices(), processor.num_cache_heads)
+        all_indices = expand_cache_head_indices(
+            cache.all_indices(), processor.num_cache_heads
+        )
         merged = gather_per_cache_head_kv(
             cache,
             all_indices,
@@ -117,14 +137,18 @@ def _expected_selection(
             rotary_style=processor.rotary_style,
             rotary_dim=processor.rotary_dim,
         )
-        indices, selected_heads = processor._select_indices_and_heads(cache, merged, select_all)
+        indices, selected_heads = processor._select_indices_and_heads(
+            cache, merged, select_all
+        )
         merged = torch.gather(
             merged,
             dim=2,
             index=indices[..., None].expand(-1, -1, -1, merged.shape[-1]),
         )
     else:
-        indices, selected_heads = processor._select_indices_and_heads(cache, None, select_all)
+        indices, selected_heads = processor._select_indices_and_heads(
+            cache, None, select_all
+        )
         merged = gather_per_cache_head_kv(
             cache,
             indices,
@@ -134,13 +158,17 @@ def _expected_selection(
             rotary_dim=processor.rotary_dim,
         )
     if selected_heads is None:
-        selected_heads = _select_heads_from_merged(merged, processor.config.topk_heads)
+        selected_heads = _select_heads_from_merged(
+            merged, processor.config.topk_heads
+        )
     return indices, selected_heads
 
 
 def _install_fake_compiler(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[list[tuple[str, dict[str, object]]], list[tuple[torch.Tensor, torch.Tensor]]]:
+) -> tuple[
+    list[tuple[str, dict[str, object]]], list[tuple[torch.Tensor, torch.Tensor]]
+]:
     compile_calls: list[tuple[str, dict[str, object]]] = []
     region_inputs: list[tuple[torch.Tensor, torch.Tensor]] = []
 
@@ -151,7 +179,9 @@ def _install_fake_compiler(
             positions, selected_heads = args[2], args[3]
             assert isinstance(positions, torch.Tensor)
             assert isinstance(selected_heads, torch.Tensor)
-            region_inputs.append((positions.detach().clone(), selected_heads.detach().clone()))
+            region_inputs.append(
+                (positions.detach().clone(), selected_heads.detach().clone())
+            )
             return function(*args, **inner_kwargs)
 
         return compiled
@@ -160,7 +190,9 @@ def _install_fake_compiler(
     return compile_calls, region_inputs
 
 
-@pytest.mark.parametrize(("score", "update_stream"), (("kv_norm", "kv"), ("attn_l2", "v")))
+@pytest.mark.parametrize(
+    ("score", "update_stream"), (("kv_norm", "kv"), ("attn_l2", "v"))
+)
 def test_compiled_icarus_post_selection_matches_outputs_indices_and_gradients(
     monkeypatch: pytest.MonkeyPatch,
     score: str,
@@ -211,19 +243,27 @@ def test_compiled_icarus_post_selection_matches_outputs_indices_and_gradients(
     assert torch.equal(selected_heads, expected_heads)
 
     expected_destinations = [
-        ~torch.isclose(before, after) for before, after in zip(source.values, expected.values, strict=True)
+        ~torch.isclose(before, after)
+        for before, after in zip(source.values, expected.values, strict=True)
     ]
     actual_destinations = [
-        ~torch.isclose(before, after) for before, after in zip(source.values, actual.values, strict=True)
+        ~torch.isclose(before, after)
+        for before, after in zip(source.values, actual.values, strict=True)
     ]
-    assert sum(mask.any(dim=-1).sum().item() for mask in actual_destinations) > 0
+    assert (
+        sum(mask.any(dim=-1).sum().item() for mask in actual_destinations) > 0
+    )
     assert all(
         torch.equal(actual_mask, expected_mask)
-        for actual_mask, expected_mask in zip(actual_destinations, expected_destinations, strict=True)
+        for actual_mask, expected_mask in zip(
+            actual_destinations, expected_destinations, strict=True
+        )
     )
 
 
-def test_compiled_icarus_preserves_processor_checkpointing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compiled_icarus_preserves_processor_checkpointing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     torch.manual_seed(2027)
     config = _config(gradient_checkpointing=True)
     eager = _processor(config)
@@ -270,10 +310,14 @@ def test_icarus_backend_is_eager_by_default_and_preserves_training_fingerprint(
     monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "eager")
     explicit_eager = _training_fingerprint(train_config, 1, 128, 128, 1)
     assert explicit_eager == fingerprint
-    assert processor.execution_backend_metadata()["effective_backend"] == "eager"
+    assert (
+        processor.execution_backend_metadata()["effective_backend"] == "eager"
+    )
 
 
-def test_compiled_icarus_is_not_campaign_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compiled_icarus_is_not_campaign_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
     monkeypatch.delenv("GCW_ALLOW_REJECTED_ICARUS_COMPILE", raising=False)
     with pytest.raises(RuntimeError, match="not campaign-admitted"):
@@ -287,11 +331,16 @@ def test_compiled_icarus_is_state_neutral_fingerprinted_and_fail_closed(
     monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
     _install_fake_compiler(monkeypatch)
     processor = _processor(config)
-    state = {name: tensor.clone() for name, tensor in processor.state_dict().items()}
+    state = {
+        name: tensor.clone() for name, tensor in processor.state_dict().items()
+    }
     processor(_cache(config))
 
     assert tuple(processor.state_dict()) == tuple(state)
-    assert all(torch.equal(tensor, state[name]) for name, tensor in processor.state_dict().items())
+    assert all(
+        torch.equal(tensor, state[name])
+        for name, tensor in processor.state_dict().items()
+    )
     restored = _processor(config)
     incompatible = restored.load_state_dict(state, strict=True)
     assert incompatible.missing_keys == []
@@ -304,10 +353,21 @@ def test_compiled_icarus_is_state_neutral_fingerprinted_and_fail_closed(
     assert metadata["campaign_admitted"] is False
     assert metadata["rejection"] == "fixed_batch_2_adam_parameter_tolerance"
     assert len(str(metadata["fingerprint_sha256"])) == 64
-    fingerprint = _training_fingerprint(TrainConfig(model=config, data=DataConfig(kind="random")), 1, 128, 128, 1)
-    assert fingerprint["icarus_processor_backend_fingerprint"] == metadata["fingerprint_sha256"]
+    fingerprint = _training_fingerprint(
+        TrainConfig(model=config, data=DataConfig(kind="random")),
+        1,
+        128,
+        128,
+        1,
+    )
+    assert (
+        fingerprint["icarus_processor_backend_fingerprint"]
+        == metadata["fingerprint_sha256"]
+    )
 
-    def failing_compile(_function: Callable[..., torch.Tensor], **_kwargs: object):
+    def failing_compile(
+        _function: Callable[..., torch.Tensor], **_kwargs: object
+    ):
         def fail(*_args: object, **_inner_kwargs: object) -> torch.Tensor:
             raise RuntimeError("inductor failed")
 
@@ -318,7 +378,9 @@ def test_compiled_icarus_is_state_neutral_fingerprinted_and_fail_closed(
     # Direct invocation is deliberately eager even when compilation was requested.
     failing(_cache(config))
     configure_icarus_training_execution(failing, (2,))
-    with pytest.raises(RuntimeError, match="shape=.*eager fallback is disabled") as error:
+    with pytest.raises(
+        RuntimeError, match="shape=.*eager fallback is disabled"
+    ) as error:
         with icarus_training_execution(failing, 2):
             failing(_cache(config))
     assert isinstance(error.value.__cause__, RuntimeError)
@@ -350,7 +412,9 @@ def test_compiled_icarus_rejects_wrong_architecture_and_missing_compiler(
     _install_fake_compiler(monkeypatch)
     wrong = _config()
     wrong.variant = "longshot"
-    with pytest.raises(RuntimeError, match="supports deterministic Icarus only"):
+    with pytest.raises(
+        RuntimeError, match="supports deterministic Icarus only"
+    ):
         build_model(wrong)
 
     monkeypatch.setattr(torch, "compile", None)
@@ -359,7 +423,9 @@ def test_compiled_icarus_rejects_wrong_architecture_and_missing_compiler(
 
 
 @pytest.mark.gpu
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA smoke requires a GPU")
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA smoke requires a GPU"
+)
 def test_compiled_icarus_cuda_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise the real Inductor/Flash forward and backward boundary on CUDA."""
     torch.manual_seed(2048)
@@ -371,7 +437,9 @@ def test_compiled_icarus_cuda_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GCW_STRICT_FLASH", "1")
     compiled.execution_backend = "compile"
     configure_icarus_training_execution(compiled, (1,))
-    source = _cache(config, batch=1, seq=64, device=device, dtype=torch.bfloat16)
+    source = _cache(
+        config, batch=1, seq=64, device=device, dtype=torch.bfloat16
+    )
     eager_cache = clone_cache(source, requires_grad=True)
     compiled_cache = clone_cache(source, requires_grad=True)
 
@@ -400,10 +468,18 @@ def test_compile_warmup_is_rng_gradient_and_serialized_state_neutral(
     configure_icarus_training_execution(second, (2,))
     rng_before = torch.random.get_rng_state().clone()
     backend_module.warmup_icarus_training_execution(
-        first, (2, 4), sequence_length=128, device=torch.device("cpu"), bf16=False
+        first,
+        (2, 4),
+        sequence_length=128,
+        device=torch.device("cpu"),
+        bf16=False,
     )
     backend_module.warmup_icarus_training_execution(
-        second, (2,), sequence_length=128, device=torch.device("cpu"), bf16=False
+        second,
+        (2,),
+        sequence_length=128,
+        device=torch.device("cpu"),
+        bf16=False,
     )
 
     assert torch.equal(torch.random.get_rng_state(), rng_before)
@@ -412,10 +488,16 @@ def test_compile_warmup_is_rng_gradient_and_serialized_state_neutral(
     assert len(compile_calls) == 2
     assert len(region_inputs) == 3
     assert {positions.shape[-1] for positions, _heads in region_inputs} == {64}
-    assert all(positions.is_contiguous() and heads.is_contiguous() for positions, heads in region_inputs)
+    assert all(
+        positions.is_contiguous() and heads.is_contiguous()
+        for positions, heads in region_inputs
+    )
     assert first.block in backend_module._COMPILED_RUNNERS
     assert second.block in backend_module._COMPILED_RUNNERS
-    assert backend_module._COMPILED_RUNNERS[first.block] is not backend_module._COMPILED_RUNNERS[second.block]
+    assert (
+        backend_module._COMPILED_RUNNERS[first.block]
+        is not backend_module._COMPILED_RUNNERS[second.block]
+    )
     assert not any("compiled_runner" in name for name in first.block.__dict__)
     calls_after_warmup = len(region_inputs)
     first(_cache(_config(), batch=2))
@@ -441,7 +523,9 @@ def test_materialized_runner_is_deepcopy_neutral_and_copy_compiles_independently
     assert copied.block not in backend_module._COMPILED_RUNNERS
     with torch.no_grad():
         next(original.parameters()).add_(7.0)
-    assert not torch.equal(next(original.parameters()), next(copied.parameters()))
+    assert not torch.equal(
+        next(original.parameters()), next(copied.parameters())
+    )
 
     source = _cache(_config(), batch=2)
     eager_cache = clone_cache(source, requires_grad=True)
@@ -477,9 +561,14 @@ def test_materialized_runner_is_whole_module_pickle_neutral_and_restored_copy_is
     payload = pickle.dumps(model)
     restored = pickle.loads(payload)
     assert isinstance(restored, LanguageModel)
-    assert restored.cache_processor.block not in backend_module._COMPILED_RUNNERS
+    assert (
+        restored.cache_processor.block not in backend_module._COMPILED_RUNNERS
+    )
     assert tuple(restored.state_dict()) == tuple(model.state_dict())
-    assert all(torch.equal(restored.state_dict()[name], tensor) for name, tensor in model.state_dict().items())
+    assert all(
+        torch.equal(restored.state_dict()[name], tensor)
+        for name, tensor in model.state_dict().items()
+    )
 
     eager = copy.deepcopy(restored)
     eager.cache_processor.execution_backend = "eager"
@@ -487,13 +576,17 @@ def test_materialized_runner_is_whole_module_pickle_neutral_and_restored_copy_is
     configure_icarus_training_execution(restored, (2,))
     expected = eager.cache_processor(clone_cache(source, requires_grad=True))
     with icarus_training_execution(restored, 2):
-        actual = restored.cache_processor(clone_cache(source, requires_grad=True))
+        actual = restored.cache_processor(
+            clone_cache(source, requires_grad=True)
+        )
         cache_objective(actual).backward()
     cache_objective(expected).backward()
 
     assert len(compile_calls) == 2
     assert_cache_close(actual, expected)
-    assert_parameter_gradients_close(restored.cache_processor, eager.cache_processor)
+    assert_parameter_gradients_close(
+        restored.cache_processor, eager.cache_processor
+    )
 
 
 def test_compile_scope_rejects_unadmitted_shapes_and_preserves_checkpoint_control_flow(
@@ -512,7 +605,9 @@ def test_compile_scope_rejects_unadmitted_shapes_and_preserves_checkpoint_contro
         {"__module__": "torch.utils.checkpoint"},
     )
 
-    def control_flow_compile(_function: Callable[..., torch.Tensor], **_kwargs: object):
+    def control_flow_compile(
+        _function: Callable[..., torch.Tensor], **_kwargs: object
+    ):
         def fail(*_args: object, **_inner_kwargs: object) -> torch.Tensor:
             raise stop_type()
 
@@ -545,7 +640,9 @@ def test_requested_compile_keeps_language_model_generation_eager(
     assert compile_calls == []
 
 
-@pytest.mark.parametrize(("distributed", "world_size"), (("ddp", 1), ("fsdp", 1), ("none", 2)))
+@pytest.mark.parametrize(
+    ("distributed", "world_size"), (("ddp", 1), ("fsdp", 1), ("none", 2))
+)
 def test_compile_training_admission_rejects_unqualified_distributed_topologies(
     distributed: str,
     world_size: int,

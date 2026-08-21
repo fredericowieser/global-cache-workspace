@@ -28,9 +28,13 @@ class Gemma4TF(TF):
     def __init__(self, config: ModelConfig, pad_vocab_size_to: int = 128):
         nn.Module.__init__(self)
         self.config = replace(config, variant="tf")
-        vocab = ((config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to) * pad_vocab_size_to
+        vocab = (
+            (config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to
+        ) * pad_vocab_size_to
         ple_vocab = int(config.vocab_size_per_layer_input or config.vocab_size)
-        ple_vocab = ((ple_vocab + pad_vocab_size_to - 1) // pad_vocab_size_to) * pad_vocab_size_to
+        ple_vocab = (
+            (ple_vocab + pad_vocab_size_to - 1) // pad_vocab_size_to
+        ) * pad_vocab_size_to
         self.padded_vocab_size = vocab
         self.padded_ple_vocab_size = ple_vocab
         self.embed_tokens = Gemma4ScaledWordEmbedding(
@@ -39,13 +43,18 @@ class Gemma4TF(TF):
             padding_idx=0,
             embed_scale=config.hidden_size**0.5,
         )
-        cache_index_by_layer = {layer: idx for idx, layer in enumerate(config.cache_layer_indices)}
+        cache_index_by_layer = {
+            layer: idx for idx, layer in enumerate(config.cache_layer_indices)
+        }
         self.layers = nn.ModuleList(
-            self.block_cls(config, i, cache_index_by_layer.get(i)) for i in range(config.num_layers)
+            self.block_cls(config, i, cache_index_by_layer.get(i))
+            for i in range(config.num_layers)
         )
         self.norm = Gemma4RMSNorm(config.hidden_size, config.norm_eps)  # type: ignore[assignment]
         self.rotary = Gemma4RotaryCache(config)  # type: ignore[assignment]
-        self.hidden_size_per_layer_input = int(config.hidden_size_per_layer_input)
+        self.hidden_size_per_layer_input = int(
+            config.hidden_size_per_layer_input
+        )
         if self.hidden_size_per_layer_input:
             self.embed_tokens_per_layer = Gemma4ScaledWordEmbedding(
                 ple_vocab,
@@ -60,8 +69,14 @@ class Gemma4TF(TF):
                 bias=False,
             )
             self.per_layer_model_projection_scale = config.hidden_size**-0.5
-            self.per_layer_projection_norm = Gemma4RMSNorm(self.hidden_size_per_layer_input, config.norm_eps)
-        self.lm_head = None if config.tie_embeddings else Linear(config.hidden_size, vocab, bias=False)
+            self.per_layer_projection_norm = Gemma4RMSNorm(
+                self.hidden_size_per_layer_input, config.norm_eps
+            )
+        self.lm_head = (
+            None
+            if config.tie_embeddings
+            else Linear(config.hidden_size, vocab, bias=False)
+        )
 
     @torch.no_grad()
     def init_weights(self, std: float = 0.02) -> None:
@@ -79,7 +94,9 @@ class Gemma4TF(TF):
             elif isinstance(module, Gemma4Block):
                 module.layer_scalar.fill_(1.0)
 
-    def _per_layer_inputs(self, input_ids: torch.Tensor, inputs_embeds: torch.Tensor) -> torch.Tensor | None:
+    def _per_layer_inputs(
+        self, input_ids: torch.Tensor, inputs_embeds: torch.Tensor
+    ) -> torch.Tensor | None:
         if not self.hidden_size_per_layer_input:
             return None
         per_layer_inputs = self.embed_tokens_per_layer(input_ids).reshape(
@@ -87,7 +104,10 @@ class Gemma4TF(TF):
             self.config.num_layers,
             self.hidden_size_per_layer_input,
         )
-        projection = self.per_layer_model_projection(inputs_embeds) * self.per_layer_model_projection_scale
+        projection = (
+            self.per_layer_model_projection(inputs_embeds)
+            * self.per_layer_model_projection_scale
+        )
         projection = projection.reshape(
             *inputs_embeds.shape[:-1],
             self.config.num_layers,
@@ -128,16 +148,32 @@ class Gemma4TF(TF):
         x = self.embed_tokens(input_ids)
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
         position_embeddings = self._position_embeddings(
-            0, input_ids.shape[1], input_ids.device, _autocast_dtype(x.device) or x.dtype
+            0,
+            input_ids.shape[1],
+            input_ids.device,
+            _autocast_dtype(x.device) or x.dtype,
         )
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
-            per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
-            x, _, _, _ = layer(x, per_layer_input, position_embeddings[layer.layer_type], None, shared_kv_states, 0)
+            per_layer_input = (
+                per_layer_inputs[:, :, i, :]
+                if per_layer_inputs is not None
+                else None
+            )
+            x, _, _, _ = layer(
+                x,
+                per_layer_input,
+                position_embeddings[layer.layer_type],
+                None,
+                shared_kv_states,
+                0,
+            )
         x = self.norm(x)
         if targets is not None:
-            return self.loss_from_hidden(x, targets, loss_reduction, loss_backend)
+            return self.loss_from_hidden(
+                x, targets, loss_reduction, loss_backend
+            )
         return self.logits_from_hidden(x)
 
     def forward_chunk(
@@ -150,7 +186,9 @@ class Gemma4TF(TF):
         cache_format: str = "list",
     ) -> tuple[torch.Tensor, CacheState | WindowedCache]:
         if isinstance(cache, WindowedCache) and not self._uniform_cache_shape():
-            raise ValueError("Gemma4 WindowedCache requires uniform stored KV shapes")
+            raise ValueError(
+                "Gemma4 WindowedCache requires uniform stored KV shapes"
+            )
         x = self.embed_tokens(input_ids)
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
         position_embeddings = self._position_embeddings(
@@ -162,13 +200,21 @@ class Gemma4TF(TF):
         keys: list[torch.Tensor] = []
         values: list[torch.Tensor] = []
         layer_scores: list[torch.Tensor] = []
-        old_scores = input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32) if cache is None else cache.scores
+        old_scores = (
+            input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32)
+            if cache is None
+            else cache.scores
+        )
         has_cache = cache is not None and cache.scores.numel() > 0
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
         cache_idx = 0
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
-            per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
+            per_layer_input = (
+                per_layer_inputs[:, :, i, :]
+                if per_layer_inputs is not None
+                else None
+            )
             if layer.self_attn.is_kv_shared_layer:
                 x, _, _, scores = layer(
                     x,
@@ -181,7 +227,9 @@ class Gemma4TF(TF):
             else:
                 if has_cache:
                     if cache is None:
-                        raise RuntimeError("cache state disappeared during cached attention")
+                        raise RuntimeError(
+                            "cache state disappeared during cached attention"
+                        )
                     past = cache.layer(cache_idx)
                 else:
                     past = None
@@ -200,10 +248,16 @@ class Gemma4TF(TF):
         x = self.norm(x)
         out = self.logits_from_hidden(x) if logits else x
         chunk_scores = torch.stack(layer_scores).mean(dim=0)
-        new_scores = chunk_scores if old_scores.numel() == 0 else torch.cat([old_scores, chunk_scores], dim=1)
+        new_scores = (
+            chunk_scores
+            if old_scores.numel() == 0
+            else torch.cat([old_scores, chunk_scores], dim=1)
+        )
         if cache_format == "windowed" or isinstance(cache, WindowedCache):
             if not self._uniform_cache_shape():
-                raise ValueError("Gemma4 WindowedCache requires uniform stored KV shapes")
+                raise ValueError(
+                    "Gemma4 WindowedCache requires uniform stored KV shapes"
+                )
             return out, WindowedCache.from_lists(keys, values, new_scores)
         return out, CacheState(keys, values, new_scores)
 
@@ -216,16 +270,24 @@ class Gemma4TF(TF):
         logits: bool = True,
     ) -> tuple[torch.Tensor, StaticCacheState]:
         if not self._uniform_cache_shape():
-            raise ValueError("Gemma4 static cache requires uniform stored KV shapes")
+            raise ValueError(
+                "Gemma4 static cache requires uniform stored KV shapes"
+            )
         x = self.embed_tokens(input_ids)
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
         end_pos = start_pos + input_ids.shape[1]
-        position_embeddings = self._position_embeddings(start_pos, input_ids.shape[1], input_ids.device, x.dtype)
+        position_embeddings = self._position_embeddings(
+            start_pos, input_ids.shape[1], input_ids.device, x.dtype
+        )
         layer_scores: list[torch.Tensor] = []
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
-            per_layer_input = per_layer_inputs[:, :, i, :] if per_layer_inputs is not None else None
+            per_layer_input = (
+                per_layer_inputs[:, :, i, :]
+                if per_layer_inputs is not None
+                else None
+            )
             x, scores = layer.forward_static(
                 x,
                 per_layer_input,
@@ -281,17 +343,26 @@ class Gemma4TF(TF):
             for start in range(0, out.shape[1], process_every):
                 if start > 0 and processor is not None:
                     cache = processor(cache)
-                logits, cache = self.forward_chunk(out[:, start : start + process_every], start, cache)
+                logits, cache = self.forward_chunk(
+                    out[:, start : start + process_every], start, cache
+                )
         else:
             logits, cache = self.forward_chunk(out, 0, cache)
         if logits is None:
             raise ValueError("generate requires at least one input token")
 
-        finished = torch.zeros(out.shape[0], dtype=torch.bool, device=out.device)
+        finished = torch.zeros(
+            out.shape[0], dtype=torch.bool, device=out.device
+        )
         fill_id = eos_token_id if pad_token_id is None else pad_token_id
         if fill_id is None:
             fill_id = 0
-        fill = torch.full((out.shape[0], 1), int(fill_id), dtype=input_ids.dtype, device=out.device)
+        fill = torch.full(
+            (out.shape[0], 1),
+            int(fill_id),
+            dtype=input_ids.dtype,
+            device=out.device,
+        )
         for generated_idx in range(max_new_tokens):
             next_id = logits[:, -1].argmax(dim=-1, keepdim=True)
             if bool(finished.any()):
@@ -305,18 +376,29 @@ class Gemma4TF(TF):
             pos = out.shape[1] - 1
             if processor is not None:
                 if relative_generation_cadence:
-                    should_process = generated_idx == 0 and process_after_prefill
-                    should_process = should_process or (generated_idx > 0 and generated_idx % process_every == 0)
+                    should_process = (
+                        generated_idx == 0 and process_after_prefill
+                    )
+                    should_process = should_process or (
+                        generated_idx > 0 and generated_idx % process_every == 0
+                    )
                 else:
                     should_process = pos > 0 and pos % process_every == 0
                 if should_process:
-                    cache = processor(cache, select_all=relative_generation_cadence and generated_idx == 0)
+                    cache = processor(
+                        cache,
+                        select_all=relative_generation_cadence
+                        and generated_idx == 0,
+                    )
             logits, cache = self.forward_chunk(next_id, pos, cache)
         return out
 
     def _uniform_cache_shape(self) -> bool:
         shapes = [
-            (self.config.kv_heads_for_layer(i), self.config.head_dim_for_layer(i))
+            (
+                self.config.kv_heads_for_layer(i),
+                self.config.head_dim_for_layer(i),
+            )
             for i in self.config.cache_layer_indices
         ]
         return len(set(shapes)) <= 1

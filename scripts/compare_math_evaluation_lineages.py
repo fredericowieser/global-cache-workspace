@@ -28,17 +28,38 @@ def compare_lineages(
 ) -> dict[str, Any]:
     comparisons: list[dict[str, Any]] = []
     violations: list[str] = []
-    for group, tasks in (("core", CANONICAL_CORE_TASKS), ("reasoning", CANONICAL_REASONING_TASKS)):
-        reference_path = reference / arm / "processor-on" / "canonical-likelihood" / group / "result.json"
-        candidate_path = candidate / arm / "processor-on" / "canonical-likelihood" / group / "result.json"
+    for group, tasks in (
+        ("core", CANONICAL_CORE_TASKS),
+        ("reasoning", CANONICAL_REASONING_TASKS),
+    ):
+        reference_path = (
+            reference
+            / arm
+            / "processor-on"
+            / "canonical-likelihood"
+            / group
+            / "result.json"
+        )
+        candidate_path = (
+            candidate
+            / arm
+            / "processor-on"
+            / "canonical-likelihood"
+            / group
+            / "result.json"
+        )
         if not reference_path.is_file() or not candidate_path.is_file():
             violations.append(f"missing canonical {group} result")
             continue
         reference_payload = json.loads(reference_path.read_text())
         candidate_payload = json.loads(candidate_path.read_text())
         for task in tasks:
-            reference_key, reference_score = _canonical_metric(reference_payload, task)
-            candidate_key, candidate_score = _canonical_metric(candidate_payload, task)
+            reference_key, reference_score = _canonical_metric(
+                reference_payload, task
+            )
+            candidate_key, candidate_score = _canonical_metric(
+                candidate_payload, task
+            )
             delta = candidate_score - reference_score
             passed = reference_key == candidate_key and abs(delta) <= 0.005
             comparisons.append(
@@ -59,33 +80,55 @@ def compare_lineages(
         accuracy_tolerance = 0.01 if thinking == "thinking_off" else 0.015
         agreement_tolerance = 0.97 if thinking == "thinking_off" else 0.90
         for task in NUMERIC_MATH_TASKS:
-            relative = Path("processor-on") / "numeric-generation" / thinking / "tasks" / task / "result.json"
+            relative = (
+                Path("processor-on")
+                / "numeric-generation"
+                / thinking
+                / "tasks"
+                / task
+                / "result.json"
+            )
             reference_path = reference / arm / relative
             candidate_path = candidate / arm / relative
             if not reference_path.is_file():
                 if require_complete_reference:
-                    violations.append(f"missing reference numeric result for {thinking}/{task}")
+                    violations.append(
+                        f"missing reference numeric result for {thinking}/{task}"
+                    )
                 continue
             if not candidate_path.is_file():
-                violations.append(f"missing candidate numeric result for {thinking}/{task}")
+                violations.append(
+                    f"missing candidate numeric result for {thinking}/{task}"
+                )
                 continue
             reference_payload = json.loads(reference_path.read_text())
             candidate_payload = json.loads(candidate_path.read_text())
             reference_rows = reference_payload["rows"]
             candidate_rows = candidate_payload["rows"]
             reference_identity = [
-                (row["task"], row["source_task"], row["source_index"], row["target"])
+                (
+                    row["task"],
+                    row["source_task"],
+                    row["source_index"],
+                    row["target"],
+                )
                 for row in reference_rows
             ]
             candidate_identity = [
-                (row["task"], row["source_task"], row["source_index"], row["target"])
+                (
+                    row["task"],
+                    row["source_task"],
+                    row["source_index"],
+                    row["target"],
+                )
                 for row in candidate_rows
             ]
             identity_match = reference_identity == candidate_identity
             paired = min(len(reference_rows), len(candidate_rows))
             agreement = (
                 sum(
-                    reference_rows[index].get("prediction") == candidate_rows[index].get("prediction")
+                    reference_rows[index].get("prediction")
+                    == candidate_rows[index].get("prediction")
                     for index in range(paired)
                 )
                 / paired
@@ -95,7 +138,8 @@ def compare_lineages(
             reference_metrics = reference_payload["tasks"][task]
             candidate_metrics = candidate_payload["tasks"][task]
             deltas = {
-                metric: float(candidate_metrics[metric]) - float(reference_metrics[metric])
+                metric: float(candidate_metrics[metric])
+                - float(reference_metrics[metric])
                 for metric in ("accuracy", "parse_rate", "truncation_rate")
             }
             passed = (
@@ -120,7 +164,9 @@ def compare_lineages(
                 }
             )
             if not passed:
-                violations.append(f"numeric parity failed for {thinking}/{task}")
+                violations.append(
+                    f"numeric parity failed for {thinking}/{task}"
+                )
     return {
         "schema": "gcw.math_evaluation_lineage_parity.v1",
         "arm": arm,
@@ -135,7 +181,9 @@ def compare_lineages(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Compare H200 and H100 math-evaluation lineages")
+    parser = argparse.ArgumentParser(
+        description="Compare H200 and H100 math-evaluation lineages"
+    )
     parser.add_argument("--reference", required=True)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--arm", required=True)

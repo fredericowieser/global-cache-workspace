@@ -41,7 +41,11 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
         base_cp,
         replace(base_cp, update_stream="v"),
         replace(base_cp, encoder_method="query_attention"),
-        replace(base_cp, encoder_method="query_attention", encoder_query_source="final_token"),
+        replace(
+            base_cp,
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+        ),
         replace(
             base_cp,
             encoder_method="query_attention",
@@ -62,7 +66,9 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
         )
         model = build_model(cfg)
 
-        assert processor_params(cfg) == sum(p.numel() for p in model.cache_processor.parameters())
+        assert processor_params(cfg) == sum(
+            p.numel() for p in model.cache_processor.parameters()
+        )
 
     kv_cfg = ModelConfig(
         variant="longshot",
@@ -103,7 +109,12 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
         num_kv_heads=1,
         head_dim=8,
         sequence_len=32,
-        layer_types=["linear_attention", "full_attention", "linear_attention", "full_attention"],
+        layer_types=[
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "full_attention",
+        ],
         processor_layer_indices=[1, 3],
         linear_key_head_dim=4,
         linear_value_head_dim=4,
@@ -112,14 +123,27 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
         cache_processor=cp,
     )
     model = build_model(cfg)
-    default_cfg = replace(cfg, cache_processor=replace(cp, linear_state_cache=False))
-    shared_cfg = replace(cfg, cache_processor=replace(cp, linear_state_query_mode="shared"))
-    per_linear_state_cfg = replace(cfg, cache_processor=replace(cp, linear_state_query_mode="per_linear_state"))
-    gated_cfg = replace(cfg, cache_processor=replace(cp, linear_state_update_mode="gated_delta"))
+    default_cfg = replace(
+        cfg, cache_processor=replace(cp, linear_state_cache=False)
+    )
+    shared_cfg = replace(
+        cfg, cache_processor=replace(cp, linear_state_query_mode="shared")
+    )
+    per_linear_state_cfg = replace(
+        cfg,
+        cache_processor=replace(cp, linear_state_query_mode="per_linear_state"),
+    )
+    gated_cfg = replace(
+        cfg, cache_processor=replace(cp, linear_state_update_mode="gated_delta")
+    )
     gated_model = build_model(gated_cfg)
 
-    assert processor_params(cfg) == sum(p.numel() for p in model.cache_processor.parameters())
-    assert processor_params(gated_cfg) == sum(p.numel() for p in gated_model.cache_processor.parameters())
+    assert processor_params(cfg) == sum(
+        p.numel() for p in model.cache_processor.parameters()
+    )
+    assert processor_params(gated_cfg) == sum(
+        p.numel() for p in gated_model.cache_processor.parameters()
+    )
     assert processor_params(gated_cfg) > processor_params(cfg)
     assert processor_params(cfg) > processor_params(default_cfg)
     assert processor_params(cfg) < processor_params(shared_cfg)
@@ -133,7 +157,11 @@ def test_matched_total_uses_one_backbone_under_tf_target():
     bgt, bgt_meta = fit_processor_config(backbone, "bgt", fraction=0.05)
     assert bt.num_layers == bgt.num_layers == backbone.num_layers
     assert bt.hidden_size == bgt.hidden_size == backbone.hidden_size
-    assert bt.intermediate_size == bgt.intermediate_size == backbone.intermediate_size
+    assert (
+        bt.intermediate_size
+        == bgt.intermediate_size
+        == backbone.intermediate_size
+    )
     assert bt_meta["processor_fraction"] <= 0.05
     assert bgt_meta["processor_fraction"] <= 0.05
     assert total_non_embedding_params(bt) <= target
@@ -167,10 +195,14 @@ def test_icarus_per_cache_head_projection_params_match_model():
         head_dim=8,
         cache_processor=cp,
     )
-    shared = replace(cfg, cache_processor=replace(cp, per_cache_head_projections=False))
+    shared = replace(
+        cfg, cache_processor=replace(cp, per_cache_head_projections=False)
+    )
     per_head = build_model(cfg)
 
-    assert processor_params(cfg) == sum(p.numel() for p in per_head.cache_processor.parameters())
+    assert processor_params(cfg) == sum(
+        p.numel() for p in per_head.cache_processor.parameters()
+    )
     assert processor_params(cfg) > processor_params(shared)
 
 
@@ -194,46 +226,111 @@ def test_generated_family_configs_include_icarus(tmp_path):
     assert table["icarus"]["model"]["variant"] == "icarus"
     assert table["icarus"]["model"]["cache_processor"]["topk_heads"] == 32
     assert table["icarus_per_cache_head"]["model"]["variant"] == "icarus"
-    assert table["icarus_per_cache_head"]["model"]["cache_processor"]["per_cache_head_projections"] is True
-    assert table["icarus_per_cache_head"]["model"]["cache_processor"]["topk_heads"] == 32
+    assert (
+        table["icarus_per_cache_head"]["model"]["cache_processor"][
+            "per_cache_head_projections"
+        ]
+        is True
+    )
+    assert (
+        table["icarus_per_cache_head"]["model"]["cache_processor"]["topk_heads"]
+        == 32
+    )
     assert table["longshot"]["model"]["variant"] == "longshot"
     assert table["longshot"]["model"]["cache_processor"]["topk_heads"] == 32
     assert table["longshot_query_attention"]["model"]["variant"] == "longshot"
-    assert table["longshot_query_attention"]["model"]["cache_processor"]["encoder_method"] == "query_attention"
-    assert table["longshot_query_attention_per_cache_head"]["model"]["variant"] == "longshot"
-    assert table["longshot_query_attention_per_cache_head"]["model"]["cache_processor"]["encoder_method"] == "query_attention"
-    assert table["longshot_query_attention_per_cache_head"]["model"]["cache_processor"]["per_cache_head_projections"] is True
+    assert (
+        table["longshot_query_attention"]["model"]["cache_processor"][
+            "encoder_method"
+        ]
+        == "query_attention"
+    )
+    assert (
+        table["longshot_query_attention_per_cache_head"]["model"]["variant"]
+        == "longshot"
+    )
+    assert (
+        table["longshot_query_attention_per_cache_head"]["model"][
+            "cache_processor"
+        ]["encoder_method"]
+        == "query_attention"
+    )
+    assert (
+        table["longshot_query_attention_per_cache_head"]["model"][
+            "cache_processor"
+        ]["per_cache_head_projections"]
+        is True
+    )
     assert (tmp_path / "smollm360m_icarus.yaml").exists()
     assert (tmp_path / "smollm360m_icarus_per_cache_head.yaml").exists()
     assert (tmp_path / "smollm360m_longshot.yaml").exists()
     assert (tmp_path / "smollm360m_longshot_query_attention.yaml").exists()
-    assert (tmp_path / "smollm360m_longshot_query_attention_per_cache_head.yaml").exists()
+    assert (
+        tmp_path / "smollm360m_longshot_query_attention_per_cache_head.yaml"
+    ).exists()
 
 
 def test_value_only_processor_params_use_smaller_cache_stream():
-    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
-    kv_cp = CacheProcessorConfig(hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)
+    backbone = replace(
+        smollm360m_backbone(num_layers=2),
+        hidden_size=128,
+        num_heads=2,
+        num_kv_heads=1,
+    )
+    kv_cp = CacheProcessorConfig(
+        hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1
+    )
     kv = replace(backbone, variant="bt", cache_processor=kv_cp)
-    v = replace(backbone, variant="bt", cache_processor=replace(kv_cp, update_stream="v"))
+    v = replace(
+        backbone,
+        variant="bt",
+        cache_processor=replace(kv_cp, update_stream="v"),
+    )
 
     assert processor_params(v) < processor_params(kv)
 
 
 def test_icarus_value_only_writeback_params_keep_kv_input_but_reduce_output():
-    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
-    kv_cp = CacheProcessorConfig(hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1)
+    backbone = replace(
+        smollm360m_backbone(num_layers=2),
+        hidden_size=128,
+        num_heads=2,
+        num_kv_heads=1,
+    )
+    kv_cp = CacheProcessorConfig(
+        hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1
+    )
     kv = replace(backbone, variant="icarus", cache_processor=kv_cp)
-    v = replace(backbone, variant="icarus", cache_processor=replace(kv_cp, update_stream="v"))
+    v = replace(
+        backbone,
+        variant="icarus",
+        cache_processor=replace(kv_cp, update_stream="v"),
+    )
     model = build_model(v)
 
-    assert processor_params(v) == sum(p.numel() for p in model.cache_processor.parameters())
+    assert processor_params(v) == sum(
+        p.numel() for p in model.cache_processor.parameters()
+    )
     assert processor_params(v) < processor_params(kv)
 
 
 def test_bgt_kv_norm_salience_adds_two_params():
-    backbone = replace(smollm360m_backbone(num_layers=2), hidden_size=128, num_heads=2, num_kv_heads=1)
-    cp = CacheProcessorConfig(hidden_size=64, intermediate_size=256, num_heads=1, num_kv_heads=1, update_stream="v")
+    backbone = replace(
+        smollm360m_backbone(num_layers=2),
+        hidden_size=128,
+        num_heads=2,
+        num_kv_heads=1,
+    )
+    cp = CacheProcessorConfig(
+        hidden_size=64,
+        intermediate_size=256,
+        num_heads=1,
+        num_kv_heads=1,
+        update_stream="v",
+    )
     standard = replace(backbone, variant="bgt", cache_processor=cp)
-    kv_norm = replace(backbone, variant="bgt", cache_processor=replace(cp, score="kv_norm"))
+    kv_norm = replace(
+        backbone, variant="bgt", cache_processor=replace(cp, score="kv_norm")
+    )
 
     assert processor_params(kv_norm) == processor_params(standard) + 2

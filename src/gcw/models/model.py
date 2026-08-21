@@ -48,12 +48,18 @@ class LanguageModel(nn.Module):
             return
         from gcw.models.backbones.qwen3 import _qwen35_linear_state_dynamics
 
-        setattr(self.cache_processor, "linear_state_dynamics", _qwen35_linear_state_dynamics(self.backbone))
+        setattr(
+            self.cache_processor,
+            "linear_state_dynamics",
+            _qwen35_linear_state_dynamics(self.backbone),
+        )
 
     def _processor_config(self) -> CacheProcessorConfig:
         config = self.config.cache_processor
         if config is None:
-            raise RuntimeError("processed language model has no cache processor configuration")
+            raise RuntimeError(
+                "processed language model has no cache processor configuration"
+            )
         return config
 
     def forward(
@@ -68,12 +74,17 @@ class LanguageModel(nn.Module):
     ) -> torch.Tensor:
         processor = self._processor_config()
         if activation_checkpoint_windows < 0:
-            raise ValueError("activation_checkpoint_windows must be non-negative")
+            raise ValueError(
+                "activation_checkpoint_windows must be non-negative"
+            )
         if activation_checkpoint_min_padded_sequence_length < 0:
-            raise ValueError("activation_checkpoint_min_padded_sequence_length must be non-negative")
+            raise ValueError(
+                "activation_checkpoint_min_padded_sequence_length must be non-negative"
+            )
         sequence_length_eligible = (
             activation_checkpoint_min_padded_sequence_length == 0
-            or input_ids.shape[1] >= activation_checkpoint_min_padded_sequence_length
+            or input_ids.shape[1]
+            >= activation_checkpoint_min_padded_sequence_length
         )
         checkpoint_segments = (
             activation_checkpoint_windows > 0
@@ -82,7 +93,9 @@ class LanguageModel(nn.Module):
             and self.training
             and torch.is_grad_enabled()
         )
-        effective_checkpoint_windows = activation_checkpoint_windows if checkpoint_segments else 0
+        effective_checkpoint_windows = (
+            activation_checkpoint_windows if checkpoint_segments else 0
+        )
         if checkpoint_segments:
             # Each original segment and each backward replay owns an independent
             # prepared execution. No graph-derived BT stack outlives its segment.
@@ -119,7 +132,9 @@ class LanguageModel(nn.Module):
         eos_token_id: int | None = None,
     ) -> torch.Tensor:
         processor = self._processor_config()
-        relative = self.config.processor_generation_mode == "post_prefill_relative"
+        relative = (
+            self.config.processor_generation_mode == "post_prefill_relative"
+        )
         return self.backbone.generate(
             input_ids,
             max_new_tokens,
@@ -141,7 +156,9 @@ class LanguageModel(nn.Module):
         pad_token_id: int | None = None,
     ) -> torch.Tensor:
         processor = self._processor_config()
-        relative = self.config.processor_generation_mode == "post_prefill_relative"
+        relative = (
+            self.config.processor_generation_mode == "post_prefill_relative"
+        )
         return self.backbone.generate_fast(
             input_ids,
             max_new_tokens,
@@ -175,7 +192,9 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
     if config.variant == "tf":
         return build_backbone(config)
 
-    from gcw.performance.backends.cache_processors import resolve_cache_processor_backend
+    from gcw.performance.backends.cache_processors import (
+        resolve_cache_processor_backend,
+    )
     from gcw.performance.backends.icarus import resolve_icarus_processor_backend
 
     resolve_cache_processor_backend(config)
@@ -188,14 +207,22 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
         processor_generation_mode="windowed",
     )
     if config.variant == "longshot":
-        backbone_config = replace(backbone_config, workspace_flow_refinement=None)
+        backbone_config = replace(
+            backbone_config, workspace_flow_refinement=None
+        )
     backbone = build_backbone(backbone_config)
     linear_state_dynamics = None
-    if config.variant == "longshot" and config.cache_processor and config.cache_processor.linear_state_cache:
+    if (
+        config.variant == "longshot"
+        and config.cache_processor
+        and config.cache_processor.linear_state_cache
+    ):
         from gcw.models.backbones.qwen3 import _qwen35_linear_state_dynamics
 
         linear_state_dynamics = _qwen35_linear_state_dynamics(backbone)
-    processor = build_cache_processor(config, linear_state_dynamics=linear_state_dynamics)
+    processor = build_cache_processor(
+        config, linear_state_dynamics=linear_state_dynamics
+    )
     return LanguageModel(config, backbone, processor)
 
 
@@ -205,7 +232,9 @@ def build_cache_processor(
     linear_state_dynamics: dict[int, Any] | None = None,
 ) -> CacheProcessorBase:
     """Construct one cache processor without constructing a backbone."""
-    from gcw.performance.backends.cache_processors import resolve_cache_processor_backend
+    from gcw.performance.backends.cache_processors import (
+        resolve_cache_processor_backend,
+    )
     from gcw.performance.backends.icarus import resolve_icarus_processor_backend
 
     resolve_cache_processor_backend(config)
@@ -215,15 +244,25 @@ def build_cache_processor(
 
         return PerLayerCacheProcessor(config)
     if config.variant == "bgt":
-        from gcw.models.cache_processors.standard import GlobalCacheProcessor as BGTProcessor
+        from gcw.models.cache_processors.standard import (
+            GlobalCacheProcessor as BGTProcessor,
+        )
 
         return BGTProcessor(config)
     if config.variant == "icarus":
-        from gcw.models.cache_processors.icarus import GlobalCacheProcessor as IcarusProcessor
+        from gcw.models.cache_processors.icarus import (
+            GlobalCacheProcessor as IcarusProcessor,
+        )
 
         return IcarusProcessor(config)
     if config.variant == "longshot":
-        from gcw.models.cache_processors.longshot import GlobalCacheProcessor as LongshotProcessor
+        from gcw.models.cache_processors.longshot import (
+            GlobalCacheProcessor as LongshotProcessor,
+        )
 
-        return LongshotProcessor(config, linear_state_dynamics=linear_state_dynamics)
-    raise ValueError(f"variant {config.variant!r} does not define a cache processor")
+        return LongshotProcessor(
+            config, linear_state_dynamics=linear_state_dynamics
+        )
+    raise ValueError(
+        f"variant {config.variant!r} does not define a cache processor"
+    )

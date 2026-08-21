@@ -20,7 +20,12 @@ def _cosmo2() -> HFTokenizer:
 
 
 class Tokenizer:
-    def __init__(self, tokenizer: HFTokenizer | None = None, vocab_size: int = COSMO2_VOCAB_SIZE, eot_id: int = COSMO2_EOT_ID):
+    def __init__(
+        self,
+        tokenizer: HFTokenizer | None = None,
+        vocab_size: int = COSMO2_VOCAB_SIZE,
+        eot_id: int = COSMO2_EOT_ID,
+    ):
         self.enc = tokenizer or _cosmo2()
         self.vocab_size = vocab_size
         self.eot_id = eot_id
@@ -29,7 +34,10 @@ class Tokenizer:
         return self.enc.encode(text, add_special_tokens=False).ids
 
     def encode_batch(self, texts: list[str]) -> list[list[int]]:
-        return [item.ids for item in self.enc.encode_batch(texts, add_special_tokens=False)]
+        return [
+            item.ids
+            for item in self.enc.encode_batch(texts, add_special_tokens=False)
+        ]
 
     def decode(self, ids) -> str:
         decoded = self.enc.decode(list(ids), skip_special_tokens=False)
@@ -71,8 +79,12 @@ class TransformersTokenizer:
         try:
             from transformers import AutoTokenizer
         except ImportError as exc:
-            raise ImportError("HF tokenizers require the convert/eval extra with transformers installed") from exc
-        self.enc = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
+            raise ImportError(
+                "HF tokenizers require the convert/eval extra with transformers installed"
+            ) from exc
+        self.enc = AutoTokenizer.from_pretrained(
+            source, trust_remote_code=False
+        )
         self.source = source
         self.eot_id = self.enc.eos_token_id or self.enc.pad_token_id or 0
         self.vocab_size = len(self.enc)
@@ -102,9 +114,17 @@ class TransformersTokenizer:
             add_generation_prompt=add_generation_prompt,
             enable_thinking=enable_thinking,
         )
-        token_ids: object = encoded.get("input_ids") if isinstance(encoded, Mapping) else encoded
-        if not isinstance(token_ids, list) or any(not isinstance(token_id, int) for token_id in token_ids):
-            raise TypeError("tokenised chat template must return one list of token IDs")
+        token_ids: object = (
+            encoded.get("input_ids")
+            if isinstance(encoded, Mapping)
+            else encoded
+        )
+        if not isinstance(token_ids, list) or any(
+            not isinstance(token_id, int) for token_id in token_ids
+        ):
+            raise TypeError(
+                "tokenised chat template must return one list of token IDs"
+            )
         return cast(list[int], token_ids)
 
     def get_vocab_size(self) -> int:
@@ -118,13 +138,17 @@ class TransformersTokenizer:
         )
 
 
-def _tokenizer_identity_sha256(tokenizer: object, source: str | None, vocab_size: int) -> str:
+def _tokenizer_identity_sha256(
+    tokenizer: object, source: str | None, vocab_size: int
+) -> str:
     get_vocab = getattr(tokenizer, "get_vocab", None)
     vocab = get_vocab() if callable(get_vocab) else {}
     payload = {
         "source": source,
         "name_or_path": str(getattr(tokenizer, "name_or_path", "")),
-        "vocab": sorted((str(token), int(token_id)) for token, token_id in vocab.items()),
+        "vocab": sorted(
+            (str(token), int(token_id)) for token, token_id in vocab.items()
+        ),
         "vocab_size": vocab_size,
         "eos_token_id": getattr(tokenizer, "eos_token_id", None),
         "pad_token_id": getattr(tokenizer, "pad_token_id", None),
@@ -132,7 +156,9 @@ def _tokenizer_identity_sha256(tokenizer: object, source: str | None, vocab_size
         "special_tokens_map": getattr(tokenizer, "special_tokens_map", {}),
         "chat_template": getattr(tokenizer, "chat_template", None),
     }
-    encoded = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=False).encode("utf-8")
+    encoded = json.dumps(
+        payload, sort_keys=True, default=str, ensure_ascii=False
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 

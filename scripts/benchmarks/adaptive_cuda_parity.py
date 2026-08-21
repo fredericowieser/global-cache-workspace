@@ -37,7 +37,12 @@ from scripts.benchmarks.adaptive_trace import (
 from scripts.benchmarks.harness import device_identity, write_integrity_json
 from gcw.checkpoint import load_backbone_checkpoint
 from gcw.config import load_train_config, to_dict
-from gcw.data.training import TrainingBatch, TrainingBatchStream, build_training_stream, cursor_to_dict
+from gcw.data.training import (
+    TrainingBatch,
+    TrainingBatchStream,
+    build_training_stream,
+    cursor_to_dict,
+)
 from gcw.models import build_model
 from gcw.performance.adjacent_pairs import (
     PAIRS_PER_STEP,
@@ -50,7 +55,10 @@ from gcw.performance.backends.qwen3 import (
     Qwen3BackboneChunkBackend,
     configure_qwen3_backbone_chunk_backend,
 )
-from gcw.performance.config import AdaptiveBatchingConfig, TritonCacheMovementConfig
+from gcw.performance.config import (
+    AdaptiveBatchingConfig,
+    TritonCacheMovementConfig,
+)
 from gcw.performance.triton.execution import (
     TritonCacheExecutionContext,
     configure_triton_cache_movement,
@@ -61,7 +69,10 @@ from gcw.provenance import (
     find_repository_root,
     repository_source_identity,
 )
-from gcw.training.model_setup import _apply_trainable_policy, _load_initial_model
+from gcw.training.model_setup import (
+    _apply_trainable_policy,
+    _load_initial_model,
+)
 from gcw.training.optimizer import (
     _build_optimizer,
     _clip_grad_norm,
@@ -74,7 +85,9 @@ ExecutionKind = Literal["fixed", "adaptive"]
 PairLossFunction = Callable[[torch.nn.Module, TrainingBatch], torch.Tensor]
 ModelFactory = Callable[[], torch.nn.Module]
 OptimizerFactory = Callable[[torch.nn.Module], torch.optim.Optimizer]
-ForwardContext = Callable[[torch.nn.Module, TrainingBatch], AbstractContextManager[Any]]
+ForwardContext = Callable[
+    [torch.nn.Module, TrainingBatch], AbstractContextManager[Any]
+]
 CheckpointExpectation = Callable[[TrainingBatch], bool]
 PrepareOptimizerStep = Callable[
     [torch.nn.Module, Sequence[torch.nn.Parameter], torch.optim.Optimizer, int],
@@ -172,9 +185,11 @@ def capture_rng() -> RngSnapshot:
         python=random.getstate(),
         numpy=np.random.get_state(),
         torch_cpu=torch.get_rng_state().clone(),
-        torch_cuda=tuple(state.clone() for state in torch.cuda.get_rng_state_all())
-        if torch.cuda.is_available()
-        else (),
+        torch_cuda=(
+            tuple(state.clone() for state in torch.cuda.get_rng_state_all())
+            if torch.cuda.is_available()
+            else ()
+        ),
     )
 
 
@@ -186,7 +201,9 @@ def restore_rng(snapshot: RngSnapshot) -> None:
         torch.cuda.set_rng_state_all(list(snapshot.torch_cuda))
 
 
-def reserve_parity_steps(stream: TrainingBatchStream, steps: int) -> tuple[ReservedParityStep, ...]:
+def reserve_parity_steps(
+    stream: TrainingBatchStream, steps: int
+) -> tuple[ReservedParityStep, ...]:
     """Reserve complete optimizer steps once, before any compared execution."""
     if steps <= 0:
         raise ValueError("parity trajectory must contain at least one step")
@@ -217,14 +234,18 @@ def run_adaptive_parity(
 ) -> dict[str, Any]:
     """Run and compare fixed batch-2, adaptive eager, and adaptive compiled paths."""
     if len(variants) < 2:
-        raise ValueError("formal parity requires at least two execution variants")
+        raise ValueError(
+            "formal parity requires at least two execution variants"
+        )
     names = [variant.name for variant in variants]
     if len(set(names)) != len(names):
         raise ValueError("parity variant names must be unique")
     if not reserved_steps:
         raise ValueError("formal parity requires reserved steps")
     if process_every <= 0:
-        raise ValueError("formal parity requires a positive cache process interval")
+        raise ValueError(
+            "formal parity requires a positive cache process interval"
+        )
     if resume_evidence_requested:
         raise ValueError(
             "production resume evidence requested, but this benchmark does not execute production checkpoint save/reload"
@@ -250,13 +271,17 @@ def run_adaptive_parity(
                 adaptive_policy=adaptive_policy,
                 process_every=process_every,
                 required_event_operations=required_event_operations,
-                checkpoint_expected=variant.checkpoint_expected or checkpoint_factory,
+                checkpoint_expected=variant.checkpoint_expected
+                or checkpoint_factory,
                 forward_context=context_factory,
                 prepare_optimizer_step=prepare_optimizer_step,
             )
         )
     reference = results[0]
-    comparisons = [_compare_variant(reference, candidate, tolerances) for candidate in results[1:]]
+    comparisons = [
+        _compare_variant(reference, candidate, tolerances)
+        for candidate in results[1:]
+    ]
     passed = all(comparison["passed"] for comparison in comparisons)
     payload = {
         "schema": "gcw.adaptive_cuda_parity.v2",
@@ -303,9 +328,15 @@ def _run_variant(
     forward_context: ForwardContext,
     prepare_optimizer_step: PrepareOptimizerStep | None,
 ) -> VariantResult:
-    parameters = [(name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad]
+    parameters = [
+        (name, parameter)
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    ]
     if not parameters:
-        raise ValueError(f"parity variant {variant.name!r} has no trainable parameters")
+        raise ValueError(
+            f"parity variant {variant.name!r} has no trainable parameters"
+        )
     initial_rng_sha256 = capture_rng().digest()
     step_results: list[VariantStepResult] = []
     for step_index, reserved in enumerate(reserved_steps):
@@ -315,50 +346,90 @@ def _run_variant(
         with trace_cache_events(recorder):
             if variant.execution == "fixed":
                 groups: Iterator[tuple[int, int, TrainingBatch]] = (
-                    (pair_index, pair_index + 1, batch) for pair_index, batch in enumerate(reserved.reservation.pairs)
+                    (pair_index, pair_index + 1, batch)
+                    for pair_index, batch in enumerate(
+                        reserved.reservation.pairs
+                    )
                 )
             else:
-                plan = plan_contiguous_pair_groups(reserved.reservation, adaptive_policy)
-                groups = (
-                    (group.pair_start, group.pair_stop, collate_pair_group(plan, group).batch) for group in plan.groups
+                plan = plan_contiguous_pair_groups(
+                    reserved.reservation, adaptive_policy
                 )
-            for group_index, (pair_start, pair_stop, batch) in enumerate(groups):
+                groups = (
+                    (
+                        group.pair_start,
+                        group.pair_stop,
+                        collate_pair_group(plan, group).batch,
+                    )
+                    for group in plan.groups
+                )
+            for group_index, (pair_start, pair_stop, batch) in enumerate(
+                groups
+            ):
                 scope = TraceScope(
                     step=step_index,
                     group=group_index,
-                    row_keys=row_keys_for_pairs(step_index, pair_start, pair_stop),
+                    row_keys=row_keys_for_pairs(
+                        step_index, pair_start, pair_stop
+                    ),
                     source_padded_widths=row_widths_for_pairs(
-                        reserved.reservation.padded_lengths, pair_start, pair_stop
+                        reserved.reservation.padded_lengths,
+                        pair_start,
+                        pair_stop,
                     ),
                     process_every=process_every,
                     checkpoint_expected=checkpoint_expected(batch),
                 )
                 recorder.expect_scope(scope)
-                with recorder.bind_scope(scope), active_trace_scope(scope), forward_context(model, batch):
+                with (
+                    recorder.bind_scope(scope),
+                    active_trace_scope(scope),
+                    forward_context(model, batch),
+                ):
                     losses = pair_loss(model, batch)
                     if losses.shape != (pair_stop - pair_start,):
                         raise RuntimeError(
                             f"pair loss returned {tuple(losses.shape)} for {pair_stop - pair_start} pairs"
                         )
-                    for offset, value in enumerate(losses.detach().to(device="cpu", dtype=torch.float64)):
+                    for offset, value in enumerate(
+                        losses.detach().to(device="cpu", dtype=torch.float64)
+                    ):
                         pair_values[pair_start + offset] = value
                     (losses.sum() / PAIRS_PER_STEP).backward()
         if any(value is None for value in pair_values):
-            raise RuntimeError("parity execution did not produce every reserved pair loss")
+            raise RuntimeError(
+                "parity execution did not produce every reserved pair loss"
+            )
         gradients = {
-            name: parameter.grad.detach().cpu().clone() for name, parameter in parameters if parameter.grad is not None
+            name: parameter.grad.detach().cpu().clone()
+            for name, parameter in parameters
+            if parameter.grad is not None
         }
-        missing_gradients = tuple(sorted(name for name, parameter in parameters if parameter.grad is None))
+        missing_gradients = tuple(
+            sorted(
+                name for name, parameter in parameters if parameter.grad is None
+            )
+        )
         if prepare_optimizer_step is not None:
-            prepare_optimizer_step(model, [parameter for _, parameter in parameters], optimizer, step_index)
+            prepare_optimizer_step(
+                model,
+                [parameter for _, parameter in parameters],
+                optimizer,
+                step_index,
+            )
         optimizer.step()
         moments, optimizer_steps = _optimizer_snapshot(optimizer, parameters)
         step_results.append(
             VariantStepResult(
-                pair_losses=torch.stack([value for value in pair_values if value is not None]),
+                pair_losses=torch.stack(
+                    [value for value in pair_values if value is not None]
+                ),
                 gradients=gradients,
                 missing_gradients=missing_gradients,
-                parameters={name: parameter.detach().cpu().clone() for name, parameter in parameters},
+                parameters={
+                    name: parameter.detach().cpu().clone()
+                    for name, parameter in parameters
+                },
                 adam_moments=moments,
                 optimizer_steps=optimizer_steps,
                 rng_sha256=capture_rng().digest(),
@@ -386,11 +457,16 @@ def _optimizer_snapshot(
         tensor_moments = {
             key: value.detach().cpu().clone()
             for key, value in state.items()
-            if key in {"exp_avg", "exp_avg_sq", "max_exp_avg_sq"} and isinstance(value, torch.Tensor)
+            if key in {"exp_avg", "exp_avg_sq", "max_exp_avg_sq"}
+            and isinstance(value, torch.Tensor)
         }
         moments[name] = tensor_moments
         raw_step = state.get("step", 0)
-        steps[name] = float(raw_step.detach().cpu()) if isinstance(raw_step, torch.Tensor) else float(raw_step)
+        steps[name] = (
+            float(raw_step.detach().cpu())
+            if isinstance(raw_step, torch.Tensor)
+            else float(raw_step)
+        )
     return moments, steps
 
 
@@ -402,19 +478,38 @@ def _compare_variant(
     if len(reference.steps) != len(candidate.steps):
         raise ValueError("parity variants have different trajectory lengths")
     step_comparisons: list[dict[str, Any]] = []
-    for step_index, (expected, actual) in enumerate(zip(reference.steps, candidate.steps, strict=True)):
-        pair_comparison = _compare_tensor(expected.pair_losses, actual.pair_losses, tolerances.pair_losses)
-        gradient_comparison = _compare_vector_family(expected.gradients, actual.gradients, tolerances.gradients)
-        missing_gradients_equal = expected.missing_gradients == actual.missing_gradients
-        parameter_comparison = _compare_named_tensors(expected.parameters, actual.parameters, tolerances.parameters)
+    for step_index, (expected, actual) in enumerate(
+        zip(reference.steps, candidate.steps, strict=True)
+    ):
+        pair_comparison = _compare_tensor(
+            expected.pair_losses, actual.pair_losses, tolerances.pair_losses
+        )
+        gradient_comparison = _compare_vector_family(
+            expected.gradients, actual.gradients, tolerances.gradients
+        )
+        missing_gradients_equal = (
+            expected.missing_gradients == actual.missing_gradients
+        )
+        parameter_comparison = _compare_named_tensors(
+            expected.parameters, actual.parameters, tolerances.parameters
+        )
         expected_moments = _flatten_nested_tensors(expected.adam_moments)
         actual_moments = _flatten_nested_tensors(actual.adam_moments)
-        moment_comparison = _compare_vector_family(expected_moments, actual_moments, tolerances.adam_moments)
+        moment_comparison = _compare_vector_family(
+            expected_moments, actual_moments, tolerances.adam_moments
+        )
         event_comparison = _compare_events(expected, actual)
         optimizer_steps_finite = all(
-            math.isfinite(value) for value in (*expected.optimizer_steps.values(), *actual.optimizer_steps.values())
+            math.isfinite(value)
+            for value in (
+                *expected.optimizer_steps.values(),
+                *actual.optimizer_steps.values(),
+            )
         )
-        optimizer_steps_equal = optimizer_steps_finite and expected.optimizer_steps == actual.optimizer_steps
+        optimizer_steps_equal = (
+            optimizer_steps_finite
+            and expected.optimizer_steps == actual.optimizer_steps
+        )
         rng_equal = expected.rng_sha256 == actual.rng_sha256
         passed = all(
             (
@@ -445,17 +540,22 @@ def _compare_variant(
                 "passed": passed,
             }
         )
-    initial_rng_equal = reference.initial_rng_sha256 == candidate.initial_rng_sha256
+    initial_rng_equal = (
+        reference.initial_rng_sha256 == candidate.initial_rng_sha256
+    )
     return {
         "reference": reference.name,
         "candidate": candidate.name,
         "initial_rng_equal": initial_rng_equal,
         "steps": step_comparisons,
-        "passed": initial_rng_equal and all(step["passed"] for step in step_comparisons),
+        "passed": initial_rng_equal
+        and all(step["passed"] for step in step_comparisons),
     }
 
 
-def _compare_events(expected: VariantStepResult, actual: VariantStepResult) -> dict[str, Any]:
+def _compare_events(
+    expected: VariantStepResult, actual: VariantStepResult
+) -> dict[str, Any]:
     expected_primary = _semantic_primary_events(expected.events)
     actual_primary = _semantic_primary_events(actual.events)
     primary_equal = expected_primary == actual_primary
@@ -477,8 +577,12 @@ def _compare_events(expected: VariantStepResult, actual: VariantStepResult) -> d
     }
 
 
-def _semantic_primary_events(events: Sequence[CacheEvent]) -> dict[str, tuple[int, ...]]:
-    selected = [event for event in events if event.semantic and event.phase == "primary"]
+def _semantic_primary_events(
+    events: Sequence[CacheEvent],
+) -> dict[str, tuple[int, ...]]:
+    selected = [
+        event for event in events if event.semantic and event.phase == "primary"
+    ]
     identities = [event.stable_event_id for event in selected]
     if len(identities) != len(set(identities)):
         return {}
@@ -492,12 +596,14 @@ def _compare_named_tensors(
 ) -> dict[str, Any]:
     names_equal = expected.keys() == actual.keys()
     comparisons = {
-        name: _compare_tensor(expected[name], actual[name], tolerance) for name in expected.keys() & actual.keys()
+        name: _compare_tensor(expected[name], actual[name], tolerance)
+        for name in expected.keys() & actual.keys()
     }
     return {
         "names_equal": names_equal,
         "tensors": comparisons,
-        "passed": names_equal and all(result["passed"] for result in comparisons.values()),
+        "passed": names_equal
+        and all(result["passed"] for result in comparisons.values()),
     }
 
 
@@ -505,7 +611,9 @@ def _flatten_nested_tensors(
     values: Mapping[str, Mapping[str, torch.Tensor]],
 ) -> dict[str, torch.Tensor]:
     return {
-        f"{parameter}/{moment}": tensor for parameter, moments in values.items() for moment, tensor in moments.items()
+        f"{parameter}/{moment}": tensor
+        for parameter, moments in values.items()
+        for moment, tensor in moments.items()
     }
 
 
@@ -516,12 +624,29 @@ def _compare_vector_family(
 ) -> dict[str, Any]:
     names_equal = expected.keys() == actual.keys()
     common = sorted(expected.keys() & actual.keys())
-    tensors = {name: _compare_vector(expected[name], actual[name], tolerance) for name in common}
-    shape_compatible = all(expected[name].shape == actual[name].shape for name in common)
+    tensors = {
+        name: _compare_vector(expected[name], actual[name], tolerance)
+        for name in common
+    }
+    shape_compatible = all(
+        expected[name].shape == actual[name].shape for name in common
+    )
     if common and shape_compatible:
-        expected_global = torch.cat([expected[name].detach().reshape(-1).to(torch.float64) for name in common])
-        actual_global = torch.cat([actual[name].detach().reshape(-1).to(torch.float64) for name in common])
-        global_comparison = _compare_vector(expected_global, actual_global, tolerance)
+        expected_global = torch.cat(
+            [
+                expected[name].detach().reshape(-1).to(torch.float64)
+                for name in common
+            ]
+        )
+        actual_global = torch.cat(
+            [
+                actual[name].detach().reshape(-1).to(torch.float64)
+                for name in common
+            ]
+        )
+        global_comparison = _compare_vector(
+            expected_global, actual_global, tolerance
+        )
     else:
         global_comparison = {"available": False, "passed": False}
     return {
@@ -578,8 +703,13 @@ def _compare_vector(
     expected_norm = _finite_metric(torch.linalg.vector_norm(expected_float))
     actual_norm = _finite_metric(torch.linalg.vector_norm(actual_float))
     difference_norm = _finite_metric(torch.linalg.vector_norm(difference))
-    max_abs = _finite_metric(difference.abs().max()) if difference.numel() else 0.0
-    metrics_finite = all(value is not None for value in (expected_norm, actual_norm, difference_norm, max_abs))
+    max_abs = (
+        _finite_metric(difference.abs().max()) if difference.numel() else 0.0
+    )
+    metrics_finite = all(
+        value is not None
+        for value in (expected_norm, actual_norm, difference_norm, max_abs)
+    )
     if not metrics_finite:
         return {
             **base,
@@ -596,10 +726,19 @@ def _compare_vector(
     assert expected_norm is not None and actual_norm is not None
     assert difference_norm is not None and max_abs is not None
     near_zero = expected_norm <= tolerance.near_zero_norm
-    raw_relative_l2 = difference_norm / expected_norm if expected_norm > 0 else None
-    relative_l2 = raw_relative_l2 if raw_relative_l2 is None or math.isfinite(raw_relative_l2) else None
+    raw_relative_l2 = (
+        difference_norm / expected_norm if expected_norm > 0 else None
+    )
+    relative_l2 = (
+        raw_relative_l2
+        if raw_relative_l2 is None or math.isfinite(raw_relative_l2)
+        else None
+    )
     cosine = (
-        _finite_metric(torch.dot(expected_float.reshape(-1), actual_float.reshape(-1)) / (expected_norm * actual_norm))
+        _finite_metric(
+            torch.dot(expected_float.reshape(-1), actual_float.reshape(-1))
+            / (expected_norm * actual_norm)
+        )
         if expected_norm > 0 and actual_norm > 0
         else None
     )
@@ -654,9 +793,15 @@ def _compare_tensor(
         }
     difference = (actual_float - expected_float).abs()
     denominator = expected_float.abs().clamp_min(torch.finfo(torch.float64).eps)
-    close = torch.isclose(actual_float, expected_float, atol=tolerance.atol, rtol=tolerance.rtol)
+    close = torch.isclose(
+        actual_float, expected_float, atol=tolerance.atol, rtol=tolerance.rtol
+    )
     max_abs = _finite_metric(difference.max()) if difference.numel() else 0.0
-    max_rel = _finite_metric((difference / denominator).max()) if difference.numel() else 0.0
+    max_rel = (
+        _finite_metric((difference / denominator).max())
+        if difference.numel()
+        else 0.0
+    )
     metrics_finite = max_abs is not None and max_rel is not None
     return {
         "shape_equal": True,
@@ -681,7 +826,11 @@ def _tensor_summary(tensor: torch.Tensor) -> dict[str, Any]:
     cpu = tensor.detach().cpu().contiguous()
     float_value = cpu.float()
     nonfinite_count = int((~torch.isfinite(float_value)).sum())
-    norm = _finite_metric(torch.linalg.vector_norm(float_value)) if cpu.numel() and not nonfinite_count else None
+    norm = (
+        _finite_metric(torch.linalg.vector_norm(float_value))
+        if cpu.numel() and not nonfinite_count
+        else None
+    )
     return {
         "shape": list(cpu.shape),
         "dtype": str(cpu.dtype),
@@ -699,19 +848,35 @@ def _variant_to_json(result: VariantResult) -> dict[str, Any]:
         "steps": [
             {
                 "step": step_index,
-                "pair_losses": [_json_scalar(value) for value in step.pair_losses],
+                "pair_losses": [
+                    _json_scalar(value) for value in step.pair_losses
+                ],
                 "pair_losses_by_key": {
-                    f"step-{step_index:04d}/pair-{pair_index:02d}": _json_scalar(value)
+                    f"step-{step_index:04d}/pair-{pair_index:02d}": _json_scalar(
+                        value
+                    )
                     for pair_index, value in enumerate(step.pair_losses)
                 },
-                "gradients": {name: _tensor_summary(value) for name, value in step.gradients.items()},
+                "gradients": {
+                    name: _tensor_summary(value)
+                    for name, value in step.gradients.items()
+                },
                 "missing_gradients": list(step.missing_gradients),
-                "parameters": {name: _tensor_summary(value) for name, value in step.parameters.items()},
+                "parameters": {
+                    name: _tensor_summary(value)
+                    for name, value in step.parameters.items()
+                },
                 "adam_moments": {
-                    name: {moment: _tensor_summary(value) for moment, value in moments.items()}
+                    name: {
+                        moment: _tensor_summary(value)
+                        for moment, value in moments.items()
+                    }
                     for name, moments in step.adam_moments.items()
                 },
-                "optimizer_steps": {name: _json_float(value) for name, value in step.optimizer_steps.items()},
+                "optimizer_steps": {
+                    name: _json_float(value)
+                    for name, value in step.optimizer_steps.items()
+                },
                 "rng_sha256": step.rng_sha256,
                 "event_coverage": step.event_coverage,
                 "recomputation": step.recomputation,
@@ -738,7 +903,9 @@ def _json_scalar(value: torch.Tensor) -> float | dict[str, str]:
     return _json_float(float(value))
 
 
-def _clone_named_tensors(state: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def _clone_named_tensors(
+    state: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
     return {name: tensor.detach().clone() for name, tensor in state.items()}
 
 
@@ -748,11 +915,19 @@ def _tensor_mapping_sha256(state: Mapping[str, torch.Tensor]) -> str:
     for name, tensor in sorted(state.items()):
         value = tensor.detach().cpu().contiguous()
         metadata = json.dumps(
-            {"name": name, "dtype": str(value.dtype), "shape": list(value.shape)},
+            {
+                "name": name,
+                "dtype": str(value.dtype),
+                "shape": list(value.shape),
+            },
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        byte_view = value.reshape(1).view(torch.uint8) if value.ndim == 0 else value.view(torch.uint8)
+        byte_view = (
+            value.reshape(1).view(torch.uint8)
+            if value.ndim == 0
+            else value.view(torch.uint8)
+        )
         digest.update(len(metadata).to_bytes(8, "big"))
         digest.update(metadata)
         digest.update(byte_view.numpy().tobytes())
@@ -782,7 +957,10 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     repository = find_repository_root(Path(__file__))
     source = repository_source_identity(
         repository,
-        executed_files=(Path(__file__), Path(__file__).with_name("adaptive_trace.py")),
+        executed_files=(
+            Path(__file__),
+            Path(__file__).with_name("adaptive_trace.py"),
+        ),
         require_git=True,
     )
     if source["git_dirty"]:
@@ -794,21 +972,37 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             "production resume evidence is unavailable: this benchmark does not save/reload production checkpoints"
         )
     if args.steps <= 0 or args.steps > config.max_steps:
-        raise ValueError("CUDA parity steps must be positive and no greater than train max_steps")
+        raise ValueError(
+            "CUDA parity steps must be positive and no greater than train max_steps"
+        )
     variant_set = getattr(args, "variant_set", "adaptive")
-    if variant_set not in {"adaptive", "fixed_regional", "checkpoint_threshold", "triton_cache"}:
-        raise ValueError(f"unsupported CUDA parity variant set: {variant_set!r}")
+    if variant_set not in {
+        "adaptive",
+        "fixed_regional",
+        "checkpoint_threshold",
+        "triton_cache",
+    }:
+        raise ValueError(
+            f"unsupported CUDA parity variant set: {variant_set!r}"
+        )
     policy = config.performance.adaptive_batching
     if variant_set == "adaptive" and not policy.enabled:
-        raise ValueError("adaptive CUDA parity requires performance.adaptive_batching.enabled=true")
-    candidate_checkpoint_threshold = getattr(args, "candidate_checkpoint_min_padded_sequence_length", None)
+        raise ValueError(
+            "adaptive CUDA parity requires performance.adaptive_batching.enabled=true"
+        )
+    candidate_checkpoint_threshold = getattr(
+        args, "candidate_checkpoint_min_padded_sequence_length", None
+    )
     if variant_set == "checkpoint_threshold":
         if config.activation_checkpoint_windows <= 0:
-            raise ValueError("checkpoint-threshold parity requires activation_checkpoint_windows>0")
+            raise ValueError(
+                "checkpoint-threshold parity requires activation_checkpoint_windows>0"
+            )
         if (
             isinstance(candidate_checkpoint_threshold, bool)
             or not isinstance(candidate_checkpoint_threshold, int)
-            or candidate_checkpoint_threshold <= config.activation_checkpoint_min_padded_sequence_length
+            or candidate_checkpoint_threshold
+            <= config.activation_checkpoint_min_padded_sequence_length
         ):
             raise ValueError(
                 "checkpoint-threshold parity requires a candidate threshold greater than the reference threshold"
@@ -817,17 +1011,29 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("CUDA parity CLI requires distributed='none'")
     diffusion = config.model.diffusion_processor
     if diffusion is not None and diffusion.noise_scale > 0:
-        raise ValueError("CUDA parity CLI rejects noisy Diffusion before model allocation")
-    if config.model.family != "qwen3" or config.model.variant not in {"bt", "bgt"}:
-        raise ValueError("compiled CUDA parity CLI currently supports deterministic Qwen3 BT/BGT only")
+        raise ValueError(
+            "CUDA parity CLI rejects noisy Diffusion before model allocation"
+        )
+    if config.model.family != "qwen3" or config.model.variant not in {
+        "bt",
+        "bgt",
+    }:
+        raise ValueError(
+            "compiled CUDA parity CLI currently supports deterministic Qwen3 BT/BGT only"
+        )
     processor = config.model.cache_processor
     if processor is not None and processor.attention_dropout != 0:
         raise ValueError("CUDA parity CLI rejects processor dropout")
     if config.model.lora is not None and config.model.lora.dropout != 0:
         raise ValueError("CUDA parity CLI rejects LoRA dropout")
     if processor is None:
-        raise ValueError("CUDA parity CLI requires a standard BT/BGT cache processor")
-    required_operations = ("select", "write_v" if processor.update_stream == "v" else "write_kv")
+        raise ValueError(
+            "CUDA parity CLI requires a standard BT/BGT cache processor"
+        )
+    required_operations = (
+        "select",
+        "write_v" if processor.update_stream == "v" else "write_kv",
+    )
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA parity requested but CUDA is unavailable")
@@ -840,9 +1046,15 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     ) -> torch.nn.Module:
         compile_regions = backbone_backend is not None
         environment = {
-            "GCW_BT_PROCESSOR_BACKEND": ("compile" if compile_regions and config.model.variant == "bt" else "eager"),
+            "GCW_BT_PROCESSOR_BACKEND": (
+                "compile"
+                if compile_regions and config.model.variant == "bt"
+                else "eager"
+            ),
             "GCW_CACHE_PROCESSOR_BACKEND": (
-                "compile" if compile_regions and config.model.variant == "bgt" else "eager"
+                "compile"
+                if compile_regions and config.model.variant == "bgt"
+                else "eager"
             ),
         }
         with _temporary_environment(environment):
@@ -856,7 +1068,9 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             if backbone_backend is not None:
                 configure_qwen3_backbone_chunk_backend(model, backbone_backend)
             if triton_cache:
-                with _temporary_environment({"GCW_ALLOW_UNQUALIFIED_TRITON_CACHE": "1"}):
+                with _temporary_environment(
+                    {"GCW_ALLOW_UNQUALIFIED_TRITON_CACHE": "1"}
+                ):
                     configure_triton_cache_movement(
                         model,
                         TritonCacheMovementConfig(enabled=True),
@@ -892,7 +1106,9 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         if callable(close):
             close()
 
-    def pair_losses(model: torch.nn.Module, batch: TrainingBatch) -> torch.Tensor:
+    def pair_losses(
+        model: torch.nn.Module, batch: TrainingBatch
+    ) -> torch.Tensor:
         row_sums, row_counts = row_loss_sums_and_counts(
             model,
             batch.x,
@@ -900,14 +1116,27 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
             loss_backend=config.loss_backend,
             attention_mask=batch.attention_mask,
             activation_checkpoint_windows=config.activation_checkpoint_windows,
-            activation_checkpoint_min_padded_sequence_length=getattr(model, "_gcw_parity_checkpoint_threshold"),
+            activation_checkpoint_min_padded_sequence_length=getattr(
+                model, "_gcw_parity_checkpoint_threshold"
+            ),
         )
-        return row_sums.reshape(-1, 2).sum(dim=1) / row_counts.reshape(-1, 2).sum(dim=1).clamp_min(1)
+        return row_sums.reshape(-1, 2).sum(dim=1) / row_counts.reshape(
+            -1, 2
+        ).sum(dim=1).clamp_min(1)
 
     def optimizer_factory(model: torch.nn.Module) -> torch.optim.Optimizer:
-        return _build_optimizer([parameter for parameter in model.parameters() if parameter.requires_grad], config)
+        return _build_optimizer(
+            [
+                parameter
+                for parameter in model.parameters()
+                if parameter.requires_grad
+            ],
+            config,
+        )
 
-    def autocast_context(_model: torch.nn.Module, _batch: TrainingBatch) -> AbstractContextManager[Any]:
+    def autocast_context(
+        _model: torch.nn.Module, _batch: TrainingBatch
+    ) -> AbstractContextManager[Any]:
         return torch.autocast(
             device_type=device.type,
             dtype=torch.bfloat16,
@@ -916,10 +1145,13 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
 
     def checkpoint_expectation(threshold: int) -> CheckpointExpectation:
         return lambda batch: (
-            config.activation_checkpoint_windows > 0 and (threshold == 0 or batch.x.shape[1] >= threshold)
+            config.activation_checkpoint_windows > 0
+            and (threshold == 0 or batch.x.shape[1] >= threshold)
         )
 
-    expects_checkpoint = checkpoint_expectation(config.activation_checkpoint_min_padded_sequence_length)
+    expects_checkpoint = checkpoint_expectation(
+        config.activation_checkpoint_min_padded_sequence_length
+    )
 
     def prepare_optimizer_step(
         model: torch.nn.Module,
@@ -929,8 +1161,16 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     ) -> None:
         if config.grad_clip:
             _clip_grad_norm(model, list(parameters), config.grad_clip)
-        lr_scale = _wsd_lr(step, config.max_steps, config.warmup_steps, config.warmdown_ratio, config.final_lr_frac)
-        weight_decay = _weight_decay(step, config.max_steps, config.weight_decay)
+        lr_scale = _wsd_lr(
+            step,
+            config.max_steps,
+            config.warmup_steps,
+            config.warmdown_ratio,
+            config.final_lr_frac,
+        )
+        weight_decay = _weight_decay(
+            step, config.max_steps, config.weight_decay
+        )
         for group in optimizer.param_groups:
             group["lr"] = group["initial_lr"] * lr_scale
             if group.get("decay", False):
@@ -941,12 +1181,16 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
         variants = (
             ParityVariant("fixed_batch2_eager", "fixed", lambda: build(None)),
             ParityVariant("adaptive_eager", "adaptive", lambda: build(None)),
-            ParityVariant("adaptive_compiled", "adaptive", lambda: build("compile")),
+            ParityVariant(
+                "adaptive_compiled", "adaptive", lambda: build("compile")
+            ),
         )
     elif variant_set == "fixed_regional":
         variants = (
             ParityVariant("fixed_batch2_eager", "fixed", lambda: build(None)),
-            ParityVariant("fixed_batch2_compiled", "fixed", lambda: build("compile")),
+            ParityVariant(
+                "fixed_batch2_compiled", "fixed", lambda: build("compile")
+            ),
             ParityVariant(
                 "fixed_batch2_compile_full_windows",
                 "fixed",
@@ -965,16 +1209,26 @@ def _real_model_cli(args: argparse.Namespace) -> dict[str, Any]:
     elif variant_set == "checkpoint_threshold":
         assert isinstance(candidate_checkpoint_threshold, int)
         variants = (
-            ParityVariant("fixed_batch2_checkpoint_reference", "fixed", lambda: build(None)),
+            ParityVariant(
+                "fixed_batch2_checkpoint_reference",
+                "fixed",
+                lambda: build(None),
+            ),
             ParityVariant(
                 "fixed_batch2_checkpoint_candidate",
                 "fixed",
-                lambda: build(None, checkpoint_threshold=candidate_checkpoint_threshold),
-                checkpoint_expected=checkpoint_expectation(candidate_checkpoint_threshold),
+                lambda: build(
+                    None, checkpoint_threshold=candidate_checkpoint_threshold
+                ),
+                checkpoint_expected=checkpoint_expectation(
+                    candidate_checkpoint_threshold
+                ),
             ),
         )
     else:
-        raise ValueError(f"unsupported CUDA parity variant set: {variant_set!r}")
+        raise ValueError(
+            f"unsupported CUDA parity variant set: {variant_set!r}"
+        )
     payload = run_adaptive_parity(
         initial_model,
         variants,
@@ -1020,7 +1274,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     parser.add_argument(
         "--variant-set",
-        choices=("adaptive", "fixed_regional", "checkpoint_threshold", "triton_cache"),
+        choices=(
+            "adaptive",
+            "fixed_regional",
+            "checkpoint_threshold",
+            "triton_cache",
+        ),
         default="adaptive",
         help="compare adaptive grouping, fixed regional compilers, or checkpoint thresholds",
     )

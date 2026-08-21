@@ -24,7 +24,10 @@ def test_extract_paper_table_uses_martin_metric_mapping():
                 "gsm8k_hard": {"exact_match,flexible": 0.3},
                 "theoremqa": {"exact_match,none": 0.4},
                 "logiqa": {"acc,none": 0.01, "acc_norm,none": 0.5},
-                "agieval_gaokao_mathqa": {"acc,none": 0.02, "acc_norm,none": 0.6},
+                "agieval_gaokao_mathqa": {
+                    "acc,none": 0.02,
+                    "acc_norm,none": 0.6,
+                },
             }
         }
     )

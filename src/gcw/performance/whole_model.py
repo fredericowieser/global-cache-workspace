@@ -27,5 +27,7 @@ def maybe_compile_whole_model(model: torch.nn.Module) -> torch.nn.Module:
     if mode == "default":
         return cast(torch.nn.Module, torch.compile(model))
     if mode == "reduce-overhead":
-        return cast(torch.nn.Module, torch.compile(model, mode="reduce-overhead"))
+        return cast(
+            torch.nn.Module, torch.compile(model, mode="reduce-overhead")
+        )
     raise ValueError("GCW_COMPILE must be 0, default, or reduce-overhead")

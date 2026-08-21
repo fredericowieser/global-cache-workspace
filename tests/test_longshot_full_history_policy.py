@@ -6,11 +6,19 @@ import pytest
 import torch
 
 from gcw.architecture import resolve_experiment, resolve_model
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig, to_dict
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    ModelConfig,
+    TrainConfig,
+    to_dict,
+)
 from gcw.data.training import RandomCursor
 from gcw.models import build_model
 from gcw.performance.config import LongshotFullHistoryConfig, PerformanceConfig
-from gcw.performance.longshot_cache import longshot_full_history_execution_metadata
+from gcw.performance.longshot_cache import (
+    longshot_full_history_execution_metadata,
+)
 from gcw.provenance import canonical_json_sha256
 from gcw.training.checkpoint import (
     CheckpointCompatibilityError,
@@ -70,7 +78,9 @@ def _fingerprint(config: TrainConfig) -> dict[str, object]:
     return _training_fingerprint(config, 1, 256, 256, 1)
 
 
-def test_disabled_policy_preserves_normalized_payload_and_same_environment_identities() -> None:
+def test_disabled_policy_preserves_normalized_payload_and_same_environment_identities() -> (
+    None
+):
     config = _train_config()
     explicit_default = replace(config, performance=PerformanceConfig())
 
@@ -90,40 +100,71 @@ def test_disabled_policy_preserves_normalized_payload_and_same_environment_ident
     assert experiment_receipt == explicit_experiment_receipt
 
 
-def test_enabled_policy_is_authenticated_in_metadata_and_resume_fingerprint() -> None:
+def test_enabled_policy_is_authenticated_in_metadata_and_resume_fingerprint() -> (
+    None
+):
     first = LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
     second = replace(first, max_temp_bytes=8192)
     first_config = _train_config(history=first)
     second_config = _train_config(history=second)
 
     first_metadata = longshot_full_history_execution_metadata(first)
-    assert first_metadata["requested_via"] == "TrainConfig.performance.longshot_full_history"
     assert (
-        first_metadata["fingerprint_sha256"] != longshot_full_history_execution_metadata(second)["fingerprint_sha256"]
+        first_metadata["requested_via"]
+        == "TrainConfig.performance.longshot_full_history"
     )
-    assert _fingerprint(first_config)["longshot_full_history_execution"] == first_metadata
-    assert canonical_json_sha256(_fingerprint(first_config)) != canonical_json_sha256(_fingerprint(second_config))
+    assert (
+        first_metadata["fingerprint_sha256"]
+        != longshot_full_history_execution_metadata(second)[
+            "fingerprint_sha256"
+        ]
+    )
+    assert (
+        _fingerprint(first_config)["longshot_full_history_execution"]
+        == first_metadata
+    )
+    assert canonical_json_sha256(
+        _fingerprint(first_config)
+    ) != canonical_json_sha256(_fingerprint(second_config))
     assert first_metadata["fingerprint_sha256"] == (
         "0a5429ce764221587d1aedc77cfa68a2f0b319edb822164a40653b0a37594bf4"
     )
 
 
-def test_unrope_strategy_is_versioned_and_changes_the_authenticated_fingerprint() -> None:
+def test_unrope_strategy_is_versioned_and_changes_the_authenticated_fingerprint() -> (
+    None
+):
     history = LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
     processor = replace(_train_config().model.cache_processor, unrope_keys=True)
     unroped = _train_config(history=history, processor=processor)
 
     eager_metadata = longshot_full_history_execution_metadata(history)
-    unrope_metadata = longshot_full_history_execution_metadata(history, unrope_keys=True)
+    unrope_metadata = longshot_full_history_execution_metadata(
+        history, unrope_keys=True
+    )
     assert unrope_metadata["schema"] == "gcw.longshot_full_history_execution.v2"
     assert unrope_metadata["unrope_keys"] == "chunk_local_inverse_rope_v1"
-    assert unrope_metadata["unrope_position_mapping"] == "layer_major_row_mod_sequence_v1"
-    assert unrope_metadata["unrope_temporary_bound"] == "rotation_trig_pointwise_merge_fp32_v1"
-    assert unrope_metadata["fingerprint_sha256"] != eager_metadata["fingerprint_sha256"]
-    assert _fingerprint(unroped)["longshot_full_history_execution"] == unrope_metadata
+    assert (
+        unrope_metadata["unrope_position_mapping"]
+        == "layer_major_row_mod_sequence_v1"
+    )
+    assert (
+        unrope_metadata["unrope_temporary_bound"]
+        == "rotation_trig_pointwise_merge_fp32_v1"
+    )
+    assert (
+        unrope_metadata["fingerprint_sha256"]
+        != eager_metadata["fingerprint_sha256"]
+    )
+    assert (
+        _fingerprint(unroped)["longshot_full_history_execution"]
+        == unrope_metadata
+    )
 
 
-def test_production_checkpoint_rejects_full_history_policy_mismatch(tmp_path) -> None:
+def test_production_checkpoint_rejects_full_history_policy_mismatch(
+    tmp_path,
+) -> None:
     first = _train_config(
         history=LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
     )
@@ -151,12 +192,18 @@ def test_production_checkpoint_rejects_full_history_policy_mismatch(tmp_path) ->
     )
     checkpoint_path = tmp_path / "checkpoint"
     save_training_checkpoint(
-        checkpoint_path, model, first.model, optimizer, resume, _fingerprint(first)
+        checkpoint_path,
+        model,
+        first.model,
+        optimizer,
+        resume,
+        _fingerprint(first),
     )
 
     for expected in (changed, unroped, _train_config()):
         with pytest.raises(
-            CheckpointCompatibilityError, match="longshot_full_history_execution"
+            CheckpointCompatibilityError,
+            match="longshot_full_history_execution",
         ):
             TrainingCheckpoint.open(
                 checkpoint_path,
@@ -166,7 +213,9 @@ def test_production_checkpoint_rejects_full_history_policy_mismatch(tmp_path) ->
             )
 
 
-def test_verified_checkpoint_recomputation_and_external_recurrence_are_admitted() -> None:
+def test_verified_checkpoint_recomputation_and_external_recurrence_are_admitted() -> (
+    None
+):
     processor = replace(
         _train_config().model.cache_processor,
         gradient_checkpointing=True,
@@ -183,8 +232,12 @@ def test_verified_checkpoint_recomputation_and_external_recurrence_are_admitted(
 
     assert segmented.activation_checkpoint_windows == 2
     with pytest.raises(ValueError, match="one FP32 K/V row"):
-        _train_config(history=LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1))
-    with pytest.raises(ValueError, match="one complete un-RoPE rotation and score row"):
+        _train_config(
+            history=LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1)
+        )
+    with pytest.raises(
+        ValueError, match="one complete un-RoPE rotation and score row"
+    ):
         _train_config(
             history=LongshotFullHistoryConfig(enabled=True, max_temp_bytes=64),
             processor=replace(processor, unrope_keys=True),
@@ -198,16 +251,25 @@ def test_enabled_policy_rejects_compiled_backbone_execution() -> None:
         processor=processor,
         family="qwen3",
     )
-    with pytest.raises(ValueError, match="requires backbone_chunk_backend='eager'"):
+    with pytest.raises(
+        ValueError, match="requires backbone_chunk_backend='eager'"
+    ):
         replace(eager, backbone_chunk_backend="compile")
 
 
 @pytest.mark.parametrize(
     ("processor", "distributed", "trainable", "message"),
     [
-        (replace(_train_config().model.cache_processor, score="attn_l2"), "none", "cache_processor", "score='kv_norm'"),
         (
-            replace(_train_config().model.cache_processor, attention_dropout=0.1),
+            replace(_train_config().model.cache_processor, score="attn_l2"),
+            "none",
+            "cache_processor",
+            "score='kv_norm'",
+        ),
+        (
+            replace(
+                _train_config().model.cache_processor, attention_dropout=0.1
+            ),
             "none",
             "cache_processor",
             "attention_dropout=0",
@@ -223,8 +285,18 @@ def test_enabled_policy_rejects_compiled_backbone_execution() -> None:
             "cache_processor",
             "internal recurrence",
         ),
-        (_train_config().model.cache_processor, "ddp", "cache_processor", "single-process"),
-        (_train_config().model.cache_processor, "none", "all", "trainable='cache_processor'"),
+        (
+            _train_config().model.cache_processor,
+            "ddp",
+            "cache_processor",
+            "single-process",
+        ),
+        (
+            _train_config().model.cache_processor,
+            "none",
+            "all",
+            "trainable='cache_processor'",
+        ),
     ],
 )
 def test_enabled_policy_fails_closed_for_unverified_execution(

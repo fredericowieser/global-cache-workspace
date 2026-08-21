@@ -26,7 +26,16 @@ def test_legacy_generation_flag_maps_to_explicit_policy():
 
 
 def test_checkpoint_roundtrip(tmp_path):
-    cfg = ModelConfig(vocab_size=64, hidden_size=16, intermediate_size=32, num_layers=1, num_heads=2, num_kv_heads=1, head_dim=8, sequence_len=16)
+    cfg = ModelConfig(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+    )
     model = build_model(cfg).to(dtype=torch.bfloat16)
     model.init_weights()
     save_checkpoint(tmp_path, model, cfg, {"step": 3})
@@ -109,7 +118,9 @@ def test_checkpoint_cache_processor_only_roundtrip(tmp_path):
     assert loaded(x).shape == (1, 4, 64)
 
 
-def test_backbone_checkpoint_initializes_lora_model_without_overwriting_adapters(tmp_path):
+def test_backbone_checkpoint_initializes_lora_model_without_overwriting_adapters(
+    tmp_path,
+):
     base_config = ModelConfig(
         vocab_size=64,
         hidden_size=16,
@@ -122,13 +133,18 @@ def test_backbone_checkpoint_initializes_lora_model_without_overwriting_adapters
     base = build_model(base_config)
     base.init_weights()
     save_checkpoint(tmp_path / "base", base, base_config)
-    adapted_config = ModelConfig(**{**base_config.__dict__, "lora": LoRAConfig(rank=2)})
+    adapted_config = ModelConfig(
+        **{**base_config.__dict__, "lora": LoRAConfig(rank=2)}
+    )
     adapted = build_model(adapted_config)
     adapted.init_weights()
 
     load_backbone_checkpoint(adapted, tmp_path / "base")
 
-    assert torch.equal(adapted.layers[0].self_attn.q_proj.weight, base.layers[0].self_attn.q_proj.weight)
+    assert torch.equal(
+        adapted.layers[0].self_attn.q_proj.weight,
+        base.layers[0].self_attn.q_proj.weight,
+    )
     assert torch.count_nonzero(adapted.layers[0].self_attn.q_proj.lora_b) == 0
 
 
@@ -154,7 +170,9 @@ def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
         name_or_path = "qwen-tokenizer"
         eot_id = 0
 
-        def apply_chat_template(self, chat_history, tokenize=False, add_generation_prompt=True):
+        def apply_chat_template(
+            self, chat_history, tokenize=False, add_generation_prompt=True
+        ):
             assert tokenize is False
             return f"{chat_history[0]['role']}:{chat_history[0]['content']}:{add_generation_prompt}"
 
@@ -162,7 +180,10 @@ def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
     lm.tokenizer = FakeTokenizer()
 
     assert lm.tokenizer_name == "qwen-tokenizer"
-    assert lm.apply_chat_template([{"role": "user", "content": "hi"}]) == "user:hi:True"
+    assert (
+        lm.apply_chat_template([{"role": "user", "content": "hi"}])
+        == "user:hi:True"
+    )
 
 
 def test_hf_eval_tokenizer_adapter_exposes_the_training_tokenizer_contract():
@@ -193,11 +214,14 @@ def test_hf_eval_tokenizer_adapter_exposes_the_training_tokenizer_contract():
 
     assert adapter.get_vocab_size() == 32
     assert len(adapter.identity_sha256()) == 64
-    assert adapter.apply_chat_template([], tokenize=True, add_generation_prompt=True) == [1, 2]
+    assert adapter.apply_chat_template(
+        [], tokenize=True, add_generation_prompt=True
+    ) == [1, 2]
 
 
-
-def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(tmp_path):
+def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(
+    tmp_path,
+):
     from gcw.checkpoint import load_checkpoint, save_checkpoint
     from gcw.config import CacheProcessorConfig, ModelConfig
     from gcw.models import LanguageModel, build_model
@@ -235,7 +259,9 @@ def test_load_checkpoint_preserves_mixed_backbone_and_processor_dtypes(tmp_path)
 
     assert isinstance(loaded, LanguageModel)
     assert {p.dtype for p in loaded.backbone.parameters()} == {torch.bfloat16}
-    assert {p.dtype for p in loaded.cache_processor.parameters()} == {torch.float32}
+    assert {p.dtype for p in loaded.cache_processor.parameters()} == {
+        torch.float32
+    }
     assert loaded.cache_processor.block.gate.item() == pytest.approx(-4.9896)
 
 
@@ -258,7 +284,10 @@ def test_final_checkpoint_manifest_binds_all_loader_inputs(tmp_path):
     import json
 
     manifest_path = checkpoint / "manifest.json"
-    assert manifest_sha256 == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert (
+        manifest_sha256
+        == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    )
     manifest = json.loads(manifest_path.read_text())
     assert manifest == {
         "schema": "gcw.final_checkpoint.manifest.v2",

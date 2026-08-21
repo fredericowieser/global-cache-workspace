@@ -44,7 +44,11 @@ from gcw.training.objectives import (
     model_loss as _model_loss,
     row_loss_sums_and_counts as _row_loss_sums_and_counts,
 )
-from gcw.training.assembly import TrainingPlan, _checkpoint_stop_requested, assemble_training_execution
+from gcw.training.assembly import (
+    TrainingPlan,
+    _checkpoint_stop_requested,
+    assemble_training_execution,
+)
 from gcw.training.audit import (
     _audit_training_step,
     _validate_train_batch,
@@ -137,7 +141,9 @@ def run_training_loop(plan: TrainingPlan) -> None:
     if start_step == 0 and config.eval_on_start and config.eval_every:
         val = _eval_loss(model, config, device)
         if rank == 0:
-            message = f"step 0/{config.max_steps} val_loss={val['val/loss']:.4f}"
+            message = (
+                f"step 0/{config.max_steps} val_loss={val['val/loss']:.4f}"
+            )
             print0(message)
             if tracker is not None:
                 tracker.log_message(message)
@@ -155,30 +161,51 @@ def run_training_loop(plan: TrainingPlan) -> None:
         adaptive_checkpointing_decisions: list[bool] = []
         adaptive_padded_sequence_lengths: list[int] = []
         # Adaptive pair ladder (16/8/4/2) replaces plain gradient accumulation when enabled.
-        adaptive_step_plan = build_adaptive_pair_step(stream, adaptive_batching) if adaptive_batching.enabled else None
+        adaptive_step_plan = (
+            build_adaptive_pair_step(stream, adaptive_batching)
+            if adaptive_batching.enabled
+            else None
+        )
         adaptive_physical_batches = (
-            tuple(collate_pair_group(adaptive_step_plan, group) for group in adaptive_step_plan.groups)
+            tuple(
+                collate_pair_group(adaptive_step_plan, group)
+                for group in adaptive_step_plan.groups
+            )
             if adaptive_step_plan is not None
             else ()
         )
-        physical_microsteps = len(adaptive_physical_batches) if adaptive_step_plan is not None else grad_accum_steps
+        physical_microsteps = (
+            len(adaptive_physical_batches)
+            if adaptive_step_plan is not None
+            else grad_accum_steps
+        )
         # Forward/backward over each micro-batch; the last micro-step syncs grads.
         for micro_step in range(physical_microsteps):
-            batch = adaptive_physical_batches[micro_step].batch if adaptive_step_plan is not None else next(stream)
+            batch = (
+                adaptive_physical_batches[micro_step].batch
+                if adaptive_step_plan is not None
+                else next(stream)
+            )
             if adaptive_step_plan is None and step == 0 and micro_step == 0:
                 _validate_train_batch(batch.x, batch.y, config)
             batch_non_padding_tokens += int(
-                batch.x.numel() if batch.attention_mask is None else batch.attention_mask.sum().item()
+                batch.x.numel()
+                if batch.attention_mask is None
+                else batch.attention_mask.sum().item()
             )
             batch_supervised_tokens += int((batch.y != -100).sum().item())
             checkpoint_length_eligible = (
                 config.activation_checkpoint_min_padded_sequence_length == 0
-                or batch.x.shape[1] >= config.activation_checkpoint_min_padded_sequence_length
+                or batch.x.shape[1]
+                >= config.activation_checkpoint_min_padded_sequence_length
             )
             segmented_window_checkpointed_microbatches += int(
-                config.activation_checkpoint_windows > 0 and checkpoint_length_eligible
+                config.activation_checkpoint_windows > 0
+                and checkpoint_length_eligible
             )
-            longshot_checkpointing = _longshot_gradient_checkpointing_decision(config, batch.x)
+            longshot_checkpointing = _longshot_gradient_checkpointing_decision(
+                config, batch.x
+            )
             if longshot_checkpointing is not None:
                 adaptive_checkpointing_decisions.append(longshot_checkpointing)
                 adaptive_padded_sequence_lengths.append(batch.x.shape[1])
@@ -228,9 +255,15 @@ def run_training_loop(plan: TrainingPlan) -> None:
                             ),
                             longshot_gradient_checkpointing=longshot_checkpointing,
                         )
-                normalized_loss = loss / PAIRS_PER_STEP if adaptive_step_plan is not None else loss / grad_accum_steps
+                normalized_loss = (
+                    loss / PAIRS_PER_STEP
+                    if adaptive_step_plan is not None
+                    else loss / grad_accum_steps
+                )
                 loss_total += float(
-                    normalized_loss.detach().cpu() if adaptive_step_plan is not None else loss.detach().cpu()
+                    normalized_loss.detach().cpu()
+                    if adaptive_step_plan is not None
+                    else loss.detach().cpu()
                 )
                 normalized_loss.backward()
         if audit_output is not None and step + 1 == config.max_steps:
@@ -238,9 +271,19 @@ def run_training_loop(plan: TrainingPlan) -> None:
         # Gradient clipping, then per-group LR/weight-decay schedule before the step.
         grad_norm = None
         if config.grad_clip:
-            grad_norm = _clip_grad_norm(model, params, config.grad_clip, use_fsdp=use_fsdp)
-        lr_scale = _wsd_lr(step, config.max_steps, config.warmup_steps, config.warmdown_ratio, config.final_lr_frac)
-        weight_decay = _weight_decay(step, config.max_steps, config.weight_decay)
+            grad_norm = _clip_grad_norm(
+                model, params, config.grad_clip, use_fsdp=use_fsdp
+            )
+        lr_scale = _wsd_lr(
+            step,
+            config.max_steps,
+            config.warmup_steps,
+            config.warmdown_ratio,
+            config.final_lr_frac,
+        )
+        weight_decay = _weight_decay(
+            step, config.max_steps, config.weight_decay
+        )
         for group in opt.param_groups:
             group["lr"] = group["initial_lr"] * lr_scale
             if group.get("decay", False):
@@ -249,13 +292,23 @@ def run_training_loop(plan: TrainingPlan) -> None:
 
         step_num = step + 1
         completed_step = step_num
-        stop_after_step = _checkpoint_stop_requested(checkpoint_stop_policy, step_num)
+        stop_after_step = _checkpoint_stop_requested(
+            checkpoint_stop_policy, step_num
+        )
         step_seconds = time.perf_counter() - step_start
         tokens_seen = tokens_per_step * step_num
         flops_seen = flops_per_tok * tokens_seen
         # Reduce the per-step loss across ranks when logical pair grouping is active.
-        train_loss = loss_total if adaptive_step_plan is not None else loss_total / grad_accum_steps
-        if config.logical_pair_grouping and dist.is_available() and dist.is_initialized():
+        train_loss = (
+            loss_total
+            if adaptive_step_plan is not None
+            else loss_total / grad_accum_steps
+        )
+        if (
+            config.logical_pair_grouping
+            and dist.is_available()
+            and dist.is_initialized()
+        ):
             metric_totals = torch.tensor(
                 [train_loss, batch_non_padding_tokens, batch_supervised_tokens],
                 device=device,
@@ -282,27 +335,43 @@ def run_training_loop(plan: TrainingPlan) -> None:
             "train/epoch": getattr(stream.cursor, "epoch", None),
             "train/grad_accum_steps": physical_microsteps,
             "train/nominal_grad_accum_steps": grad_accum_steps,
-            "train/adaptive_batching_active": float(adaptive_step_plan is not None),
+            "train/adaptive_batching_active": float(
+                adaptive_step_plan is not None
+            ),
             "train/micro_tokens_per_step": micro_tokens,
             "train/tokens_per_step": tokens_per_step,
             "train/rows_per_step": micro_rows * grad_accum_steps,
-            "train/logical_pairs_per_step": (config.global_batch_rows // 2 if config.logical_pair_grouping else None),
-            "train/segmented_window_checkpointing_active": (segmented_window_checkpointed_microbatches > 0),
-            "train/segmented_window_checkpointed_microbatches": (segmented_window_checkpointed_microbatches),
+            "train/logical_pairs_per_step": (
+                config.global_batch_rows // 2
+                if config.logical_pair_grouping
+                else None
+            ),
+            "train/segmented_window_checkpointing_active": (
+                segmented_window_checkpointed_microbatches > 0
+            ),
+            "train/segmented_window_checkpointed_microbatches": (
+                segmented_window_checkpointed_microbatches
+            ),
             "train/segmented_window_eager_microbatches": (
                 physical_microsteps - segmented_window_checkpointed_microbatches
             ),
             "timing/step_seconds": step_seconds,
-            "timing/tokens_per_second": tokens_per_step / max(step_seconds, 1e-12),
-            "timing/flops_per_second": (flops_per_tok * tokens_per_step) / max(step_seconds, 1e-12),
+            "timing/tokens_per_second": tokens_per_step
+            / max(step_seconds, 1e-12),
+            "timing/flops_per_second": (flops_per_tok * tokens_per_step)
+            / max(step_seconds, 1e-12),
             "optim/grad_norm": _maybe_float(grad_norm),
             "optim/weight_decay": weight_decay,
         }
         if adaptive_step_plan is not None:
             train_metrics.update(adaptive_step_plan.metrics())
         if device.type == "cuda":
-            train_metrics["system/vram_allocated_mib"] = torch.cuda.max_memory_allocated(device) / 1024 / 1024
-            train_metrics["system/vram_reserved_mib"] = torch.cuda.max_memory_reserved(device) / 1024 / 1024
+            train_metrics["system/vram_allocated_mib"] = (
+                torch.cuda.max_memory_allocated(device) / 1024 / 1024
+            )
+            train_metrics["system/vram_reserved_mib"] = (
+                torch.cuda.max_memory_reserved(device) / 1024 / 1024
+            )
         train_metrics.update(_cache_processor_metrics(model))
         train_metrics.update(
             _longshot_gradient_checkpointing_step_metrics(
@@ -310,7 +379,11 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 adaptive_padded_sequence_lengths,
             )
         )
-        if not stop_after_step and config.eval_every and step_num % config.eval_every == 0:
+        if (
+            not stop_after_step
+            and config.eval_every
+            and step_num % config.eval_every == 0
+        ):
             train_metrics.update(_eval_loss(model, config, device))
         if rank == 0:
             msg = f"step {step_num}/{config.max_steps} loss={train_metrics['train/loss_smooth']:.4f}"
@@ -322,21 +395,33 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 tracker.log(_compact_metrics(train_metrics), step=step_num)
             if audit_output is not None and step_num == config.max_steps:
                 if audit_gradients is None:
-                    raise RuntimeError("training audit gradients were not captured")
+                    raise RuntimeError(
+                        "training audit gradients were not captured"
+                    )
                 _write_training_audit(
                     Path(audit_output),
                     {
                         **audit_gradients,
                         "architecture": config.model.architecture_name,
                         "step": step_num,
-                        "tokens_per_second": train_metrics["timing/tokens_per_second"],
-                        "peak_memory_mib": train_metrics.get("system/vram_allocated_mib", 0.0),
-                        "source_commit": os.environ.get("GCW_AUDIT_SOURCE_COMMIT"),
-                        "experiment_manifest_sha256": os.environ.get("GCW_AUDIT_MANIFEST_SHA256"),
+                        "tokens_per_second": train_metrics[
+                            "timing/tokens_per_second"
+                        ],
+                        "peak_memory_mib": train_metrics.get(
+                            "system/vram_allocated_mib", 0.0
+                        ),
+                        "source_commit": os.environ.get(
+                            "GCW_AUDIT_SOURCE_COMMIT"
+                        ),
+                        "experiment_manifest_sha256": os.environ.get(
+                            "GCW_AUDIT_MANIFEST_SHA256"
+                        ),
                     },
                 )
 
-        if stop_after_step or (config.save_every and step_num % config.save_every == 0):
+        if stop_after_step or (
+            config.save_every and step_num % config.save_every == 0
+        ):
             _save_step_checkpoint(
                 Path(config.output_dir) / "checkpoint",
                 model,
@@ -353,7 +438,10 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 initial_processor_state=initial_processor_state,
             )
             last_checkpoint_step = step_num
-            if retained_checkpoint_every is not None and step_num % retained_checkpoint_every == 0:
+            if (
+                retained_checkpoint_every is not None
+                and step_num % retained_checkpoint_every == 0
+            ):
                 _save_step_checkpoint(
                     Path(config.output_dir) / f"checkpoint-{step_num}",
                     model,
@@ -371,10 +459,16 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 )
             if stop_after_step:
                 stopped_at_checkpoint = True
-                print0(f"stopping after authenticated checkpoint step={step_num}")
+                print0(
+                    f"stopping after authenticated checkpoint step={step_num}"
+                )
                 break
 
-    if not stopped_at_checkpoint and config.save_final and last_checkpoint_step != config.max_steps:
+    if (
+        not stopped_at_checkpoint
+        and config.save_final
+        and last_checkpoint_step != config.max_steps
+    ):
         _save_step_checkpoint(
             Path(config.output_dir) / "checkpoint",
             model,
@@ -404,14 +498,20 @@ def run_training_loop(plan: TrainingPlan) -> None:
 
 
 @torch.no_grad()
-def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device) -> dict[str, float]:
+def _eval_loss(
+    model: torch.nn.Module, config: TrainConfig, device: torch.device
+) -> dict[str, float]:
     validation_stream: TrainingBatchStream | None = None
     if config.mode == "sft" and config.data.validation_dataset is not None:
         validation_config = deepcopy(config)
         validation_config.data.dataset = config.data.validation_dataset
         validation_config.data.sft_skip_rows = 0
-        validation_config.data.sft_take_rows = config.batch_size * max(1, config.eval_batches)
-        validation_stream = build_training_stream(validation_config, device, rank=0, world_size=1)
+        validation_config.data.sft_take_rows = config.batch_size * max(
+            1, config.eval_batches
+        )
+        validation_stream = build_training_stream(
+            validation_config, device, rank=0, world_size=1
+        )
         loader = _training_batch_loader(validation_stream)
     elif config.mode != "pretrain" or config.data.kind == "random":
         loader = _random_loader(config, device)
@@ -431,9 +531,15 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
     total_tokens = torch.zeros((), device=device)
     for _ in range(max(1, config.eval_batches)):
         x, y, attention_mask = next(loader)
-        longshot_checkpointing = _longshot_gradient_checkpointing_decision(config, x)
+        longshot_checkpointing = _longshot_gradient_checkpointing_decision(
+            config, x
+        )
         with torch.autocast(**_autocast_kwargs(config, device)):
-            grouped_attention_mask = attention_mask if isinstance(attention_mask, torch.Tensor) else None
+            grouped_attention_mask = (
+                attention_mask
+                if isinstance(attention_mask, torch.Tensor)
+                else None
+            )
             if config.logical_pair_grouping:
                 row_sums, row_counts = _row_loss_sums_and_counts(
                     model,
@@ -448,7 +554,10 @@ def _eval_loss(model: torch.nn.Module, config: TrainConfig, device: torch.device
                     longshot_gradient_checkpointing=longshot_checkpointing,
                 )
                 pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
-                loss = (row_sums.reshape(-1, 2).sum(dim=1) / pair_counts.clamp_min(1.0)).sum()
+                loss = (
+                    row_sums.reshape(-1, 2).sum(dim=1)
+                    / pair_counts.clamp_min(1.0)
+                ).sum()
                 weight = x.new_tensor(x.shape[0] // 2, dtype=torch.float32)
             else:
                 loss = _model_loss(
@@ -501,7 +610,8 @@ def _training_batch_loader(stream: TrainingBatchStream):
 def _random_loader(config: TrainConfig, device: torch.device):
     vocab = config.model.vocab_size
     while True:
-        x = torch.randint(0, vocab, (config.batch_size, config.sequence_len), device=device)
+        x = torch.randint(
+            0, vocab, (config.batch_size, config.sequence_len), device=device
+        )
         y = torch.roll(x, shifts=-1, dims=1)
         yield x, y, {"kind": "random"}
-

@@ -37,19 +37,27 @@ def answer_only_loss_from_hidden(
             selected_hidden = flat_hidden.index_select(0, valid_indices)
             logits = logits_fn(selected_hidden)
             selected_targets = flat_targets.index_select(0, valid_indices)
-            selected_loss = F.cross_entropy(logits, selected_targets, reduction="none")
-            chunk_loss = logits.new_zeros(flat_targets.shape).index_copy(0, valid_indices, selected_loss)
+            selected_loss = F.cross_entropy(
+                logits, selected_targets, reduction="none"
+            )
+            chunk_loss = logits.new_zeros(flat_targets.shape).index_copy(
+                0, valid_indices, selected_loss
+            )
         else:
             chunk_loss = x.new_zeros(flat_targets.shape, dtype=torch.float32)
         loss_sum = loss_sum + chunk_loss.sum()
         token_count = token_count + valid.sum().to(torch.float32)
         if loss_reduction == "row_sum":
-            row_loss_sums = row_loss_sums + chunk_loss.reshape(target_chunk.shape).sum(dim=1)
+            row_loss_sums = row_loss_sums + chunk_loss.reshape(
+                target_chunk.shape
+            ).sum(dim=1)
         if loss_reduction == "none":
             per_token.append(chunk_loss.reshape(target_chunk.shape))
     if not any_valid:
         head = embed_weight if tie_embeddings else cast(Linear, lm_head).weight
-        connected_zero = (x.reshape(-1)[:1].float().sum() + head.reshape(-1)[:1].float().sum()) * 0.0
+        connected_zero = (
+            x.reshape(-1)[:1].float().sum() + head.reshape(-1)[:1].float().sum()
+        ) * 0.0
         if loss_reduction == "none":
             return torch.cat(per_token, dim=1) + connected_zero
         if loss_reduction == "row_sum":
@@ -92,7 +100,9 @@ def loss_from_hidden_reference(
         loss_sum = loss_sum + chunk_loss.sum()
         token_count = token_count + valid.sum().to(torch.float32)
         if loss_reduction == "row_sum":
-            row_loss_sums = row_loss_sums + chunk_loss.reshape(target_chunk.shape).sum(dim=1)
+            row_loss_sums = row_loss_sums + chunk_loss.reshape(
+                target_chunk.shape
+            ).sum(dim=1)
         if loss_reduction == "none":
             per_token.append(chunk_loss.reshape(target_chunk.shape))
     if loss_reduction == "none":

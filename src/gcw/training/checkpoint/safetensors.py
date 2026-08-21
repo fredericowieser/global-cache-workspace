@@ -36,21 +36,33 @@ def _capture_verified_payloads(
 ) -> dict[str, bytes]:
     files = manifest.get("files")
     if not isinstance(files, dict):
-        raise TrainingCheckpointError("checkpoint manifest files must be an object")
-    expected_names = PAYLOAD_FILES | ({INITIAL_PROCESSOR_FILE} if INITIAL_PROCESSOR_FILE in files else set())
+        raise TrainingCheckpointError(
+            "checkpoint manifest files must be an object"
+        )
+    expected_names = PAYLOAD_FILES | (
+        {INITIAL_PROCESSOR_FILE} if INITIAL_PROCESSOR_FILE in files else set()
+    )
     if set(files) != expected_names:
-        raise TrainingCheckpointError("checkpoint manifest payload roles differ from required schema")
+        raise TrainingCheckpointError(
+            "checkpoint manifest payload roles differ from required schema"
+        )
     payloads: dict[str, bytes] = {}
     for name in sorted(expected_names):
         expected = files.get(name)
         if not isinstance(expected, str) or len(expected) != 64:
-            raise TrainingCheckpointError(f"checkpoint manifest digest is invalid for {name}")
+            raise TrainingCheckpointError(
+                f"checkpoint manifest digest is invalid for {name}"
+            )
         try:
             payload = (path / name).read_bytes()
         except OSError as exc:
-            raise TrainingCheckpointError(f"checkpoint payload is missing: {name}") from exc
+            raise TrainingCheckpointError(
+                f"checkpoint payload is missing: {name}"
+            ) from exc
         if hashlib.sha256(payload).hexdigest() != expected:
-            raise TrainingCheckpointError(f"checkpoint payload digest differs for {name}")
+            raise TrainingCheckpointError(
+                f"checkpoint payload digest differs for {name}"
+            )
         payloads[name] = payload
     return payloads
 
@@ -60,12 +72,22 @@ def verify_training_checkpoint_files(path: str | Path) -> dict[str, Any]:
     manifest = _read_manifest(resolved)
     _verify_files(resolved, manifest)
     try:
-        train_state = json.loads((resolved / "train_state.json").read_text(encoding="utf-8"))
+        train_state = json.loads(
+            (resolved / "train_state.json").read_text(encoding="utf-8")
+        )
     except (OSError, json.JSONDecodeError) as exc:
-        raise TrainingCheckpointError(f"invalid checkpoint train state in {resolved}: {exc}") from exc
+        raise TrainingCheckpointError(
+            f"invalid checkpoint train state in {resolved}: {exc}"
+        ) from exc
     if train_state.get("step") != manifest.get("step"):
-        raise TrainingCheckpointError("checkpoint manifest and train state steps differ")
-    return {"path": str(resolved), "manifest": manifest, "train_state": train_state}
+        raise TrainingCheckpointError(
+            "checkpoint manifest and train state steps differ"
+        )
+    return {
+        "path": str(resolved),
+        "manifest": manifest,
+        "train_state": train_state,
+    }
 
 
 def save_training_checkpoint(
@@ -82,7 +104,10 @@ def save_training_checkpoint(
     distributed = dist.is_available() and dist.is_initialized()
     rank = dist.get_rank() if distributed else 0
     world_size = dist.get_world_size() if distributed else 1
-    local_runtime = {"rng": _capture_rng_state(), "loader_cursor": cursor_to_dict(resume_state.loader_cursor)}
+    local_runtime = {
+        "rng": _capture_rng_state(),
+        "loader_cursor": cursor_to_dict(resume_state.loader_cursor),
+    }
     gathered_runtime: list[dict[str, Any]] | None = [None] * world_size if rank == 0 else None  # type: ignore[list-item]
     if distributed:
         dist.gather_object(local_runtime, gathered_runtime, dst=0)
@@ -93,7 +118,10 @@ def save_training_checkpoint(
     if rank == 0:
         try:
             import gcw.training.checkpoint as checkpoint_pkg
-            write_fn = getattr(checkpoint_pkg, "_write_checkpoint", _write_checkpoint)
+
+            write_fn = getattr(
+                checkpoint_pkg, "_write_checkpoint", _write_checkpoint
+            )
             write_fn(
                 Path(path),
                 model,
@@ -106,13 +134,22 @@ def save_training_checkpoint(
                 cache_processor_only=cache_processor_only,
             )
             status[0] = {"ok": True}
-        except Exception as exc:  # broadcast recoverable rank-zero failures before raising
-            status[0] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+        except (
+            Exception
+        ) as exc:  # broadcast recoverable rank-zero failures before raising
+            status[0] = {
+                "ok": False,
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
     if distributed:
         dist.broadcast_object_list(status, src=0)
     result = status[0]
     if not result or not result.get("ok"):
-        error = result or {"type": "TrainingCheckpointError", "message": "rank zero did not report checkpoint status"}
+        error = result or {
+            "type": "TrainingCheckpointError",
+            "message": "rank zero did not report checkpoint status",
+        }
         raise TrainingCheckpointError(f"{error['type']}: {error['message']}")
 
     if distributed:
@@ -121,17 +158,29 @@ def save_training_checkpoint(
     if rank == 0:
         try:
             import gcw.training.checkpoint as checkpoint_pkg
-            remove_fn = getattr(checkpoint_pkg, "_remove_previous", _remove_previous)
+
+            remove_fn = getattr(
+                checkpoint_pkg, "_remove_previous", _remove_previous
+            )
             remove_fn(Path(path))
             cleanup_status[0] = {"ok": True}
         except Exception as exc:
-            cleanup_status[0] = {"ok": False, "type": type(exc).__name__, "message": str(exc)}
+            cleanup_status[0] = {
+                "ok": False,
+                "type": type(exc).__name__,
+                "message": str(exc),
+            }
     if distributed:
         dist.broadcast_object_list(cleanup_status, src=0)
     cleanup_result = cleanup_status[0]
     if not cleanup_result or not cleanup_result.get("ok"):
-        error = cleanup_result or {"type": "TrainingCheckpointError", "message": "rank zero did not report cleanup status"}
-        raise TrainingCheckpointError(f"checkpoint committed but rollback cleanup failed: {error['type']}: {error['message']}")
+        error = cleanup_result or {
+            "type": "TrainingCheckpointError",
+            "message": "rank zero did not report cleanup status",
+        }
+        raise TrainingCheckpointError(
+            f"checkpoint committed but rollback cleanup failed: {error['type']}: {error['message']}"
+        )
 
 
 def _write_checkpoint(
@@ -147,7 +196,9 @@ def _write_checkpoint(
     cache_processor_only: bool = False,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = Path(tempfile.mkdtemp(prefix=f".{path.name}.tmp-", dir=path.parent))
+    temp_path = Path(
+        tempfile.mkdtemp(prefix=f".{path.name}.tmp-", dir=path.parent)
+    )
     previous = path.with_name(f"{path.name}.previous")
     moved_previous = False
     try:
@@ -157,28 +208,44 @@ def _write_checkpoint(
             if not cache_processor_only or key.startswith("cache_processor.")
         }
         if cache_processor_only and not model_state:
-            raise TrainingCheckpointError("cache_processor_only checkpoint contained no cache_processor state")
+            raise TrainingCheckpointError(
+                "cache_processor_only checkpoint contained no cache_processor state"
+            )
         save_file(model_state, temp_path / "model.safetensors")
         if initial_processor_state is not None:
             save_file(
-                {k: v.detach().cpu().contiguous() for k, v in initial_processor_state.items()},
+                {
+                    k: v.detach().cpu().contiguous()
+                    for k, v in initial_processor_state.items()
+                },
                 temp_path / INITIAL_PROCESSOR_FILE,
             )
         torch.save(optimizer.state_dict(), temp_path / "optimizer.pt")
-        torch.save([state["rng"] for state in runtime_states], temp_path / "rng.pt")
+        torch.save(
+            [state["rng"] for state in runtime_states], temp_path / "rng.pt"
+        )
         _write_json(temp_path / "config.json", {"model": to_dict(model_config)})
         train_state_payload = {
             **resume_state.metadata,
             "step": resume_state.step,
             "smooth_loss": resume_state.smooth_loss,
             "loader_cursor": cursor_to_dict(resume_state.loader_cursor),
-            "rank_loader_cursors": [state["loader_cursor"] for state in runtime_states],
+            "rank_loader_cursors": [
+                state["loader_cursor"] for state in runtime_states
+            ],
             "saved_world_size": resume_state.saved_world_size,
             "exact_topology": True,
         }
         _write_json(temp_path / "train_state.json", train_state_payload)
-        required_names = list(PAYLOAD_FILES) + ([INITIAL_PROCESSOR_FILE] if initial_processor_state is not None else [])
-        files = {name: file_sha256(temp_path / name) for name in sorted(required_names)}
+        required_names = list(PAYLOAD_FILES) + (
+            [INITIAL_PROCESSOR_FILE]
+            if initial_processor_state is not None
+            else []
+        )
+        files = {
+            name: file_sha256(temp_path / name)
+            for name in sorted(required_names)
+        }
         manifest = {
             "format_version": FORMAT_VERSION,
             "complete": True,
@@ -214,13 +281,20 @@ def _resolve_checkpoint_path(path: Path) -> Path:
     previous_error = _checkpoint_error(previous)
     if previous_error is None:
         return previous
-    if not (path / "manifest.json").exists() and (path / "model.safetensors").exists():
-        raise LegacyCheckpointError(f"{path} is not a complete version-2 training checkpoint")
+    if (
+        not (path / "manifest.json").exists()
+        and (path / "model.safetensors").exists()
+    ):
+        raise LegacyCheckpointError(
+            f"{path} is not a complete version-2 training checkpoint"
+        )
     if path.exists():
         raise TrainingCheckpointError(
             f"invalid training checkpoint at {path}: {primary_error}; no valid rollback checkpoint: {previous_error}"
         ) from primary_error
-    raise TrainingCheckpointError(f"training checkpoint not found: {path}; rollback checkpoint: {previous_error}")
+    raise TrainingCheckpointError(
+        f"training checkpoint not found: {path}; rollback checkpoint: {previous_error}"
+    )
 
 
 def _checkpoint_error(path: Path) -> TrainingCheckpointError | None:
@@ -236,9 +310,18 @@ def _parse_manifest_bytes(payload: bytes, path: Path) -> dict[str, Any]:
     try:
         manifest = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise TrainingCheckpointError(f"invalid checkpoint manifest in {path}: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("format_version") != FORMAT_VERSION:
-        version = manifest.get("format_version") if isinstance(manifest, dict) else None
+        raise TrainingCheckpointError(
+            f"invalid checkpoint manifest in {path}: {exc}"
+        ) from exc
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("format_version") != FORMAT_VERSION
+    ):
+        version = (
+            manifest.get("format_version")
+            if isinstance(manifest, dict)
+            else None
+        )
         raise TrainingCheckpointError(
             f"unsupported training checkpoint version {version!r}; expected {FORMAT_VERSION}"
         )
@@ -251,7 +334,9 @@ def _read_manifest(path: Path) -> dict[str, Any]:
     try:
         payload = (path / "manifest.json").read_bytes()
     except OSError as exc:
-        raise TrainingCheckpointError(f"invalid checkpoint manifest in {path}: {exc}") from exc
+        raise TrainingCheckpointError(
+            f"invalid checkpoint manifest in {path}: {exc}"
+        ) from exc
     return _parse_manifest_bytes(payload, path)
 
 
@@ -260,7 +345,10 @@ def _verify_files(path: Path, manifest: dict[str, Any]) -> None:
     if not isinstance(files, dict):
         raise TrainingCheckpointError("checkpoint manifest has no file hashes")
     file_names = set(files)
-    if not PAYLOAD_FILES <= file_names or not file_names <= PAYLOAD_FILES | OPTIONAL_PAYLOAD_FILES:
+    if (
+        not PAYLOAD_FILES <= file_names
+        or not file_names <= PAYLOAD_FILES | OPTIONAL_PAYLOAD_FILES
+    ):
         missing = sorted(PAYLOAD_FILES - file_names)
         unexpected = sorted(file_names - PAYLOAD_FILES - OPTIONAL_PAYLOAD_FILES)
         raise TrainingCheckpointError(
@@ -268,13 +356,17 @@ def _verify_files(path: Path, manifest: dict[str, Any]) -> None:
         )
     for name, expected_hash in files.items():
         if not isinstance(expected_hash, str):
-            raise TrainingCheckpointError(f"checkpoint hash for {name} is not a string")
+            raise TrainingCheckpointError(
+                f"checkpoint hash for {name} is not a string"
+            )
         candidate = path / name
         if not candidate.is_file():
             raise TrainingCheckpointError(f"checkpoint file is missing: {name}")
         actual_hash = file_sha256(candidate)
         if actual_hash != expected_hash:
-            raise TrainingCheckpointError(f"checkpoint hash mismatch for {name}")
+            raise TrainingCheckpointError(
+                f"checkpoint hash mismatch for {name}"
+            )
 
 
 def _remove_previous(path: Path) -> None:
@@ -292,7 +384,9 @@ def _capture_rng_state() -> dict[str, Any]:
         "python": random.getstate(),
         "numpy": np.random.get_state(),
         "torch_cpu": torch.get_rng_state(),
-        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+        "torch_cuda": (
+            torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []
+        ),
     }
 
 
@@ -305,7 +399,9 @@ def _restore_rng_state(state: dict[str, Any]) -> None:
 
 
 def _elastic_seed(seed: int, step: int, rank: int, world_size: int) -> int:
-    digest = hashlib.sha256(f"{seed}:{step}:{rank}:{world_size}".encode()).digest()
+    digest = hashlib.sha256(
+        f"{seed}:{step}:{rank}:{world_size}".encode()
+    ).digest()
     return int.from_bytes(digest[:8], "big") % (2**31)
 
 

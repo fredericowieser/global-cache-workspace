@@ -37,25 +37,36 @@ def smoke_config(variant: str, flow_steps: int) -> ModelConfig:
     )
 
 
-def run_variant(variant: str, device: torch.device, flow_steps: int, bf16: bool) -> dict[str, object]:
+def run_variant(
+    variant: str, device: torch.device, flow_steps: int, bf16: bool
+) -> dict[str, object]:
     torch.manual_seed(1234)
     config = smoke_config(variant, flow_steps)
     model = build_model(config).to(device)
     model.init_weights()
     model.train()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-    input_ids = torch.randint(0, config.vocab_size, (2, config.sequence_len), device=device)
+    input_ids = torch.randint(
+        0, config.vocab_size, (2, config.sequence_len), device=device
+    )
 
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)
         torch.cuda.synchronize(device)
     started = time.perf_counter()
     optimizer.zero_grad(set_to_none=True)
-    with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=bf16):
+    with torch.autocast(
+        device_type=device.type, dtype=torch.bfloat16, enabled=bf16
+    ):
         loss = model(input_ids, input_ids)
     loss.backward()
-    flow = next(module for module in model.modules() if isinstance(module, LatentFlow))
-    if flow.flow_gate.grad is None or not torch.isfinite(flow.flow_gate.grad).all():
+    flow = next(
+        module for module in model.modules() if isinstance(module, LatentFlow)
+    )
+    if (
+        flow.flow_gate.grad is None
+        or not torch.isfinite(flow.flow_gate.grad).all()
+    ):
         raise RuntimeError(f"{variant} produced an invalid flow-gate gradient")
     optimizer.step()
     if device.type == "cuda":
@@ -70,13 +81,21 @@ def run_variant(variant: str, device: torch.device, flow_steps: int, bf16: bool)
         "loss": float(loss.detach().cpu()),
         "flow_gate_grad": float(flow.flow_gate.grad.detach().float().cpu()),
         "elapsed_seconds": elapsed,
-        "peak_memory_mib": torch.cuda.max_memory_allocated(device) / 1024 / 1024 if device.type == "cuda" else 0.0,
+        "peak_memory_mib": (
+            torch.cuda.max_memory_allocated(device) / 1024 / 1024
+            if device.type == "cuda"
+            else 0.0
+        ),
     }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run one optimisation step for every flow-enabled BGT-family model.")
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser = argparse.ArgumentParser(
+        description="Run one optimisation step for every flow-enabled BGT-family model."
+    )
+    parser.add_argument(
+        "--device", default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     parser.add_argument("--flow-steps", type=int, default=2)
     parser.add_argument("--no-bf16", action="store_true")
     args = parser.parse_args()
@@ -86,9 +105,20 @@ def main() -> None:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
 
-    print(json.dumps({"torch": torch.__version__, "cuda": torch.version.cuda, "device": str(device)}), flush=True)
+    print(
+        json.dumps(
+            {
+                "torch": torch.__version__,
+                "cuda": torch.version.cuda,
+                "device": str(device),
+            }
+        ),
+        flush=True,
+    )
     for variant in ("bgt", "icarus", "longshot"):
-        result = run_variant(variant, device, args.flow_steps, bf16=not args.no_bf16)
+        result = run_variant(
+            variant, device, args.flow_steps, bf16=not args.no_bf16
+        )
         print(json.dumps(result, sort_keys=True), flush=True)
 
 

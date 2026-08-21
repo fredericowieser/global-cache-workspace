@@ -35,26 +35,57 @@ class ExperimentContract:
         mismatches: list[str] = []
         checks: dict[str, tuple[Any, Any]] = {
             "sequence_length": (config.sequence_len, self.sequence_length),
-            "global_batch_rows": (config.global_batch_rows, self.global_batch_rows),
+            "global_batch_rows": (
+                config.global_batch_rows,
+                self.global_batch_rows,
+            ),
             "max_steps": (config.max_steps, self.max_steps),
-            "dataset": (str(Path(config.data.dataset or "").expanduser().resolve()), self.dataset_path),
-            "tokenizer_source": (config.data.tokenizer_source, self.tokenizer_source),
-            "backbone_checkpoint": (config.backbone_checkpoint, self.backbone_checkpoint),
+            "dataset": (
+                str(Path(config.data.dataset or "").expanduser().resolve()),
+                self.dataset_path,
+            ),
+            "tokenizer_source": (
+                config.data.tokenizer_source,
+                self.tokenizer_source,
+            ),
+            "backbone_checkpoint": (
+                config.backbone_checkpoint,
+                self.backbone_checkpoint,
+            ),
         }
         for name, (observed, expected) in checks.items():
             if expected is not None and observed != expected:
-                mismatches.append(f"{name}: observed {observed!r}, expected {expected!r}")
+                mismatches.append(
+                    f"{name}: observed {observed!r}, expected {expected!r}"
+                )
         dataset = Path(config.data.dataset or "").expanduser()
-        if not dataset.is_file() or _sha256_file(dataset) != self.dataset_sha256:
-            mismatches.append("dataset_sha256 does not match the experiment contract")
+        if (
+            not dataset.is_file()
+            or _sha256_file(dataset) != self.dataset_sha256
+        ):
+            mismatches.append(
+                "dataset_sha256 does not match the experiment contract"
+            )
         tokenizer = get_tokenizer(f"hf:{config.data.tokenizer_source}")
         if tokenizer.identity_sha256() != self.tokenizer_identity_sha256:
-            mismatches.append("tokenizer_identity_sha256 does not match the experiment contract")
-        checkpoint = Path(config.backbone_checkpoint or "").expanduser() / "model.safetensors"
-        if not checkpoint.is_file() or _sha256_file(checkpoint) != self.backbone_sha256:
-            mismatches.append("backbone_sha256 does not match the experiment contract")
+            mismatches.append(
+                "tokenizer_identity_sha256 does not match the experiment contract"
+            )
+        checkpoint = (
+            Path(config.backbone_checkpoint or "").expanduser()
+            / "model.safetensors"
+        )
+        if (
+            not checkpoint.is_file()
+            or _sha256_file(checkpoint) != self.backbone_sha256
+        ):
+            mismatches.append(
+                "backbone_sha256 does not match the experiment contract"
+            )
         if mismatches:
-            raise ValueError("experiment contract mismatch: " + "; ".join(mismatches))
+            raise ValueError(
+                "experiment contract mismatch: " + "; ".join(mismatches)
+            )
 
 
 def validate_experiment(config: TrainConfig) -> ExperimentContract | None:

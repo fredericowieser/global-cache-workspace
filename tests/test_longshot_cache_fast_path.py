@@ -37,7 +37,9 @@ from gcw.training.objectives import row_loss_sums_and_counts
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_layer_major_kv_scores_match_identity_gather_forward_backward(dtype: torch.dtype) -> None:
+def test_layer_major_kv_scores_match_identity_gather_forward_backward(
+    dtype: torch.dtype,
+) -> None:
     torch.manual_seed(71)
     keys = torch.randn(3, 2, 2, 7, 4, dtype=dtype, requires_grad=True)
     values = torch.randn(3, 2, 2, 7, 4, dtype=dtype, requires_grad=True)
@@ -46,18 +48,24 @@ def test_layer_major_kv_scores_match_identity_gather_forward_backward(dtype: tor
     identity_merged = gather_per_cache_head_kv(cache, all_indices)
 
     expected = chunked_fp32_squared_l2(identity_merged, max_temp_bytes=8 * 4)
-    actual = chunked_fp32_concatenated_kv_squared_l2(keys, values, max_temp_bytes=8 * 4)
+    actual = chunked_fp32_concatenated_kv_squared_l2(
+        keys, values, max_temp_bytes=8 * 4
+    )
 
     assert torch.equal(actual, expected)
     upstream = torch.randn_like(actual)
-    expected_grads = torch.autograd.grad(expected, (keys, values), upstream, retain_graph=True)
+    expected_grads = torch.autograd.grad(
+        expected, (keys, values), upstream, retain_graph=True
+    )
     actual_grads = torch.autograd.grad(actual, (keys, values), upstream)
     assert torch.equal(actual_grads[0], expected_grads[0])
     assert torch.equal(actual_grads[1], expected_grads[1])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-@pytest.mark.parametrize(("rotary_style", "rotary_dim"), [("llama", 4), ("llama", 8), ("ppt", 8)])
+@pytest.mark.parametrize(
+    ("rotary_style", "rotary_dim"), [("llama", 4), ("llama", 8), ("ppt", 8)]
+)
 def test_chunk_local_unrope_scores_and_gradients_match_full_history_oracle(
     dtype: torch.dtype,
     rotary_style: str,
@@ -87,7 +95,9 @@ def test_chunk_local_unrope_scores_and_gradients_match_full_history_oracle(
 
     assert torch.equal(actual, expected)
     upstream = torch.randn_like(actual)
-    expected_grads = torch.autograd.grad(expected, (keys, values), upstream, retain_graph=True)
+    expected_grads = torch.autograd.grad(
+        expected, (keys, values), upstream, retain_graph=True
+    )
     actual_grads = torch.autograd.grad(actual, (keys, values), upstream)
     assert torch.equal(actual_grads[0], expected_grads[0])
     assert torch.equal(actual_grads[1], expected_grads[1])
@@ -100,7 +110,8 @@ def test_chunk_local_unrope_never_rotates_more_rows_than_the_budget() -> None:
         dtype=keys.dtype, head_dim=8, rotary_dim=8
     )
     with patch(
-        "gcw.performance.longshot_scores.rotate_cache_keys", wraps=rotate_cache_keys
+        "gcw.performance.longshot_scores.rotate_cache_keys",
+        wraps=rotate_cache_keys,
     ) as rotate:
         chunked_fp32_unroped_concatenated_kv_squared_l2(
             keys,
@@ -115,7 +126,9 @@ def test_chunk_local_unrope_never_rotates_more_rows_than_the_budget() -> None:
     assert max(call.args[0].shape[0] for call in rotate.call_args_list) <= 3
 
 
-def test_rotate_cache_keys_inner_allocator_events_fit_the_reported_bound() -> None:
+def test_rotate_cache_keys_inner_allocator_events_fit_the_reported_bound() -> (
+    None
+):
     rows = 5
     head_dim = rotary_dim = 8
     keys = torch.randn(rows, head_dim, dtype=torch.bfloat16)
@@ -142,7 +155,9 @@ def test_rotate_cache_keys_inner_allocator_events_fit_the_reported_bound() -> No
     ]
     names = {event.name for event in inner_events}
     assert {"aten::cos", "aten::sin", "aten::cat"} <= names
-    profiled_inner_allocation_bytes = sum(event.cpu_memory_usage for event in inner_events)
+    profiled_inner_allocation_bytes = sum(
+        event.cpu_memory_usage for event in inner_events
+    )
     output_bytes = rows * head_dim * keys.element_size()
     reported_bound = unrope_rotation_estimated_inner_allocation_bytes(
         rows,
@@ -155,13 +170,17 @@ def test_rotate_cache_keys_inner_allocator_events_fit_the_reported_bound() -> No
 
 def test_layer_major_kv_score_saves_sources_not_full_merged_history() -> None:
     keys = torch.randn(3, 2, 2, 7, 4, dtype=torch.bfloat16, requires_grad=True)
-    values = torch.randn(3, 2, 2, 7, 4, dtype=torch.bfloat16, requires_grad=True)
+    values = torch.randn(
+        3, 2, 2, 7, 4, dtype=torch.bfloat16, requires_grad=True
+    )
     saved: list[torch.Tensor] = []
     with torch.autograd.graph.saved_tensors_hooks(
         lambda tensor: (saved.append(tensor) or tensor),
         lambda tensor: tensor,
     ):
-        chunked_fp32_concatenated_kv_squared_l2(keys, values, max_temp_bytes=8 * 4)
+        chunked_fp32_concatenated_kv_squared_l2(
+            keys, values, max_temp_bytes=8 * 4
+        )
 
     assert len(saved) == 2
     assert saved[0].data_ptr() == keys.data_ptr()
@@ -190,13 +209,17 @@ def test_direct_selected_kv_gather_matches_flatten_then_gather(
 
     assert torch.equal(actual, expected)
     upstream = torch.randn_like(actual)
-    expected_grads = torch.autograd.grad(expected, (keys, values), upstream, retain_graph=True)
+    expected_grads = torch.autograd.grad(
+        expected, (keys, values), upstream, retain_graph=True
+    )
     actual_grads = torch.autograd.grad(actual, (keys, values), upstream)
     assert torch.equal(actual_grads[0], expected_grads[0])
     assert torch.equal(actual_grads[1], expected_grads[1])
 
 
-def test_qwen3_backbone_cache_positions_drive_exact_llama_unrope_history_scoring() -> None:
+def test_qwen3_backbone_cache_positions_drive_exact_llama_unrope_history_scoring() -> (
+    None
+):
     torch.manual_seed(74)
     config = ModelConfig(
         variant="longshot",
@@ -236,7 +259,9 @@ def test_qwen3_backbone_cache_positions_drive_exact_llama_unrope_history_scoring
         assert layer.self_attn is not None
         hooks.append(
             layer.self_attn.k_norm.register_forward_hook(
-                lambda _module, _inputs, output: pre_rotary_keys.append(output.detach())
+                lambda _module, _inputs, output: pre_rotary_keys.append(
+                    output.detach()
+                )
             )
         )
     try:
@@ -252,7 +277,9 @@ def test_qwen3_backbone_cache_positions_drive_exact_llama_unrope_history_scoring
     assert isinstance(cache, WindowedCache)
     assert cache.keys.shape == (2, 2, 1, 11, 8)
     expected_unrotated = torch.stack(pre_rotary_keys).permute(0, 1, 3, 2, 4)
-    all_indices = expand_cache_head_indices(cache.all_indices(), config.num_layers)
+    all_indices = expand_cache_head_indices(
+        cache.all_indices(), config.num_layers
+    )
     gathered = gather_per_cache_head_kv(
         cache,
         all_indices,
@@ -266,7 +293,9 @@ def test_qwen3_backbone_cache_positions_drive_exact_llama_unrope_history_scoring
         .reshape(2, config.num_layers, config.num_kv_heads, 11, config.head_dim)
         .permute(1, 0, 2, 3, 4)
     )
-    torch.testing.assert_close(actual_unrotated, expected_unrotated, atol=2e-6, rtol=2e-5)
+    torch.testing.assert_close(
+        actual_unrotated, expected_unrotated, atol=2e-6, rtol=2e-5
+    )
 
     optimized = model.cache_processor
     assert isinstance(optimized, GlobalCacheProcessor)
@@ -296,9 +325,11 @@ def test_windowed_kv_norm_scores_indices_and_selected_history_match_reference(
     cache, _, _ = _cache(requires_grad=True)
     reference_cache, _, _ = _cache(requires_grad=True)
 
-    actual_merged, actual_scores, actual_indices = processor._select_kv_norm_history(cache)
-    expected_merged, expected_scores, expected_indices = _reference_kv_norm_history(
-        processor, reference_cache
+    actual_merged, actual_scores, actual_indices = (
+        processor._select_kv_norm_history(cache)
+    )
+    expected_merged, expected_scores, expected_indices = (
+        _reference_kv_norm_history(processor, reference_cache)
     )
 
     assert torch.equal(actual_scores, expected_scores)
@@ -329,33 +360,67 @@ def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
         optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
     reference = copy.deepcopy(optimized)
-    object.__setattr__(reference, "_select_kv_norm_history", MethodType(_reference_kv_norm_history, reference))
-    optimized_state = {name: value.clone() for name, value in optimized.state_dict().items()}
-    reference_state = {name: value.clone() for name, value in reference.state_dict().items()}
+    object.__setattr__(
+        reference,
+        "_select_kv_norm_history",
+        MethodType(_reference_kv_norm_history, reference),
+    )
+    optimized_state = {
+        name: value.clone() for name, value in optimized.state_dict().items()
+    }
+    reference_state = {
+        name: value.clone() for name, value in reference.state_dict().items()
+    }
 
     optimized_result = _run_processor(optimized)
     reference_result = _run_processor(reference)
 
-    assert torch.equal(optimized_result.source.indices, reference_result.source.indices)
-    assert torch.equal(optimized_result.source.selected_heads, reference_result.source.selected_heads)
-    assert torch.equal(optimized_result.source.latest_indices, reference_result.source.latest_indices)
-    assert torch.equal(optimized_result.source.merged, reference_result.source.merged)
-    assert len(optimized_result.selection_trace) == len(reference_result.selection_trace)
-    for actual, expected in zip(optimized_result.selection_trace, reference_result.selection_trace, strict=True):
+    assert torch.equal(
+        optimized_result.source.indices, reference_result.source.indices
+    )
+    assert torch.equal(
+        optimized_result.source.selected_heads,
+        reference_result.source.selected_heads,
+    )
+    assert torch.equal(
+        optimized_result.source.latest_indices,
+        reference_result.source.latest_indices,
+    )
+    assert torch.equal(
+        optimized_result.source.merged, reference_result.source.merged
+    )
+    assert len(optimized_result.selection_trace) == len(
+        reference_result.selection_trace
+    )
+    for actual, expected in zip(
+        optimized_result.selection_trace,
+        reference_result.selection_trace,
+        strict=True,
+    ):
         assert torch.equal(actual, expected)
-    assert torch.equal(optimized_result.output.keys, reference_result.output.keys)
-    assert torch.equal(optimized_result.output.values, reference_result.output.values)
+    assert torch.equal(
+        optimized_result.output.keys, reference_result.output.keys
+    )
+    assert torch.equal(
+        optimized_result.output.values, reference_result.output.values
+    )
     assert torch.equal(optimized_result.key_grad, reference_result.key_grad)
     assert torch.equal(optimized_result.value_grad, reference_result.value_grad)
-    assert optimized_result.iteration_metrics == reference_result.iteration_metrics
+    assert (
+        optimized_result.iteration_metrics == reference_result.iteration_metrics
+    )
 
     for optimized_parameter, reference_parameter in zip(
         optimized.parameters(), reference.parameters(), strict=True
     ):
-        assert (optimized_parameter.grad is None) == (reference_parameter.grad is None)
+        assert (optimized_parameter.grad is None) == (
+            reference_parameter.grad is None
+        )
         if optimized_parameter.grad is not None:
             assert reference_parameter.grad is not None
-            assert torch.equal(optimized_parameter.grad, reference_parameter.grad)
+            assert torch.equal(
+                optimized_parameter.grad, reference_parameter.grad
+            )
     assert _state_dict_equal(optimized.state_dict(), optimized_state)
     assert _state_dict_equal(reference.state_dict(), reference_state)
     assert optimized.state_dict().keys() == reference.state_dict().keys()
@@ -363,20 +428,32 @@ def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
 
 def test_default_windowed_kv_norm_path_remains_eager() -> None:
     processor = _processor(
-        iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=False
+        iteration_mode="internal",
+        iterations=1,
+        update_stream="v",
+        unrope_keys=False,
     )
     cache, _, _ = _cache(requires_grad=False)
 
-    with patch.object(longshot_module, "gather_per_cache_head_kv", wraps=gather_per_cache_head_kv) as gather:
+    with patch.object(
+        longshot_module,
+        "gather_per_cache_head_kv",
+        wraps=gather_per_cache_head_kv,
+    ) as gather:
         processor.encode_source(cache)
 
     gather.assert_called_once()
 
 
 @pytest.mark.parametrize("unrope_keys", [False, True])
-def test_windowed_kv_norm_path_does_not_call_full_history_gather(unrope_keys: bool) -> None:
+def test_windowed_kv_norm_path_does_not_call_full_history_gather(
+    unrope_keys: bool,
+) -> None:
     processor = _processor(
-        iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=unrope_keys
+        iteration_mode="internal",
+        iterations=1,
+        update_stream="v",
+        unrope_keys=unrope_keys,
     )
     configure_longshot_full_history_execution(
         processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
@@ -386,7 +463,9 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(unrope_keys: bo
     with patch.object(
         longshot_module,
         "gather_per_cache_head_kv",
-        side_effect=AssertionError("windowed kv_norm must gather selected history only"),
+        side_effect=AssertionError(
+            "windowed kv_norm must gather selected history only"
+        ),
     ):
         source = processor.encode_source(cache)
         processor(cache)
@@ -395,8 +474,12 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(unrope_keys: bo
     metrics = pop_longshot_full_history_metrics(processor)
     assert metrics["performance/longshot_full_history_events"] == 2.0
     assert (
-        metrics["performance/longshot_full_history_selected_history_logical_payload_bytes"]
-        < metrics["performance/longshot_full_history_reference_full_history_logical_payload_bytes"]
+        metrics[
+            "performance/longshot_full_history_selected_history_logical_payload_bytes"
+        ]
+        < metrics[
+            "performance/longshot_full_history_reference_full_history_logical_payload_bytes"
+        ]
     )
     assert (
         metrics[
@@ -411,7 +494,9 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(unrope_keys: bo
             metrics[
                 "performance/longshot_full_history_optimized_selected_unrope_estimated_live_bytes"
             ]
-            < metrics["performance/longshot_full_history_reference_unrope_estimated_live_bytes"]
+            < metrics[
+                "performance/longshot_full_history_reference_unrope_estimated_live_bytes"
+            ]
         )
         full_rows = 2 * 2 * 2 * 6
         selected_rows = full_rows // 6 * source.indices.shape[-1]
@@ -452,17 +537,28 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(unrope_keys: bo
 
 def test_enabled_full_history_admits_bounded_chunk_local_unrope() -> None:
     processor = _processor(
-        iteration_mode="internal", iterations=1, update_stream="kv", unrope_keys=True
+        iteration_mode="internal",
+        iterations=1,
+        update_stream="kv",
+        unrope_keys=True,
     )
     configure_longshot_full_history_execution(
         processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
-    assert processor._select_kv_norm_history(_cache(requires_grad=False)[0])[2].shape[-1] > 0
+    assert (
+        processor._select_kv_norm_history(_cache(requires_grad=False)[0])[
+            2
+        ].shape[-1]
+        > 0
+    )
 
 
 def test_full_history_telemetry_ignores_checkpoint_recomputation() -> None:
     processor = _processor(
-        iteration_mode="internal", iterations=1, update_stream="v", unrope_keys=False
+        iteration_mode="internal",
+        iterations=1,
+        update_stream="v",
+        unrope_keys=False,
     )
     cache, _, _ = _cache(requires_grad=False)
     record_longshot_full_history_event(
@@ -483,7 +579,9 @@ def test_full_history_telemetry_ignores_checkpoint_recomputation() -> None:
     assert metrics["performance/longshot_full_history_events"] == 1.0
 
 
-def test_segmented_backward_records_full_history_events_once_per_original_forward() -> None:
+def test_segmented_backward_records_full_history_events_once_per_original_forward() -> (
+    None
+):
     config = ModelConfig(
         variant="longshot",
         family="smollm",
@@ -574,10 +672,16 @@ def _run_processor(processor: GlobalCacheProcessor) -> _RunResult:
         trace.append(selected.detach().clone())
         return selected
 
-    with patch.object(longshot_module, "_select_heads_from_head_scores", side_effect=traced_selector):
+    with patch.object(
+        longshot_module,
+        "_select_heads_from_head_scores",
+        side_effect=traced_selector,
+    ):
         source = processor.encode_source(source_cache)
         output = processor(cache)
-    loss = output.keys.float().pow(2).mean() + output.values.float().pow(2).mean()
+    loss = (
+        output.keys.float().pow(2).mean() + output.values.float().pow(2).mean()
+    )
     loss.backward()
     assert input_keys.grad is not None
     assert input_values.grad is not None
@@ -592,10 +696,15 @@ def _run_processor(processor: GlobalCacheProcessor) -> _RunResult:
 
 
 @pytest.mark.parametrize("unrope_keys", [False, True])
-def test_selected_history_matches_native_checkpoint_recomputation(unrope_keys: bool) -> None:
+def test_selected_history_matches_native_checkpoint_recomputation(
+    unrope_keys: bool,
+) -> None:
     torch.manual_seed(97)
     optimized = _processor(
-        iteration_mode="internal", iterations=2, update_stream="kv", unrope_keys=unrope_keys
+        iteration_mode="internal",
+        iterations=2,
+        update_stream="kv",
+        unrope_keys=unrope_keys,
     )
     optimized.config.gradient_checkpointing = True
     optimized.train()
@@ -604,7 +713,9 @@ def test_selected_history_matches_native_checkpoint_recomputation(unrope_keys: b
     )
     reference = copy.deepcopy(optimized)
     object.__setattr__(
-        reference, "_select_kv_norm_history", MethodType(_reference_kv_norm_history, reference)
+        reference,
+        "_select_kv_norm_history",
+        MethodType(_reference_kv_norm_history, reference),
     )
 
     actual = _run_processor(optimized)
@@ -627,7 +738,9 @@ def _reference_kv_norm_history(
     self: GlobalCacheProcessor,
     cache: WindowedCache,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    all_indices = expand_cache_head_indices(cache.all_indices(), self.num_kv_cache_heads)
+    all_indices = expand_cache_head_indices(
+        cache.all_indices(), self.num_kv_cache_heads
+    )
     merged_all = gather_per_cache_head_kv(
         cache,
         all_indices,
@@ -688,14 +801,30 @@ def _processor(
     return GlobalCacheProcessor(config)
 
 
-def _cache(*, requires_grad: bool) -> tuple[WindowedCache, torch.Tensor, torch.Tensor]:
+def _cache(
+    *, requires_grad: bool
+) -> tuple[WindowedCache, torch.Tensor, torch.Tensor]:
     generator = torch.Generator().manual_seed(83)
-    keys = torch.randn(2, 2, 2, 6, 8, generator=generator).requires_grad_(requires_grad)
-    values = torch.randn(2, 2, 2, 6, 8, generator=generator).requires_grad_(requires_grad)
-    return WindowedCache(keys=keys, values=values, scores=torch.randn(2, 6, generator=generator)), keys, values
+    keys = torch.randn(2, 2, 2, 6, 8, generator=generator).requires_grad_(
+        requires_grad
+    )
+    values = torch.randn(2, 2, 2, 6, 8, generator=generator).requires_grad_(
+        requires_grad
+    )
+    return (
+        WindowedCache(
+            keys=keys,
+            values=values,
+            scores=torch.randn(2, 6, generator=generator),
+        ),
+        keys,
+        values,
+    )
 
 
-def _state_dict_equal(actual: dict[str, torch.Tensor], expected: dict[str, torch.Tensor]) -> bool:
+def _state_dict_equal(
+    actual: dict[str, torch.Tensor], expected: dict[str, torch.Tensor]
+) -> bool:
     return actual.keys() == expected.keys() and all(
         torch.equal(actual[name], expected[name]) for name in actual
     )

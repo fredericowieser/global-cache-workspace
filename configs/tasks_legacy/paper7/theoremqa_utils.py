@@ -152,12 +152,17 @@ def _is_correct(pred: str, gold: str, answer_type: str) -> bool:
             return _int_match(pred, gold)
         if "float" in at:
             return _float_match(pred, gold)
-        return _float_match(pred, gold) or pred.strip().lower() == gold.strip().lower()
+        return (
+            _float_match(pred, gold)
+            or pred.strip().lower() == gold.strip().lower()
+        )
     except Exception:
         return False
 
 
-def process_results(doc: Dict[str, Any], results: List[str]) -> Dict[str, float]:
+def process_results(
+    doc: Dict[str, Any], results: List[str]
+) -> Dict[str, float]:
     completion = results[0]
     pred = _extract_prediction(completion)
     gold = str(doc["Answer"])

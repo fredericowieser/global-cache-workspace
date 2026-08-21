@@ -8,7 +8,9 @@ from gcw.params import estimate_non_embedding_params, processor_params
 from scripts import generate_math_experiment_configs as generator
 
 
-def test_experiment_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatch):
+def test_experiment_configs_share_data_steps_rows_and_wandb(
+    tmp_path, monkeypatch
+):
     dataset = tmp_path / "train.jsonl"
     dataset.write_text("{}\n")
     data_manifest = tmp_path / "data.json"
@@ -17,7 +19,9 @@ def test_experiment_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatc
             {
                 "rows": 129,
                 "dataset_path": str(dataset.resolve()),
-                "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
+                "dataset_sha256": hashlib.sha256(
+                    dataset.read_bytes()
+                ).hexdigest(),
                 "validation_path": str(dataset.resolve()),
                 "source_ids_sha256": "12" * 32,
                 "tokenizer_identity_sha256": "23" * 32,
@@ -27,7 +31,10 @@ def test_experiment_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatc
     checkpoint = tmp_path / "backbone"
     checkpoint.mkdir()
     (checkpoint / "model.safetensors").write_bytes(b"weights")
-    monkeypatch.setattr("transformers.AutoConfig.from_pretrained", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        "transformers.AutoConfig.from_pretrained",
+        lambda *_args, **_kwargs: object(),
+    )
     monkeypatch.setattr(
         generator,
         "config_from_hf",
@@ -67,12 +74,35 @@ def test_experiment_configs_share_data_steps_rows_and_wandb(tmp_path, monkeypatc
     assert {config.sequence_len for config in configs} == {4096}
     assert {config.global_batch_rows for config in configs} == {64}
     assert {config.max_steps for config in configs} == {3}
-    assert {config.data.dataset for config in configs} == {str(dataset.resolve())}
+    assert {config.data.dataset for config in configs} == {
+        str(dataset.resolve())
+    }
     assert {config.wandb.entity for config in configs} == {"huawei-noahs-ark"}
-    assert {config.wandb.project for config in configs} == {"global-cache-workspace"}
-    assert {config.learning_rate for config in configs if config.trainable == "cache_processor"} == {1e-3}
-    assert next(config for config in configs if config.trainable == "lora").learning_rate == 1e-4
-    assert next(config for config in configs if config.trainable == "backbone").learning_rate == 5e-6
+    assert {config.wandb.project for config in configs} == {
+        "global-cache-workspace"
+    }
+    assert {
+        config.learning_rate
+        for config in configs
+        if config.trainable == "cache_processor"
+    } == {1e-3}
+    assert (
+        next(
+            config for config in configs if config.trainable == "lora"
+        ).learning_rate
+        == 1e-4
+    )
+    assert (
+        next(
+            config for config in configs if config.trainable == "backbone"
+        ).learning_rate
+        == 5e-6
+    )
     for config in configs:
-        if config.model.variant != "tf" and estimate_non_embedding_params(config.model) > 1_000_000:
-            assert processor_params(config.model) <= 0.05 * estimate_non_embedding_params(config.model)
+        if (
+            config.model.variant != "tf"
+            and estimate_non_embedding_params(config.model) > 1_000_000
+        ):
+            assert processor_params(
+                config.model
+            ) <= 0.05 * estimate_non_embedding_params(config.model)

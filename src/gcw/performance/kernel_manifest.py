@@ -27,11 +27,17 @@ class KernelLaunchSpec:
 
     def __post_init__(self) -> None:
         if not self.name or self.block <= 0 or self.num_warps <= 0:
-            raise ValueError("kernel launch manifest entries require a name and positive launch dimensions")
+            raise ValueError(
+                "kernel launch manifest entries require a name and positive launch dimensions"
+            )
         if not self.input_dtypes or not self.layouts:
-            raise ValueError("kernel launch manifest entries require closed dtypes and layouts")
+            raise ValueError(
+                "kernel launch manifest entries require closed dtypes and layouts"
+            )
         if self.autotuning is not False:
-            raise ValueError("production kernel manifest forbids runtime autotuning")
+            raise ValueError(
+                "production kernel manifest forbids runtime autotuning"
+            )
 
 
 KERNEL_LAUNCHES = (
@@ -116,4 +122,6 @@ def kernel_manifest_payload() -> dict[str, object]:
 
 
 def kernel_manifest_sha256() -> str:
-    return hashlib.sha256(canonical_json_bytes(kernel_manifest_payload())).hexdigest()
+    return hashlib.sha256(
+        canonical_json_bytes(kernel_manifest_payload())
+    ).hexdigest()

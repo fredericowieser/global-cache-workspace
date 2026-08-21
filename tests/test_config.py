@@ -1,16 +1,31 @@
 import pytest
 
-from gcw.config import DataConfig, LoRAConfig, ModelConfig, ResumeConfig, TrainConfig, WandbConfig, load_train_config
+from gcw.config import (
+    DataConfig,
+    LoRAConfig,
+    ModelConfig,
+    ResumeConfig,
+    TrainConfig,
+    WandbConfig,
+    load_train_config,
+)
 
 
 def test_train_config_builds_explicit_resume_and_wandb_state():
     config = TrainConfig(
-        resume={"checkpoint": "runs/example/checkpoint", "topology": "elastic_ddp"},
+        resume={
+            "checkpoint": "runs/example/checkpoint",
+            "topology": "elastic_ddp",
+        },
         wandb={"enabled": True, "id": "run-123", "resume": "must"},
     )
 
-    assert config.resume == ResumeConfig(checkpoint="runs/example/checkpoint", topology="elastic_ddp")
-    assert config.wandb == WandbConfig(enabled=True, id="run-123", resume="must")
+    assert config.resume == ResumeConfig(
+        checkpoint="runs/example/checkpoint", topology="elastic_ddp"
+    )
+    assert config.wandb == WandbConfig(
+        enabled=True, id="run-123", resume="must"
+    )
 
 
 def test_row_and_token_batch_contracts_are_mutually_exclusive():
@@ -30,7 +45,9 @@ def test_train_config_allows_backbone_with_resume_for_fingerprint_stability():
 
 
 def test_train_config_rejects_init_checkpoint_with_resume():
-    with pytest.raises(ValueError, match="init_checkpoint and resume are mutually exclusive"):
+    with pytest.raises(
+        ValueError, match="init_checkpoint and resume are mutually exclusive"
+    ):
         TrainConfig(
             init_checkpoint="runs/init/checkpoint",
             resume={"checkpoint": "runs/training/checkpoint"},
@@ -38,7 +55,10 @@ def test_train_config_rejects_init_checkpoint_with_resume():
 
 
 def test_train_config_rejects_backbone_with_init_checkpoint():
-    with pytest.raises(ValueError, match="backbone_checkpoint and init_checkpoint are mutually exclusive"):
+    with pytest.raises(
+        ValueError,
+        match="backbone_checkpoint and init_checkpoint are mutually exclusive",
+    ):
         TrainConfig(
             backbone_checkpoint="runs/backbone/checkpoint",
             init_checkpoint="runs/init/checkpoint",
@@ -47,7 +67,9 @@ def test_train_config_rejects_backbone_with_init_checkpoint():
 
 @pytest.mark.parametrize("grad_clip", [0.0, -1.0, float("inf"), float("nan")])
 def test_train_config_requires_finite_positive_grad_clip(grad_clip):
-    with pytest.raises(ValueError, match="grad_clip must be finite and positive"):
+    with pytest.raises(
+        ValueError, match="grad_clip must be finite and positive"
+    ):
         TrainConfig(grad_clip=grad_clip)
 
 
@@ -64,7 +86,9 @@ def test_train_config_accepts_explicit_trainable_policy(trainable):
 def test_lora_policy_requires_adapters():
     with pytest.raises(ValueError, match="requires model.lora"):
         TrainConfig(trainable="lora")
-    config = TrainConfig(model=ModelConfig(lora=LoRAConfig(rank=8)), trainable="lora")
+    config = TrainConfig(
+        model=ModelConfig(lora=LoRAConfig(rank=8)), trainable="lora"
+    )
     assert config.model.lora == LoRAConfig(rank=8)
 
 
@@ -87,9 +111,18 @@ def test_wandb_tags_match_service_constraints(tags):
 @pytest.mark.parametrize(
     ("path", "topology"),
     [
-        ("configs/train/resume/smollm360m_matched_bgt_20b_pe512_resume.yaml", "same"),
-        ("configs/train/resume/smollm360m_matched_bt_20b_pe512_resume.yaml", "same"),
-        ("configs/train/resume/smollm360m_matched_bt_20b_pe512_resume_2gpu.yaml", "elastic_ddp"),
+        (
+            "configs/train/resume/smollm360m_matched_bgt_20b_pe512_resume.yaml",
+            "same",
+        ),
+        (
+            "configs/train/resume/smollm360m_matched_bt_20b_pe512_resume.yaml",
+            "same",
+        ),
+        (
+            "configs/train/resume/smollm360m_matched_bt_20b_pe512_resume_2gpu.yaml",
+            "elastic_ddp",
+        ),
     ],
 )
 def test_resume_configs_use_versioned_resume_interface(path, topology):
@@ -120,7 +153,9 @@ def test_canonical_data_config_requires_non_placeholder_artifact_identity_hashes
     artifact_hash,
     source_ids_hash,
 ):
-    with pytest.raises(ValueError, match="canonical data requires authenticated"):
+    with pytest.raises(
+        ValueError, match="canonical data requires authenticated"
+    ):
         DataConfig(
             canonical_execution=True,
             expected_artifact_sha256=artifact_hash,

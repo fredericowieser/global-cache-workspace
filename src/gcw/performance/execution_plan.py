@@ -44,10 +44,20 @@ class OptimizedStepAuthority:
     def __post_init__(self) -> None:
         for name in ("source_tree_sha256", "config_sha256"):
             value = getattr(self, name)
-            if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
-                raise ValueError(f"optimized-step authority {name} must be lowercase SHA-256")
-        if not self.gpu_uuid or not self.torch_version or not self.triton_version:
-            raise ValueError("optimized-step authority runtime identity must be complete")
+            if len(value) != 64 or any(
+                character not in "0123456789abcdef" for character in value
+            ):
+                raise ValueError(
+                    f"optimized-step authority {name} must be lowercase SHA-256"
+                )
+        if (
+            not self.gpu_uuid
+            or not self.torch_version
+            or not self.triton_version
+        ):
+            raise ValueError(
+                "optimized-step authority runtime identity must be complete"
+            )
 
 
 @dataclass(frozen=True)
@@ -70,7 +80,9 @@ def combined_v1_plan_payload() -> dict[str, object]:
         "eager_fallback": False,
         "campaign_admitted": COMBINED_V1_CAMPAIGN_ADMITTED,
         "kernel_manifest_sha256": kernel_manifest_sha256(),
-        "components": [asdict(component) for component in COMBINED_V1_COMPONENTS],
+        "components": [
+            asdict(component) for component in COMBINED_V1_COMPONENTS
+        ],
         "excluded": [
             "adaptive_pair_batching",
             "regional_inductor",
@@ -85,7 +97,9 @@ def combined_v1_plan_payload() -> dict[str, object]:
 
 
 def combined_v1_plan_sha256() -> str:
-    return hashlib.sha256(canonical_json_bytes(combined_v1_plan_payload())).hexdigest()
+    return hashlib.sha256(
+        canonical_json_bytes(combined_v1_plan_payload())
+    ).hexdigest()
 
 
 def optimized_step_receipt_context(
@@ -93,7 +107,9 @@ def optimized_step_receipt_context(
     authority: OptimizedStepAuthority,
 ) -> dict[str, object]:
     if not config.enabled or config.qualification_id is None:
-        raise ValueError("optimized-step receipt context requires an enabled bound configuration")
+        raise ValueError(
+            "optimized-step receipt context requires an enabled bound configuration"
+        )
     return {
         "audience": "gcw.training.optimized_step",
         "qualification_id": config.qualification_id,
@@ -113,9 +129,13 @@ def require_optimized_step_admission(
     if not config.enabled:
         return None
     if not COMBINED_V1_CAMPAIGN_ADMITTED:
-        raise RuntimeError("optimized-step combined_v1 is not campaign-admitted by this source build")
+        raise RuntimeError(
+            "optimized-step combined_v1 is not campaign-admitted by this source build"
+        )
     if authority is None:
-        raise RuntimeError("enabled optimized-step execution requires complete runtime authority")
+        raise RuntimeError(
+            "enabled optimized-step execution requires complete runtime authority"
+        )
     assert config.receipt_path is not None
     assert config.key_path is not None
     assert config.key_id is not None
@@ -127,7 +147,13 @@ def require_optimized_step_admission(
         expected_context=optimized_step_receipt_context(config, authority),
         key=key,
     )
-    expected_keys = {"admitted", "profile", "plan_sha256", "evidence_sha256", "qualified_accelerators"}
+    expected_keys = {
+        "admitted",
+        "profile",
+        "plan_sha256",
+        "evidence_sha256",
+        "qualified_accelerators",
+    }
     if set(payload) != expected_keys:
         raise RuntimeError("optimized-step receipt payload schema differs")
     evidence = payload["evidence_sha256"]
@@ -145,7 +171,9 @@ def require_optimized_step_admission(
             for value in evidence
         )
     ):
-        raise RuntimeError("optimized-step receipt does not admit the closed H100/H200 plan")
+        raise RuntimeError(
+            "optimized-step receipt does not admit the closed H100/H200 plan"
+        )
     return VerifiedOptimizedStepPlan(
         profile="combined_v1",
         plan_sha256=combined_v1_plan_sha256(),

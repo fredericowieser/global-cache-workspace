@@ -54,7 +54,9 @@ _FINAL_CHOICES_RE = re.compile(
     r"(?i)final\s+answer\s*(?:is|[:=])\s*(?:option[s]?\s*)?"
     r"[\(\[]?([A-Z](?:\s*[,/&]\s*[A-Z])*)"
 )
-_BOXED_CHOICES_RE = re.compile(r"\\boxed\{\s*([A-Z](?:\s*[,/&]\s*[A-Z])*)\s*\}", re.IGNORECASE)
+_BOXED_CHOICES_RE = re.compile(
+    r"\\boxed\{\s*([A-Z](?:\s*[,/&]\s*[A-Z])*)\s*\}", re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -82,9 +84,16 @@ def format_multiple_choice_prompt(
     allow_multiple: bool = False,
 ) -> str:
     if not 2 <= len(choices) <= len(_CHOICE_LABELS):
-        raise ValueError("multiple-choice examples require between 2 and 26 choices")
-    cleaned_stem = re.sub(r"(?:\n|^)\s*Answer:\s*$", "", stem.strip(), flags=re.IGNORECASE)
-    rendered = "\n".join(f"{_CHOICE_LABELS[index]}. {choice.strip()}" for index, choice in enumerate(choices))
+        raise ValueError(
+            "multiple-choice examples require between 2 and 26 choices"
+        )
+    cleaned_stem = re.sub(
+        r"(?:\n|^)\s*Answer:\s*$", "", stem.strip(), flags=re.IGNORECASE
+    )
+    rendered = "\n".join(
+        f"{_CHOICE_LABELS[index]}. {choice.strip()}"
+        for index, choice in enumerate(choices)
+    )
     instruction = (
         "Reason through the problem, then end with exactly `Final answer: X`, "
         "where X is the correct choice letter."
@@ -102,7 +111,9 @@ def format_numeric_prompt(question: str) -> str:
     return question.strip()
 
 
-def extract_final_choices(response: str, choice_count: int) -> tuple[int, ...] | None:
+def extract_final_choices(
+    response: str, choice_count: int
+) -> tuple[int, ...] | None:
     matches = list(_FINAL_CHOICES_RE.finditer(response))
     if not matches:
         matches = list(_BOXED_CHOICES_RE.finditer(response))
@@ -110,7 +121,11 @@ def extract_final_choices(response: str, choice_count: int) -> tuple[int, ...] |
         return None
     labels = re.findall(r"[A-Z]", matches[-1].group(1).upper())
     indices = tuple(sorted({ord(label) - ord("A") for label in labels}))
-    return indices if indices and all(0 <= index < choice_count for index in indices) else None
+    return (
+        indices
+        if indices and all(0 <= index < choice_count for index in indices)
+        else None
+    )
 
 
 def extract_final_choice(response: str, choice_count: int) -> int | None:
@@ -129,11 +144,15 @@ def _stable_doc_hash(task: str, index: int, doc: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _select_docs(task: str, docs: Iterable[Mapping[str, Any]], limit: int | None) -> list[tuple[int, Mapping[str, Any]]]:
+def _select_docs(
+    task: str, docs: Iterable[Mapping[str, Any]], limit: int | None
+) -> list[tuple[int, Mapping[str, Any]]]:
     indexed = list(enumerate(docs))
     if limit is None or len(indexed) <= limit:
         return indexed
-    return sorted(indexed, key=lambda item: _stable_doc_hash(task, item[0], item[1]))[:limit]
+    return sorted(
+        indexed, key=lambda item: _stable_doc_hash(task, item[0], item[1])
+    )[:limit]
 
 
 def _flatten_tasks(value: Any) -> list[Any]:
@@ -150,7 +169,9 @@ def _task_docs(task: Any) -> Iterable[Mapping[str, Any]]:
         return cast(Iterable[Mapping[str, Any]], task.test_docs())
     if task.has_validation_docs():
         return cast(Iterable[Mapping[str, Any]], task.validation_docs())
-    raise ValueError(f"task {task.config.task!r} has no test or validation documents")
+    raise ValueError(
+        f"task {task.config.task!r} has no test or validation documents"
+    )
 
 
 def _coerce_choice_indices(
@@ -162,7 +183,11 @@ def _coerce_choice_indices(
     if task_name == "winogrande":
         return (int(doc["answer"]) - 1,)
     gold = doc.get("gold")
-    if isinstance(gold, (list, tuple)) and gold and all(isinstance(index, int) for index in gold):
+    if (
+        isinstance(gold, (list, tuple))
+        and gold
+        and all(isinstance(index, int) for index in gold)
+    ):
         indices = tuple(sorted(set(int(index) for index in gold)))
         if all(0 <= index < len(choices) for index in indices):
             return indices
@@ -208,10 +233,14 @@ def _task_stem(task_name: str, task: Any, doc: Mapping[str, Any]) -> str:
     return str(task.doc_to_text(doc))
 
 
-def _load_task_examples(task_names: Sequence[str]) -> tuple[list[ChatExample], dict[str, Any]]:
+def _load_task_examples(
+    task_names: Sequence[str],
+) -> tuple[list[ChatExample], dict[str, Any]]:
     from lm_eval.tasks import TaskManager, get_task_dict
 
-    manager = TaskManager(include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR")
+    manager = TaskManager(
+        include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR"
+    )
     examples: list[ChatExample] = []
     identity: dict[str, Any] = {}
     next_index = 0
@@ -232,26 +261,40 @@ def _load_task_examples(task_names: Sequence[str]) -> tuple[list[ChatExample], d
                 "validation_split": task.config.validation_split,
             }
             per_source_limit = GENERAL_TASK_LIMITS.get(requested_name)
-            selected = _select_docs(source_name, _task_docs(task), per_source_limit)
+            selected = _select_docs(
+                source_name, _task_docs(task), per_source_limit
+            )
             source_counts[source_name] = len(selected)
             for source_index, doc in selected:
-                selected_hashes.append(_stable_doc_hash(source_name, source_index, doc))
+                selected_hashes.append(
+                    _stable_doc_hash(source_name, source_index, doc)
+                )
                 if requested_name in NUMERIC_TASKS:
-                    target = extract_numeric_answer(str(task.doc_to_target(doc)))
+                    target = extract_numeric_answer(
+                        str(task.doc_to_target(doc))
+                    )
                     if target is None:
-                        raise ValueError(f"numeric target is not parseable for {source_name} row {source_index}")
+                        raise ValueError(
+                            f"numeric target is not parseable for {source_name} row {source_index}"
+                        )
                     example = ChatExample(
                         index=next_index,
                         task=requested_name,
                         source_task=source_name,
                         source_index=source_index,
-                        prompt=format_numeric_prompt(str(task.doc_to_text(doc))),
+                        prompt=format_numeric_prompt(
+                            str(task.doc_to_text(doc))
+                        ),
                         target_kind="numeric",
                         target=str(target),
                     )
                 else:
-                    choices = tuple(str(choice) for choice in task.doc_to_choice(doc))
-                    gold = _coerce_choice_indices(requested_name, task, doc, choices)
+                    choices = tuple(
+                        str(choice) for choice in task.doc_to_choice(doc)
+                    )
+                    gold = _coerce_choice_indices(
+                        requested_name, task, doc, choices
+                    )
                     example = ChatExample(
                         index=next_index,
                         task=requested_name,
@@ -260,10 +303,13 @@ def _load_task_examples(task_names: Sequence[str]) -> tuple[list[ChatExample], d
                         prompt=format_multiple_choice_prompt(
                             _task_stem(requested_name, task, doc),
                             choices,
-                            allow_multiple=requested_name == "agieval_gaokao_mathqa",
+                            allow_multiple=requested_name
+                            == "agieval_gaokao_mathqa",
                         ),
                         target_kind="choice",
-                        target=",".join(_CHOICE_LABELS[index] for index in gold),
+                        target=",".join(
+                            _CHOICE_LABELS[index] for index in gold
+                        ),
                         choices=choices,
                     )
                 examples.append(example)
@@ -273,14 +319,22 @@ def _load_task_examples(task_names: Sequence[str]) -> tuple[list[ChatExample], d
             "selected_rows": task_rows,
             "source_counts": source_counts,
             "source_configs": source_configs,
-            "selection": "all_rows" if requested_name not in GENERAL_TASK_LIMITS else "sha256_ranked_seed_24",
+            "selection": (
+                "all_rows"
+                if requested_name not in GENERAL_TASK_LIMITS
+                else "sha256_ranked_seed_24"
+            ),
             "per_source_limit": GENERAL_TASK_LIMITS.get(requested_name),
-            "ordered_selection_sha256": hashlib.sha256("\n".join(selected_hashes).encode()).hexdigest(),
+            "ordered_selection_sha256": hashlib.sha256(
+                "\n".join(selected_hashes).encode()
+            ).hexdigest(),
         }
     return examples, identity
 
 
-def _prepare_examples(examples: Sequence[ChatExample], tokenizer: Any, mode: str) -> list[PreparedChatExample]:
+def _prepare_examples(
+    examples: Sequence[ChatExample], tokenizer: Any, mode: str
+) -> list[PreparedChatExample]:
     if mode not in {"thinking_off", "thinking_on"}:
         raise ValueError(f"unsupported chat benchmark mode: {mode}")
     return [
@@ -308,7 +362,10 @@ def evaluate_chat_examples(
     prepared = _prepare_examples(examples, tokenizer, mode)
     if backend.supports_left_padding:
         ordered = sorted(prepared, key=lambda item: len(item.prompt_ids))
-        batches = [ordered[offset : offset + batch_size] for offset in range(0, len(ordered), batch_size)]
+        batches = [
+            ordered[offset : offset + batch_size]
+            for offset in range(0, len(ordered), batch_size)
+        ]
         grouping = "length_sorted_left_padding"
     else:
         by_length: dict[int, list[PreparedChatExample]] = defaultdict(list)
@@ -328,14 +385,23 @@ def evaluate_chat_examples(
         torch.cuda.reset_peak_memory_stats(backend.device)
     for chunk in batches:
         width = max(len(item.prompt_ids) for item in chunk)
-        input_ids = torch.full((len(chunk), width), backend.pad_id, dtype=torch.long, device=backend.device)
+        input_ids = torch.full(
+            (len(chunk), width),
+            backend.pad_id,
+            dtype=torch.long,
+            device=backend.device,
+        )
         attention_mask = torch.zeros_like(input_ids)
         for row, item in enumerate(chunk):
-            prompt = torch.tensor(item.prompt_ids, dtype=torch.long, device=backend.device)
+            prompt = torch.tensor(
+                item.prompt_ids, dtype=torch.long, device=backend.device
+            )
             input_ids[row, -len(prompt) :] = prompt
             attention_mask[row, -len(prompt) :] = 1
         output = backend.generate(input_ids, attention_mask, max_new_tokens)
-        for item, tokens in zip(chunk, output[:, width:].detach().cpu().tolist(), strict=True):
+        for item, tokens in zip(
+            chunk, output[:, width:].detach().cpu().tolist(), strict=True
+        ):
             response_ids, termination = _trim_at_eos(tokens, backend.eos_ids)
             response = tokenizer.decode(
                 response_ids,
@@ -344,11 +410,15 @@ def evaluate_chat_examples(
             )
             source_example = item.example
             if source_example.target_kind == "choice":
-                prediction_indices = extract_final_choices(response, len(source_example.choices))
+                prediction_indices = extract_final_choices(
+                    response, len(source_example.choices)
+                )
                 prediction = (
                     None
                     if prediction_indices is None
-                    else ",".join(_CHOICE_LABELS[index] for index in prediction_indices)
+                    else ",".join(
+                        _CHOICE_LABELS[index] for index in prediction_indices
+                    )
                 )
                 correct = prediction == source_example.target
             else:
@@ -366,7 +436,10 @@ def evaluate_chat_examples(
                 "correct": correct,
             }
         if backend.device.type == "cuda":
-            peak_memory = max(peak_memory, int(torch.cuda.max_memory_allocated(backend.device)))
+            peak_memory = max(
+                peak_memory,
+                int(torch.cuda.max_memory_allocated(backend.device)),
+            )
     if any(row is None for row in generated):
         raise RuntimeError("chat generation did not produce every row")
     rows = [cast(dict[str, Any], row) for row in generated]
@@ -375,7 +448,9 @@ def evaluate_chat_examples(
         selected = [row for row in rows if row["task"] == task]
         correct_count = sum(bool(row["correct"]) for row in selected)
         parsed = sum(bool(row["parse_success"]) for row in selected)
-        truncated = sum(row["termination"] == "max_new_tokens" for row in selected)
+        truncated = sum(
+            row["termination"] == "max_new_tokens" for row in selected
+        )
         task_results[task] = {
             "correct": correct_count,
             "total": len(selected),
@@ -384,7 +459,9 @@ def evaluate_chat_examples(
             "parse_rate": parsed / len(selected),
             "truncated": truncated,
             "truncation_rate": truncated / len(selected),
-            "response_tokens": sum(int(row["response_tokens"]) for row in selected),
+            "response_tokens": sum(
+                int(row["response_tokens"]) for row in selected
+            ),
         }
     return {
         "mode": mode,
@@ -416,13 +493,19 @@ def run_chat_benchmarks(
     if (checkpoint is None) == (hf_model is None):
         raise ValueError("choose exactly one evaluation target")
     if max_new_tokens != MAX_NEW_TOKENS:
-        raise ValueError(f"chat benchmark protocol requires max_new_tokens={MAX_NEW_TOKENS}")
+        raise ValueError(
+            f"chat benchmark protocol requires max_new_tokens={MAX_NEW_TOKENS}"
+        )
     if not torch.cuda.is_available():
         raise RuntimeError("chat benchmark evaluation requires CUDA")
     device = torch.device("cuda")
     if hf_model is not None:
-        backend: BenchmarkBackend = HFBenchmarkBackend(Path(hf_model).expanduser().resolve(), device)
-        tokenizer_source = Path(tokenizer_path or hf_model).expanduser().resolve()
+        backend: BenchmarkBackend = HFBenchmarkBackend(
+            Path(hf_model).expanduser().resolve(), device
+        )
+        tokenizer_source = (
+            Path(tokenizer_path or hf_model).expanduser().resolve()
+        )
     else:
         backend = GCWBenchmarkBackend(
             Path(cast(str | Path, checkpoint)).expanduser().resolve(),
@@ -430,7 +513,9 @@ def run_chat_benchmarks(
             processor_enabled=processor_enabled,
         )
         if tokenizer_path is None:
-            raise ValueError("native chat benchmark evaluation requires tokenizer_path")
+            raise ValueError(
+                "native chat benchmark evaluation requires tokenizer_path"
+            )
         tokenizer_source = Path(tokenizer_path).expanduser().resolve()
     tokenizer, tokenizer_identity = _load_tokenizer(tokenizer_source)
     examples, dataset_identity = _load_task_examples(tasks)
@@ -450,5 +535,7 @@ def run_chat_benchmarks(
         "processor_enabled": processor_enabled,
         **result,
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
     return {**payload, "payload_sha256": hashlib.sha256(encoded).hexdigest()}

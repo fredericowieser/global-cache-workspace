@@ -9,8 +9,13 @@ import torch.nn.functional as F
 from gcw.config import ModelConfig
 
 try:
-    from torch.nn.attention import SDPBackend as _SDPBackend, sdpa_kernel as _sdpa_kernel
-    from torch.nn.attention.bias import causal_lower_right as _causal_lower_right
+    from torch.nn.attention import (
+        SDPBackend as _SDPBackend,
+        sdpa_kernel as _sdpa_kernel,
+    )
+    from torch.nn.attention.bias import (
+        causal_lower_right as _causal_lower_right,
+    )
 except ImportError:  # pragma: no cover - older torch fallback
     _SDPBackend = None  # type: ignore[assignment,misc]
     _causal_lower_right = None  # type: ignore[assignment]
@@ -29,7 +34,10 @@ def _autocast_dtype(device: torch.device) -> torch.dtype | None:
 
 class Linear(nn.Linear):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if _autocast_dtype(x.device) is not None or x.dtype == self.weight.dtype:
+        if (
+            _autocast_dtype(x.device) is not None
+            or x.dtype == self.weight.dtype
+        ):
             return F.linear(x, self.weight, None)
         return F.linear(x, self.weight.to(dtype=x.dtype), None)
 
@@ -44,7 +52,9 @@ class RMSNorm(nn.Module):
         return F.rms_norm(x, (x.shape[-1],), self.weight.to(x.dtype), self.eps)
 
 
-def apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, style: str = "llama") -> torch.Tensor:
+def apply_rotary(
+    x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, style: str = "llama"
+) -> torch.Tensor:
     d = x.shape[-1] // 2
     x1, x2 = x[..., :d], x[..., d:]
     if style == "ppt":
@@ -61,24 +71,40 @@ class RotaryCache(nn.Module):
         self.max_seq_len = max_seq_len
         self.head_dim = head_dim
         self.theta = theta
-        cos, sin = self._build(max_seq_len, head_dim, theta, torch.device("cpu"))
+        cos, sin = self._build(
+            max_seq_len, head_dim, theta, torch.device("cpu")
+        )
         self.register_buffer("cos", cos, persistent=False)
         self.register_buffer("sin", sin, persistent=False)
 
     @staticmethod
-    def _build(seq_len: int, head_dim: int, theta: float, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-        inv = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32, device=device) / head_dim))
-        freqs = torch.outer(torch.arange(seq_len, dtype=torch.float32, device=device), inv)
+    def _build(
+        seq_len: int, head_dim: int, theta: float, device: torch.device
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        inv = 1.0 / (
+            theta
+            ** (
+                torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
+                / head_dim
+            )
+        )
+        freqs = torch.outer(
+            torch.arange(seq_len, dtype=torch.float32, device=device), inv
+        )
         return freqs.cos()[None, :, None, :], freqs.sin()[None, :, None, :]
 
     def maybe_grow(self, seq_len: int, device: torch.device) -> None:
         if seq_len <= self.cos.shape[1] and self.cos.device == device:
             return
         self.max_seq_len = max(seq_len, self.max_seq_len * 2)
-        cos, sin = self._build(self.max_seq_len, self.head_dim, self.theta, device)
+        cos, sin = self._build(
+            self.max_seq_len, self.head_dim, self.theta, device
+        )
         self.cos, self.sin = cos, sin
 
-    def get(self, positions: torch.Tensor, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    def get(
+        self, positions: torch.Tensor, dtype: torch.dtype
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         self.maybe_grow(int(positions.max().item()) + 1, positions.device)
         cos = self.cos.index_select(1, positions).to(dtype)
         sin = self.sin.index_select(1, positions).to(dtype)
@@ -89,10 +115,14 @@ class RotaryCache(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         self.maybe_grow(start + seq_len, device)
         end = start + seq_len
-        return self.cos[:, start:end].to(dtype), self.sin[:, start:end].to(dtype)
+        return self.cos[:, start:end].to(dtype), self.sin[:, start:end].to(
+            dtype
+        )
 
 
-def _causal_chunk_bias(steps: int, past_len: int, device: torch.device) -> tuple[torch.Tensor | None, bool]:
+def _causal_chunk_bias(
+    steps: int, past_len: int, device: torch.device
+) -> tuple[torch.Tensor | None, bool]:
     if past_len == 0:
         return None, True
     if causal_lower_right is not None:
@@ -100,7 +130,9 @@ def _causal_chunk_bias(steps: int, past_len: int, device: torch.device) -> tuple
     return _causal_chunk_mask(steps, past_len, device), False
 
 
-def _causal_chunk_mask(steps: int, past_len: int, device: torch.device) -> torch.Tensor:
+def _causal_chunk_mask(
+    steps: int, past_len: int, device: torch.device
+) -> torch.Tensor:
     q = torch.arange(steps, device=device)[:, None]
     kv = torch.arange(past_len + steps, device=device)[None, :]
     return kv <= (past_len + q)
@@ -118,7 +150,12 @@ def flash_sdpa(
     scale: float | None = None,
     try_flash: bool = True,
 ) -> torch.Tensor:
-    if try_flash and q.is_cuda and q.dtype in {torch.float16, torch.bfloat16} and sdpa_kernel is not None:
+    if (
+        try_flash
+        and q.is_cuda
+        and q.dtype in {torch.float16, torch.bfloat16}
+        and sdpa_kernel is not None
+    ):
         try:
             with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 return F.scaled_dot_product_attention(
@@ -149,9 +186,15 @@ def flash_sdpa(
 class MLP(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()
-        self.gate_proj = Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.up_proj = Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.down_proj = Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.gate_proj = Linear(
+            config.hidden_size, config.intermediate_size, bias=False
+        )
+        self.up_proj = Linear(
+            config.hidden_size, config.intermediate_size, bias=False
+        )
+        self.down_proj = Linear(
+            config.intermediate_size, config.hidden_size, bias=False
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))

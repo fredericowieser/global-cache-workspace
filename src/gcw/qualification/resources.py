@@ -62,9 +62,13 @@ class CUDAReleaseObservation:
 
     def __post_init__(self) -> None:
         if not self.gpu_uuid or not self.polls or self.polls[-1] != ():
-            raise QualificationResourceError("CUDA release observation must end with an empty GPU process set")
+            raise QualificationResourceError(
+                "CUDA release observation must end with an empty GPU process set"
+            )
         if self.cleared_monotonic_ns < self.started_monotonic_ns:
-            raise QualificationResourceError("CUDA release observation timestamps are reversed")
+            raise QualificationResourceError(
+                "CUDA release observation timestamps are reversed"
+            )
 
 
 def observe_cuda_release(
@@ -75,7 +79,9 @@ def observe_cuda_release(
 ) -> CUDAReleaseObservation:
     """Poll NVIDIA process authority until this GPU is observably unused."""
     if not gpu_uuid or timeout_seconds <= 0 or poll_interval_seconds <= 0:
-        raise ValueError("CUDA release observation requires a UUID and positive timing bounds")
+        raise ValueError(
+            "CUDA release observation requires a UUID and positive timing bounds"
+        )
     started = time.monotonic_ns()
     deadline = time.monotonic() + timeout_seconds
     polls: list[tuple[tuple[int, int], ...]] = []
@@ -83,10 +89,14 @@ def observe_cuda_release(
         rows = _query_compute_processes(gpu_uuid)
         polls.append(rows)
         if not rows:
-            return CUDAReleaseObservation(gpu_uuid, started, time.monotonic_ns(), tuple(polls))
+            return CUDAReleaseObservation(
+                gpu_uuid, started, time.monotonic_ns(), tuple(polls)
+            )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise QualificationResourceError(f"CUDA processes remained on {gpu_uuid} after worker exit: {rows}")
+            raise QualificationResourceError(
+                f"CUDA processes remained on {gpu_uuid} after worker exit: {rows}"
+            )
         time.sleep(min(poll_interval_seconds, remaining))
 
 
@@ -99,11 +109,15 @@ def capture_resource_identity(
     """Capture device semantics separately from process/allocation authority."""
     visible = torch.cuda.device_count() if torch.cuda.is_available() else 0
     if require_single_cuda and visible != 1:
-        raise QualificationResourceError(f"qualification requires exactly one visible CUDA GPU; found {visible}")
+        raise QualificationResourceError(
+            f"qualification requires exactly one visible CUDA GPU; found {visible}"
+        )
     if visible == 0:
         if expected_accelerator not in {None, "cpu"}:
             assert expected_accelerator is not None
-            raise QualificationResourceError(f"expected {expected_accelerator.upper()} but CUDA is unavailable")
+            raise QualificationResourceError(
+                f"expected {expected_accelerator.upper()} but CUDA is unavailable"
+            )
         semantic = SemanticDeviceIdentity(
             accelerator="cpu",
             device_name=platform.processor() or "cpu",
@@ -120,16 +134,23 @@ def capture_resource_identity(
     properties = torch.cuda.get_device_properties(ordinal)
     accelerator = _classify_accelerator(properties.name)
     if expected_accelerator is not None and accelerator != expected_accelerator:
-        raise QualificationResourceError(f"expected {expected_accelerator.upper()} but found {properties.name}")
+        raise QualificationResourceError(
+            f"expected {expected_accelerator.upper()} but found {properties.name}"
+        )
     gpu_rows = _query_nvidia_smi()
     property_uuid = _normalized_optional(getattr(properties, "uuid", None))
     if property_uuid is not None and not property_uuid.startswith("GPU-"):
         property_uuid = f"GPU-{property_uuid}"
     gpu = _match_gpu_row(gpu_rows, property_uuid, ordinal, visible)
     if require_gpu_authority and (
-        gpu is None or gpu.uuid is None or gpu.pci_bus_id is None or gpu.driver_version is None
+        gpu is None
+        or gpu.uuid is None
+        or gpu.pci_bus_id is None
+        or gpu.driver_version is None
     ):
-        raise QualificationResourceError("GPU UUID, PCI bus ID, and driver authority are required")
+        raise QualificationResourceError(
+            "GPU UUID, PCI bus ID, and driver authority are required"
+        )
     semantic = SemanticDeviceIdentity(
         accelerator=accelerator,
         device_name=properties.name,
@@ -181,7 +202,9 @@ def _query_nvidia_smi() -> tuple[_NvidiaSMIRow, ...]:
         fields = tuple(field.strip() for field in raw.split(","))
         if len(fields) != 3:
             return ()
-        rows.append(_NvidiaSMIRow(*(_normalized_optional(field) for field in fields)))
+        rows.append(
+            _NvidiaSMIRow(*(_normalized_optional(field) for field in fields))
+        )
     return tuple(rows)
 
 
@@ -199,26 +222,38 @@ def _query_compute_processes(gpu_uuid: str) -> tuple[tuple[int, int], ...]:
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise QualificationResourceError("cannot observe CUDA process release") from exc
+        raise QualificationResourceError(
+            "cannot observe CUDA process release"
+        ) from exc
     if result.returncode != 0:
-        raise QualificationResourceError("nvidia-smi rejected CUDA process release query")
+        raise QualificationResourceError(
+            "nvidia-smi rejected CUDA process release query"
+        )
     rows: list[tuple[int, int]] = []
     for raw in result.stdout.splitlines():
         fields = tuple(field.strip() for field in raw.split(","))
         if len(fields) != 3:
-            raise QualificationResourceError("CUDA process release query returned malformed rows")
+            raise QualificationResourceError(
+                "CUDA process release query returned malformed rows"
+            )
         row_uuid, pid, memory = fields
         if row_uuid != gpu_uuid:
             continue
         try:
             parsed = (int(pid), int(memory))
         except ValueError as exc:
-            raise QualificationResourceError("CUDA process release row is not numeric") from exc
+            raise QualificationResourceError(
+                "CUDA process release row is not numeric"
+            ) from exc
         if parsed[0] <= 0 or parsed[1] < 0:
-            raise QualificationResourceError("CUDA process release row has invalid values")
+            raise QualificationResourceError(
+                "CUDA process release row has invalid values"
+            )
         rows.append(parsed)
     if len({pid for pid, _memory in rows}) != len(rows):
-        raise QualificationResourceError("CUDA process release query returned duplicate PIDs")
+        raise QualificationResourceError(
+            "CUDA process release query returned duplicate PIDs"
+        )
     return tuple(sorted(rows))
 
 

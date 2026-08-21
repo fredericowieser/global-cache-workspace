@@ -16,12 +16,13 @@ from gcw.provenance import (
     verify_package_member_manifest,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def _git(repository: Path, *args: str) -> str:
-    return subprocess.check_output(["git", *args], cwd=repository, text=True).strip()
+    return subprocess.check_output(
+        ["git", *args], cwd=repository, text=True
+    ).strip()
 
 
 def _initialise_repository(repository: Path) -> None:
@@ -32,7 +33,9 @@ def _initialise_repository(repository: Path) -> None:
     _git(repository, "commit", "-qm", "fixture")
 
 
-def test_source_tree_digest_is_independent_of_physical_src_layout(tmp_path: Path) -> None:
+def test_source_tree_digest_is_independent_of_physical_src_layout(
+    tmp_path: Path,
+) -> None:
     flat = tmp_path / "flat" / "gcw"
     src = tmp_path / "src-layout" / "src" / "gcw"
     for package in (flat, src):
@@ -68,7 +71,9 @@ def test_repository_root_discovery_is_layout_independent(
     assert find_repository_root(module) == repository.resolve()
 
 
-def test_source_tree_digest_uses_unambiguous_framing_and_rejects_duplicates() -> None:
+def test_source_tree_digest_uses_unambiguous_framing_and_rejects_duplicates() -> (
+    None
+):
     first = source_tree_sha256((("gcw/a", b"bc"),))
     second = source_tree_sha256((("gcw/ab", b"c"),))
 
@@ -79,7 +84,9 @@ def test_source_tree_digest_uses_unambiguous_framing_and_rejects_duplicates() ->
         source_tree_sha256((("../outside.py", b"unsafe"),))
 
 
-def test_package_member_manifest_verifies_exact_installed_subset(tmp_path: Path) -> None:
+def test_package_member_manifest_verifies_exact_installed_subset(
+    tmp_path: Path,
+) -> None:
     package = tmp_path / "gcw"
     package.mkdir()
     (package / "__init__.py").write_bytes(b"VERSION = 1\n")
@@ -96,7 +103,9 @@ def test_package_member_manifest_verifies_exact_installed_subset(tmp_path: Path)
         verify_package_member_manifest(package, manifest)
 
 
-def test_repository_source_identity_v2_binds_declared_script_and_git_state(tmp_path: Path) -> None:
+def test_repository_source_identity_v2_binds_declared_script_and_git_state(
+    tmp_path: Path,
+) -> None:
     repository = tmp_path / "repository"
     package = repository / "gcw"
     scripts = repository / "scripts"
@@ -141,7 +150,9 @@ def test_repository_source_identity_v2_binds_declared_script_and_git_state(tmp_p
     assert changed["git_status_sha256"] != identity["git_status_sha256"]
 
 
-def test_repository_source_identity_requires_git_when_requested(tmp_path: Path) -> None:
+def test_repository_source_identity_requires_git_when_requested(
+    tmp_path: Path,
+) -> None:
     repository = tmp_path / "not-a-repository"
     (repository / "gcw").mkdir(parents=True)
     (repository / "gcw" / "__init__.py").write_bytes(b"")
@@ -152,8 +163,9 @@ def test_repository_source_identity_requires_git_when_requested(tmp_path: Path) 
         repository_source_identity(repository, require_git=True)
 
 
-
-def test_package_manifest_has_canonical_json_stable_digest(tmp_path: Path) -> None:
+def test_package_manifest_has_canonical_json_stable_digest(
+    tmp_path: Path,
+) -> None:
     package = tmp_path / "gcw"
     package.mkdir()
     payload = b"x = 1\n"
@@ -167,5 +179,10 @@ def test_package_manifest_has_canonical_json_stable_digest(tmp_path: Path) -> No
             "size_bytes": len(payload),
         }
     }
-    encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    assert hashlib.sha256(encoded).hexdigest() == hashlib.sha256(encoded).hexdigest()
+    encoded = json.dumps(
+        manifest, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    assert (
+        hashlib.sha256(encoded).hexdigest()
+        == hashlib.sha256(encoded).hexdigest()
+    )

@@ -39,14 +39,22 @@ def select_kv_norm_history(
     if sidecar_policy.enabled:
         policy = longshot_full_history_execution(processor)
         if policy.enabled:
-            raise RuntimeError("KV-score sidecar cannot run with Longshot full-history execution")
+            raise RuntimeError(
+                "KV-score sidecar cannot run with Longshot full-history execution"
+            )
         if not isinstance(cache, WindowedCache):
-            raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
+            raise TypeError(
+                "enabled KV-score sidecar requires contiguous WindowedCache storage"
+            )
         synchronize_sidecar(processor, cache)
         state = cache.kv_score_sidecar
         if state is None:
-            raise RuntimeError("KV-score sidecar bootstrap did not produce state")
-        all_indices = expand_cache_head_indices(cache.all_indices(), processor.num_kv_cache_heads)
+            raise RuntimeError(
+                "KV-score sidecar bootstrap did not produce state"
+            )
+        all_indices = expand_cache_head_indices(
+            cache.all_indices(), processor.num_kv_cache_heads
+        )
         merged_all = ls_pkg.gather_per_cache_head_kv(
             cache,
             all_indices,
@@ -65,7 +73,9 @@ def select_kv_norm_history(
 
     policy = longshot_full_history_execution(processor)
     if not policy.enabled:
-        all_indices = expand_cache_head_indices(cache.all_indices(), processor.num_kv_cache_heads)
+        all_indices = expand_cache_head_indices(
+            cache.all_indices(), processor.num_kv_cache_heads
+        )
         merged_all = ls_pkg.gather_per_cache_head_kv(
             cache,
             all_indices,
@@ -83,7 +93,9 @@ def select_kv_norm_history(
         return torch.gather(merged_all, dim=2, index=index), scores, indices
 
     if not isinstance(cache, WindowedCache):
-        raise TypeError("enabled Longshot selected-history execution requires contiguous WindowedCache storage")
+        raise TypeError(
+            "enabled Longshot selected-history execution requires contiguous WindowedCache storage"
+        )
     with torch.no_grad():
         if processor.config.unrope_keys:
             scores = chunked_fp32_unroped_concatenated_kv_squared_l2(
@@ -126,17 +138,27 @@ def select_kv_norm_history(
 
 def synchronize_sidecar(processor: Any, cache: WindowedCache) -> None:
     spec = kv_score_sidecar_spec(processor)
-    sync_fn = getattr(ls_pkg, "synchronize_kv_score_sidecar", synchronize_kv_score_sidecar)
-    cache.kv_score_sidecar = sync_fn(cache.kv_score_sidecar, cache.keys, cache.values, spec)
+    sync_fn = getattr(
+        ls_pkg, "synchronize_kv_score_sidecar", synchronize_kv_score_sidecar
+    )
+    cache.kv_score_sidecar = sync_fn(
+        cache.kv_score_sidecar, cache.keys, cache.values, spec
+    )
 
 
-def refresh_sidecar(processor: Any, cache: CacheLike, positions: torch.Tensor) -> CacheLike:
+def refresh_sidecar(
+    processor: Any, cache: CacheLike, positions: torch.Tensor
+) -> CacheLike:
     if not kv_score_sidecar_execution(processor).enabled:
         return cache
     if not isinstance(cache, WindowedCache):
-        raise TypeError("enabled KV-score sidecar requires contiguous WindowedCache storage")
+        raise TypeError(
+            "enabled KV-score sidecar requires contiguous WindowedCache storage"
+        )
     spec = kv_score_sidecar_spec(processor)
-    refresh_fn = getattr(ls_pkg, "refresh_kv_score_sidecar", refresh_kv_score_sidecar)
+    refresh_fn = getattr(
+        ls_pkg, "refresh_kv_score_sidecar", refresh_kv_score_sidecar
+    )
     cache.kv_score_sidecar = refresh_fn(
         cache.kv_score_sidecar, cache.keys, cache.values, positions, spec
     )

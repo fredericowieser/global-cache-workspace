@@ -19,7 +19,9 @@ from gcw.models.cache_processors.windowed import WindowedCache
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("score", ["squared_l2", "l2_norm"])
-def test_chunked_longshot_scores_match_eager_forward_backward(dtype: torch.dtype, score: str) -> None:
+def test_chunked_longshot_scores_match_eager_forward_backward(
+    dtype: torch.dtype, score: str
+) -> None:
     torch.manual_seed(41)
     x = torch.randn(2, 3, 5, 7, dtype=dtype, requires_grad=True)
     if score == "squared_l2":
@@ -37,7 +39,9 @@ def test_chunked_longshot_scores_match_eager_forward_backward(dtype: torch.dtype
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_chunked_longshot_score_selection_matches_eager_on_near_ties(dtype: torch.dtype) -> None:
+def test_chunked_longshot_score_selection_matches_eager_on_near_ties(
+    dtype: torch.dtype,
+) -> None:
     one = torch.tensor(1.0, dtype=dtype)
     up = torch.nextafter(one, torch.tensor(float("inf"), dtype=dtype))
     down = torch.nextafter(one, torch.tensor(float("-inf"), dtype=dtype))
@@ -55,12 +59,18 @@ def test_chunked_longshot_score_selection_matches_eager_on_near_ties(dtype: torc
     expected = eager_fp32_squared_l2(base)
 
     assert torch.equal(actual, expected)
-    assert torch.equal(torch.topk(actual.flatten(), k=4).indices, torch.topk(expected.flatten(), k=4).indices)
+    assert torch.equal(
+        torch.topk(actual.flatten(), k=4).indices,
+        torch.topk(expected.flatten(), k=4).indices,
+    )
 
     actual_norm = chunked_fp32_l2_norm(base, max_temp_bytes=3 * 4 * 4)
     expected_norm = eager_fp32_l2_norm(base)
     assert torch.equal(actual_norm, expected_norm)
-    assert torch.equal(torch.topk(actual_norm, k=1).indices, torch.topk(expected_norm, k=1).indices)
+    assert torch.equal(
+        torch.topk(actual_norm, k=1).indices,
+        torch.topk(expected_norm, k=1).indices,
+    )
 
 
 def test_chunked_longshot_score_saves_source_not_full_fp32_conversion() -> None:
@@ -75,13 +85,18 @@ def test_chunked_longshot_score_saves_source_not_full_fp32_conversion() -> None:
             function(x)
         return saved
 
-    chunked_saved = saved_by(lambda value: chunked_fp32_squared_l2(value, max_temp_bytes=4 * 32 * 4))
+    chunked_saved = saved_by(
+        lambda value: chunked_fp32_squared_l2(value, max_temp_bytes=4 * 32 * 4)
+    )
     eager_saved = saved_by(eager_fp32_squared_l2)
 
     assert len(chunked_saved) == 1
     assert chunked_saved[0].data_ptr() == x.data_ptr()
     assert chunked_saved[0].dtype == torch.bfloat16
-    assert any(tensor.dtype == torch.float32 and tensor.numel() == x.numel() for tensor in eager_saved)
+    assert any(
+        tensor.dtype == torch.float32 and tensor.numel() == x.numel()
+        for tensor in eager_saved
+    )
 
 
 def test_chunked_longshot_score_bounds_each_profiled_fp32_temporary() -> None:
@@ -98,7 +113,8 @@ def test_chunked_longshot_score_bounds_each_profiled_fp32_temporary() -> None:
         return [
             event.cpu_memory_usage
             for event in profile.events()
-            if event.name in {"aten::_to_copy", "aten::pow"} and event.cpu_memory_usage > 0
+            if event.name in {"aten::_to_copy", "aten::pow"}
+            and event.cpu_memory_usage > 0
         ]
 
     chunked_allocations = allocation_sizes(
@@ -108,7 +124,10 @@ def test_chunked_longshot_score_bounds_each_profiled_fp32_temporary() -> None:
 
     assert chunked_allocations
     assert max(chunked_allocations) <= max_temp_bytes
-    assert max(eager_allocations) == x.numel() * torch.empty((), dtype=torch.float32).element_size()
+    assert (
+        max(eager_allocations)
+        == x.numel() * torch.empty((), dtype=torch.float32).element_size()
+    )
 
 
 @pytest.mark.parametrize("score", ["attn_l2", "kv_norm"])
@@ -129,15 +148,21 @@ def test_longshot_modes_match_eager_forward_backward_and_selection(
     optimized_loss = optimized_output.values.float().pow(2).mean()
     optimized_loss.backward()
 
-    monkeypatch.setattr(longshot_module, "chunked_fp32_squared_l2", eager_fp32_squared_l2)
-    monkeypatch.setattr(longshot_module, "chunked_fp32_l2_norm", eager_fp32_l2_norm)
+    monkeypatch.setattr(
+        longshot_module, "chunked_fp32_squared_l2", eager_fp32_squared_l2
+    )
+    monkeypatch.setattr(
+        longshot_module, "chunked_fp32_l2_norm", eager_fp32_l2_norm
+    )
     reference_source = reference.encode_source(reference_cache)
     reference_output = reference(reference_cache)
     reference_loss = reference_output.values.float().pow(2).mean()
     reference_loss.backward()
 
     assert torch.equal(optimized_source.indices, reference_source.indices)
-    assert torch.equal(optimized_source.selected_heads, reference_source.selected_heads)
+    assert torch.equal(
+        optimized_source.selected_heads, reference_source.selected_heads
+    )
     assert torch.equal(optimized_output.keys, reference_output.keys)
     assert torch.equal(optimized_output.values, reference_output.values)
     for optimized_parameter, reference_parameter in zip(

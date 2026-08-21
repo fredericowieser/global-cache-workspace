@@ -5,7 +5,9 @@ import json
 from scripts import run_math_experiments_full_single_seed as series
 
 
-def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path, monkeypatch):
+def test_plan_declares_full_order_scheduler_and_drop_last_epoch(
+    tmp_path, monkeypatch
+):
     dataset = tmp_path / "train.jsonl"
     validation = tmp_path / "validation.jsonl"
     dataset.write_text("{}\n")
@@ -22,9 +24,13 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path, monkey
                 "source_ids_sha256": "12" * 32,
                 "tokenizer_identity_sha256": "23" * 32,
                 "dataset_path": str(dataset),
-                "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
+                "dataset_sha256": hashlib.sha256(
+                    dataset.read_bytes()
+                ).hexdigest(),
                 "validation_path": str(validation),
-                "validation_sha256": hashlib.sha256(validation.read_bytes()).hexdigest(),
+                "validation_sha256": hashlib.sha256(
+                    validation.read_bytes()
+                ).hexdigest(),
             }
         )
     )
@@ -67,7 +73,9 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path, monkey
             "flow-bgt-t4",
         }
     )
-    assert all(series.PEAK_LEARNING_RATES[arm] == 1e-3 for arm in series.PROCESSOR_ARMS)
+    assert all(
+        series.PEAK_LEARNING_RATES[arm] == 1e-3 for arm in series.PROCESSOR_ARMS
+    )
     assert series.PEAK_LEARNING_RATES["full-sft"] == 5e-6
     assert series.PEAK_LEARNING_RATES["lora-r32"] == 1e-4
     assert all(series.MICRO_BATCH_ROWS[arm] > 0 for arm in series.TRAIN_ORDER)
@@ -97,11 +105,24 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(tmp_path, monkey
     assert series._processor_states("full-sft") == ("on",)
     assert plan["schema"] == "gcw.math_experiment_series.v2"
     assert "lambada_openai" not in plan["tasks"]["canonical_multiple_choice"]
-    assert plan["tasks"]["canonical_multiple_choice"] == list(series.CANONICAL_TASKS)
+    assert plan["tasks"]["canonical_multiple_choice"] == list(
+        series.CANONICAL_TASKS
+    )
     assert plan["tasks"]["numeric_math"] == list(series.NUMERIC_MATH_TASKS)
-    assert plan["evaluation_protocols"]["canonical_likelihood"]["thinking_dimension"] is False
-    assert plan["evaluation_protocols"]["numeric_generation"]["max_new_tokens"] == 2048
-    assert plan["evaluation_protocols"]["numeric_generation"]["scoring"] == "numeric_last_answer"
+    assert (
+        plan["evaluation_protocols"]["canonical_likelihood"][
+            "thinking_dimension"
+        ]
+        is False
+    )
+    assert (
+        plan["evaluation_protocols"]["numeric_generation"]["max_new_tokens"]
+        == 2048
+    )
+    assert (
+        plan["evaluation_protocols"]["numeric_generation"]["scoring"]
+        == "numeric_last_answer"
+    )
 
 
 def test_reuse_result_preserves_bytes_and_records_source_hash(tmp_path):
@@ -113,7 +134,10 @@ def test_reuse_result_preserves_bytes_and_records_source_hash(tmp_path):
     assert series._reuse_result(source, target, protocol="test-v1") is True
     assert target.read_bytes() == source.read_bytes()
     marker = json.loads((target.parent / "reused-evidence.json").read_text())
-    assert marker["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert (
+        marker["source_sha256"]
+        == hashlib.sha256(source.read_bytes()).hexdigest()
+    )
     assert marker["bytes_preserved"] is True
     assert series._reuse_result(source, target, protocol="test-v1") is False
 
@@ -132,8 +156,12 @@ def test_numeric_result_validation_rejects_choice_rows(tmp_path):
         )
     )
     try:
-        series._validate_numeric_result(result, "gsm8k_openmath", "thinking_off")
+        series._validate_numeric_result(
+            result, "gsm8k_openmath", "thinking_off"
+        )
     except ValueError as error:
         assert "non-numeric" in str(error)
     else:
-        raise AssertionError("choice rows must not pass numeric protocol validation")
+        raise AssertionError(
+            "choice rows must not pass numeric protocol validation"
+        )

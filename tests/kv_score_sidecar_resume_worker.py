@@ -50,7 +50,9 @@ def fingerprint() -> dict[str, object]:
     policy = KVScoreSidecarConfig(enabled=True)
     return {
         "distributed": "none",
-        "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(policy, unrope_keys=False),
+        "kv_score_sidecar_execution": kv_score_sidecar_execution_metadata(
+            policy, unrope_keys=False
+        ),
     }
 
 
@@ -89,7 +91,10 @@ def main() -> None:
     optimizer.step()
     torch.save(
         {
-            "model": {name: tensor.detach().cpu() for name, tensor in model.state_dict().items()},
+            "model": {
+                name: tensor.detach().cpu()
+                for name, tensor in model.state_dict().items()
+            },
             "optimizer": optimizer.state_dict(),
         },
         output_path,

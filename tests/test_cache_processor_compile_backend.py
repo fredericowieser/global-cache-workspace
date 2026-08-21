@@ -23,7 +23,9 @@ from gcw.config import (
 )
 from gcw.models import build_model
 from gcw.performance.backends import cache_processors as backend_module
-from gcw.performance.backends.cache_processors import cache_processor_backend_metadata
+from gcw.performance.backends.cache_processors import (
+    cache_processor_backend_metadata,
+)
 from gcw.models.cache_processors.standard import GlobalCacheProcessor
 from gcw.models.cache_processors.state import CacheState
 from gcw.models.model import LanguageModel
@@ -35,7 +37,11 @@ from gcw.training.audit import _training_fingerprint
 
 def _config(kind: str = "standard", *, process_every: int = 64) -> ModelConfig:
     flow = FlowProcessorConfig(num_steps=2) if kind == "flow" else None
-    diffusion = DiffusionProcessorConfig(num_steps=2, noise_scale=0.0) if kind == "diffusion" else None
+    diffusion = (
+        DiffusionProcessorConfig(num_steps=2, noise_scale=0.0)
+        if kind == "diffusion"
+        else None
+    )
     return ModelConfig(
         variant="bgt",
         vocab_size=64,
@@ -80,8 +86,14 @@ def _cache(config: ModelConfig, batch: int, seq: int) -> CacheState:
     generator = torch.Generator().manual_seed(1000 + batch + seq)
     num_heads, head_dim = config.stored_cache_shape
     shape = (batch, num_heads, seq, head_dim)
-    keys = [torch.randn(shape, generator=generator) for _ in range(config.cache_num_layers)]
-    values = [torch.randn(shape, generator=generator) for _ in range(config.cache_num_layers)]
+    keys = [
+        torch.randn(shape, generator=generator)
+        for _ in range(config.cache_num_layers)
+    ]
+    values = [
+        torch.randn(shape, generator=generator)
+        for _ in range(config.cache_num_layers)
+    ]
     scores = torch.randn((batch, seq), generator=generator)
     return CacheState(keys, values, scores)
 
@@ -126,8 +138,12 @@ def test_compiled_bgt_regions_match_forward_backward_and_selected_indices(
         source = _cache(config, batch, seq)
         eager_cache = clone_cache(source, requires_grad=True)
         compiled_cache = clone_cache(source, requires_grad=True)
-        eager_keys, eager_values = list(eager_cache.keys), list(eager_cache.values)
-        compiled_keys, compiled_values = list(compiled_cache.keys), list(compiled_cache.values)
+        eager_keys, eager_values = list(eager_cache.keys), list(
+            eager_cache.values
+        )
+        compiled_keys, compiled_values = list(compiled_cache.keys), list(
+            compiled_cache.values
+        )
         expected_indices = eager._select_indices(eager_cache, False)
         actual_indices = compiled._select_indices(compiled_cache, False)
 
@@ -157,7 +173,9 @@ def test_compiled_bgt_regions_match_forward_backward_and_selected_indices(
     ]
 
 
-def test_compiled_bgt_callable_is_reused_across_repeated_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compiled_bgt_callable_is_reused_across_repeated_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config = _config()
     processor = _processor(_model(config))
     monkeypatch.setenv("GCW_CACHE_PROCESSOR_BACKEND", "compile")
@@ -166,7 +184,9 @@ def test_compiled_bgt_callable_is_reused_across_repeated_steps(monkeypatch: pyte
 
     for _ in range(2):
         processor.zero_grad(set_to_none=True)
-        output = processor(clone_cache(_cache(config, 2, 128), requires_grad=True))
+        output = processor(
+            clone_cache(_cache(config, 2, 128), requires_grad=True)
+        )
         cache_objective(output).backward()
 
     assert len(compile_calls) == 1
@@ -188,7 +208,9 @@ def test_compiled_bgt_composes_with_segment_and_processor_checkpointing(
     compile_calls, region_calls = _install_fake_compiler(monkeypatch)
     compiled_processor = _processor(compiled)
     compiled_processor.execution_backend = "compile"
-    _configure_native_activation_checkpointing(compiled, "standard_processor_layers")
+    _configure_native_activation_checkpointing(
+        compiled, "standard_processor_layers"
+    )
     inputs = torch.randint(0, config.vocab_size, (2, 12))
     targets = torch.roll(inputs, shifts=-1, dims=1)
 
@@ -198,9 +220,13 @@ def test_compiled_bgt_composes_with_segment_and_processor_checkpointing(
     compiled_loss.backward()
 
     torch.testing.assert_close(compiled_loss, eager_loss)
-    for expected, actual in zip(eager.parameters(), compiled.parameters(), strict=True):
+    for expected, actual in zip(
+        eager.parameters(), compiled.parameters(), strict=True
+    ):
         assert expected.grad is not None and actual.grad is not None
-        torch.testing.assert_close(actual.grad, expected.grad, atol=2e-5, rtol=2e-4)
+        torch.testing.assert_close(
+            actual.grad, expected.grad, atol=2e-5, rtol=2e-4
+        )
     assert len(compile_calls) == 1
     assert len(region_calls) == 4
     assert compiled_processor.pop_call_count() == 2
@@ -208,14 +234,16 @@ def test_compiled_bgt_composes_with_segment_and_processor_checkpointing(
 
 def test_eager_default_never_compiles_and_unavailable_opt_in_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
- ) -> None:
+) -> None:
     def fail_compile(*_args: object, **_kwargs: object) -> None:
         pytest.fail("eager cache processing must not call torch.compile")
 
     monkeypatch.setenv("GCW_CACHE_PROCESSOR_BACKEND", "eager")
     monkeypatch.setattr(torch, "compile", fail_compile)
     model = _model(_config())
-    model.cache_processor(clone_cache(_cache(model.config, 1, 64), requires_grad=False))
+    model.cache_processor(
+        clone_cache(_cache(model.config, 1, 64), requires_grad=False)
+    )
 
     monkeypatch.setenv("GCW_CACHE_PROCESSOR_BACKEND", "compile")
     monkeypatch.setattr(torch, "compile", None)
@@ -256,11 +284,16 @@ def test_backend_is_fail_closed_state_dict_neutral_and_exact_resume_visible(
     _install_fake_compiler(monkeypatch)
     model = _model(config)
     processor = _processor(model)
-    before = {name: tensor.clone() for name, tensor in model.state_dict().items()}
+    before = {
+        name: tensor.clone() for name, tensor in model.state_dict().items()
+    }
     processor(clone_cache(_cache(config, 1, 64), requires_grad=False))
 
     assert tuple(model.state_dict()) == tuple(before)
-    assert all(torch.equal(tensor, before[name]) for name, tensor in model.state_dict().items())
+    assert all(
+        torch.equal(tensor, before[name])
+        for name, tensor in model.state_dict().items()
+    )
     restored = _model(config)
     incompatible = restored.load_state_dict(before, strict=True)
     assert incompatible.missing_keys == []
@@ -274,7 +307,10 @@ def test_backend_is_fail_closed_state_dict_neutral_and_exact_resume_visible(
 
     train_config = TrainConfig(model=config, data=DataConfig(kind="random"))
     fingerprint = _training_fingerprint(train_config, 1, 192, 192, 1)
-    assert fingerprint["cache_processor_backend_fingerprint"] == metadata["fingerprint_sha256"]
+    assert (
+        fingerprint["cache_processor_backend_fingerprint"]
+        == metadata["fingerprint_sha256"]
+    )
     monkeypatch.setenv("GCW_CACHE_PROCESSOR_BACKEND", "eager")
     eager_fingerprint = _training_fingerprint(train_config, 1, 192, 192, 1)
     assert (
@@ -293,7 +329,11 @@ def test_backend_is_fail_closed_state_dict_neutral_and_exact_resume_visible(
     backend_module._compiled_bgt_transform_runner = None
     backend_module._compiled_bgt_scaled_update_runner = None
     failing = _model(config)
-    with pytest.raises(RuntimeError, match="eager fallback is disabled") as error:
-        failing.cache_processor(clone_cache(_cache(config, 1, 64), requires_grad=False))
+    with pytest.raises(
+        RuntimeError, match="eager fallback is disabled"
+    ) as error:
+        failing.cache_processor(
+            clone_cache(_cache(config, 1, 64), requires_grad=False)
+        )
     assert isinstance(error.value.__cause__, RuntimeError)
     assert str(error.value.__cause__) == "inductor failed"

@@ -8,7 +8,6 @@ import torch.nn as nn
 
 from gcw.config import DiffusionProcessorConfig
 
-
 DiffusionField = Callable[[torch.Tensor, float], torch.Tensor]
 
 
@@ -27,7 +26,9 @@ class TaskDirectedDiffusion(nn.Module):
         self.config = config
         # Execution-only policy. It is intentionally absent from state_dict.
         self.recurrence_backend: str = "eager"
-        self.refinement_gate = nn.Parameter(torch.full((1,), config.refinement_gate_init))
+        self.refinement_gate = nn.Parameter(
+            torch.full((1,), config.refinement_gate_init)
+        )
 
     def forward(
         self,
@@ -41,17 +42,25 @@ class TaskDirectedDiffusion(nn.Module):
                 f"diffusion expected hidden width {self.hidden_size}, got {bottleneck.shape[-1]}"
             )
         state = bottleneck
-        noisy_inference = not self.training and self.config.inference_mode == "stochastic"
+        noisy_inference = (
+            not self.training and self.config.inference_mode == "stochastic"
+        )
         if (self.training or noisy_inference) and self.config.noise_scale > 0.0:
             sampled = torch.randn_like(state) if noise is None else noise
             if sampled.shape != state.shape:
-                raise ValueError("diffusion noise must match the bottleneck state shape")
+                raise ValueError(
+                    "diffusion noise must match the bottleneck state shape"
+                )
             state = state + self.config.noise_scale * sampled
         elif noise is not None:
-            raise ValueError("explicit diffusion noise requires noisy training or stochastic inference")
+            raise ValueError(
+                "explicit diffusion noise requires noisy training or stochastic inference"
+            )
 
         # Noise sampling remains eager so compiled recurrence cannot alter RNG order.
-        from gcw.performance.backends.diffusion import run_noisy_diffusion_recurrence
+        from gcw.performance.backends.diffusion import (
+            run_noisy_diffusion_recurrence,
+        )
 
         return run_noisy_diffusion_recurrence(
             self.recurrence_backend,
@@ -74,7 +83,9 @@ class TaskDirectedDiffusion(nn.Module):
             time = step / self.config.num_steps
             field_input = state + self.config.conditioning_scale * bottleneck
             if self.config.time_conditioning:
-                field_input = field_input + sinusoidal_time_embedding(time, self.hidden_size, state)
+                field_input = field_input + sinusoidal_time_embedding(
+                    time, self.hidden_size, state
+                )
             velocity = field(field_input, time)
             if velocity.shape != state.shape:
                 raise ValueError(
@@ -85,7 +96,9 @@ class TaskDirectedDiffusion(nn.Module):
         return state - initial
 
     def scale(self, dtype: torch.dtype) -> torch.Tensor:
-        return (self.config.eta_max * torch.sigmoid(self.refinement_gate)).to(dtype)
+        return (self.config.eta_max * torch.sigmoid(self.refinement_gate)).to(
+            dtype
+        )
 
 
 def sinusoidal_time_embedding(
@@ -94,9 +107,13 @@ def sinusoidal_time_embedding(
     reference: torch.Tensor,
 ) -> torch.Tensor:
     half = (width + 1) // 2
-    exponent = torch.arange(half, device=reference.device, dtype=torch.float32) / max(half - 1, 1)
+    exponent = torch.arange(
+        half, device=reference.device, dtype=torch.float32
+    ) / max(half - 1, 1)
     frequencies = torch.exp(-math.log(10_000.0) * exponent)
     angles = frequencies * time
-    embedding = torch.cat((angles.sin(), angles.cos()))[:width].to(reference.dtype)
+    embedding = torch.cat((angles.sin(), angles.cos()))[:width].to(
+        reference.dtype
+    )
     shape = (1,) * (reference.ndim - 1) + (width,)
     return embedding.view(shape)

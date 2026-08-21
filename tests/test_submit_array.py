@@ -147,7 +147,9 @@ def test_local_worker_records_success_and_status(tmp_path: Path) -> None:
     ).strip() == "local"
 
 
-def test_dev_defaults_use_qwen35_legacy_eval_and_cluster_preflight(tmp_path: Path) -> None:
+def test_dev_defaults_use_qwen35_legacy_eval_and_cluster_preflight(
+    tmp_path: Path,
+) -> None:
     capture = tmp_path / "uv-args"
     config, env = _write_fixture(
         tmp_path,
@@ -163,9 +165,17 @@ def test_dev_defaults_use_qwen35_legacy_eval_and_cluster_preflight(tmp_path: Pat
 
     invocations = capture.read_text(encoding="utf-8").splitlines()
     expected_prefix = "run --locked --extra gpu --extra eval --extra qwen35"
-    assert f"{expected_prefix} python scripts/cluster/check_cuda_env.py" in invocations
-    assert any(f"{expected_prefix} gcw train --config " in line for line in invocations)
-    assert any(f"{expected_prefix} gcw eval paper7-legacy --checkpoint " in line for line in invocations)
+    assert (
+        f"{expected_prefix} python scripts/cluster/check_cuda_env.py"
+        in invocations
+    )
+    assert any(
+        f"{expected_prefix} gcw train --config " in line for line in invocations
+    )
+    assert any(
+        f"{expected_prefix} gcw eval paper7-legacy --checkpoint " in line
+        for line in invocations
+    )
 
 
 def test_local_worker_can_be_cancelled_as_a_process_group(

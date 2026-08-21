@@ -6,8 +6,19 @@ construction); everything else is imported from its domain subpackage.
 
 from importlib.metadata import PackageNotFoundError, version
 
-from gcw.config import CacheProcessorConfig, EvalConfig, ModelConfig, TrainConfig
-from gcw.models import Backbone, CacheProcessorBase, LanguageModel, TF, build_model
+from gcw.config import (
+    CacheProcessorConfig,
+    EvalConfig,
+    ModelConfig,
+    TrainConfig,
+)
+from gcw.models import (
+    Backbone,
+    CacheProcessorBase,
+    LanguageModel,
+    TF,
+    build_model,
+)
 
 try:
     __version__ = version("gcw")

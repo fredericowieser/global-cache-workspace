@@ -9,12 +9,18 @@ from gcw.models import build_model
 from gcw.models.lora import LoRALinear
 
 
-def _load_initial_model(model: torch.nn.Module, checkpoint_path: str | Path) -> None:
+def _load_initial_model(
+    model: torch.nn.Module, checkpoint_path: str | Path
+) -> None:
     """Load a complete model state without restoring optimizer or run state."""
     source, source_config, _ = load_checkpoint(checkpoint_path, device="cpu")
     model_config = getattr(model, "config", None)
-    if not isinstance(model_config, type(source_config)) or to_dict(model_config) != to_dict(source_config):
-        raise ValueError("init_checkpoint model configuration differs from train.model")
+    if not isinstance(model_config, type(source_config)) or to_dict(
+        model_config
+    ) != to_dict(source_config):
+        raise ValueError(
+            "init_checkpoint model configuration differs from train.model"
+        )
     model.load_state_dict(source.state_dict(), strict=True)
 
 
@@ -32,16 +38,24 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
         return
     if policy == "lora":
         model.requires_grad_(False)
-        adapters = [module for module in backbone.modules() if isinstance(module, LoRALinear)]
+        adapters = [
+            module
+            for module in backbone.modules()
+            if isinstance(module, LoRALinear)
+        ]
         if not adapters:
-            raise ValueError("trainable='lora' requires attached LoRA projections")
+            raise ValueError(
+                "trainable='lora' requires attached LoRA projections"
+            )
         for adapter in adapters:
             adapter.lora_a.requires_grad_(True)
             adapter.lora_b.requires_grad_(True)
         return
     if policy == "cache_processor":
         if not isinstance(processor, torch.nn.Module):
-            raise ValueError("trainable='cache_processor' requires a cache processor")
+            raise ValueError(
+                "trainable='cache_processor' requires a cache processor"
+            )
         backbone.requires_grad_(False)
         processor.requires_grad_(True)
         return

@@ -56,7 +56,9 @@ def test_removed_compatibility_modules_are_not_packaged() -> None:
             import_module(module)
         except ModuleNotFoundError:
             continue
-        raise AssertionError(f"legacy compatibility module still exists: {module}")
+        raise AssertionError(
+            f"legacy compatibility module still exists: {module}"
+        )
 
 
 def test_cpu_smoke_example_runs_from_the_source_layout() -> None:
@@ -84,7 +86,14 @@ def test_flow_smoke_example_runs_from_the_source_layout() -> None:
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     result = subprocess.run(
-        [sys.executable, str(root / "scripts/quickstart/flow_smoke.py"), "--device", "cpu", "--flow-steps", "2"],
+        [
+            sys.executable,
+            str(root / "scripts/quickstart/flow_smoke.py"),
+            "--device",
+            "cpu",
+            "--flow-steps",
+            "2",
+        ],
         cwd=root,
         env=environment,
         capture_output=True,
@@ -101,5 +110,8 @@ def test_flow_cpu_gate_uses_the_src_layout_mypy_boundary() -> None:
     root = Path(__file__).resolve().parents[1]
     script = (root / "scripts/cluster/slurm/flow_cpu_gate.sbatch").read_text()
 
-    assert '"$PYTHON" -m mypy \\\n  src/gcw \\\n  scripts/quickstart/cpu_smoke.py \\\n  scripts/quickstart/flow_smoke.py' in script
+    assert (
+        '"$PYTHON" -m mypy \\\n  src/gcw \\\n  scripts/quickstart/cpu_smoke.py \\\n  scripts/quickstart/flow_smoke.py'
+        in script
+    )
     assert '"$PYTHON" -m mypy gcw' not in script

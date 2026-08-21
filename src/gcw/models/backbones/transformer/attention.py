@@ -30,8 +30,12 @@ class CausalSelfAttention(nn.Module):
         self.k_proj = Linear(config.hidden_size, kv_dim, bias=False)
         self.v_proj = Linear(config.hidden_size, kv_dim, bias=False)
         self.o_proj = Linear(q_dim, config.hidden_size, bias=False)
-        self.q_norm = RMSNorm(self.head_dim, config.norm_eps) if config.qk_norm else None
-        self.k_norm = RMSNorm(self.head_dim, config.norm_eps) if config.qk_norm else None
+        self.q_norm = (
+            RMSNorm(self.head_dim, config.norm_eps) if config.qk_norm else None
+        )
+        self.k_norm = (
+            RMSNorm(self.head_dim, config.norm_eps) if config.qk_norm else None
+        )
 
     def forward(
         self,
@@ -47,7 +51,9 @@ class CausalSelfAttention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
         rotary = (cos_sin[0].to(q.dtype), cos_sin[1].to(q.dtype))
-        q, k = apply_rotary(q, *rotary, style=self.rotary_style), apply_rotary(k, *rotary, style=self.rotary_style)
+        q, k = apply_rotary(q, *rotary, style=self.rotary_style), apply_rotary(
+            k, *rotary, style=self.rotary_style
+        )
         q, k = q.to(v.dtype), k.to(v.dtype)
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         past_len = 0
@@ -57,8 +63,19 @@ class CausalSelfAttention(nn.Module):
             k = torch.cat([pk, k], dim=2)
             v = torch.cat([pv, v], dim=2)
         mask, is_causal = _causal_chunk_bias(steps, past_len, x.device)
-        y = tf_pkg.flash_sdpa(q, k, v, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads)
-        y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
+        y = tf_pkg.flash_sdpa(
+            q,
+            k,
+            v,
+            attn_mask=mask,
+            is_causal=is_causal,
+            enable_gqa=self.num_kv_heads != self.num_heads,
+        )
+        y = (
+            y.transpose(1, 2)
+            .contiguous()
+            .view(batch, steps, self.num_heads * self.head_dim)
+        )
         attn_out = self.o_proj(y)
         return attn_out, k, v, attn_out.float().norm(dim=-1)
 
@@ -85,8 +102,18 @@ class CausalSelfAttention(nn.Module):
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         k = torch.cat([past_keys, k], dim=2)
         v = torch.cat([past_values, v], dim=2)
-        y = tf_pkg.flash_sdpa(q, k, v, attn_mask=attention_bias, enable_gqa=self.num_kv_heads != self.num_heads)
-        y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
+        y = tf_pkg.flash_sdpa(
+            q,
+            k,
+            v,
+            attn_mask=attention_bias,
+            enable_gqa=self.num_kv_heads != self.num_heads,
+        )
+        y = (
+            y.transpose(1, 2)
+            .contiguous()
+            .view(batch, steps, self.num_heads * self.head_dim)
+        )
         attn_out = self.o_proj(y)
         return attn_out, k, v, attn_out.float().norm(dim=-1)
 
@@ -106,15 +133,26 @@ class CausalSelfAttention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
         rotary = (cos_sin[0].to(q.dtype), cos_sin[1].to(q.dtype))
-        q, k = apply_rotary(q, *rotary, style=self.rotary_style), apply_rotary(k, *rotary, style=self.rotary_style)
+        q, k = apply_rotary(q, *rotary, style=self.rotary_style), apply_rotary(
+            k, *rotary, style=self.rotary_style
+        )
         q, k = q.to(v.dtype), k.to(v.dtype)
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         cache.write_layer(self.layer_idx, start_pos, k, v)
         keys, values = cache.layer_view(self.layer_idx, end_pos)
         mask, is_causal = _causal_chunk_bias(steps, start_pos, x.device)
         y = tf_pkg.flash_sdpa(
-            q, keys, values, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads
+            q,
+            keys,
+            values,
+            attn_mask=mask,
+            is_causal=is_causal,
+            enable_gqa=self.num_kv_heads != self.num_heads,
         )
-        y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
+        y = (
+            y.transpose(1, 2)
+            .contiguous()
+            .view(batch, steps, self.num_heads * self.head_dim)
+        )
         attn_out = self.o_proj(y)
         return attn_out, attn_out.float().norm(dim=-1)

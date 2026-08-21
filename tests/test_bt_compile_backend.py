@@ -5,10 +5,17 @@ import copy
 import pytest
 import torch
 
-from gcw.config import CacheProcessorConfig, DataConfig, ModelConfig, TrainConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    ModelConfig,
+    TrainConfig,
+)
 from gcw.models import build_model
 from gcw.performance.backends import cache_processors as backend_module
-from gcw.performance.backends.cache_processors import bt_processor_backend_metadata
+from gcw.performance.backends.cache_processors import (
+    bt_processor_backend_metadata,
+)
 from gcw.models.model import LanguageModel
 from gcw.performance.checkpointing import (
     configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
@@ -49,7 +56,9 @@ def _model() -> LanguageModel:
     return model
 
 
-def _install_fake_compiler(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict[str, object]], list[int]]:
+def _install_fake_compiler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[dict[str, object]], list[int]]:
     compile_calls: list[dict[str, object]] = []
     region_calls: list[int] = []
 
@@ -67,7 +76,9 @@ def _install_fake_compiler(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict[s
     return compile_calls, region_calls
 
 
-def test_bt_backend_dispatches_only_prepared_region(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bt_backend_dispatches_only_prepared_region(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("GCW_BT_PROCESSOR_BACKEND", "compile")
     compile_calls, region_calls = _install_fake_compiler(monkeypatch)
     model = _model()
@@ -79,13 +90,17 @@ def test_bt_backend_dispatches_only_prepared_region(monkeypatch: pytest.MonkeyPa
 
     model(inputs)
 
-    assert compile_calls == [{"backend": "inductor", "dynamic": False, "fullgraph": True}]
+    assert compile_calls == [
+        {"backend": "inductor", "dynamic": False, "fullgraph": True}
+    ]
     assert region_calls == [4, 6]
     assert model.cache_processor.pop_call_count() == 2
     assert model.cache_processor.execution_backend == "compile"
 
 
-def test_explicit_eager_is_cpu_safe_and_never_calls_torch_compile(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_eager_is_cpu_safe_and_never_calls_torch_compile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("GCW_BT_PROCESSOR_BACKEND", "eager")
 
     def fail_compile(*_args, **_kwargs):
@@ -119,10 +134,17 @@ def test_compiled_dispatch_preserves_outputs_gradients_train_eval_and_repeated_g
         eager_loss.backward()
         compiled_loss.backward()
         torch.testing.assert_close(compiled_loss, eager_loss)
-        for eager_parameter, compiled_parameter in zip(eager.parameters(), compiled.parameters(), strict=True):
+        for eager_parameter, compiled_parameter in zip(
+            eager.parameters(), compiled.parameters(), strict=True
+        ):
             assert eager_parameter.grad is not None
             assert compiled_parameter.grad is not None
-            torch.testing.assert_close(compiled_parameter.grad, eager_parameter.grad, atol=2e-5, rtol=2e-4)
+            torch.testing.assert_close(
+                compiled_parameter.grad,
+                eager_parameter.grad,
+                atol=2e-5,
+                rtol=2e-4,
+            )
 
     eager.eval()
     compiled.eval()
@@ -139,7 +161,9 @@ def test_compiled_backend_composes_with_segment_and_processor_checkpointing(
     monkeypatch.setenv("GCW_BT_PROCESSOR_BACKEND", "compile")
     compile_calls, region_calls = _install_fake_compiler(monkeypatch)
     checkpointed.cache_processor.execution_backend = "compile"
-    _configure_native_activation_checkpointing(checkpointed, "standard_processor_layers")
+    _configure_native_activation_checkpointing(
+        checkpointed, "standard_processor_layers"
+    )
     inputs = torch.randint(0, eager.config.vocab_size, (2, 12))
     targets = torch.randint(0, eager.config.vocab_size, (2, 12))
 
@@ -154,10 +178,16 @@ def test_compiled_backend_composes_with_segment_and_processor_checkpointing(
     checkpointed_loss.backward()
 
     torch.testing.assert_close(checkpointed_loss, eager_loss)
-    for expected, actual in zip(eager.parameters(), checkpointed.parameters(), strict=True):
+    for expected, actual in zip(
+        eager.parameters(), checkpointed.parameters(), strict=True
+    ):
         assert expected.grad is not None and actual.grad is not None
-        torch.testing.assert_close(actual.grad, expected.grad, atol=2e-5, rtol=2e-4)
-    assert compile_calls == [{"backend": "inductor", "dynamic": False, "fullgraph": True}]
+        torch.testing.assert_close(
+            actual.grad, expected.grad, atol=2e-5, rtol=2e-4
+        )
+    assert compile_calls == [
+        {"backend": "inductor", "dynamic": False, "fullgraph": True}
+    ]
     assert len(region_calls) == 4
     assert checkpointed.cache_processor.pop_call_count() == 2
 
@@ -179,7 +209,9 @@ def test_compiled_backend_is_fail_closed_and_unavailable_compile_is_rejected(
     monkeypatch.setattr(torch, "compile", fake_compile)
     monkeypatch.setattr(backend_module, "_compiled_runner", None)
     model = _model()
-    with pytest.raises(RuntimeError, match="eager fallback is disabled") as error:
+    with pytest.raises(
+        RuntimeError, match="eager fallback is disabled"
+    ) as error:
         model(torch.randint(0, model.config.vocab_size, (1, 9)))
     assert isinstance(error.value.__cause__, RuntimeError)
     assert str(error.value.__cause__) == "inductor failed"
@@ -191,13 +223,20 @@ def test_backend_is_state_dict_neutral_and_visible_in_metadata_and_training_fing
     monkeypatch.setenv("GCW_BT_PROCESSOR_BACKEND", "compile")
     _install_fake_compiler(monkeypatch)
     model = _model()
-    before = {name: tensor.clone() for name, tensor in model.state_dict().items()}
+    before = {
+        name: tensor.clone() for name, tensor in model.state_dict().items()
+    }
 
     model(torch.randint(0, model.config.vocab_size, (1, 9)))
 
     assert tuple(model.state_dict()) == tuple(before)
-    assert all("compiled" not in name and "prepared" not in name for name in before)
-    assert all(torch.equal(tensor, before[name]) for name, tensor in model.state_dict().items())
+    assert all(
+        "compiled" not in name and "prepared" not in name for name in before
+    )
+    assert all(
+        torch.equal(tensor, before[name])
+        for name, tensor in model.state_dict().items()
+    )
     restored = _model()
     incompatible = restored.load_state_dict(before, strict=True)
     assert incompatible.missing_keys == []
@@ -205,10 +244,18 @@ def test_backend_is_state_dict_neutral_and_visible_in_metadata_and_training_fing
     metadata = model.cache_processor.execution_backend_metadata()
     assert metadata == bt_processor_backend_metadata("compile")
     assert metadata["effective_backend"] == "compile"
-    assert metadata["region"] == "gcw.models.cache_processors.ops.run_prepared_batched_cache_processors"
+    assert (
+        metadata["region"]
+        == "gcw.models.cache_processors.ops.run_prepared_batched_cache_processors"
+    )
     assert isinstance(metadata["fingerprint_sha256"], str)
     assert len(metadata["fingerprint_sha256"]) == 64
 
-    train_config = TrainConfig(model=model.config, data=DataConfig(kind="random"))
+    train_config = TrainConfig(
+        model=model.config, data=DataConfig(kind="random")
+    )
     fingerprint = _training_fingerprint(train_config, 1, 32, 32, 1)
-    assert fingerprint["bt_processor_backend_fingerprint"] == metadata["fingerprint_sha256"]
+    assert (
+        fingerprint["bt_processor_backend_fingerprint"]
+        == metadata["fingerprint_sha256"]
+    )

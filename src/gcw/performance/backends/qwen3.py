@@ -17,10 +17,18 @@ from gcw.performance.compile_telemetry import compile_acceptance_recorder
 from gcw.performance.cuda_graphs import run_graphed_callable
 from gcw.provenance import canonical_json_sha256
 
-
-Qwen3BackboneChunkBackend = Literal["eager", "compile", "compile_full_windows", "cuda_graph"]
+Qwen3BackboneChunkBackend = Literal[
+    "eager", "compile", "compile_full_windows", "cuda_graph"
+]
 Qwen3ChunkRunner = Callable[
-    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    [
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ],
     tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
 ]
 Qwen3InitialChunkRunner = Callable[
@@ -44,13 +52,17 @@ _QWEN3_INITIAL_RUNNER_ATTRIBUTE = "_gcw_qwen3_compiled_initial_chunk_runner"
 _qwen3_compiled_runners_lock = Lock()
 
 
-def validate_qwen3_backbone_chunk_backend(backend: Qwen3BackboneChunkBackend) -> None:
+def validate_qwen3_backbone_chunk_backend(
+    backend: Qwen3BackboneChunkBackend,
+) -> None:
     """Reject unavailable or fallback-enabled compile execution before dispatch."""
     if backend == "eager":
         return
     if backend == "cuda_graph":
         if not torch.cuda.is_available():
-            raise RuntimeError("backbone_chunk_backend=cuda_graph requires CUDA")
+            raise RuntimeError(
+                "backbone_chunk_backend=cuda_graph requires CUDA"
+            )
         if os.environ.get("GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH") != "1":
             raise RuntimeError(
                 "backbone_chunk_backend=cuda_graph is benchmark-only after failing its retention gate; "
@@ -72,12 +84,18 @@ def configure_qwen3_backbone_chunk_backend(
     config: Any = getattr(backbone, "config", None)
     if backend != "eager":
         if config is None or getattr(config, "family", None) != "qwen3":
-            raise ValueError(f"backbone_chunk_backend={backend} requires a Qwen3 backbone")
+            raise ValueError(
+                f"backbone_chunk_backend={backend} requires a Qwen3 backbone"
+            )
         if any(parameter.requires_grad for parameter in backbone.parameters()):
-            raise ValueError(f"backbone_chunk_backend={backend} requires a frozen backbone")
+            raise ValueError(
+                f"backbone_chunk_backend={backend} requires a frozen backbone"
+            )
     if not hasattr(backbone, "backbone_chunk_backend"):
         if backend != "eager":
-            raise ValueError(f"backbone_chunk_backend={backend} requires the standard Qwen3 transformer")
+            raise ValueError(
+                f"backbone_chunk_backend={backend} requires the standard Qwen3 transformer"
+            )
         return
     object.__setattr__(backbone, "backbone_chunk_backend", backend)
 
@@ -94,7 +112,9 @@ def qwen3_backbone_chunk_backend_metadata(
             "region": "gcw.models.backbones.backend._qwen3_backbone_chunk_tensor_region",
             "chunk_steps": _QWEN3_CHUNK_STEPS,
             "dynamic_past_length": backend == "compile",
-            "compile_options": dict(_QWEN3_COMPILE_OPTIONS) if backend == "compile" else None,
+            "compile_options": (
+                dict(_QWEN3_COMPILE_OPTIONS) if backend == "compile" else None
+            ),
             "attention_bias_boundary": "causal_lower_right",
             "initial_chunk": "eager",
             "partial_chunks": "eager",
@@ -105,7 +125,9 @@ def qwen3_backbone_chunk_backend_metadata(
             "requested_via": "TrainConfig.backbone_chunk_backend",
             "requested_value": backend,
             "implementation_module": "gcw.performance.backends.qwen3",
-            "implementation_symbol": ("gcw.performance.backends.qwen3._qwen3_backbone_chunk_tensor_region"),
+            "implementation_symbol": (
+                "gcw.performance.backends.qwen3._qwen3_backbone_chunk_tensor_region"
+            ),
             "fingerprint_sha256": canonical_json_sha256(execution),
         }
 
@@ -180,7 +202,13 @@ def run_qwen3_backbone_chunk_region(
     """Run one complete 64-token backbone chunk; compiled failures are fatal."""
     if backend == "eager":
         return _qwen3_backbone_chunk_tensor_region(
-            backbone, inputs_embeds, cos, sin, past_keys, past_values, attention_bias
+            backbone,
+            inputs_embeds,
+            cos,
+            sin,
+            past_keys,
+            past_values,
+            attention_bias,
         )
     if backend == "cuda_graph":
         # PyTorch's CausalBias is a symbolic CPU Tensor subclass. Keep it in
@@ -203,11 +231,25 @@ def run_qwen3_backbone_chunk_region(
     recorder = compile_acceptance_recorder(backbone)
     try:
         if recorder is None:
-            return runner(inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
-        operation = partial(runner, inputs_embeds, cos, sin, past_keys, past_values, attention_bias)
+            return runner(
+                inputs_embeds, cos, sin, past_keys, past_values, attention_bias
+            )
+        operation = partial(
+            runner,
+            inputs_embeds,
+            cos,
+            sin,
+            past_keys,
+            past_values,
+            attention_bias,
+        )
         return recorder.record_call(
             "full_window_with_past",
-            (inputs_embeds.shape[0], inputs_embeds.shape[1], past_keys.shape[3]),
+            (
+                inputs_embeds.shape[0],
+                inputs_embeds.shape[1],
+                past_keys.shape[3],
+            ),
             inputs_embeds.device,
             operation,
         )
@@ -228,7 +270,9 @@ def run_qwen3_initial_backbone_chunk_region(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Run the initial full causal window; compilation is explicit and fail closed."""
     if backend == "eager":
-        return _qwen3_initial_chunk_tensor_region(backbone, inputs_embeds, cos, sin)
+        return _qwen3_initial_chunk_tensor_region(
+            backbone, inputs_embeds, cos, sin
+        )
     if backend == "cuda_graph":
         operation = partial(_qwen3_initial_chunk_tensor_region, backbone)
         return run_graphed_callable(
@@ -238,7 +282,9 @@ def run_qwen3_initial_backbone_chunk_region(
             args=(inputs_embeds, cos, sin),
         )
     if backend != "compile_full_windows":
-        raise ValueError(f"backend {backend!r} does not compile the initial Qwen3 window")
+        raise ValueError(
+            f"backend {backend!r} does not compile the initial Qwen3 window"
+        )
     runner = _get_qwen3_compiled_initial_runner(backbone)
     recorder = compile_acceptance_recorder(backbone)
     try:
@@ -283,7 +329,12 @@ def _qwen3_initial_chunk_tensor_region(
         values.append(values_i)
         layer_scores.append(scores_i)
     norm: Any = getattr(backbone, "norm")
-    return x if norm is None else norm(x), torch.stack(keys), torch.stack(values), torch.stack(layer_scores).mean(dim=0)
+    return (
+        x if norm is None else norm(x),
+        torch.stack(keys),
+        torch.stack(values),
+        torch.stack(layer_scores).mean(dim=0),
+    )
 
 
 def _qwen3_backbone_chunk_tensor_region(
@@ -313,11 +364,18 @@ def _qwen3_backbone_chunk_tensor_region(
         values.append(values_i)
         layer_scores.append(scores_i)
     norm: Any = getattr(backbone, "norm")
-    return x if norm is None else norm(x), torch.stack(keys), torch.stack(values), torch.stack(layer_scores).mean(dim=0)
+    return (
+        x if norm is None else norm(x),
+        torch.stack(keys),
+        torch.stack(values),
+        torch.stack(layer_scores).mean(dim=0),
+    )
 
 
 def _get_qwen3_compiled_runner(backbone: nn.Module) -> Qwen3ChunkRunner:
-    runner: Qwen3ChunkRunner | None = backbone.__dict__.get(_QWEN3_RUNNER_ATTRIBUTE)
+    runner: Qwen3ChunkRunner | None = backbone.__dict__.get(
+        _QWEN3_RUNNER_ATTRIBUTE
+    )
     if runner is not None:
         return runner
     with _qwen3_compiled_runners_lock:
@@ -325,7 +383,10 @@ def _get_qwen3_compiled_runner(backbone: nn.Module) -> Qwen3ChunkRunner:
         if runner is None:
             compiler = require_torch_compile("backbone_chunk_backend=compile")
             try:
-                runner = compiler(partial(_qwen3_backbone_chunk_tensor_region, backbone), **_QWEN3_COMPILE_OPTIONS)
+                runner = compiler(
+                    partial(_qwen3_backbone_chunk_tensor_region, backbone),
+                    **_QWEN3_COMPILE_OPTIONS,
+                )
             except Exception as error:
                 raise RuntimeError(
                     "failed to create the compiled Qwen3 backbone chunk; eager fallback is disabled"
@@ -334,14 +395,20 @@ def _get_qwen3_compiled_runner(backbone: nn.Module) -> Qwen3ChunkRunner:
     return runner
 
 
-def _get_qwen3_compiled_initial_runner(backbone: nn.Module) -> Qwen3InitialChunkRunner:
-    runner: Qwen3InitialChunkRunner | None = backbone.__dict__.get(_QWEN3_INITIAL_RUNNER_ATTRIBUTE)
+def _get_qwen3_compiled_initial_runner(
+    backbone: nn.Module,
+) -> Qwen3InitialChunkRunner:
+    runner: Qwen3InitialChunkRunner | None = backbone.__dict__.get(
+        _QWEN3_INITIAL_RUNNER_ATTRIBUTE
+    )
     if runner is not None:
         return runner
     with _qwen3_compiled_runners_lock:
         runner = backbone.__dict__.get(_QWEN3_INITIAL_RUNNER_ATTRIBUTE)
         if runner is None:
-            compiler = require_torch_compile("backbone_chunk_backend=compile_full_windows")
+            compiler = require_torch_compile(
+                "backbone_chunk_backend=compile_full_windows"
+            )
             try:
                 runner = compiler(
                     partial(_qwen3_initial_chunk_tensor_region, backbone),
@@ -351,5 +418,7 @@ def _get_qwen3_compiled_initial_runner(backbone: nn.Module) -> Qwen3InitialChunk
                 raise RuntimeError(
                     "failed to create the compiled initial Qwen3 backbone chunk; eager fallback is disabled"
                 ) from error
-            object.__setattr__(backbone, _QWEN3_INITIAL_RUNNER_ATTRIBUTE, runner)
+            object.__setattr__(
+                backbone, _QWEN3_INITIAL_RUNNER_ATTRIBUTE, runner
+            )
     return runner

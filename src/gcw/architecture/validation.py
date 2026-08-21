@@ -21,20 +21,44 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
         issues.append(CompatibilityIssue(code, message, path))
 
     if config.variant not in _SUPPORTED_VARIANTS:
-        add("unknown_variant", f"unknown model variant: {config.variant}", "model.variant")
+        add(
+            "unknown_variant",
+            f"unknown model variant: {config.variant}",
+            "model.variant",
+        )
     if config.family not in _SUPPORTED_FAMILIES:
-        add("unknown_family", f"unknown model family: {config.family}", "model.family")
+        add(
+            "unknown_family",
+            f"unknown model family: {config.family}",
+            "model.family",
+        )
 
     processor = config.cache_processor
     if config.variant != "tf" and processor is None:
-        add("processor_required", f"{config.variant} requires cache_processor config", "model.cache_processor")
-    if processor is not None and not _has_fields(processor, "processor_mode", "update_stream", "iterations"):
-        add("processor_config", "cache_processor must be a CacheProcessorConfig", "model.cache_processor")
+        add(
+            "processor_required",
+            f"{config.variant} requires cache_processor config",
+            "model.cache_processor",
+        )
+    if processor is not None and not _has_fields(
+        processor, "processor_mode", "update_stream", "iterations"
+    ):
+        add(
+            "processor_config",
+            "cache_processor must be a CacheProcessorConfig",
+            "model.cache_processor",
+        )
         processor = None
 
     flow = config.flow_processor
-    if flow is not None and not _has_fields(flow, "num_steps", "time_conditioning"):
-        add("flow_config", "flow_processor must be a FlowProcessorConfig", "model.flow_processor")
+    if flow is not None and not _has_fields(
+        flow, "num_steps", "time_conditioning"
+    ):
+        add(
+            "flow_config",
+            "flow_processor must be a FlowProcessorConfig",
+            "model.flow_processor",
+        )
     if flow is not None and config.variant not in {"bgt", "icarus", "longshot"}:
         add(
             "flow_variant",
@@ -42,7 +66,9 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
             "model.flow_processor",
         )
     diffusion = config.diffusion_processor
-    if diffusion is not None and not _has_fields(diffusion, "num_steps", "noise_scale"):
+    if diffusion is not None and not _has_fields(
+        diffusion, "num_steps", "noise_scale"
+    ):
         add(
             "diffusion_config",
             "diffusion_processor must be a DiffusionProcessorConfig",
@@ -62,7 +88,9 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
         )
 
     refinement = config.workspace_flow_refinement
-    if refinement is not None and not _has_fields(refinement, "solver", "solver_steps"):
+    if refinement is not None and not _has_fields(
+        refinement, "solver", "solver_steps"
+    ):
         add(
             "workspace_refinement_config",
             "workspace_flow_refinement must be a WorkspaceFlowRefinementConfig",
@@ -96,31 +124,46 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                     "model.cache_processor.score",
                 )
         elif config.variant == "bgt":
-            if processor.processor_mode == "workspace_broadcast" and processor.update_stream != "v":
+            if (
+                processor.processor_mode == "workspace_broadcast"
+                and processor.update_stream != "v"
+            ):
                 add(
                     "workspace_broadcast_write",
                     "workspace_broadcast requires cache_processor.update_stream='v'",
                     "model.cache_processor.update_stream",
                 )
-            if processor.processor_mode == "workspace_broadcast" and processor.score != "kv_norm":
+            if (
+                processor.processor_mode == "workspace_broadcast"
+                and processor.score != "kv_norm"
+            ):
                 add(
                     "workspace_broadcast_score",
                     "workspace_broadcast requires cache_processor.score='kv_norm'",
                     "model.cache_processor.score",
                 )
-            if processor.processor_mode == "head_mask_broadcast" and processor.update_stream != "kv":
+            if (
+                processor.processor_mode == "head_mask_broadcast"
+                and processor.update_stream != "kv"
+            ):
                 add(
                     "head_mask_write",
                     "head_mask_broadcast requires cache_processor.update_stream='kv'",
                     "model.cache_processor.update_stream",
                 )
-            if processor.processor_mode == "head_mask_broadcast" and processor.score != "kv_norm":
+            if (
+                processor.processor_mode == "head_mask_broadcast"
+                and processor.score != "kv_norm"
+            ):
                 add(
                     "head_mask_score",
                     "head_mask_broadcast requires cache_processor.score='kv_norm'",
                     "model.cache_processor.score",
                 )
-        elif config.variant in {"icarus", "longshot"} and processor.processor_mode != "standard":
+        elif (
+            config.variant in {"icarus", "longshot"}
+            and processor.processor_mode != "standard"
+        ):
             add(
                 "processor_mode",
                 f"{config.variant.capitalize()} supports only cache_processor.processor_mode='standard'",
@@ -168,7 +211,10 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                     "cache_processor.linear_state_cache requires update_stream='kv'",
                     "model.cache_processor.update_stream",
                 )
-        if processor.linear_state_update_mode == "gated_delta" and not processor.linear_state_cache:
+        if (
+            processor.linear_state_update_mode == "gated_delta"
+            and not processor.linear_state_cache
+        ):
             add(
                 "linear_state_update_mode",
                 "cache_processor.linear_state_update_mode='gated_delta' requires linear_state_cache=true",
@@ -177,7 +223,9 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
 
     if config.variant != "tf" and config.family == "gemma4":
         try:
-            config.ensure_uniform_stored_cache_shape(config.variant.capitalize())
+            config.ensure_uniform_stored_cache_shape(
+                config.variant.capitalize()
+            )
         except ValueError as error:
             add("uniform_cache_shape", str(error), "model.layer_types")
     return _unique_issues(issues)
@@ -211,10 +259,21 @@ def _experiment_issues(config: TrainConfig) -> list[CompatibilityIssue]:
             "checkpoint_format",
         )
     if config.mode not in {"pretrain", "sft"}:
-        add("unknown_training_mode", f"unknown training mode: {config.mode}", "mode")
+        add(
+            "unknown_training_mode",
+            f"unknown training mode: {config.mode}",
+            "mode",
+        )
     if config.distributed not in {"none", "ddp", "fsdp"}:
-        add("unknown_execution", f"unknown distributed strategy: {config.distributed}", "distributed")
-    if config.init_checkpoint is not None and config.backbone_checkpoint is not None:
+        add(
+            "unknown_execution",
+            f"unknown distributed strategy: {config.distributed}",
+            "distributed",
+        )
+    if (
+        config.init_checkpoint is not None
+        and config.backbone_checkpoint is not None
+    ):
         add(
             "backbone_with_init",
             "backbone_checkpoint and init_checkpoint are mutually exclusive",
@@ -226,11 +285,22 @@ def _experiment_issues(config: TrainConfig) -> list[CompatibilityIssue]:
             "init_checkpoint and resume are mutually exclusive",
             "resume",
         )
-    if config.mode == "pretrain" and config.data.kind not in {"fineweb", "random"}:
-        add("pretrain_data", "pretrain mode requires fineweb or random data", "data.kind")
+    if config.mode == "pretrain" and config.data.kind not in {
+        "fineweb",
+        "random",
+    }:
+        add(
+            "pretrain_data",
+            "pretrain mode requires fineweb or random data",
+            "data.kind",
+        )
     if config.mode == "sft" and config.data.kind != "sft":
         add("sft_data", "sft mode requires data.kind='sft'", "data.kind")
-    if config.data.canonical_execution and config.resume is not None and config.resume.expected_manifest_sha256 is None:
+    if (
+        config.data.canonical_execution
+        and config.resume is not None
+        and config.resume.expected_manifest_sha256 is None
+    ):
         add(
             "canonical_resume_manifest",
             "canonical training resume requires expected manifest sha256",
@@ -240,7 +310,9 @@ def _experiment_issues(config: TrainConfig) -> list[CompatibilityIssue]:
     return _unique_issues(issues)
 
 
-def _unique_issues(issues: list[CompatibilityIssue]) -> list[CompatibilityIssue]:
+def _unique_issues(
+    issues: list[CompatibilityIssue],
+) -> list[CompatibilityIssue]:
     seen: set[tuple[str, str, str]] = set()
     unique: list[CompatibilityIssue] = []
     for issue in issues:

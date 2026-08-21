@@ -15,7 +15,9 @@ from gcw.data.training import RandomCursor
 from gcw.models import build_model
 from gcw.training.core import train
 from gcw.training.checkpoint import ResumeState, TrainingCheckpointError
-from gcw.training.checkpoint import save_training_checkpoint as real_save_training_checkpoint
+from gcw.training.checkpoint import (
+    save_training_checkpoint as real_save_training_checkpoint,
+)
 
 
 def test_two_process_ddp_resume_matches_uninterrupted_training(tmp_path):
@@ -37,7 +39,9 @@ def test_two_process_ddp_resume_matches_uninterrupted_training(tmp_path):
     baseline, _, baseline_state = load_checkpoint(baseline_dir / "checkpoint")
     resumed, _, resumed_state = load_checkpoint(resumed_dir / "checkpoint")
     assert baseline_state["step"] == resumed_state["step"] == 2
-    for expected, actual in zip(baseline.parameters(), resumed.parameters(), strict=True):
+    for expected, actual in zip(
+        baseline.parameters(), resumed.parameters(), strict=True
+    ):
         assert torch.equal(expected, actual)
 
 
@@ -49,8 +53,17 @@ def test_one_to_two_process_elastic_fineweb_resume_is_deterministic(tmp_path):
     seed_dir = tmp_path / "seed"
     config = _fineweb_config(str(seed_dir), str(data_dir), batch_size=2)
 
-    def save_then_interrupt(path, model, model_config, optimizer, resume_state, training_fingerprint):
-        real_save_training_checkpoint(path, model, model_config, optimizer, resume_state, training_fingerprint)
+    def save_then_interrupt(
+        path, model, model_config, optimizer, resume_state, training_fingerprint
+    ):
+        real_save_training_checkpoint(
+            path,
+            model,
+            model_config,
+            optimizer,
+            resume_state,
+            training_fingerprint,
+        )
         if resume_state.step == 1 and Path(path).name == "checkpoint":
             raise RuntimeError("simulated elastic interruption")
 
@@ -68,7 +81,12 @@ def test_one_to_two_process_elastic_fineweb_resume_is_deterministic(tmp_path):
         shutil.copytree(seed_dir / "checkpoint", output / "checkpoint")
         mp.spawn(
             _elastic_worker,
-            args=(2, str(tmp_path / f"elastic-init-{index}"), str(output), str(data_dir)),
+            args=(
+                2,
+                str(tmp_path / f"elastic-init-{index}"),
+                str(output),
+                str(data_dir),
+            ),
             nprocs=2,
             join=True,
         )
@@ -77,7 +95,9 @@ def test_one_to_two_process_elastic_fineweb_resume_is_deterministic(tmp_path):
     second, _, second_state = load_checkpoint(outputs[1] / "checkpoint")
     assert first_state["step"] == second_state["step"] == 2
     assert first_state["resume_exact_topology"] is False
-    for expected, actual in zip(first.parameters(), second.parameters(), strict=True):
+    for expected, actual in zip(
+        first.parameters(), second.parameters(), strict=True
+    ):
         assert torch.equal(expected, actual)
 
 
@@ -90,15 +110,26 @@ def test_rank_zero_checkpoint_failure_reaches_every_ddp_rank(tmp_path):
     )
 
 
-def _train_worker(rank: int, world_size: int, init_file: str, output_dir: str, interrupt: bool) -> None:
+def _train_worker(
+    rank: int, world_size: int, init_file: str, output_dir: str, interrupt: bool
+) -> None:
     _init_process_group(rank, world_size, init_file)
     config = _config(output_dir)
     if not interrupt:
         train(config)
         return
 
-    def save_then_interrupt(path, model, model_config, optimizer, resume_state, training_fingerprint):
-        real_save_training_checkpoint(path, model, model_config, optimizer, resume_state, training_fingerprint)
+    def save_then_interrupt(
+        path, model, model_config, optimizer, resume_state, training_fingerprint
+    ):
+        real_save_training_checkpoint(
+            path,
+            model,
+            model_config,
+            optimizer,
+            resume_state,
+            training_fingerprint,
+        )
         if resume_state.step == 1 and Path(path).name == "checkpoint":
             raise RuntimeError("simulated distributed interruption")
 
@@ -110,18 +141,26 @@ def _train_worker(rank: int, world_size: int, init_file: str, output_dir: str, i
             raise
     finally:
         state_module.save_training_checkpoint = real_save_training_checkpoint
-    config.resume = ResumeConfig(checkpoint=str(Path(output_dir) / "checkpoint"))
+    config.resume = ResumeConfig(
+        checkpoint=str(Path(output_dir) / "checkpoint")
+    )
     train(config)
 
 
-def _elastic_worker(rank: int, world_size: int, init_file: str, output_dir: str, data_dir: str) -> None:
+def _elastic_worker(
+    rank: int, world_size: int, init_file: str, output_dir: str, data_dir: str
+) -> None:
     _init_process_group(rank, world_size, init_file)
     config = _fineweb_config(output_dir, data_dir, batch_size=1)
-    config.resume = ResumeConfig(checkpoint=str(Path(output_dir) / "checkpoint"), topology="elastic_ddp")
+    config.resume = ResumeConfig(
+        checkpoint=str(Path(output_dir) / "checkpoint"), topology="elastic_ddp"
+    )
     train(config)
 
 
-def _checkpoint_failure_worker(rank: int, world_size: int, init_file: str, output_dir: str) -> None:
+def _checkpoint_failure_worker(
+    rank: int, world_size: int, init_file: str, output_dir: str
+) -> None:
     _init_process_group(rank, world_size, init_file)
     config = _config(output_dir)
     model = build_model(config.model)
@@ -136,6 +175,7 @@ def _checkpoint_failure_worker(rank: int, world_size: int, init_file: str, outpu
     )
     original_write = checkpoint_module._write_checkpoint
     if rank == 0:
+
         def fail_write(*args, **kwargs):
             raise OSError("simulated disk failure")
 
@@ -162,8 +202,13 @@ def _checkpoint_failure_worker(rank: int, world_size: int, init_file: str, outpu
 def _init_process_group(rank: int, world_size: int, init_file: str) -> None:
     use_cuda = os.environ.get("GCW_DDP_TEST_DEVICE") == "cuda"
     if use_cuda:
-        if not torch.cuda.is_available() or torch.cuda.device_count() < world_size:
-            raise RuntimeError(f"CUDA DDP test requires {world_size} visible GPUs")
+        if (
+            not torch.cuda.is_available()
+            or torch.cuda.device_count() < world_size
+        ):
+            raise RuntimeError(
+                f"CUDA DDP test requires {world_size} visible GPUs"
+            )
         os.environ["LOCAL_RANK"] = str(rank)
         torch.cuda.set_device(rank)
     dist.init_process_group(
@@ -204,7 +249,9 @@ def _config(output_dir: str) -> TrainConfig:
     )
 
 
-def _fineweb_config(output_dir: str, data_dir: str, *, batch_size: int) -> TrainConfig:
+def _fineweb_config(
+    output_dir: str, data_dir: str, *, batch_size: int
+) -> TrainConfig:
     config = _config(output_dir)
     config.data = DataConfig(kind="fineweb", data_dir=data_dir)
     config.batch_size = batch_size

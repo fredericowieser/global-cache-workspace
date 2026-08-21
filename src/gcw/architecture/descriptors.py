@@ -92,7 +92,9 @@ class ModelAssemblyReceipt:
                 "component": self.backbone_component,
                 "contract": self.backbone_contract,
             },
-            "memory_domains": [domain.payload() for domain in self.memory_domains],
+            "memory_domains": [
+                domain.payload() for domain in self.memory_domains
+            ],
             "processor": (
                 None
                 if self.processor_component is None
@@ -118,7 +120,9 @@ class ModelResolution:
     def require(self) -> tuple[ResolvedModelAssembly, ModelAssemblyReceipt]:
         self.report.require()
         if self.assembly is None or self.receipt is None:
-            raise RuntimeError("compatible model resolution has no assembly receipt")
+            raise RuntimeError(
+                "compatible model resolution has no assembly receipt"
+            )
         return self.assembly, self.receipt
 
 
@@ -182,11 +186,15 @@ class ExperimentResolution:
     def require(self) -> tuple[ResolvedExperiment, CompositionReceipt]:
         self.report.require()
         if self.experiment is None or self.receipt is None:
-            raise RuntimeError("compatible experiment resolution has no composition receipt")
+            raise RuntimeError(
+                "compatible experiment resolution has no composition receipt"
+            )
         return self.experiment, self.receipt
 
 
-def _receipt_metadata(receipt: ModelAssemblyReceipt | CompositionReceipt) -> dict[str, Any]:
+def _receipt_metadata(
+    receipt: ModelAssemblyReceipt | CompositionReceipt,
+) -> dict[str, Any]:
     payload = receipt.payload()
     return {
         "payload": payload,
@@ -207,10 +215,13 @@ def admission_receipt_metadata(
     when omitted they are resolved from ``config`` directly.
     """
     from gcw.architecture.resolution import resolve_experiment, resolve_model
+
     if model_receipt is None:
         _, model_receipt = resolve_model(config.model).require()
     if composition_receipt is None:
-        _, composition_receipt = resolve_experiment(config, model_receipt).require()
+        _, composition_receipt = resolve_experiment(
+            config, model_receipt
+        ).require()
     return {
         "schema": "gcw.admission.v1",
         "model_assembly_receipt": _receipt_metadata(model_receipt),

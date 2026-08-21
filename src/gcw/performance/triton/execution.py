@@ -59,22 +59,42 @@ def configure_triton_cache_movement(
         return
     if processor is None:
         raise ValueError("Triton cache movement requires a cache processor")
-    validate_triton_cache_movement_request(config, next(processor.parameters()).device)
+    validate_triton_cache_movement_request(
+        config, next(processor.parameters()).device
+    )
     if context.model_variant not in {"bt", "bgt", "longshot", "icarus"}:
-        raise ValueError("Triton cache movement found an unsupported model variant")
+        raise ValueError(
+            "Triton cache movement found an unsupported model variant"
+        )
     if context.model_family != "qwen3":
         raise ValueError("Triton cache movement currently admits only Qwen3")
     if context.physical_batch_size != 2 or context.distributed != "none":
-        raise ValueError("Triton cache movement requires fixed batch two and one process")
+        raise ValueError(
+            "Triton cache movement requires fixed batch two and one process"
+        )
     if context.trainable != "cache_processor" or not context.bf16:
-        raise ValueError("Triton cache movement requires BF16 cache-processor-only training")
-    if context.backbone_chunk_backend != "eager" or context.whole_model_compile_requested:
-        raise ValueError("Triton cache movement does not compose with compiled execution")
+        raise ValueError(
+            "Triton cache movement requires BF16 cache-processor-only training"
+        )
+    if (
+        context.backbone_chunk_backend != "eager"
+        or context.whole_model_compile_requested
+    ):
+        raise ValueError(
+            "Triton cache movement does not compose with compiled execution"
+        )
     if context.adaptive_batching_enabled:
-        raise ValueError("Triton cache movement does not compose with adaptive batching")
+        raise ValueError(
+            "Triton cache movement does not compose with adaptive batching"
+        )
     processor_config = getattr(processor, "config", None)
-    if processor_config is None or getattr(processor_config, "attention_dropout", None) != 0.0:
-        raise ValueError("Triton cache movement requires zero processor attention dropout")
+    if (
+        processor_config is None
+        or getattr(processor_config, "attention_dropout", None) != 0.0
+    ):
+        raise ValueError(
+            "Triton cache movement requires zero processor attention dropout"
+        )
     object.__setattr__(processor, _POLICY_ATTRIBUTE, True)
 
 
@@ -86,7 +106,9 @@ def triton_cache_movement_enabled(processor: torch.nn.Module) -> bool:
     return value
 
 
-def triton_cache_movement_metadata(config: TritonCacheMovementConfig) -> dict[str, object]:
+def triton_cache_movement_metadata(
+    config: TritonCacheMovementConfig,
+) -> dict[str, object]:
     """Return stable benchmark provenance for the exact movement boundary."""
     execution = {
         "schema": "gcw.triton_cache_movement.v3",

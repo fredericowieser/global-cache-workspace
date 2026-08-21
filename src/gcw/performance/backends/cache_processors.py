@@ -25,7 +25,9 @@ PreparedProcessorRunner = Callable[
     [PreparedBatchedCacheProcessorParameters, torch.Tensor, torch.Tensor],
     torch.Tensor,
 ]
-BGTProcessorRunner = Callable[[nn.Module, torch.Tensor, torch.Tensor], torch.Tensor]
+BGTProcessorRunner = Callable[
+    [nn.Module, torch.Tensor, torch.Tensor], torch.Tensor
+]
 
 _BT_BACKEND_ENV = "GCW_BT_PROCESSOR_BACKEND"
 _CACHE_BACKEND_ENV = "GCW_CACHE_PROCESSOR_BACKEND"
@@ -51,7 +53,9 @@ def resolve_bt_processor_backend() -> BTProcessorBackend:
     return requested  # type: ignore[return-value]
 
 
-def bt_processor_backend_metadata(backend: BTProcessorBackend | None = None) -> dict[str, object]:
+def bt_processor_backend_metadata(
+    backend: BTProcessorBackend | None = None,
+) -> dict[str, object]:
     """Return provenance and a stable fingerprint for the selected BT region backend."""
     selected = resolve_bt_processor_backend() if backend is None else backend
     # Keep the v1 region identifier stable so code-only module moves do not invalidate exact resume.
@@ -59,7 +63,9 @@ def bt_processor_backend_metadata(backend: BTProcessorBackend | None = None) -> 
         "schema": "gcw.bt_processor_backend.v1",
         "effective_backend": selected,
         "region": "gcw.models.cache_processors.ops.run_prepared_batched_cache_processors",
-        "compile_options": dict(_COMPILE_OPTIONS) if selected == "compile" else None,
+        "compile_options": (
+            dict(_COMPILE_OPTIONS) if selected == "compile" else None
+        ),
         "torch_version": str(torch.__version__),
     }
     return {
@@ -106,7 +112,10 @@ def _get_compiled_runner() -> PreparedProcessorRunner:
             try:
                 _compiled_runner = cast(
                     PreparedProcessorRunner,
-                    compiler(run_prepared_batched_cache_processors, **_COMPILE_OPTIONS),
+                    compiler(
+                        run_prepared_batched_cache_processors,
+                        **_COMPILE_OPTIONS,
+                    ),
                 )
             except Exception as error:
                 raise RuntimeError(
@@ -116,7 +125,9 @@ def _get_compiled_runner() -> PreparedProcessorRunner:
     return _compiled_runner
 
 
-def resolve_cache_processor_backend(model_config: ModelConfig) -> CacheProcessorBackend:
+def resolve_cache_processor_backend(
+    model_config: ModelConfig,
+) -> CacheProcessorBackend:
     """Resolve the regional backend for the non-BT cache-processor region."""
     requested = os.environ.get(_CACHE_BACKEND_ENV, "eager").strip().lower()
     if requested not in {"eager", "compile"}:
@@ -148,9 +159,17 @@ def cache_processor_backend_metadata(
     backend: CacheProcessorBackend | None = None,
 ) -> dict[str, object]:
     """Return provenance and a stable fingerprint for the BGT regional backend."""
-    selected = resolve_cache_processor_backend(model_config) if backend is None else backend
+    selected = (
+        resolve_cache_processor_backend(model_config)
+        if backend is None
+        else backend
+    )
     diffusion = model_config.diffusion_processor
-    family = "diffusion_bgt" if diffusion is not None else ("flow_bgt" if model_config.flow_processor else "bgt")
+    family = (
+        "diffusion_bgt"
+        if diffusion is not None
+        else ("flow_bgt" if model_config.flow_processor else "bgt")
+    )
     # Keep the v1 region identifiers stable so code-only module moves do not invalidate exact resume.
     execution = {
         "schema": "gcw.cache_processor_backend.v1",
@@ -160,9 +179,13 @@ def cache_processor_backend_metadata(
             "gcw.models.cache_processors.backend._run_bgt_transform",
             "gcw.models.cache_processors.backend._run_bgt_scaled_update",
         ],
-        "compile_options": dict(_COMPILE_OPTIONS) if selected == "compile" else None,
+        "compile_options": (
+            dict(_COMPILE_OPTIONS) if selected == "compile" else None
+        ),
         "diffusion_noise_policy": (
-            "fullgraph_compile_requires_noise_scale_zero" if diffusion is not None else None
+            "fullgraph_compile_requires_noise_scale_zero"
+            if diffusion is not None
+            else None
         ),
         "torch_version": str(torch.__version__),
     }
@@ -202,27 +225,41 @@ def run_bgt_processor_region(
         ) from error
 
 
-def _run_bgt_transform(block: nn.Module, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+def _run_bgt_transform(
+    block: nn.Module, x: torch.Tensor, positions: torch.Tensor
+) -> torch.Tensor:
     return block(x, positions)
 
 
-def _run_bgt_scaled_update(block: nn.Module, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+def _run_bgt_scaled_update(
+    block: nn.Module, x: torch.Tensor, positions: torch.Tensor
+) -> torch.Tensor:
     scaled_update = getattr(block, "scaled_update")
     return scaled_update(x, positions)
 
 
 def _get_compiled_bgt_runner(*, scaled_update: bool) -> BGTProcessorRunner:
     global _compiled_bgt_scaled_update_runner, _compiled_bgt_transform_runner
-    runner = _compiled_bgt_scaled_update_runner if scaled_update else _compiled_bgt_transform_runner
+    runner = (
+        _compiled_bgt_scaled_update_runner
+        if scaled_update
+        else _compiled_bgt_transform_runner
+    )
     if runner is not None:
         return runner
     function = _run_bgt_scaled_update if scaled_update else _run_bgt_transform
     with _compiled_bgt_runner_lock:
-        runner = _compiled_bgt_scaled_update_runner if scaled_update else _compiled_bgt_transform_runner
+        runner = (
+            _compiled_bgt_scaled_update_runner
+            if scaled_update
+            else _compiled_bgt_transform_runner
+        )
         if runner is None:
             compiler = require_torch_compile(f"{_CACHE_BACKEND_ENV}=compile")
             try:
-                runner = cast(BGTProcessorRunner, compiler(function, **_COMPILE_OPTIONS))
+                runner = cast(
+                    BGTProcessorRunner, compiler(function, **_COMPILE_OPTIONS)
+                )
             except Exception as error:
                 raise RuntimeError(
                     "failed to create the compiled BGT processor region; eager fallback is disabled"

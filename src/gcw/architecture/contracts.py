@@ -13,7 +13,14 @@ MODEL_CONFIG_CONTRACT = "gcw.model_config.v1"
 TRAIN_CONFIG_CONTRACT = "gcw.training.core_config.v1"
 
 _SUPPORTED_VARIANTS = ("tf", "bt", "bgt", "icarus", "longshot")
-_SUPPORTED_FAMILIES = ("smollm", "llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4")
+_SUPPORTED_FAMILIES = (
+    "smollm",
+    "llama",
+    "qwen3",
+    "qwen3_5",
+    "qwen3_5_moe",
+    "gemma4",
+)
 _SUPPORTED_DATA_KINDS = (
     "random",
     "fineweb",
@@ -24,7 +31,10 @@ _SUPPORTED_CHECKPOINT_FORMATS = ("native_safetensors",)
 
 def _config_payload(value: object) -> object:
     if isinstance(value, PerformanceConfig):
-        payload = {field.name: _config_payload(getattr(value, field.name)) for field in fields(value)}
+        payload = {
+            field.name: _config_payload(getattr(value, field.name))
+            for field in fields(value)
+        }
         if value.reference_loss.mode == "legacy":
             payload.pop("reference_loss")
         if not value.longshot_full_history.enabled:
@@ -39,7 +49,10 @@ def _config_payload(value: object) -> object:
             payload.pop("noisy_diffusion")
         return payload
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _config_payload(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _config_payload(getattr(value, field.name))
+            for field in fields(value)
+        }
     if isinstance(value, (list, tuple)):
         return [_config_payload(item) for item in value]
     if isinstance(value, dict):
@@ -104,11 +117,21 @@ class CompatibilityError(ValueError):
 
 def require_model_config(config: ModelConfig) -> None:
     from gcw.architecture.validation import _model_issues
-    issues = tuple(issue for issue in _model_issues(config) if issue.code in _MODEL_CONFIG_VALIDATION_CODES)
+
+    issues = tuple(
+        issue
+        for issue in _model_issues(config)
+        if issue.code in _MODEL_CONFIG_VALIDATION_CODES
+    )
     CompatibilityReport(issues).require()
 
 
 def require_train_config(config: TrainConfig) -> None:
     from gcw.architecture.validation import _experiment_issues
-    issues = tuple(issue for issue in _experiment_issues(config) if issue.code in _TRAIN_CONFIG_VALIDATION_CODES)
+
+    issues = tuple(
+        issue
+        for issue in _experiment_issues(config)
+        if issue.code in _TRAIN_CONFIG_VALIDATION_CODES
+    )
     CompatibilityReport(issues).require()

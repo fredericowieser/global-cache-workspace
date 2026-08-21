@@ -15,7 +15,9 @@ def iter_jsonl(path: str | Path) -> Iterable[dict]:
                 yield json.loads(line)
 
 
-def prepare_openmath(source: str | Path, out: str | Path, limit: int | None = None) -> int:
+def prepare_openmath(
+    source: str | Path, out: str | Path, limit: int | None = None
+) -> int:
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -24,7 +26,12 @@ def prepare_openmath(source: str | Path, out: str | Path, limit: int | None = No
             prompt, answer = _prompt_answer(row)
             if not prompt or not answer:
                 continue
-            f.write(json.dumps({"prompt": prompt, "answer": answer}, ensure_ascii=False) + "\n")
+            f.write(
+                json.dumps(
+                    {"prompt": prompt, "answer": answer}, ensure_ascii=False
+                )
+                + "\n"
+            )
             count += 1
             if limit is not None and count >= limit:
                 break
@@ -44,7 +51,9 @@ def _iter_openmath_rows(source: str | Path) -> Iterable[dict]:
     try:
         from datasets import DatasetDict, load_from_disk
     except ImportError as exc:
-        raise ImportError("Install datasets to prepare OpenMathInstruct Arrow data.") from exc
+        raise ImportError(
+            "Install datasets to prepare OpenMathInstruct Arrow data."
+        ) from exc
     data = load_from_disk(str(path))
     if isinstance(data, DatasetDict):
         data = data["train"] if "train" in data else next(iter(data.values()))
@@ -55,10 +64,28 @@ def _iter_openmath_rows(source: str | Path) -> Iterable[dict]:
 def _prompt_answer(row: dict) -> tuple[str, str]:
     messages = row.get("messages")
     if isinstance(messages, list) and messages:
-        prompt_parts = [str(msg.get("content", "")) for msg in messages[:-1] if isinstance(msg, dict)]
-        answer = messages[-1].get("content", "") if isinstance(messages[-1], dict) else ""
-        return "\n".join(part for part in prompt_parts if part).strip(), str(answer).strip()
-    prompt = row.get("prompt") or row.get("question") or row.get("problem") or row.get("instruction") or row.get("input") or ""
+        prompt_parts = [
+            str(msg.get("content", ""))
+            for msg in messages[:-1]
+            if isinstance(msg, dict)
+        ]
+        answer = (
+            messages[-1].get("content", "")
+            if isinstance(messages[-1], dict)
+            else ""
+        )
+        return (
+            "\n".join(part for part in prompt_parts if part).strip(),
+            str(answer).strip(),
+        )
+    prompt = (
+        row.get("prompt")
+        or row.get("question")
+        or row.get("problem")
+        or row.get("instruction")
+        or row.get("input")
+        or ""
+    )
     answer = (
         row.get("answer")
         or row.get("generated_solution")
@@ -113,7 +140,10 @@ def sft_batch(
     enable_thinking: bool = False,
     loss_scope: Literal["answer_only", "full_sequence"] = "answer_only",
     return_attention_mask: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> (
+    tuple[torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+):
     if loss_scope not in {"answer_only", "full_sequence"}:
         raise ValueError("loss_scope must be 'answer_only' or 'full_sequence'")
     if chat_template and response_prefix:
@@ -121,15 +151,26 @@ def sft_batch(
     ids = []
     targets = []
     for row in rows:
-        prompt = row.get("prompt") or row.get("question") or row.get("instruction") or ""
-        answer = row.get("answer") or row.get("response") or row.get("output") or ""
+        prompt = (
+            row.get("prompt")
+            or row.get("question")
+            or row.get("instruction")
+            or ""
+        )
+        answer = (
+            row.get("answer") or row.get("response") or row.get("output") or ""
+        )
         if chat_template:
             row_thinking = row.get("enable_thinking", enable_thinking)
             if not isinstance(row_thinking, bool):
                 raise ValueError("row enable_thinking must be boolean")
             messages = row.get("messages")
             if isinstance(messages, list) and messages:
-                prompt_messages = [message for message in messages if message.get("role") != "assistant"]
+                prompt_messages = [
+                    message
+                    for message in messages
+                    if message.get("role") != "assistant"
+                ]
                 if messages[-1].get("role") == "assistant":
                     answer = messages[-1].get("content", answer)
             else:
@@ -138,7 +179,9 @@ def sft_batch(
                 prompt_messages = [dict(message) for message in prompt_messages]
                 for message in reversed(prompt_messages):
                     if message.get("role") == "user":
-                        message["content"] = f"{message.get('content', '')}\n\n{prompt_suffix.strip()}"
+                        message["content"] = (
+                            f"{message.get('content', '')}\n\n{prompt_suffix.strip()}"
+                        )
                         break
                 else:
                     raise ValueError("prompt_suffix requires a user message")
@@ -153,10 +196,18 @@ def sft_batch(
             if prompt_suffix.strip():
                 prompt = f"{prompt}\n\n{prompt_suffix.strip()}"
             prompt_ids = tokenizer.encode(prompt)
-            answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [tokenizer.eot_id]
+            answer_ids = tokenizer.encode(f"{response_prefix}{answer}") + [
+                tokenizer.eot_id
+            ]
         seq = (prompt_ids + answer_ids)[:max_length]
-        labels = answer_ids if loss_scope == "answer_only" else prompt_ids + answer_ids
-        prefix_mask = [-100] * len(prompt_ids) if loss_scope == "answer_only" else []
+        labels = (
+            answer_ids
+            if loss_scope == "answer_only"
+            else prompt_ids + answer_ids
+        )
+        prefix_mask = (
+            [-100] * len(prompt_ids) if loss_scope == "answer_only" else []
+        )
         hf_labels = (prefix_mask + labels)[: len(seq)]
         target = hf_labels[1:] + [-100]
         ids.append(seq)

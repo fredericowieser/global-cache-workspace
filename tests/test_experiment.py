@@ -9,7 +9,9 @@ from gcw.experiment import validate_experiment
 from gcw.config import DataConfig, TrainConfig
 
 
-def test_experiment_contract_accepts_only_matched_execution(tmp_path, monkeypatch):
+def test_experiment_contract_accepts_only_matched_execution(
+    tmp_path, monkeypatch
+):
     class Tokenizer:
         @staticmethod
         def identity_sha256():
@@ -17,7 +19,7 @@ def test_experiment_contract_accepts_only_matched_execution(tmp_path, monkeypatc
 
     monkeypatch.setattr("gcw.experiment.get_tokenizer", lambda _: Tokenizer())
     dataset = tmp_path / "train.jsonl"
-    dataset.write_text('{}\n')
+    dataset.write_text("{}\n")
     digest = hashlib.sha256(dataset.read_bytes()).hexdigest()
     checkpoint = tmp_path / "model.safetensors"
     checkpoint.write_bytes(b"weights")

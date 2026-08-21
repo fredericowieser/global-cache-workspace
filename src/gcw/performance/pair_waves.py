@@ -46,9 +46,13 @@ class PairWavePlan:
     def __post_init__(self) -> None:
         if self.wave_size not in {1, 2, 4}:
             raise ValueError("pair wave_size must be 1, 2, or 4")
-        flattened = tuple(index for wave in self.waves for index in wave.pair_indices)
+        flattened = tuple(
+            index for wave in self.waves for index in wave.pair_indices
+        )
         if flattened != tuple(range(PAIRS_PER_STEP)):
-            raise ValueError(f"pair waves must cover exactly {PAIRS_PER_STEP} source pairs")
+            raise ValueError(
+                f"pair waves must cover exactly {PAIRS_PER_STEP} source pairs"
+            )
         if any(len(wave.pair_indices) > self.wave_size for wave in self.waves):
             raise ValueError("pair wave exceeds configured wave_size")
 
@@ -60,7 +64,9 @@ def plan_pair_waves(wave_size: int) -> PairWavePlan:
     return PairWavePlan(
         wave_size,
         tuple(
-            PairWave(tuple(range(start, min(start + wave_size, PAIRS_PER_STEP))))
+            PairWave(
+                tuple(range(start, min(start + wave_size, PAIRS_PER_STEP)))
+            )
             for start in range(0, PAIRS_PER_STEP, wave_size)
         ),
     )
@@ -81,7 +87,11 @@ class PairWaveRuntime:
 
     def __init__(self, device: torch.device, wave_size: int) -> None:
         if device.type == "cuda":
-            index = device.index if device.index is not None else torch.cuda.current_device()
+            index = (
+                device.index
+                if device.index is not None
+                else torch.cuda.current_device()
+            )
             device = torch.device("cuda", index)
         self.device = device
         self.plan = plan_pair_waves(wave_size)
@@ -89,11 +99,21 @@ class PairWaveRuntime:
             raise ValueError("overlapped pair waves require CUDA")
         self._closed = False
         self._streams = (
-            tuple(torch.cuda.Stream(device=device) for _ in range(wave_size)) if device.type == "cuda" else ()
+            tuple(torch.cuda.Stream(device=device) for _ in range(wave_size))
+            if device.type == "cuda"
+            else ()
         )
         self._ready = torch.cuda.Event() if device.type == "cuda" else None
-        self._forward_done = tuple(torch.cuda.Event() for _ in range(wave_size)) if device.type == "cuda" else ()
-        self._backward_done = tuple(torch.cuda.Event() for _ in range(wave_size)) if device.type == "cuda" else ()
+        self._forward_done = (
+            tuple(torch.cuda.Event() for _ in range(wave_size))
+            if device.type == "cuda"
+            else ()
+        )
+        self._backward_done = (
+            tuple(torch.cuda.Event() for _ in range(wave_size))
+            if device.type == "cuda"
+            else ()
+        )
 
     def execute(
         self,
@@ -109,14 +129,22 @@ class PairWaveRuntime:
             raise RuntimeError("closed pair-wave runtime cannot execute")
         pair_tuple = tuple(pairs)
         if len(pair_tuple) != PAIRS_PER_STEP:
-            raise ValueError(f"pair-wave execution requires exactly {PAIRS_PER_STEP} pairs")
+            raise ValueError(
+                f"pair-wave execution requires exactly {PAIRS_PER_STEP} pairs"
+            )
         if normalizer != PAIRS_PER_STEP:
-            raise ValueError(f"pair-wave normalization must remain exactly 1/{PAIRS_PER_STEP}")
+            raise ValueError(
+                f"pair-wave normalization must remain exactly 1/{PAIRS_PER_STEP}"
+            )
         parameter_tuple = tuple(parameters)
         if not parameter_tuple:
-            raise ValueError("pair-wave execution requires trainable parameters")
+            raise ValueError(
+                "pair-wave execution requires trainable parameters"
+            )
         if any(parameter.grad is not None for parameter in parameter_tuple):
-            raise ValueError("pair-wave execution requires unset parameter gradients")
+            raise ValueError(
+                "pair-wave execution requires unset parameter gradients"
+            )
         _validate_pair_devices(pair_tuple, parameter_tuple, self.device)
         context_factory = pair_context or (lambda _index, _pair: nullcontext())
         losses: list[torch.Tensor | None] = [None] * PAIRS_PER_STEP
@@ -136,7 +164,10 @@ class PairWaveRuntime:
                 else:
                     pair_index = wave.pair_indices[0]
                     with context_factory(pair_index, pair_tuple[pair_index]):
-                        loss = _scalar_loss(pair_loss(pair_index, pair_tuple[pair_index]), pair_index)
+                        loss = _scalar_loss(
+                            pair_loss(pair_index, pair_tuple[pair_index]),
+                            pair_index,
+                        )
                     losses[pair_index] = loss.detach()
                     with context_factory(pair_index, pair_tuple[pair_index]):
                         (loss / normalizer).backward()
@@ -148,7 +179,9 @@ class PairWaveRuntime:
                 parameter.grad = None
             raise
         if any(loss is None for loss in losses):
-            raise RuntimeError("pair-wave execution did not produce every pair loss")
+            raise RuntimeError(
+                "pair-wave execution did not produce every pair loss"
+            )
         return PairWaveResult(
             pair_losses=tuple(loss for loss in losses if loss is not None),
             plan=self.plan,
@@ -172,8 +205,13 @@ class PairWaveRuntime:
         for lane, pair_index in enumerate(wave.pair_indices):
             stream = self._streams[lane]
             stream.wait_event(self._ready)
-            with torch.cuda.stream(stream), context_factory(pair_index, pairs[pair_index]):
-                loss = _scalar_loss(pair_loss(pair_index, pairs[pair_index]), pair_index)
+            with (
+                torch.cuda.stream(stream),
+                context_factory(pair_index, pairs[pair_index]),
+            ):
+                loss = _scalar_loss(
+                    pair_loss(pair_index, pairs[pair_index]), pair_index
+                )
                 self._forward_done[lane].record(stream)
             live_losses.append(loss)
             losses[pair_index] = loss.detach()
@@ -186,7 +224,10 @@ class PairWaveRuntime:
         # never changes its owning stream between pairs.
         for lane, loss in enumerate(live_losses):
             pair_index = wave.pair_indices[lane]
-            with torch.cuda.stream(authority), context_factory(pair_index, pairs[pair_index]):
+            with (
+                torch.cuda.stream(authority),
+                context_factory(pair_index, pairs[pair_index]),
+            ):
                 (loss / normalizer).backward()
                 self._backward_done[lane].record(authority)
 
@@ -208,7 +249,9 @@ class PairWaveRuntime:
             raise RuntimeError("closed pair-wave runtime cannot be re-entered")
         return self
 
-    def __exit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
+    def __exit__(
+        self, _exc_type: object, _exc_value: object, _traceback: object
+    ) -> None:
         self.close()
 
 
@@ -225,9 +268,15 @@ def _validate_pair_devices(
 ) -> None:
     for pair_index, pair in enumerate(pairs):
         tensors = (pair.x, pair.y, pair.attention_mask)
-        if any(tensor is not None and tensor.device != device for tensor in tensors):
-            raise ValueError(f"pair {pair_index} tensors are not on the runtime device")
+        if any(
+            tensor is not None and tensor.device != device for tensor in tensors
+        ):
+            raise ValueError(
+                f"pair {pair_index} tensors are not on the runtime device"
+            )
         if pair.x.shape[0] != 2 or pair.y.shape != pair.x.shape:
-            raise ValueError(f"pair {pair_index} must remain one physical batch-two pair")
+            raise ValueError(
+                f"pair {pair_index} must remain one physical batch-two pair"
+            )
     if any(parameter.device != device for parameter in parameters):
         raise ValueError("pair-wave parameters are not on the runtime device")

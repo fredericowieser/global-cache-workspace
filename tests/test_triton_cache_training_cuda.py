@@ -21,10 +21,17 @@ pytestmark = [pytest.mark.gpu, pytest.mark.performance]
 
 def _require_cuda_gate() -> None:
     if os.environ.get("GCW_RUN_TRITON_CACHE_TRAINING_TESTS") != "1":
-        pytest.skip("set GCW_RUN_TRITON_CACHE_TRAINING_TESTS=1 for full-model Triton tests")
+        pytest.skip(
+            "set GCW_RUN_TRITON_CACHE_TRAINING_TESTS=1 for full-model Triton tests"
+        )
     if os.environ.get("GCW_ALLOW_UNQUALIFIED_TRITON_CACHE") != "1":
-        pytest.skip("explicit unqualified Triton qualification override is required")
-    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (9, 0):
+        pytest.skip(
+            "explicit unqualified Triton qualification override is required"
+        )
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (
+        9,
+        0,
+    ):
         pytest.skip("full-model Triton tests require H100/H200")
 
 
@@ -79,7 +86,9 @@ def _configure(model: LanguageModel) -> None:
 
 
 @pytest.mark.parametrize("variant", ("bt", "bgt", "longshot", "icarus"))
-def test_triton_cache_training_forward_gradient_and_adam_match_eager(variant: str) -> None:
+def test_triton_cache_training_forward_gradient_and_adam_match_eager(
+    variant: str,
+) -> None:
     _require_cuda_gate()
     torch.manual_seed(123)
     eager = build_model(_config(variant)).cuda()
@@ -95,14 +104,22 @@ def test_triton_cache_training_forward_gradient_and_adam_match_eager(variant: st
     generator = torch.Generator(device="cuda").manual_seed(456)
     inputs = torch.randint(0, 64, (2, 128), device="cuda", generator=generator)
     targets = torch.randint(0, 64, (2, 128), device="cuda", generator=generator)
-    eager_parameters = tuple(parameter for parameter in eager.parameters() if parameter.requires_grad)
-    candidate_parameters = tuple(parameter for parameter in candidate.parameters() if parameter.requires_grad)
+    eager_parameters = tuple(
+        parameter for parameter in eager.parameters() if parameter.requires_grad
+    )
+    candidate_parameters = tuple(
+        parameter
+        for parameter in candidate.parameters()
+        if parameter.requires_grad
+    )
     eager_optimizer = torch.optim.AdamW(eager_parameters, lr=1e-3)
     candidate_optimizer = torch.optim.AdamW(candidate_parameters, lr=1e-3)
 
     with torch.autocast("cuda", dtype=torch.bfloat16):
         eager_loss = eager(inputs, targets, loss_reduction="row_sum").sum()
-        candidate_loss = candidate(inputs, targets, loss_reduction="row_sum").sum()
+        candidate_loss = candidate(
+            inputs, targets, loss_reduction="row_sum"
+        ).sum()
     torch.testing.assert_close(candidate_loss, eager_loss, atol=0.0, rtol=0.0)
     eager_loss.backward()
     candidate_loss.backward()
@@ -123,4 +140,6 @@ def test_triton_cache_training_forward_gradient_and_adam_match_eager(variant: st
     for eager_parameter, candidate_parameter in zip(
         eager_parameters, candidate_parameters, strict=True
     ):
-        torch.testing.assert_close(candidate_parameter, eager_parameter, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(
+            candidate_parameter, eager_parameter, atol=0.0, rtol=0.0
+        )

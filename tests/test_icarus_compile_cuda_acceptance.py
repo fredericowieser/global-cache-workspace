@@ -31,7 +31,6 @@ from gcw.performance.backends.icarus import (
 )
 from tests.test_icarus_compile_backend import _cache, _config, _processor
 
-
 _CUDA_ACCEPTANCE = os.environ.get("GCW_RUN_CUDA_COMPILE_ACCEPTANCE") == "1"
 _FIXED_BATCH_SIZE = 2
 pytestmark = [
@@ -48,7 +47,9 @@ def _allow_rejected_icarus_benchmark(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GCW_ALLOW_REJECTED_ICARUS_COMPILE", "1")
 
 
-def _paired_models(config: Any, *, device: torch.device) -> tuple[LanguageModel, LanguageModel]:
+def _paired_models(
+    config: Any, *, device: torch.device
+) -> tuple[LanguageModel, LanguageModel]:
     torch.manual_seed(811)
     eager = build_model(config).to(device)
     assert isinstance(eager, LanguageModel)
@@ -79,7 +80,11 @@ def _install_exact_trace(
         positions: torch.Tensor,
         selected_heads: torch.Tensor,
     ) -> torch.Tensor:
-        label = "eager" if block is eager_block else "compile" if block is compiled_block else None
+        label = (
+            "eager"
+            if block is eager_block
+            else "compile" if block is compiled_block else None
+        )
         if label is not None:
             traces[label].append(
                 (
@@ -90,30 +95,38 @@ def _install_exact_trace(
             )
         return original(backend, block, x, positions, selected_heads)
 
-    monkeypatch.setattr(processor_module, "run_icarus_post_selection_region", traced)
+    monkeypatch.setattr(
+        processor_module, "run_icarus_post_selection_region", traced
+    )
     return traces
 
 
 def _flat_gradients(model: LanguageModel) -> torch.Tensor:
     gradients = [
-        parameter.grad.detach().float().flatten() for parameter in model.parameters() if parameter.grad is not None
+        parameter.grad.detach().float().flatten()
+        for parameter in model.parameters()
+        if parameter.grad is not None
     ]
     assert gradients
     return torch.cat(gradients)
 
 
-def _assert_tight_gradient_metrics(eager: LanguageModel, compiled: LanguageModel) -> None:
+def _assert_tight_gradient_metrics(
+    eager: LanguageModel, compiled: LanguageModel
+) -> None:
     expected = _flat_gradients(eager)
     actual = _flat_gradients(compiled)
-    relative_l2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected).clamp_min(1e-12)
+    relative_l2 = torch.linalg.vector_norm(
+        actual - expected
+    ) / torch.linalg.vector_norm(expected).clamp_min(1e-12)
     cosine = torch.nn.functional.cosine_similarity(actual, expected, dim=0)
     assert relative_l2.item() <= 5e-4
     assert cosine.item() >= 0.99999
 
 
-
-
-def test_real_inductor_checkpoint_cache_and_parameter_gradients(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_real_inductor_checkpoint_cache_and_parameter_gradients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Exercise two processor events and non-reentrant checkpoint replay at length 192."""
     monkeypatch.setenv("GCW_ICARUS_PROCESSOR_BACKEND", "compile")
     monkeypatch.setenv("GCW_STRICT_FLASH", "1")
@@ -124,7 +137,9 @@ def test_real_inductor_checkpoint_cache_and_parameter_gradients(monkeypatch: pyt
     compiled = copy.deepcopy(eager)
     compiled.execution_backend = "compile"
     configure_icarus_training_execution(compiled, (2,))
-    source = _cache(config, batch=2, seq=192, device=device, dtype=torch.bfloat16)
+    source = _cache(
+        config, batch=2, seq=192, device=device, dtype=torch.bfloat16
+    )
     eager_cache = clone_cache(source, requires_grad=True)
     compiled_cache = clone_cache(source, requires_grad=True)
     eager_inputs = [*eager_cache.keys, *eager_cache.values]
@@ -140,7 +155,9 @@ def test_real_inductor_checkpoint_cache_and_parameter_gradients(monkeypatch: pyt
         cache_objective(expected).backward()
 
     assert_cache_close(actual, expected, atol=2e-2, rtol=2e-2)
-    assert_tensor_gradients_close(compiled_inputs, eager_inputs, atol=3e-2, rtol=3e-2)
+    assert_tensor_gradients_close(
+        compiled_inputs, eager_inputs, atol=3e-2, rtol=3e-2
+    )
     assert_parameter_gradients_close(compiled, eager, atol=3e-2, rtol=3e-2)
 
 
@@ -194,7 +211,9 @@ def test_real_inductor_fixed_batch_two_is_rejected_by_adam_parameter_gate(
         eager_events = traces["eager"]
         compiled_events = traces["compile"]
         assert len(eager_events) == len(compiled_events) == 2
-        for expected_event, actual_event in zip(eager_events, compiled_events, strict=True):
+        for expected_event, actual_event in zip(
+            eager_events, compiled_events, strict=True
+        ):
             expected_positions, expected_heads, expected_writes = expected_event
             actual_positions, actual_heads, actual_writes = actual_event
             assert torch.equal(actual_positions, expected_positions)
@@ -207,7 +226,9 @@ def test_real_inductor_fixed_batch_two_is_rejected_by_adam_parameter_gate(
         compiled_optimizer.step()
         formal_parameter_parity = all(
             torch.allclose(actual, expected, atol=2e-5, rtol=2e-4)
-            for expected, actual in zip(eager.parameters(), compiled.parameters(), strict=True)
+            for expected, actual in zip(
+                eager.parameters(), compiled.parameters(), strict=True
+            )
         )
         assert not formal_parameter_parity, (
             "the recorded H200 Adam parameter rejection no longer reproduces; "
@@ -228,7 +249,9 @@ def _assert_nested_equal(actual: Any, expected: Any) -> None:
         assert actual == expected
 
 
-def test_real_inductor_production_checkpoint_survives_process_restart(tmp_path: Path) -> None:
+def test_real_inductor_production_checkpoint_survives_process_restart(
+    tmp_path: Path,
+) -> None:
     """Compare uninterrupted training with production save/open/restore APIs in a new process."""
     checkpoint = tmp_path / "checkpoint"
     continuous = tmp_path / "continuous.pt"
@@ -240,9 +263,21 @@ def test_real_inductor_production_checkpoint_survives_process_restart(tmp_path: 
         "GCW_STRICT_FLASH": "1",
         "PYTHONPATH": os.pathsep.join(sys.path),
     }
-    subprocess.run([sys.executable, str(script), "continuous", str(continuous)], check=True, env=env)
-    subprocess.run([sys.executable, str(script), "save", str(checkpoint)], check=True, env=env)
-    subprocess.run([sys.executable, str(script), "resume", str(checkpoint), str(resumed)], check=True, env=env)
+    subprocess.run(
+        [sys.executable, str(script), "continuous", str(continuous)],
+        check=True,
+        env=env,
+    )
+    subprocess.run(
+        [sys.executable, str(script), "save", str(checkpoint)],
+        check=True,
+        env=env,
+    )
+    subprocess.run(
+        [sys.executable, str(script), "resume", str(checkpoint), str(resumed)],
+        check=True,
+        env=env,
+    )
     expected = torch.load(continuous, map_location="cpu", weights_only=True)
     actual = torch.load(resumed, map_location="cpu", weights_only=True)
     _assert_nested_equal(actual, expected)

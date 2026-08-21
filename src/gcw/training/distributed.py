@@ -7,7 +7,9 @@ import torch
 import torch.distributed as dist
 
 from gcw.config import TrainConfig
-from gcw.performance.checkpointing import transformer_layer_classes as _transformer_layer_classes
+from gcw.performance.checkpointing import (
+    transformer_layer_classes as _transformer_layer_classes,
+)
 
 
 def _fsdp_active(config: TrainConfig) -> bool:
@@ -23,14 +25,25 @@ def _fsdp_wrap_classes(family: str) -> set[type[torch.nn.Module]]:
     return classes
 
 
-def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device) -> torch.nn.Module:
-    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, MixedPrecision
+def _wrap_fsdp(
+    model: torch.nn.Module, config: TrainConfig, device: torch.device
+) -> torch.nn.Module:
+    from torch.distributed.fsdp import (
+        FullyShardedDataParallel as FSDP,
+        MixedPrecision,
+    )
     from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
     layer_classes = _fsdp_wrap_classes(config.model.family)
-    auto_wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=layer_classes)
+    auto_wrap_policy = partial(
+        transformer_auto_wrap_policy, transformer_layer_cls=layer_classes
+    )
     mixed_precision = (
-        MixedPrecision(param_dtype=torch.bfloat16, reduce_dtype=torch.bfloat16, buffer_dtype=torch.bfloat16)
+        MixedPrecision(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.bfloat16,
+            buffer_dtype=torch.bfloat16,
+        )
         if config.precision in {"bf16_mixed", "bf16"}
         else None
     )
@@ -44,7 +57,9 @@ def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device
     if device.type == "cuda":
         kwargs["device_id"] = device
     wrapped = FSDP(model, **kwargs)
-    refresh_dynamics = getattr(_unwrap(wrapped), "refresh_linear_state_dynamics", None)
+    refresh_dynamics = getattr(
+        _unwrap(wrapped), "refresh_linear_state_dynamics", None
+    )
     if refresh_dynamics is not None:
         refresh_dynamics()
     return wrapped
@@ -52,8 +67,12 @@ def _wrap_fsdp(model: torch.nn.Module, config: TrainConfig, device: torch.device
 
 def _fsdp_param_init_fn(device: torch.device):
     def init_fn(module: torch.nn.Module) -> None:
-        has_meta_param = any(param.is_meta for param in module.parameters(recurse=False))
-        has_meta_buffer = any(buffer.is_meta for buffer in module.buffers(recurse=False))
+        has_meta_param = any(
+            param.is_meta for param in module.parameters(recurse=False)
+        )
+        has_meta_buffer = any(
+            buffer.is_meta for buffer in module.buffers(recurse=False)
+        )
         if has_meta_param or has_meta_buffer:
             module.to_empty(device=device, recurse=False)
 

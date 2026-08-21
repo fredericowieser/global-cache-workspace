@@ -7,14 +7,30 @@ import torch
 from gcw.config import TrainConfig
 
 
-def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> torch.optim.AdamW:
+def _build_optimizer(
+    params: list[torch.nn.Parameter], config: TrainConfig
+) -> torch.optim.AdamW:
     decay = [p for p in params if p.ndim >= 2]
     nodecay = [p for p in params if p.ndim < 2]
     groups: list[dict[str, Any]] = []
     if decay:
-        groups.append({"params": decay, "lr": config.learning_rate, "weight_decay": config.weight_decay, "decay": True})
+        groups.append(
+            {
+                "params": decay,
+                "lr": config.learning_rate,
+                "weight_decay": config.weight_decay,
+                "decay": True,
+            }
+        )
     if nodecay:
-        groups.append({"params": nodecay, "lr": config.learning_rate, "weight_decay": 0.0, "decay": False})
+        groups.append(
+            {
+                "params": nodecay,
+                "lr": config.learning_rate,
+                "weight_decay": 0.0,
+                "decay": False,
+            }
+        )
     opt = torch.optim.AdamW(
         groups,
         lr=config.learning_rate,
@@ -26,7 +42,13 @@ def _build_optimizer(params: list[torch.nn.Parameter], config: TrainConfig) -> t
     return opt
 
 
-def _wsd_lr(step: int, max_steps: int, warmup_steps: int, warmdown_ratio: float, final_lr_frac: float) -> float:
+def _wsd_lr(
+    step: int,
+    max_steps: int,
+    warmup_steps: int,
+    warmdown_ratio: float,
+    final_lr_frac: float,
+) -> float:
     if step < warmup_steps:
         return (step + 1) / max(1, warmup_steps)
     warmdown = round(warmdown_ratio * max_steps)
@@ -39,7 +61,11 @@ def _wsd_lr(step: int, max_steps: int, warmup_steps: int, warmdown_ratio: float,
 
 
 def _weight_decay(step: int, max_steps: int, base_weight_decay: float) -> float:
-    return base_weight_decay * 0.5 * (1.0 + math.cos(math.pi * step / max(1, max_steps)))
+    return (
+        base_weight_decay
+        * 0.5
+        * (1.0 + math.cos(math.pi * step / max(1, max_steps)))
+    )
 
 
 def _clip_grad_norm(

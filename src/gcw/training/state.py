@@ -25,7 +25,9 @@ def _save_training_state(
     rank: int,
     initial_processor_state: dict[str, torch.Tensor] | None = None,
 ) -> None:
-    cache_processor_only = bool(config.save_cache_processor_only or config.freeze_backbone)
+    cache_processor_only = bool(
+        config.save_cache_processor_only or config.freeze_backbone
+    )
     if config.distributed == "fsdp":
         if rank == 0:
             save_checkpoint(
@@ -37,7 +39,9 @@ def _save_training_state(
             )
         return
     checkpoint_kwargs: dict[str, Any] = (
-        {"initial_processor_state": initial_processor_state} if initial_processor_state is not None else {}
+        {"initial_processor_state": initial_processor_state}
+        if initial_processor_state is not None
+        else {}
     )
     if cache_processor_only:
         checkpoint_kwargs["cache_processor_only"] = True
@@ -76,10 +80,14 @@ def _save_step_checkpoint(
             config.model,
             state,
             use_fsdp=True,
-            cache_processor_only=bool(config.save_cache_processor_only or config.freeze_backbone),
+            cache_processor_only=bool(
+                config.save_cache_processor_only or config.freeze_backbone
+            ),
         )
         return
-    resume_state = _resume_state(step, smooth_loss, stream, world_size, metadata)
+    resume_state = _resume_state(
+        step, smooth_loss, stream, world_size, metadata
+    )
     if initial_processor_state is None:
         _save_training_state(
             path,
@@ -107,11 +115,23 @@ def _json_safe_loader_state(value: Any) -> Any:
     if isinstance(value, torch.Tensor):
         return None
     if isinstance(value, dict):
-        return {k: safe for k, v in value.items() if (safe := _json_safe_loader_state(v)) is not None}
+        return {
+            k: safe
+            for k, v in value.items()
+            if (safe := _json_safe_loader_state(v)) is not None
+        }
     if isinstance(value, list):
-        return [safe for item in value if (safe := _json_safe_loader_state(item)) is not None]
+        return [
+            safe
+            for item in value
+            if (safe := _json_safe_loader_state(item)) is not None
+        ]
     if isinstance(value, tuple):
-        return [safe for item in value if (safe := _json_safe_loader_state(item)) is not None]
+        return [
+            safe
+            for item in value
+            if (safe := _json_safe_loader_state(item)) is not None
+        ]
     if isinstance(value, str | int | float | bool) or value is None:
         return value
     return str(value)
@@ -125,7 +145,9 @@ def _retained_checkpoint_every() -> int | None:
     try:
         every = int(raw)
     except ValueError as exc:
-        raise ValueError("GCW_STEP_CHECKPOINT_EVERY must be an integer") from exc
+        raise ValueError(
+            "GCW_STEP_CHECKPOINT_EVERY must be an integer"
+        ) from exc
     if every <= 0:
         raise ValueError("GCW_STEP_CHECKPOINT_EVERY must be positive")
     return every
@@ -141,7 +163,11 @@ def _save_training_checkpoint(
     cache_processor_only: bool = False,
 ) -> None:
     if use_fsdp:
-        from torch.distributed.fsdp import FullStateDictConfig, FullyShardedDataParallel as FSDP, StateDictType
+        from torch.distributed.fsdp import (
+            FullStateDictConfig,
+            FullyShardedDataParallel as FSDP,
+            StateDictType,
+        )
 
         cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
         with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, cfg):

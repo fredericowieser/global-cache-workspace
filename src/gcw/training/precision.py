@@ -21,12 +21,26 @@ def _validate_precision(config: TrainConfig, device: torch.device) -> None:
         )
 
 
-def _autocast_kwargs(config: TrainConfig, device: torch.device) -> dict[str, Any]:
+def _autocast_kwargs(
+    config: TrainConfig, device: torch.device
+) -> dict[str, Any]:
     if config.precision == "bf16_mixed":
-        return {"device_type": device.type, "dtype": torch.bfloat16, "enabled": device.type == "cuda"}
+        return {
+            "device_type": device.type,
+            "dtype": torch.bfloat16,
+            "enabled": device.type == "cuda",
+        }
     if config.precision == "bf16":
-        return {"device_type": device.type, "dtype": torch.bfloat16, "enabled": False}
-    return {"device_type": device.type, "dtype": torch.float32, "enabled": False}
+        return {
+            "device_type": device.type,
+            "dtype": torch.bfloat16,
+            "enabled": False,
+        }
+    return {
+        "device_type": device.type,
+        "dtype": torch.float32,
+        "enabled": False,
+    }
 
 
 def _precision_summary(config: TrainConfig, device: torch.device) -> str:

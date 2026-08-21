@@ -34,8 +34,14 @@ def test_qwen_template_binds_only_requested_thinking_mode():
 
     assert off == (1, 2, 3)
     assert on == (1, 2, 4)
-    assert [call[1]["enable_thinking"] for call in tokenizer.calls] == [False, True]
-    assert all(call[1]["tokenize"] and call[1]["add_generation_prompt"] for call in tokenizer.calls)
+    assert [call[1]["enable_thinking"] for call in tokenizer.calls] == [
+        False,
+        True,
+    ]
+    assert all(
+        call[1]["tokenize"] and call[1]["add_generation_prompt"]
+        for call in tokenizer.calls
+    )
 
 
 def test_gsm8k_target_and_response_use_exact_numeric_values():
@@ -121,13 +127,28 @@ def test_native_evaluation_keeps_exact_length_batches():
 
 
 def test_fast_benchmark_batch_is_the_default():
-    assert BenchmarkConfig(model_path="model", output_dir="out").batch_size == DEFAULT_BATCH_SIZE == 64
+    assert (
+        BenchmarkConfig(model_path="model", output_dir="out").batch_size
+        == DEFAULT_BATCH_SIZE
+        == 64
+    )
 
 
 def test_config_rejects_protocol_drift():
     with pytest.raises(ValueError, match=f"max_new_tokens={MAX_NEW_TOKENS}"):
-        BenchmarkConfig(model_path="model", output_dir="out", max_new_tokens=512)
+        BenchmarkConfig(
+            model_path="model", output_dir="out", max_new_tokens=512
+        )
     with pytest.raises(ValueError, match="duplicates"):
-        BenchmarkConfig(model_path="model", output_dir="out", modes=("thinking_off", "thinking_off"))
+        BenchmarkConfig(
+            model_path="model",
+            output_dir="out",
+            modes=("thinking_off", "thinking_off"),
+        )
     with pytest.raises(ValueError, match="no GCW processor"):
-        BenchmarkConfig(model_path="model", output_dir="out", target_kind="hf", processor_enabled=False)
+        BenchmarkConfig(
+            model_path="model",
+            output_dir="out",
+            target_kind="hf",
+            processor_enabled=False,
+        )

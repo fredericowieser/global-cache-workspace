@@ -38,18 +38,26 @@ class FakeBackend:
         self.calls = []
 
     def generate(self, input_ids, attention_mask, max_new_tokens):
-        self.calls.append((input_ids.clone(), attention_mask.clone(), max_new_tokens))
-        markers = torch.tensor([[21, 99], [22, 99]], dtype=torch.long)[: input_ids.shape[0]]
+        self.calls.append(
+            (input_ids.clone(), attention_mask.clone(), max_new_tokens)
+        )
+        markers = torch.tensor([[21, 99], [22, 99]], dtype=torch.long)[
+            : input_ids.shape[0]
+        ]
         return torch.cat((input_ids, markers), dim=1)
 
 
 def test_multiple_choice_prompt_is_explicit_and_requires_final_letter():
-    prompt = format_multiple_choice_prompt("Question?\nAnswer:", ["first", "second"])
+    prompt = format_multiple_choice_prompt(
+        "Question?\nAnswer:", ["first", "second"]
+    )
     assert "A. first" in prompt
     assert "B. second" in prompt
     assert "Final answer: X" in prompt
     assert "more than one" not in prompt
-    multi_prompt = format_multiple_choice_prompt("Question?", ["first", "second"], allow_multiple=True)
+    multi_prompt = format_multiple_choice_prompt(
+        "Question?", ["first", "second"], allow_multiple=True
+    )
     assert "Final answer: A,D" in multi_prompt
     assert not prompt.startswith("Answer:")
 
@@ -71,8 +79,12 @@ def test_numeric_prompt_preserves_the_calibrated_question():
 def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
     backend = FakeBackend()
     examples = [
-        ChatExample(0, "piqa", "piqa", 0, "prompt one", "choice", "B", ("x", "y")),
-        ChatExample(1, "svamp", "svamp", 0, "prompt two", "numeric", str(Fraction(7, 2))),
+        ChatExample(
+            0, "piqa", "piqa", 0, "prompt one", "choice", "B", ("x", "y")
+        ),
+        ChatExample(
+            1, "svamp", "svamp", 0, "prompt two", "numeric", str(Fraction(7, 2))
+        ),
     ]
     result = evaluate_chat_examples(
         backend,

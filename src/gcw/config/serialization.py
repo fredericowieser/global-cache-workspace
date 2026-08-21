@@ -27,7 +27,10 @@ def load_train_config(path: str | Path) -> TrainConfig:
 
 def to_dict(value: Any) -> Any:
     if isinstance(value, PerformanceConfig):
-        payload = {field.name: to_dict(getattr(value, field.name)) for field in fields(value)}
+        payload = {
+            field.name: to_dict(getattr(value, field.name))
+            for field in fields(value)
+        }
         if not value.longshot_full_history.enabled:
             payload.pop("longshot_full_history")
         if not value.kv_score_sidecar.enabled:

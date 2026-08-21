@@ -47,16 +47,27 @@ class BenchmarkConfig:
             raise ValueError("target_kind must be 'hf' or 'gcw'")
         if self.target_kind == "hf" and not self.processor_enabled:
             raise ValueError("HF targets have no GCW processor to bypass")
-        if self.scoring_protocol not in {"numeric_last_answer", "lm_eval_flexible_exact"}:
+        if self.scoring_protocol not in {
+            "numeric_last_answer",
+            "lm_eval_flexible_exact",
+        }:
             raise ValueError("unknown scoring_protocol")
         if isinstance(self.batch_size, bool) or self.batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
         if self.max_new_tokens != MAX_NEW_TOKENS:
-            raise ValueError(f"Qwen3 GSM8K reproduction requires max_new_tokens={MAX_NEW_TOKENS}")
-        if self.limit is not None and (isinstance(self.limit, bool) or self.limit <= 0):
+            raise ValueError(
+                f"Qwen3 GSM8K reproduction requires max_new_tokens={MAX_NEW_TOKENS}"
+            )
+        if self.limit is not None and (
+            isinstance(self.limit, bool) or self.limit <= 0
+        ):
             raise ValueError("limit must be a positive integer")
-        if not self.modes or any(mode not in {"thinking_off", "thinking_on"} for mode in self.modes):
-            raise ValueError("modes must contain thinking_off and/or thinking_on")
+        if not self.modes or any(
+            mode not in {"thinking_off", "thinking_on"} for mode in self.modes
+        ):
+            raise ValueError(
+                "modes must contain thinking_off and/or thinking_on"
+            )
         if len(set(self.modes)) != len(self.modes):
             raise ValueError("modes must not contain duplicates")
 
@@ -89,19 +100,26 @@ class HFBenchmarkBackend:
     def __init__(self, source: Path, device: torch.device):
         from transformers import AutoModelForCausalLM
 
-        self.model = cast(
-            Any,
-            AutoModelForCausalLM.from_pretrained(
-                source,
-                local_files_only=True,
-                trust_remote_code=False,
-                dtype=torch.bfloat16,
-            ),
-        ).to(device).eval()
+        self.model = (
+            cast(
+                Any,
+                AutoModelForCausalLM.from_pretrained(
+                    source,
+                    local_files_only=True,
+                    trust_remote_code=False,
+                    dtype=torch.bfloat16,
+                ),
+            )
+            .to(device)
+            .eval()
+        )
         self.device = device
         self.supports_left_padding = True
         self.eos_ids = _eos_ids(self.model, None)
-        self.pad_id = int(getattr(self.model.generation_config, "pad_token_id", None) or self.eos_ids[0])
+        self.pad_id = int(
+            getattr(self.model.generation_config, "pad_token_id", None)
+            or self.eos_ids[0]
+        )
         self.identity = _directory_identity(source, kind="hf")
 
     def generate(
@@ -115,14 +133,20 @@ class HFBenchmarkBackend:
             attention_mask=attention_mask,
             do_sample=False,
             max_new_tokens=max_new_tokens,
-            eos_token_id=self.eos_ids[0] if len(self.eos_ids) == 1 else list(self.eos_ids),
+            eos_token_id=(
+                self.eos_ids[0]
+                if len(self.eos_ids) == 1
+                else list(self.eos_ids)
+            ),
             pad_token_id=self.pad_id,
             use_cache=True,
         )
 
 
 class GCWBenchmarkBackend:
-    def __init__(self, checkpoint: Path, device: torch.device, *, processor_enabled: bool):
+    def __init__(
+        self, checkpoint: Path, device: torch.device, *, processor_enabled: bool
+    ):
         from gcw.checkpoint import load_checkpoint
         from gcw.evaluation.core import ProcessorBypass
 
@@ -132,7 +156,9 @@ class GCWBenchmarkBackend:
         self.model = model.eval()
         self.device = device
         self.supports_left_padding = False
-        self.eos_ids: tuple[int, ...] = (int(state.get("eos_token_id", 151645)),)
+        self.eos_ids: tuple[int, ...] = (
+            int(state.get("eos_token_id", 151645)),
+        )
         self.pad_id = int(state.get("pad_token_id", self.eos_ids[0]))
         self.identity = {
             **_directory_identity(checkpoint, kind="gcw"),
@@ -148,7 +174,9 @@ class GCWBenchmarkBackend:
         max_new_tokens: int,
     ) -> torch.Tensor:
         if not bool(attention_mask.all()):
-            raise ValueError("native GCW generation does not support padded prompts")
+            raise ValueError(
+                "native GCW generation does not support padded prompts"
+            )
         return cast(Any, self.model).generate_fast(
             input_ids,
             max_new_tokens=max_new_tokens,
@@ -157,7 +185,9 @@ class GCWBenchmarkBackend:
         )
 
 
-def apply_qwen_chat_template(tokenizer: Any, question: str, *, enable_thinking: bool) -> tuple[int, ...]:
+def apply_qwen_chat_template(
+    tokenizer: Any, question: str, *, enable_thinking: bool
+) -> tuple[int, ...]:
     rendered = tokenizer.apply_chat_template(
         [{"role": "user", "content": question}],
         tokenize=True,
@@ -168,7 +198,11 @@ def apply_qwen_chat_template(tokenizer: Any, question: str, *, enable_thinking: 
         rendered = rendered.tolist()
     if isinstance(rendered, Mapping):
         rendered = rendered.get("input_ids")
-    if isinstance(rendered, list) and len(rendered) == 1 and isinstance(rendered[0], list):
+    if (
+        isinstance(rendered, list)
+        and len(rendered) == 1
+        and isinstance(rendered[0], list)
+    ):
         rendered = rendered[0]
     if not isinstance(rendered, (list, tuple)) or not rendered:
         raise ValueError("Qwen chat template produced no token IDs")
@@ -231,18 +265,25 @@ def _directory_identity(path: Path, *, kind: str) -> dict[str, Any]:
         candidate = path / name
         if not candidate.is_file():
             raise FileNotFoundError(f"evaluation target is missing {name}")
-        files[name] = {"bytes": candidate.stat().st_size, "sha256": _sha256_file(candidate)}
+        files[name] = {
+            "bytes": candidate.stat().st_size,
+            "sha256": _sha256_file(candidate),
+        }
     return {"kind": kind, "path": str(path), "files": files}
 
 
 def _source_commit(repository: Path) -> str:
-    return subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
+    return subprocess.check_output(
+        ["git", "-C", str(repository), "rev-parse", "HEAD"], text=True
+    ).strip()
 
 
 def _load_tokenizer(source: Path) -> tuple[Any, dict[str, Any]]:
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(source, local_files_only=True, trust_remote_code=False)
+    tokenizer = AutoTokenizer.from_pretrained(
+        source, local_files_only=True, trust_remote_code=False
+    )
     if not getattr(tokenizer, "chat_template", None):
         raise ValueError("benchmark tokenizer has no official chat template")
     files: dict[str, dict[str, Any]] = {}
@@ -251,19 +292,31 @@ def _load_tokenizer(source: Path) -> tuple[Any, dict[str, Any]]:
         path = source / name
         if not path.is_file():
             raise FileNotFoundError(f"tokenizer source is missing {name}")
-        files[name] = {"bytes": path.stat().st_size, "sha256": _sha256_file(path)}
+        files[name] = {
+            "bytes": path.stat().st_size,
+            "sha256": _sha256_file(path),
+        }
     return tokenizer, identity
 
 
-def _load_test_rows(limit: int | None) -> tuple[list[dict[str, str]], dict[str, Any]]:
+def _load_test_rows(
+    limit: int | None,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
     from datasets import load_dataset
 
-    dataset = load_dataset(DATASET_REPO_ID, "main", split="test", revision=DATASET_REVISION)
+    dataset = load_dataset(
+        DATASET_REPO_ID, "main", split="test", revision=DATASET_REVISION
+    )
     if len(dataset) != EXPECTED_TEST_ROWS:
-        raise ValueError(f"expected {EXPECTED_TEST_ROWS} GSM8K test rows, found {len(dataset)}")
+        raise ValueError(
+            f"expected {EXPECTED_TEST_ROWS} GSM8K test rows, found {len(dataset)}"
+        )
     count = len(dataset) if limit is None else min(limit, len(dataset))
     rows = [
-        {"question": str(dataset[index]["question"]), "answer": str(dataset[index]["answer"])}
+        {
+            "question": str(dataset[index]["question"]),
+            "answer": str(dataset[index]["answer"]),
+        }
         for index in range(count)
     ]
     identity = {
@@ -274,20 +327,26 @@ def _load_test_rows(limit: int | None) -> tuple[list[dict[str, str]], dict[str, 
         "full_rows": EXPECTED_TEST_ROWS,
         "evaluated_rows": count,
         "ordered_rows_sha256": hashlib.sha256(
-            json.dumps(rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+            json.dumps(
+                rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            ).encode()
         ).hexdigest(),
     }
     return rows, identity
 
 
-def _prepare(rows: list[dict[str, str]], tokenizer: Any, enable_thinking: bool) -> list[PreparedExample]:
+def _prepare(
+    rows: list[dict[str, str]], tokenizer: Any, enable_thinking: bool
+) -> list[PreparedExample]:
     return [
         PreparedExample(
             index=index,
             question=row["question"],
             target_text=row["answer"],
             target_answer=extract_gsm8k_target(row["answer"]),
-            prompt_ids=apply_qwen_chat_template(tokenizer, row["question"], enable_thinking=enable_thinking),
+            prompt_ids=apply_qwen_chat_template(
+                tokenizer, row["question"], enable_thinking=enable_thinking
+            ),
         )
         for index, row in enumerate(rows)
     ]
@@ -298,13 +357,17 @@ def _eos_ids(model: Any, tokenizer: Any | None) -> tuple[int, ...]:
     if value is None and tokenizer is not None:
         value = tokenizer.eos_token_id
     values = value if isinstance(value, (list, tuple)) else [value]
-    result = tuple(dict.fromkeys(int(token) for token in values if token is not None))
+    result = tuple(
+        dict.fromkeys(int(token) for token in values if token is not None)
+    )
     if not result:
         raise ValueError("model has no EOS token")
     return result
 
 
-def _trim_at_eos(tokens: Sequence[int], eos_ids: tuple[int, ...]) -> tuple[list[int], str]:
+def _trim_at_eos(
+    tokens: Sequence[int], eos_ids: tuple[int, ...]
+) -> tuple[list[int], str]:
     eos = set(eos_ids)
     for index, token in enumerate(tokens):
         if token in eos:
@@ -325,7 +388,9 @@ def evaluate_mode(
     examples = _prepare(rows, tokenizer, mode == "thinking_on")
     if backend.supports_left_padding:
         batches = [
-            sorted(examples, key=lambda example: len(example.prompt_ids))[offset : offset + batch_size]
+            sorted(examples, key=lambda example: len(example.prompt_ids))[
+                offset : offset + batch_size
+            ]
             for offset in range(0, len(examples), batch_size)
         ]
         grouping = "length_sorted_left_padding"
@@ -351,20 +416,32 @@ def evaluate_mode(
         )
         attention_mask = torch.zeros_like(input_ids)
         for row_index, example in enumerate(chunk):
-            prompt = torch.tensor(example.prompt_ids, dtype=torch.long, device=backend.device)
+            prompt = torch.tensor(
+                example.prompt_ids, dtype=torch.long, device=backend.device
+            )
             input_ids[row_index, -len(prompt) :] = prompt
             attention_mask[row_index, -len(prompt) :] = 1
         output = backend.generate(input_ids, attention_mask, max_new_tokens)
-        for example, token_row in zip(chunk, output[:, prompt_width:].detach().cpu().tolist(), strict=True):
+        for example, token_row in zip(
+            chunk, output[:, prompt_width:].detach().cpu().tolist(), strict=True
+        ):
             response_ids, termination = _trim_at_eos(token_row, backend.eos_ids)
             response = tokenizer.decode(
                 response_ids,
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=False,
             )
-            numeric_correct = score_numeric_response(response, example.target_answer)
-            flexible_correct = score_lm_eval_flexible(response, example.target_text)
-            primary_correct = numeric_correct if scoring_protocol == "numeric_last_answer" else flexible_correct
+            numeric_correct = score_numeric_response(
+                response, example.target_answer
+            )
+            flexible_correct = score_lm_eval_flexible(
+                response, example.target_text
+            )
+            primary_correct = (
+                numeric_correct
+                if scoring_protocol == "numeric_last_answer"
+                else flexible_correct
+            )
             generated_rows[example.index] = {
                 "index": example.index,
                 "question": example.question,
@@ -375,7 +452,9 @@ def evaluate_mode(
                 "termination": termination,
                 "response": response,
                 "numeric_prediction": (
-                    None if extract_numeric_answer(response) is None else str(extract_numeric_answer(response))
+                    None
+                    if extract_numeric_answer(response) is None
+                    else str(extract_numeric_answer(response))
                 ),
                 "flexible_prediction": extract_lm_eval_flexible(response),
                 "numeric_correct": numeric_correct,
@@ -393,8 +472,12 @@ def evaluate_mode(
         "correct": correct,
         "total": len(final_rows),
         "accuracy": correct / len(final_rows),
-        "numeric_correct": sum(bool(row["numeric_correct"]) for row in final_rows),
-        "flexible_exact_correct": sum(bool(row["flexible_exact_correct"]) for row in final_rows),
+        "numeric_correct": sum(
+            bool(row["numeric_correct"]) for row in final_rows
+        ),
+        "flexible_exact_correct": sum(
+            bool(row["flexible_exact_correct"]) for row in final_rows
+        ),
         "elapsed_seconds": time.monotonic() - started,
         "generation": {
             "do_sample": False,
@@ -410,29 +493,41 @@ def evaluate_mode(
 
 def _publish_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=False)
+            json.dump(
+                payload, handle, indent=2, sort_keys=True, allow_nan=False
+            )
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         try:
             os.link(temporary, path)
         except FileExistsError as exc:
-            raise FileExistsError(f"refusing to overwrite result: {path}") from exc
+            raise FileExistsError(
+                f"refusing to overwrite result: {path}"
+            ) from exc
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def run_benchmark_matrix(config: BenchmarkConfig, repository: str | Path = ".") -> dict[str, Any]:
+def run_benchmark_matrix(
+    config: BenchmarkConfig, repository: str | Path = "."
+) -> dict[str, Any]:
     repository_path = Path(repository).resolve()
-    if subprocess.check_output(["git", "-C", str(repository_path), "status", "--porcelain"], text=True).strip():
+    if subprocess.check_output(
+        ["git", "-C", str(repository_path), "status", "--porcelain"], text=True
+    ).strip():
         raise ValueError("benchmark evaluation requires a clean Git checkout")
     output_dir = Path(config.output_dir).expanduser().resolve()
     if output_dir.exists():
-        raise FileExistsError(f"refusing to reuse output directory: {output_dir}")
+        raise FileExistsError(
+            f"refusing to reuse output directory: {output_dir}"
+        )
     if not torch.cuda.is_available():
         raise RuntimeError("Qwen3 GSM8K evaluation requires CUDA")
     device = torch.device("cuda")
@@ -441,8 +536,12 @@ def run_benchmark_matrix(config: BenchmarkConfig, repository: str | Path = ".") 
     if config.target_kind == "hf":
         backend = HFBenchmarkBackend(target, device)
     else:
-        backend = GCWBenchmarkBackend(target, device, processor_enabled=config.processor_enabled)
-    tokenizer_source = Path(config.tokenizer_path or config.model_path).expanduser().resolve()
+        backend = GCWBenchmarkBackend(
+            target, device, processor_enabled=config.processor_enabled
+        )
+    tokenizer_source = (
+        Path(config.tokenizer_path or config.model_path).expanduser().resolve()
+    )
     tokenizer, tokenizer_identity = _load_tokenizer(tokenizer_source)
     rows, dataset_identity = _load_test_rows(config.limit)
     cells = {
@@ -472,7 +571,9 @@ def run_benchmark_matrix(config: BenchmarkConfig, repository: str | Path = ".") 
         },
         "cells": cells,
     }
-    payload = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    payload = json.dumps(
+        result, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
     document = {**result, "payload_sha256": hashlib.sha256(payload).hexdigest()}
     _publish_json(output_dir / "result.json", document)
     return document

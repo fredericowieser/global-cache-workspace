@@ -25,7 +25,9 @@ def _apply_partial_rotary(
     k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
     q_rot = apply_rotary(q_rot, cos, sin, style="llama")
     k_rot = apply_rotary(k_rot, cos, sin, style="llama")
-    return torch.cat([q_rot, q_pass], dim=-1), torch.cat([k_rot, k_pass], dim=-1)
+    return torch.cat([q_rot, q_pass], dim=-1), torch.cat(
+        [k_rot, k_pass], dim=-1
+    )
 
 
 class Qwen35Attention(nn.Module):
@@ -71,8 +73,19 @@ class Qwen35Attention(nn.Module):
             k = torch.cat([pk, k], dim=2)
             v = torch.cat([pv, v], dim=2)
         mask, is_causal = _causal_chunk_bias(steps, past_len, x.device)
-        y = flash_sdpa(q, k, v, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads)
-        y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
+        y = flash_sdpa(
+            q,
+            k,
+            v,
+            attn_mask=mask,
+            is_causal=is_causal,
+            enable_gqa=self.num_kv_heads != self.num_heads,
+        )
+        y = (
+            y.transpose(1, 2)
+            .contiguous()
+            .view(batch, steps, self.num_heads * self.head_dim)
+        )
         y = y * torch.sigmoid(gate.to(y.dtype))
         attn_out = self.o_proj(y)
         return attn_out, k, v, attn_out.float().norm(dim=-1)
@@ -103,9 +116,18 @@ class Qwen35Attention(nn.Module):
         keys, values = cache.layer_view(self.cache_idx, end_pos)
         mask, is_causal = _causal_chunk_bias(steps, start_pos, x.device)
         y = flash_sdpa(
-            q, keys, values, attn_mask=mask, is_causal=is_causal, enable_gqa=self.num_kv_heads != self.num_heads
+            q,
+            keys,
+            values,
+            attn_mask=mask,
+            is_causal=is_causal,
+            enable_gqa=self.num_kv_heads != self.num_heads,
         )
-        y = y.transpose(1, 2).contiguous().view(batch, steps, self.num_heads * self.head_dim)
+        y = (
+            y.transpose(1, 2)
+            .contiguous()
+            .view(batch, steps, self.num_heads * self.head_dim)
+        )
         y = y * torch.sigmoid(gate.to(y.dtype))
         attn_out = self.o_proj(y)
         return attn_out, attn_out.float().norm(dim=-1)

@@ -11,7 +11,6 @@ from gcw.flops import processor_forward_flops_per_sequence
 from gcw.models import LatentFlow, build_model, set_flow_solver_steps
 from gcw.params import processor_params
 
-
 FLOW_VARIANTS = ("bgt", "icarus", "longshot")
 
 
@@ -60,7 +59,9 @@ def test_flow_models_forward_backward_and_checkpoint_roundtrip(variant: str):
     loss = model(input_ids, input_ids)
     loss.backward()
 
-    flows = [module for module in model.modules() if isinstance(module, LatentFlow)]
+    flows = [
+        module for module in model.modules() if isinstance(module, LatentFlow)
+    ]
     assert len(flows) == 1
     assert flows[0].flow_gate.grad is not None
     assert torch.isfinite(flows[0].flow_gate.grad).all()
@@ -70,7 +71,10 @@ def test_flow_models_forward_backward_and_checkpoint_roundtrip(variant: str):
         if parameter.requires_grad
     ]
     assert processor_gradients
-    assert all(gradient is not None and torch.isfinite(gradient).all() for gradient in processor_gradients)
+    assert all(
+        gradient is not None and torch.isfinite(gradient).all()
+        for gradient in processor_gradients
+    )
 
     clone = build_model(config)
     clone.load_state_dict(model.state_dict(), strict=True)
@@ -79,15 +83,20 @@ def test_flow_models_forward_backward_and_checkpoint_roundtrip(variant: str):
 @pytest.mark.parametrize("variant", FLOW_VARIANTS)
 def test_flow_adds_one_parameter_without_changing_base_variant(variant: str):
     base_config = tiny_config(variant)
-    flow_config = replace(base_config, flow_processor=FlowProcessorConfig(num_steps=2))
+    flow_config = replace(
+        base_config, flow_processor=FlowProcessorConfig(num_steps=2)
+    )
     base = build_model(base_config)
     flow = build_model(flow_config)
 
     assert type(flow) is type(base)
-    assert sum(parameter.numel() for parameter in flow.parameters()) == sum(
-        parameter.numel() for parameter in base.parameters()
-    ) + 1
-    assert processor_params(flow_config) == sum(parameter.numel() for parameter in flow.cache_processor.parameters())
+    assert (
+        sum(parameter.numel() for parameter in flow.parameters())
+        == sum(parameter.numel() for parameter in base.parameters()) + 1
+    )
+    assert processor_params(flow_config) == sum(
+        parameter.numel() for parameter in flow.cache_processor.parameters()
+    )
 
 
 @pytest.mark.parametrize("variant", FLOW_VARIANTS)
@@ -96,7 +105,9 @@ def test_flow_steps_increase_compute_not_parameters(variant: str):
     three = replace(one, flow_processor=FlowProcessorConfig(num_steps=3))
 
     assert processor_params(one) == processor_params(three)
-    assert processor_forward_flops_per_sequence(three, 8) > processor_forward_flops_per_sequence(one, 8)
+    assert processor_forward_flops_per_sequence(
+        three, 8
+    ) > processor_forward_flops_per_sequence(one, 8)
 
 
 @pytest.mark.parametrize("variant", ("bgt", "icarus"))
@@ -112,7 +123,15 @@ def test_each_additional_flow_step_adds_one_field_evaluation(variant: str):
 
 
 def test_latent_flow_integrates_shared_field_and_returns_displacement():
-    flow = LatentFlow(4, FlowProcessorConfig(num_steps=4, time_conditioning=False, eta_max=1.0, flow_gate_init=0.0))
+    flow = LatentFlow(
+        4,
+        FlowProcessorConfig(
+            num_steps=4,
+            time_conditioning=False,
+            eta_max=1.0,
+            flow_gate_init=0.0,
+        ),
+    )
     initial = torch.zeros(2, 3, 4)
     calls = []
 
@@ -140,7 +159,9 @@ def test_solver_step_override_updates_every_flow_without_adding_parameters():
 
     set_flow_solver_steps(model, 5)
 
-    flow = next(module for module in model.modules() if isinstance(module, LatentFlow))
+    flow = next(
+        module for module in model.modules() if isinstance(module, LatentFlow)
+    )
     assert flow.config.num_steps == 5
     assert model.config.flow_processor is not None
     assert model.config.flow_processor.num_steps == 5
@@ -160,7 +181,11 @@ def test_solver_step_override_persists_through_disk_checkpoint(tmp_path):
 
     assert loaded_config.flow_processor is not None
     assert loaded_config.flow_processor.num_steps == 4
-    loaded_flow = next(module for module in loaded_model.modules() if isinstance(module, LatentFlow))
+    loaded_flow = next(
+        module
+        for module in loaded_model.modules()
+        if isinstance(module, LatentFlow)
+    )
     assert loaded_flow.config.num_steps == 4
 
 
@@ -233,10 +258,11 @@ def test_flow_longshot_rejects_internal_recurrence_but_allows_external_recurrenc
 
     assert torch.isfinite(loss)
     assert config.architecture_name == "flow_longshot"
-    flow = next(module for module in model.modules() if isinstance(module, LatentFlow))
+    flow = next(
+        module for module in model.modules() if isinstance(module, LatentFlow)
+    )
     assert flow.flow_gate.grad is not None
     assert torch.isfinite(flow.flow_gate.grad).all()
-
 
 
 @pytest.mark.parametrize("variant", FLOW_VARIANTS)
@@ -251,7 +277,9 @@ def test_flow_gradient_checkpointing_forward_backward(variant: str):
     loss = model(input_ids, input_ids)
     loss.backward()
 
-    flow = next(module for module in model.modules() if isinstance(module, LatentFlow))
+    flow = next(
+        module for module in model.modules() if isinstance(module, LatentFlow)
+    )
     assert flow.flow_gate.grad is not None
     assert torch.isfinite(flow.flow_gate.grad).all()
 
@@ -282,7 +310,9 @@ def test_flow_models_support_bf16_autocast(variant: str):
         loss = model(input_ids, input_ids)
     loss.backward()
 
-    flow = next(module for module in model.modules() if isinstance(module, LatentFlow))
+    flow = next(
+        module for module in model.modules() if isinstance(module, LatentFlow)
+    )
     assert flow.flow_gate.grad is not None
     assert torch.isfinite(loss)
 
@@ -302,13 +332,17 @@ def test_flow_supports_value_only_writeback(variant: str):
     assert torch.isfinite(loss)
 
 
-@pytest.mark.parametrize("processor_mode", ("workspace_broadcast", "head_mask_broadcast"))
+@pytest.mark.parametrize(
+    "processor_mode", ("workspace_broadcast", "head_mask_broadcast")
+)
 def test_flow_bgt_supports_broadcast_processor_modes(processor_mode: str):
     config = tiny_config("bgt", flow=FlowProcessorConfig(num_steps=2))
     assert config.cache_processor is not None
     config.cache_processor.processor_mode = processor_mode  # type: ignore[assignment]
     config.cache_processor.score = "kv_norm"
-    config.cache_processor.update_stream = "v" if processor_mode == "workspace_broadcast" else "kv"
+    config.cache_processor.update_stream = (
+        "v" if processor_mode == "workspace_broadcast" else "kv"
+    )
     model = build_model(config)
     model.init_weights()
     input_ids = torch.randint(0, config.vocab_size, (2, 8))
@@ -317,6 +351,7 @@ def test_flow_bgt_supports_broadcast_processor_modes(processor_mode: str):
     loss.backward()
 
     assert torch.isfinite(loss)
+
 
 def test_flow_bgt_variant_has_no_legacy_compatibility():
     config = tiny_config("bgt")

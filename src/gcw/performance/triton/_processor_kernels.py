@@ -20,19 +20,31 @@ def _silu_mul_forward_kernel(gate, up, output, elements, BLOCK: tl.constexpr):
 
 
 @triton.jit
-def _silu_mul_backward_kernel(gate, up, grad_output, grad_gate, grad_up, elements, BLOCK: tl.constexpr):
+def _silu_mul_backward_kernel(
+    gate, up, grad_output, grad_gate, grad_up, elements, BLOCK: tl.constexpr
+):
     offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     valid = offsets < elements
     gate_values = tl.load(gate + offsets, mask=valid, other=0.0).to(tl.float32)
     up_values = tl.load(up + offsets, mask=valid, other=0.0).to(tl.float32)
-    output_gradient = tl.load(grad_output + offsets, mask=valid, other=0.0).to(tl.float32)
+    output_gradient = tl.load(grad_output + offsets, mask=valid, other=0.0).to(
+        tl.float32
+    )
     sigmoid = 1.0 / (1.0 + tl.exp(-gate_values))
     silu_derivative = sigmoid * (1.0 + gate_values * (1.0 - sigmoid))
-    tl.store(grad_gate + offsets, output_gradient * up_values * silu_derivative, mask=valid)
-    tl.store(grad_up + offsets, output_gradient * gate_values * sigmoid, mask=valid)
+    tl.store(
+        grad_gate + offsets,
+        output_gradient * up_values * silu_derivative,
+        mask=valid,
+    )
+    tl.store(
+        grad_up + offsets, output_gradient * gate_values * sigmoid, mask=valid
+    )
 
 
-def processor_silu_mul_forward(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+def processor_silu_mul_forward(
+    gate: torch.Tensor, up: torch.Tensor
+) -> torch.Tensor:
     output = torch.empty_like(gate)
     grid = (triton.cdiv(gate.numel(), CACHE_COPY_BLOCK),)
     _silu_mul_forward_kernel[grid](

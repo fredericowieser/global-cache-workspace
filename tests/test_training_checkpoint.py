@@ -39,7 +39,9 @@ def tiny_model_config() -> ModelConfig:
     )
 
 
-def test_training_checkpoint_restores_model_optimizer_and_resume_state(tmp_path):
+def test_training_checkpoint_restores_model_optimizer_and_resume_state(
+    tmp_path,
+):
     config = tiny_model_config()
     model = build_model(config)
     model.init_weights()
@@ -49,7 +51,12 @@ def test_training_checkpoint_restores_model_optimizer_and_resume_state(tmp_path)
     model(x, y).backward()
     optimizer.step()
     expected_optimizer = copy.deepcopy(optimizer.state_dict())
-    fingerprint = {"model": "tiny", "distributed": "none", "data_kind": "random", "seed": 24}
+    fingerprint = {
+        "model": "tiny",
+        "distributed": "none",
+        "data_kind": "random",
+        "seed": 24,
+    }
     resume = ResumeState(
         step=1,
         smooth_loss=1.25,
@@ -58,7 +65,9 @@ def test_training_checkpoint_restores_model_optimizer_and_resume_state(tmp_path)
         exact_topology=True,
     )
 
-    save_training_checkpoint(tmp_path / "checkpoint", model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        tmp_path / "checkpoint", model, config, optimizer, resume, fingerprint
+    )
 
     restored_model = build_model(config)
     restored_model.init_weights()
@@ -76,22 +85,27 @@ def test_training_checkpoint_restores_model_optimizer_and_resume_state(tmp_path)
         "config.json",
         "train_state.json",
     ):
-        (tmp_path / "checkpoint" / payload_name).write_bytes(b"replaced-after-open")
+        (tmp_path / "checkpoint" / payload_name).write_bytes(
+            b"replaced-after-open"
+        )
     checkpoint.restore_model(restored_model)
     checkpoint.restore_optimizer(restored_optimizer, device="cpu")
     checkpoint.restore_rng(rank=0)
 
     assert checkpoint.resume_state == resume
-    for expected, actual in zip(model.parameters(), restored_model.parameters(), strict=True):
+    for expected, actual in zip(
+        model.parameters(), restored_model.parameters(), strict=True
+    ):
         assert torch.equal(expected, actual)
     _assert_nested_equal(expected_optimizer, restored_optimizer.state_dict())
-
 
 
 def test_verify_training_checkpoint_files_returns_authenticated_state(tmp_path):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        path, model, config, optimizer, resume, fingerprint
+    )
 
     verified = verify_training_checkpoint_files(path)
 
@@ -129,18 +143,29 @@ def test_fsdp_resume_fails_with_specific_topology_error(tmp_path):
 def test_training_checkpoint_rejects_corrupt_payload(tmp_path):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        path, model, config, optimizer, resume, fingerprint
+    )
     with open(path / "optimizer.pt", "ab") as handle:
         handle.write(b"corrupt")
 
     with pytest.raises(TrainingCheckpointError, match="hash mismatch"):
-        TrainingCheckpoint.open(path, expected_fingerprint=fingerprint, topology="same", current_world_size=1)
+        TrainingCheckpoint.open(
+            path,
+            expected_fingerprint=fingerprint,
+            topology="same",
+            current_world_size=1,
+        )
 
 
-def test_incomplete_destination_falls_back_to_previous_complete_checkpoint(tmp_path):
+def test_incomplete_destination_falls_back_to_previous_complete_checkpoint(
+    tmp_path,
+):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        path, model, config, optimizer, resume, fingerprint
+    )
     path.rename(tmp_path / "checkpoint.previous")
     path.mkdir()
     (path / "model.safetensors").write_bytes(b"partial")
@@ -156,10 +181,14 @@ def test_incomplete_destination_falls_back_to_previous_complete_checkpoint(tmp_p
     assert checkpoint.resume_state.step == 1
 
 
-def test_corrupt_destination_falls_back_to_previous_complete_checkpoint(tmp_path):
+def test_corrupt_destination_falls_back_to_previous_complete_checkpoint(
+    tmp_path,
+):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        path, model, config, optimizer, resume, fingerprint
+    )
     previous = tmp_path / "checkpoint.previous"
     path.rename(previous)
     shutil.copytree(previous, path)
@@ -179,22 +208,33 @@ def test_corrupt_destination_falls_back_to_previous_complete_checkpoint(tmp_path
 def test_manifest_must_hash_every_required_payload(tmp_path):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        path, model, config, optimizer, resume, fingerprint
+    )
     manifest_path = path / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     del manifest["files"]["optimizer.pt"]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(TrainingCheckpointError, match="required file hashes"):
-        TrainingCheckpoint.open(path, expected_fingerprint=fingerprint, topology="same", current_world_size=1)
+        TrainingCheckpoint.open(
+            path,
+            expected_fingerprint=fingerprint,
+            topology="same",
+            current_world_size=1,
+        )
 
 
-def test_elastic_resume_requires_fineweb_ddp_and_marks_changed_topology(tmp_path):
+def test_elastic_resume_requires_fineweb_ddp_and_marks_changed_topology(
+    tmp_path,
+):
     config, model, optimizer, resume, _ = _checkpoint_fixture()
     resume = replace(resume, loader_cursor=FineWebCursor())
     fingerprint = {"distributed": "ddp", "data_kind": "fineweb", "seed": 24}
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        path, model, config, optimizer, resume, fingerprint
+    )
 
     checkpoint = TrainingCheckpoint.open(
         path,
@@ -205,14 +245,21 @@ def test_elastic_resume_requires_fineweb_ddp_and_marks_changed_topology(tmp_path
 
     assert checkpoint.resume_state.exact_topology is False
     with pytest.raises(CheckpointCompatibilityError, match="world size"):
-        TrainingCheckpoint.open(path, expected_fingerprint=fingerprint, topology="same", current_world_size=2)
+        TrainingCheckpoint.open(
+            path,
+            expected_fingerprint=fingerprint,
+            topology="same",
+            current_world_size=2,
+        )
 
 
 def test_elastic_resume_rejects_non_fineweb_data(tmp_path):
     config, model, optimizer, resume, _ = _checkpoint_fixture()
     fingerprint = {"distributed": "ddp", "data_kind": "random", "seed": 24}
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, fingerprint)
+    save_training_checkpoint(
+        path, model, config, optimizer, resume, fingerprint
+    )
 
     with pytest.raises(UnsupportedTopologyError, match="FineWeb"):
         TrainingCheckpoint.open(
@@ -226,15 +273,26 @@ def test_elastic_resume_rejects_non_fineweb_data(tmp_path):
 def _legacy_precision_checkpoint(tmp_path, legacy_bf16: bool):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, {**fingerprint, "bf16": legacy_bf16})
+    save_training_checkpoint(
+        path,
+        model,
+        config,
+        optimizer,
+        resume,
+        {**fingerprint, "bf16": legacy_bf16},
+    )
     return path, fingerprint
 
 
 @pytest.mark.parametrize("precision", ["bf16_mixed", "bf16"])
-def test_legacy_bf16_fingerprint_resumes_into_either_bf16_precision(tmp_path, precision):
+def test_legacy_bf16_fingerprint_resumes_into_either_bf16_precision(
+    tmp_path, precision
+):
     path, fingerprint = _legacy_precision_checkpoint(tmp_path, legacy_bf16=True)
 
-    with pytest.warns(RuntimeWarning, match="predates precision fingerprinting"):
+    with pytest.warns(
+        RuntimeWarning, match="predates precision fingerprinting"
+    ):
         checkpoint = TrainingCheckpoint.open(
             path,
             expected_fingerprint={**fingerprint, "precision": precision},
@@ -247,7 +305,9 @@ def test_legacy_bf16_fingerprint_resumes_into_either_bf16_precision(tmp_path, pr
 
 
 def test_legacy_fp32_fingerprint_resumes_without_warning(tmp_path):
-    path, fingerprint = _legacy_precision_checkpoint(tmp_path, legacy_bf16=False)
+    path, fingerprint = _legacy_precision_checkpoint(
+        tmp_path, legacy_bf16=False
+    )
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -265,8 +325,12 @@ def test_legacy_fp32_fingerprint_resumes_without_warning(tmp_path):
     ("legacy_bf16", "precision"),
     [(True, "fp32"), (False, "bf16_mixed"), (False, "bf16")],
 )
-def test_legacy_fingerprint_still_rejects_a_disagreeing_precision(tmp_path, legacy_bf16, precision):
-    path, fingerprint = _legacy_precision_checkpoint(tmp_path, legacy_bf16=legacy_bf16)
+def test_legacy_fingerprint_still_rejects_a_disagreeing_precision(
+    tmp_path, legacy_bf16, precision
+):
+    path, fingerprint = _legacy_precision_checkpoint(
+        tmp_path, legacy_bf16=legacy_bf16
+    )
 
     with pytest.raises(CheckpointCompatibilityError) as failure:
         TrainingCheckpoint.open(
@@ -283,7 +347,14 @@ def test_legacy_fingerprint_still_rejects_a_disagreeing_precision(tmp_path, lega
 def test_current_fingerprint_separates_the_two_bf16_precisions(tmp_path):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
-    save_training_checkpoint(path, model, config, optimizer, resume, {**fingerprint, "precision": "bf16_mixed"})
+    save_training_checkpoint(
+        path,
+        model,
+        config,
+        optimizer,
+        resume,
+        {**fingerprint, "precision": "bf16_mixed"},
+    )
 
     with pytest.raises(CheckpointCompatibilityError, match="precision"):
         TrainingCheckpoint.open(
@@ -294,7 +365,9 @@ def test_current_fingerprint_separates_the_two_bf16_precisions(tmp_path):
         )
 
 
-def test_legacy_upgrade_does_not_touch_a_manifest_that_already_records_precision(tmp_path):
+def test_legacy_upgrade_does_not_touch_a_manifest_that_already_records_precision(
+    tmp_path,
+):
     config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
     path = tmp_path / "checkpoint"
     saved = {**fingerprint, "precision": "bf16", "bf16": True}
@@ -321,7 +394,12 @@ def _checkpoint_fixture():
         saved_world_size=1,
         exact_topology=True,
     )
-    fingerprint = {"model": "tiny", "distributed": "none", "data_kind": "random", "seed": 24}
+    fingerprint = {
+        "model": "tiny",
+        "distributed": "none",
+        "data_kind": "random",
+        "seed": 24,
+    }
     return config, model, optimizer, resume, fingerprint
 
 

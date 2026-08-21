@@ -17,7 +17,11 @@ from gcw.performance.backends.icarus import (
     icarus_training_execution,
     warmup_icarus_training_execution,
 )
-from gcw.training.checkpoint import ResumeState, TrainingCheckpoint, save_training_checkpoint
+from gcw.training.checkpoint import (
+    ResumeState,
+    TrainingCheckpoint,
+    save_training_checkpoint,
+)
 from test_icarus_compile_backend import _config
 
 
@@ -25,7 +29,9 @@ def _fingerprint(model: LanguageModel) -> dict[str, Any]:
     return {
         "schema": "gcw.icarus_compile_restart_acceptance.v1",
         "distributed": "none",
-        "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(model.config, "compile")[
+        "icarus_processor_backend_fingerprint": icarus_processor_backend_metadata(
+            model.config, "compile"
+        )[
             "fingerprint_sha256"
         ],
     }
@@ -54,7 +60,10 @@ def _step(model: LanguageModel, optimizer: torch.optim.Optimizer) -> None:
     tokens = torch.randint(0, model.config.vocab_size, (2, 192), device="cuda")
     targets = tokens.roll(-1, dims=1)
     optimizer.zero_grad(set_to_none=True)
-    with torch.autocast("cuda", dtype=torch.bfloat16), icarus_training_execution(model, 2):
+    with (
+        torch.autocast("cuda", dtype=torch.bfloat16),
+        icarus_training_execution(model, 2),
+    ):
         loss = model(tokens, targets)
         loss.backward()
     optimizer.step()
@@ -69,7 +78,11 @@ def _optimizer_slots(
         if not state:
             continue
         result[name] = {
-            key: value.detach().cpu() if isinstance(value, torch.Tensor) else float(value)
+            key: (
+                value.detach().cpu()
+                if isinstance(value, torch.Tensor)
+                else float(value)
+            )
             for key, value in state.items()
         }
     return result
@@ -83,7 +96,10 @@ def _save_result(
 ) -> None:
     torch.save(
         {
-            "model": {name: value.detach().cpu() for name, value in model.state_dict().items()},
+            "model": {
+                name: value.detach().cpu()
+                for name, value in model.state_dict().items()
+            },
             "optimizer_slots": _optimizer_slots(model, optimizer),
             "cpu_rng": torch.random.get_rng_state(),
             "cuda_rng": torch.cuda.get_rng_state(),
@@ -129,7 +145,14 @@ def main() -> None:
             exact_topology=True,
             metadata={"acceptance": "icarus_compile"},
         )
-        save_training_checkpoint(Path(sys.argv[2]), model, model.config, optimizer, resume, _fingerprint(model))
+        save_training_checkpoint(
+            Path(sys.argv[2]),
+            model,
+            model.config,
+            optimizer,
+            resume,
+            _fingerprint(model),
+        )
         return
     if mode == "resume":
         model, optimizer = _new_training()
@@ -145,9 +168,13 @@ def main() -> None:
         resumed_cursor = checkpoint.loader_cursor(rank=0)
         assert isinstance(resumed_cursor, RandomCursor)
         assert resumed_cursor == _advance_cursor(_initial_cursor())
-        assert checkpoint.resume_state.metadata == {"acceptance": "icarus_compile"}
+        assert checkpoint.resume_state.metadata == {
+            "acceptance": "icarus_compile"
+        }
         _step(model, optimizer)
-        _save_result(model, optimizer, _advance_cursor(resumed_cursor), Path(sys.argv[3]))
+        _save_result(
+            model, optimizer, _advance_cursor(resumed_cursor), Path(sys.argv[3])
+        )
         return
     raise ValueError(f"unknown mode: {mode}")
 

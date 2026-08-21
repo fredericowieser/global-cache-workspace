@@ -29,7 +29,9 @@ def test_triton_cache_policy_is_typed_default_off_and_fingerprinted() -> None:
     assert TritonCacheMovementConfig().enabled is False
     config = _train_config()
     assert config.performance.triton_cache_movement.enabled is True
-    metadata = triton_cache_movement_metadata(config.performance.triton_cache_movement)
+    metadata = triton_cache_movement_metadata(
+        config.performance.triton_cache_movement
+    )
     assert metadata["status"] == "benchmark_only_not_campaign_admitted"
     assert metadata["kernel_manifest_sha256"] == kernel_manifest_sha256()
     assert metadata["runtime_autotuning"] is False
@@ -54,6 +56,8 @@ def test_unqualified_triton_request_fails_before_runtime(monkeypatch) -> None:
         ({"bf16": False}, "BF16"),
     ),
 )
-def test_triton_cache_policy_rejects_unsupported_training_composition(overrides, message) -> None:
+def test_triton_cache_policy_rejects_unsupported_training_composition(
+    overrides, message
+) -> None:
     with pytest.raises(ValueError, match=message):
         _train_config(**overrides)

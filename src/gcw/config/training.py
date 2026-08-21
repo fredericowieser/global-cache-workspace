@@ -37,9 +37,12 @@ class ResumeConfig:
             raise ValueError("resume.topology must be 'same' or 'elastic_ddp'")
         digest = self.expected_manifest_sha256
         if digest is not None and (
-            len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest)
+            len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
         ):
-            raise ValueError("resume.expected_manifest_sha256 must be a lowercase sha256 or null")
+            raise ValueError(
+                "resume.expected_manifest_sha256 must be a lowercase sha256 or null"
+            )
 
 
 @dataclass
@@ -57,13 +60,18 @@ class WandbConfig:
 
     def __post_init__(self) -> None:
         if self.resume not in {None, "allow", "must", "never", "auto"}:
-            raise ValueError("wandb.resume must be 'allow', 'must', 'never', 'auto', or null")
+            raise ValueError(
+                "wandb.resume must be 'allow', 'must', 'never', 'auto', or null"
+            )
         if self.resume == "must" and not self.id:
             raise ValueError("wandb.id is required when wandb.resume='must'")
         if not isinstance(self.tags, list) or any(
-            not isinstance(tag, str) or not 1 <= len(tag) <= 64 for tag in self.tags
+            not isinstance(tag, str) or not 1 <= len(tag) <= 64
+            for tag in self.tags
         ):
-            raise ValueError("wandb.tags must contain only strings between 1 and 64 characters")
+            raise ValueError(
+                "wandb.tags must contain only strings between 1 and 64 characters"
+            )
 
 
 @dataclass
@@ -144,26 +152,49 @@ class TrainConfig:
             raise ValueError("bf16=true conflicts with precision='fp32'")
         self.bf16 = self.precision != "fp32"
         if self.loss_backend not in {"reference", "target_only", "liger"}:
-            raise ValueError("loss_backend must be 'reference', 'target_only', or 'liger'")
+            raise ValueError(
+                "loss_backend must be 'reference', 'target_only', or 'liger'"
+            )
         if self.trainable not in get_args(TrainableComponents):
-            raise ValueError("trainable must be 'all', 'backbone', 'lora', or 'cache_processor'")
-        if self.activation_checkpointing not in {"none", "standard_processor_layers"}:
-            raise ValueError("activation_checkpointing must be 'none' or 'standard_processor_layers'")
-        if self.activation_checkpointing == "standard_processor_layers" and self.model.variant not in {"bt", "bgt"}:
+            raise ValueError(
+                "trainable must be 'all', 'backbone', 'lora', or 'cache_processor'"
+            )
+        if self.activation_checkpointing not in {
+            "none",
+            "standard_processor_layers",
+        }:
+            raise ValueError(
+                "activation_checkpointing must be 'none' or 'standard_processor_layers'"
+            )
+        if (
+            self.activation_checkpointing == "standard_processor_layers"
+            and self.model.variant not in {"bt", "bgt"}
+        ):
             raise ValueError(
                 "activation_checkpointing='standard_processor_layers' requires a BT or BGT cache processor"
             )
         # Backbone chunk compilation: an eager-vs-compiled windowed-Qwen3 backend
         # switch. Non-eager requires a windowed processor trained cache-processor-only.
-        if self.backbone_chunk_backend not in {"eager", "compile", "compile_full_windows", "cuda_graph"}:
+        if self.backbone_chunk_backend not in {
+            "eager",
+            "compile",
+            "compile_full_windows",
+            "cuda_graph",
+        }:
             raise ValueError(
                 "backbone_chunk_backend must be 'eager', 'compile', 'compile_full_windows', or 'cuda_graph'"
             )
         # Optional Longshot segmented activation-checkpointing threshold.
         threshold = self.longshot_gradient_checkpointing_seq_len_threshold
         if threshold is not None:
-            if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:
-                raise ValueError("longshot_gradient_checkpointing_seq_len_threshold must be a positive integer or null")
+            if (
+                isinstance(threshold, bool)
+                or not isinstance(threshold, int)
+                or threshold <= 0
+            ):
+                raise ValueError(
+                    "longshot_gradient_checkpointing_seq_len_threshold must be a positive integer or null"
+                )
             processor = self.model.cache_processor
             if self.model.variant != "longshot" or processor is None:
                 raise ValueError(
@@ -177,27 +208,43 @@ class TrainConfig:
         if self.trainable == "lora" and self.model.lora is None:
             raise ValueError("trainable='lora' requires model.lora")
         if self.total_batch_size and self.global_batch_rows:
-            raise ValueError("set only one of total_batch_size and global_batch_rows")
+            raise ValueError(
+                "set only one of total_batch_size and global_batch_rows"
+            )
         if self.global_batch_rows < 0:
             raise ValueError("global_batch_rows must be non-negative")
-        if isinstance(self.activation_checkpoint_windows, bool) or not isinstance(
-            self.activation_checkpoint_windows, int
-        ):
+        if isinstance(
+            self.activation_checkpoint_windows, bool
+        ) or not isinstance(self.activation_checkpoint_windows, int):
             raise ValueError("activation_checkpoint_windows must be an integer")
         if self.activation_checkpoint_windows < 0:
-            raise ValueError("activation_checkpoint_windows must be non-negative")
-        if isinstance(self.activation_checkpoint_min_padded_sequence_length, bool) or not isinstance(
+            raise ValueError(
+                "activation_checkpoint_windows must be non-negative"
+            )
+        if isinstance(
+            self.activation_checkpoint_min_padded_sequence_length, bool
+        ) or not isinstance(
             self.activation_checkpoint_min_padded_sequence_length, int
         ):
-            raise ValueError("activation_checkpoint_min_padded_sequence_length must be an integer")
+            raise ValueError(
+                "activation_checkpoint_min_padded_sequence_length must be an integer"
+            )
         if self.activation_checkpoint_min_padded_sequence_length < 0:
-            raise ValueError("activation_checkpoint_min_padded_sequence_length must be non-negative")
+            raise ValueError(
+                "activation_checkpoint_min_padded_sequence_length must be non-negative"
+            )
         if self.activation_checkpoint_windows and self.model.variant == "tf":
-            raise ValueError("activation_checkpoint_windows requires a recurrent cache-processor variant")
+            raise ValueError(
+                "activation_checkpoint_windows requires a recurrent cache-processor variant"
+            )
         if self.activation_checkpoint_windows and self.model.family != "qwen3":
-            raise ValueError("activation_checkpoint_windows currently supports only the qwen3 backbone family")
+            raise ValueError(
+                "activation_checkpoint_windows currently supports only the qwen3 backbone family"
+            )
         if self.activation_checkpoint_windows and self.distributed == "fsdp":
-            raise ValueError("activation_checkpoint_windows cannot be combined with FSDP layer checkpointing")
+            raise ValueError(
+                "activation_checkpoint_windows cannot be combined with FSDP layer checkpointing"
+            )
         if not isinstance(self.logical_pair_grouping, bool):
             raise ValueError("logical_pair_grouping must be a boolean")
         from gcw.architecture.execution import resolve_execution_plan

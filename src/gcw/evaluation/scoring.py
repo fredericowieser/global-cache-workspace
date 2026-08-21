@@ -12,7 +12,9 @@ from gcw.config import LossBackend
 from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, IntTokenizer, get_tokenizer
 
 
-def truncate_context_continuation(ctx: list[int], cont: list[int], max_length: int) -> tuple[list[int], list[int]]:
+def truncate_context_continuation(
+    ctx: list[int], cont: list[int], max_length: int
+) -> tuple[list[int], list[int]]:
     full = ctx + cont
     if len(full) <= max_length + 1:
         return ctx, cont
@@ -23,7 +25,9 @@ def truncate_context_continuation(ctx: list[int], cont: list[int], max_length: i
     return trimmed[:1], trimmed[1:]
 
 
-def encode_generate_prompt(tokenizer, prompt: str, max_length: int, *, add_special_tokens: bool = False) -> list[int]:
+def encode_generate_prompt(
+    tokenizer, prompt: str, max_length: int, *, add_special_tokens: bool = False
+) -> list[int]:
     try:
         ids = tokenizer.encode(prompt, add_special_tokens=add_special_tokens)
     except TypeError:
@@ -33,12 +37,22 @@ def encode_generate_prompt(tokenizer, prompt: str, max_length: int, *, add_speci
 
 def tokenizer_for_checkpoint(config, state):
     source = state.get("source") or state.get("tokenizer_source")
-    if source and config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}:
+    if source and config.family in {
+        "llama",
+        "qwen3",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "gemma4",
+    }:
         try:
             from transformers import AutoTokenizer
         except ImportError as exc:
-            raise ImportError("Converted HF checkpoints require transformers for eval tokenization.") from exc
-        tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=False)
+            raise ImportError(
+                "Converted HF checkpoints require transformers for eval tokenization."
+            ) from exc
+        tokenizer = AutoTokenizer.from_pretrained(
+            source, trust_remote_code=False
+        )
         return HFTokenizerAdapter(tokenizer, str(source))
     if config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}:
         raise ValueError(
@@ -53,15 +67,23 @@ def tokenizer_for_checkpoint(config, state):
 class HFTokenizerAdapter:
     def __init__(self, tokenizer, name_or_path: str | None = None):
         self.tokenizer = tokenizer
-        self.name_or_path = name_or_path or str(getattr(tokenizer, "name_or_path", ""))
+        self.name_or_path = name_or_path or str(
+            getattr(tokenizer, "name_or_path", "")
+        )
         self.source = self.name_or_path
         self.eot_id = tokenizer.eos_token_id or tokenizer.pad_token_id or 0
         self.vocab_size = len(tokenizer)
         self.chat_template = getattr(tokenizer, "chat_template", None)
-        self.default_chat_template = getattr(tokenizer, "default_chat_template", None)
+        self.default_chat_template = getattr(
+            tokenizer, "default_chat_template", None
+        )
 
-    def encode(self, text: str, add_special_tokens: bool | None = None) -> list[int]:
-        return self.tokenizer.encode(text, add_special_tokens=bool(add_special_tokens))
+    def encode(
+        self, text: str, add_special_tokens: bool | None = None
+    ) -> list[int]:
+        return self.tokenizer.encode(
+            text, add_special_tokens=bool(add_special_tokens)
+        )
 
     def decode(self, ids) -> str:
         return self.tokenizer.decode(list(ids), skip_special_tokens=False)
@@ -75,7 +97,9 @@ class HFTokenizerAdapter:
     def identity_sha256(self) -> str:
         from gcw.data.tokenizers import _tokenizer_identity_sha256
 
-        return _tokenizer_identity_sha256(self.tokenizer, self.source, self.vocab_size)
+        return _tokenizer_identity_sha256(
+            self.tokenizer, self.source, self.vocab_size
+        )
 
 
 def stop_token_sequences(tokenizer, until: tuple[str, ...]) -> list[list[int]]:
@@ -118,6 +142,7 @@ def find_subsequence(tokens: list[int], pattern: list[int]) -> int | None:
         if tokens[start : start + width] == pattern:
             return start
     return None
+
 
 _NUMBER_RE = re.compile(
     r"[-+]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*/\s*[-+]?\d[\d,]*)?"
@@ -194,11 +219,17 @@ def evaluate_nll_bpb(
     model.eval()
     for _ in range(steps):
         x, y = next(it)[:2]
-        loss = model(x, y, loss_reduction="none", loss_backend=loss_backend).view(-1)
+        loss = model(
+            x, y, loss_reduction="none", loss_backend=loss_backend
+        ).view(-1)
         y = y.view(-1)
         valid = y >= 0
         safe = torch.where(valid, y, torch.zeros_like(y))
-        counts = torch.where(valid, token_bytes[safe], torch.zeros_like(y, dtype=token_bytes.dtype))
+        counts = torch.where(
+            valid,
+            token_bytes[safe],
+            torch.zeros_like(y, dtype=token_bytes.dtype),
+        )
         keep = counts > 0
         total_nats += (loss * keep).sum()
         total_bytes += counts.sum()
@@ -210,4 +241,6 @@ def evaluate_nll_bpb(
     nats = float(total_nats.item())
     bytes_ = int(total_bytes.item())
     tokens = int(total_tokens.item())
-    return nats / tokens if tokens else float("inf"), nats / (math.log(2) * bytes_) if bytes_ else float("inf")
+    return nats / tokens if tokens else float("inf"), (
+        nats / (math.log(2) * bytes_) if bytes_ else float("inf")
+    )

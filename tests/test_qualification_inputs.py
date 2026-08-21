@@ -27,7 +27,9 @@ def test_config_snapshot_never_reopens_authored_path(tmp_path: Path) -> None:
     assert len(snapshot.resolved_sha256) == 64
 
 
-def test_source_snapshot_is_sorted_content_addressed_and_materialized(tmp_path: Path) -> None:
+def test_source_snapshot_is_sorted_content_addressed_and_materialized(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "b.py").write_text("B = 2\n")
@@ -35,7 +37,10 @@ def test_source_snapshot_is_sorted_content_addressed_and_materialized(tmp_path: 
     (source / "pkg/a.py").write_text("A = 1\n")
 
     snapshot = capture_source(source, ("pkg/a.py", "b.py"))
-    assert [member.relative_path for member in snapshot.members] == ["b.py", "pkg/a.py"]
+    assert [member.relative_path for member in snapshot.members] == [
+        "b.py",
+        "pkg/a.py",
+    ]
     assert len(snapshot.tree_sha256) == 64
 
     (source / "b.py").write_text("B = 999\n")
@@ -47,7 +52,9 @@ def test_source_snapshot_is_sorted_content_addressed_and_materialized(tmp_path: 
         snapshot.materialize(staged)
 
 
-def test_source_snapshot_rejects_ambiguous_paths_and_symlinks(tmp_path: Path) -> None:
+def test_source_snapshot_rejects_ambiguous_paths_and_symlinks(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "real.py").write_text("VALUE = 1\n")

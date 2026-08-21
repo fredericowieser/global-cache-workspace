@@ -22,7 +22,9 @@ def _act_fn(name: str):
         return lambda x: F.gelu(x, approximate="tanh")
     if name == "silu":
         return F.silu
-    raise ImportError(f"Gemma4 activation {name!r} requires transformers.activations.ACT2FN")
+    raise ImportError(
+        f"Gemma4 activation {name!r} requires transformers.activations.ACT2FN"
+    )
 
 
 class Gemma4RMSNorm(nn.Module):
@@ -34,18 +36,30 @@ class Gemma4RMSNorm(nn.Module):
             self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = x.float() * torch.pow(x.float().pow(2).mean(dim=-1, keepdim=True) + self.eps, -0.5)
+        y = x.float() * torch.pow(
+            x.float().pow(2).mean(dim=-1, keepdim=True) + self.eps, -0.5
+        )
         if self.with_scale:
             y = y * self.weight.float()
         return y.to(x.dtype)
 
 
 class Gemma4ScaledWordEmbedding(nn.Embedding):
-    def __init__(self, num_embeddings: int, embedding_dim: int, padding_idx: int | None, embed_scale: float):
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: int | None,
+        embed_scale: float,
+    ):
         super().__init__(num_embeddings, embedding_dim, padding_idx)
         self.scalar_embed_scale = embed_scale
         self.embed_scale: torch.Tensor
-        self.register_buffer("embed_scale", torch.tensor(embed_scale), persistent=False)
+        self.register_buffer(
+            "embed_scale", torch.tensor(embed_scale), persistent=False
+        )
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return super().forward(input_ids) * self.embed_scale.to(self.weight.dtype)
+        return super().forward(input_ids) * self.embed_scale.to(
+            self.weight.dtype
+        )
