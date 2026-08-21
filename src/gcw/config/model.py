@@ -81,8 +81,17 @@ class CacheProcessorConfig:
     linear_state_query_mode: CacheLinearStateQueryMode = "global"
     linear_state_update_mode: CacheLinearStateUpdateMode = "outer_product"
     gate_linear_state_delta: bool = True
+    generation_process_every: int | None = None
 
     def __post_init__(self) -> None:
+        if self.generation_process_every is not None and (
+            isinstance(self.generation_process_every, bool)
+            or not isinstance(self.generation_process_every, int)
+            or self.generation_process_every <= 0
+        ):
+            raise ValueError(
+                "cache_processor.generation_process_every must be a positive integer when set"
+            )
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError(
                 "cache_processor.score must be 'attn_l2' or 'kv_norm'"

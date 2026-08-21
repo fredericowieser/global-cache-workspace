@@ -634,6 +634,7 @@ class TF(Backbone):
         process_prefill_windows: bool = True,
         process_after_prefill: bool = False,
         relative_generation_cadence: bool = False,
+        generation_process_every: int | None = None,
     ) -> torch.Tensor:
         return generate_tf(
             self,
@@ -642,6 +643,7 @@ class TF(Backbone):
             eos_token_id=eos_token_id,
             processor=processor,
             process_every=process_every,
+            generation_process_every=generation_process_every,
             process_prefill_windows=process_prefill_windows,
             process_after_prefill=process_after_prefill,
             relative_generation_cadence=relative_generation_cadence,
@@ -660,6 +662,7 @@ class TF(Backbone):
         relative_generation_cadence: bool = False,
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
+        generation_process_every: int | None = None,
     ) -> torch.Tensor:
         return generate_fast_tf(
             self,
@@ -668,6 +671,7 @@ class TF(Backbone):
             eos_token_id=eos_token_id,
             processor=processor,
             process_every=process_every,
+            generation_process_every=generation_process_every,
             process_prefill_windows=process_prefill_windows,
             process_after_prefill=process_after_prefill,
             relative_generation_cadence=relative_generation_cadence,

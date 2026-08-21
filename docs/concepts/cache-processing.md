@@ -10,7 +10,9 @@ $$
 N_{calls}=\left\lceil\frac{T}{P}\right\rceil-1.
 $$
 
-This off-by-one matters: the processor cannot transform memory before any memory exists. Training and generation use the same absolute cache cadence.
+This off-by-one matters: the processor cannot transform memory before any memory exists. By default, prefill and decoding use the same absolute cache cadence.
+
+Set `generation_process_every` to use a separate, decoding-relative invocation cadence while leaving prefill unchanged. For example, `process_every: 64` with `generation_process_every: 1` retains 64-token prefill windows and invokes the processor before consuming every generated token. A value of `G` invokes it before decoded tokens 1, `G+1`, `2G+1`, and so on. The override changes only when the processor runs: cache selection still retains the newest `process_every` positions. `null` preserves the default behavior.
 
 ## Which positions survive
 

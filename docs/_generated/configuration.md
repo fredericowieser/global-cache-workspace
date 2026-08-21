@@ -97,6 +97,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `linear_state_query_mode` | `Literal['per_linear_state', 'shared', 'global']` | `'global'` |
 | `linear_state_update_mode` | `Literal['outer_product', 'gated_delta']` | `'outer_product'` |
 | `gate_linear_state_delta` | `bool` | `True` |
+| `generation_process_every` | `int \| None` | `None` |
 
 ## `FlowProcessorConfig`
 

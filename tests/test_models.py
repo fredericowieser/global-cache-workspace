@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from gcw.architecture import _config_payload
 from gcw.config import (
     CacheProcessorConfig,
     FlowProcessorConfig,
@@ -1562,6 +1563,96 @@ def test_generate_default_uses_windowed_prefill_cadence():
     assert calls == [(4, False), (8, False)]
 
 
+def test_generate_default_keeps_absolute_decoding_cadence():
+    model = build_model(tiny_config("tf")).eval()
+    model.init_weights()
+    calls = []
+
+    def processor(cache, **kwargs):
+        calls.append((cache.seq_len, bool(kwargs.get("select_all", False))))
+        return cache
+
+    x = torch.randint(0, 128, (1, 9))
+    model.generate(x, max_new_tokens=5, processor=processor, process_every=4)
+
+    assert calls == [(4, False), (8, False), (12, False)]
+
+
+@pytest.mark.parametrize("method_name", ["generate", "generate_fast"])
+def test_generation_process_every_overrides_only_decoding_cadence(method_name):
+    model = build_model(tiny_config("bgt", generation_process_every=2)).eval()
+    model.init_weights()
+    calls = []
+
+    def processor_forward(self, cache, *, select_all=False):
+        calls.append((cache.seq_len, select_all))
+        return cache
+
+    model.cache_processor.forward = types.MethodType(
+        processor_forward, model.cache_processor
+    )
+    x = torch.randint(0, 128, (1, 9))
+    getattr(model, method_name)(x, max_new_tokens=5)
+
+    assert model.cache_processor.config.process_every == 4
+    assert calls == [
+        (4, False),
+        (8, False),
+        (9, False),
+        (11, False),
+        (13, False),
+    ]
+
+
+def test_generation_process_every_preserves_relative_prefill_select_all():
+    config = replace(
+        tiny_config("bgt", generation_process_every=2),
+        processor_generation_mode="post_prefill_relative",
+    )
+    model = build_model(config).eval()
+    model.init_weights()
+    calls = []
+
+    def processor_forward(self, cache, *, select_all=False):
+        calls.append((cache.seq_len, select_all))
+        return cache
+
+    model.cache_processor.forward = types.MethodType(
+        processor_forward, model.cache_processor
+    )
+    x = torch.randint(0, 128, (1, 9))
+    model.generate(x, max_new_tokens=5)
+
+    assert calls == [(9, True), (11, False), (13, False)]
+
+
+def test_gemma4_nonuniform_fast_generation_uses_generation_cadence():
+    model = build_model(tiny_gemma4_config(global_head_dim=16)).eval()
+    model.init_weights()
+    calls = []
+
+    def processor(cache, **kwargs):
+        calls.append((cache.seq_len, bool(kwargs.get("select_all", False))))
+        return cache
+
+    x = torch.randint(1, 128, (1, 9))
+    model.generate_fast(
+        x,
+        max_new_tokens=5,
+        processor=processor,
+        process_every=4,
+        generation_process_every=2,
+    )
+
+    assert calls == [
+        (4, False),
+        (8, False),
+        (9, False),
+        (11, False),
+        (13, False),
+    ]
+
+
 def test_generate_fast_matches_reference_generate():
     for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         torch.manual_seed(3)
@@ -1997,6 +2088,8 @@ def test_bottleneck_state_dict_keys_stay_compatible():
 
 def test_cache_processor_experimental_defaults_preserve_current_behavior():
     cp = CacheProcessorConfig()
+    assert cp.generation_process_every is None
+    assert "generation_process_every" not in _config_payload(cp)
     assert cp.topk_heads == 32
     assert cp.topk_linear_heads is None
     assert cp.per_cache_head_projections is False
@@ -2019,9 +2112,20 @@ def test_cache_processor_experimental_defaults_preserve_current_behavior():
     assert cp.stream_factor == 2
 
 
+def test_generation_process_every_is_in_nondefault_architecture_payload():
+    payload = _config_payload(CacheProcessorConfig(generation_process_every=1))
+    assert payload["generation_process_every"] == 1
+
+
 def test_cache_processor_iterations_must_be_positive():
     with pytest.raises(ValueError, match="iterations"):
         CacheProcessorConfig(iterations=0)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "2"])
+def test_cache_processor_rejects_invalid_generation_process_every(value):
+    with pytest.raises(ValueError, match="generation_process_every"):
+        CacheProcessorConfig(generation_process_every=value)
 
 
 def test_cache_processor_topk_heads_must_be_positive():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
 from typing import TYPE_CHECKING, cast
+from gcw.config.model import CacheProcessorConfig
 from gcw.performance.config import PerformanceConfig
 
 if TYPE_CHECKING:
@@ -30,6 +31,14 @@ _SUPPORTED_CHECKPOINT_FORMATS = ("native_safetensors",)
 
 
 def _config_payload(value: object) -> object:
+    if isinstance(value, CacheProcessorConfig):
+        payload = {
+            field.name: _config_payload(getattr(value, field.name))
+            for field in fields(value)
+        }
+        if value.generation_process_every is None:
+            payload.pop("generation_process_every")
+        return payload
     if isinstance(value, PerformanceConfig):
         payload = {
             field.name: _config_payload(getattr(value, field.name))
