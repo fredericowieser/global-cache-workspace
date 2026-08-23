@@ -8,11 +8,13 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import (
     CacheProcessorConfig,
+    DiffusionProcessorConfig,
     FlowProcessorConfig,
     ModelConfig,
 )
 from gcw.models.backbones.transformer import RMSNorm
 from gcw.models.cache_processors.base import cache_processor_recomputation_id
+from gcw.models.cache_processors.diffusion import TaskDirectedDiffusion
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.cache_processors.longshot_layers import (
     EncoderMethod,
@@ -46,6 +48,7 @@ class CacheProcessor(nn.Module):
         encoder_seq_len: int | None = None,
         output_dim: int | None = None,
         flow_config: FlowProcessorConfig | None = None,
+        diffusion_config: DiffusionProcessorConfig | None = None,
         kv_cache_heads: int | None = None,
         model_config: ModelConfig | None = None,
         linear_state_specs: list[LinearStateSpec] | None = None,
@@ -95,6 +98,11 @@ class CacheProcessor(nn.Module):
         self.flow = (
             LatentFlow(config.hidden_size, flow_config)
             if flow_config is not None
+            else None
+        )
+        self.diffusion = (
+            TaskDirectedDiffusion(config.hidden_size, diffusion_config)
+            if diffusion_config is not None
             else None
         )
         self._selected_head_overlap_totals: dict[int, torch.Tensor] = {}
@@ -243,6 +251,13 @@ class CacheProcessor(nn.Module):
                     self._run_flow_field(state, selected_heads)
                 ),
             )
+        if self.diffusion is not None:
+            return self.diffusion(
+                h,
+                lambda state, _time: self.out_norm(
+                    self._run_flow_field(state, selected_heads, routing_gates)
+                ),
+            )
         iterations = (
             self.config.iterations
             if self.config.iteration_mode == "internal"
@@ -357,12 +372,16 @@ class CacheProcessor(nn.Module):
         )
 
     def _run_flow_field(
-        self, state: torch.Tensor, selected_heads: torch.Tensor
+        self,
+        state: torch.Tensor,
+        selected_heads: torch.Tensor,
+        routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor:
         for module in self.layers:
             layer = cast(ProcessorLayer, module)
             result = self._run_layer(
-                layer, state, selected_heads, return_attn_scores=False
+                layer, state, selected_heads, return_attn_scores=False,
+                routing_gates=routing_gates,
             )
             if not isinstance(result, torch.Tensor):
                 raise TypeError(

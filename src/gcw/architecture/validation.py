@@ -74,10 +74,10 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
             "diffusion_processor must be a DiffusionProcessorConfig",
             "model.diffusion_processor",
         )
-    if diffusion is not None and config.variant != "bgt":
+    if diffusion is not None and config.variant not in {"bgt", "longshot"}:
         add(
             "diffusion_variant",
-            "diffusion_processor requires variant 'bgt'",
+            "diffusion_processor requires variant 'bgt' or 'longshot'",
             "model.diffusion_processor",
         )
     if diffusion is not None and flow is not None:
