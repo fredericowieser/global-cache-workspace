@@ -18,6 +18,16 @@ ProcessorExecutionFactory = Callable[[], AbstractContextManager[ProcessorFn]]
 LinearStateLayout = tuple[tuple[int, bool], ...]
 
 
+def detach_cache(cache: CacheLike) -> CacheLike:
+    """Cut autograd history at a recurrent cache boundary.
+
+    Cache processors remain unaware of this training policy: every maintained
+    windowed processor consumes either ``CacheState`` or ``WindowedCache``, and
+    both cache representations implement the same detached-boundary contract.
+    """
+    return cache.detach()
+
+
 @dataclass(frozen=True)
 class WindowedCacheLayout:
     sidecar_spec: KVScoreSidecarSpec | None = None

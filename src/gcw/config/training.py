@@ -180,6 +180,10 @@ class TrainConfig:
     freeze_backbone: bool = False
     activation_checkpoint_windows: int = 0
     activation_checkpoint_min_padded_sequence_length: int = 0
+    # Number of cache-processing windows kept in one autograd horizon. Zero
+    # preserves full BPTT; positive values detach recurrent cache state at each
+    # horizon boundary without changing the forward recurrence.
+    truncated_bptt_windows: int = 0
     seed: int = 24
     save_every: int = 0
     save_final: bool = True
@@ -342,6 +346,18 @@ class TrainConfig:
         if self.activation_checkpoint_min_padded_sequence_length < 0:
             raise ValueError(
                 "activation_checkpoint_min_padded_sequence_length must be non-negative"
+            )
+        if isinstance(self.truncated_bptt_windows, bool) or not isinstance(
+            self.truncated_bptt_windows, int
+        ):
+            raise ValueError("truncated_bptt_windows must be an integer")
+        if self.truncated_bptt_windows < 0:
+            raise ValueError(
+                "truncated_bptt_windows must be non-negative"
+            )
+        if self.truncated_bptt_windows and self.model.variant == "tf":
+            raise ValueError(
+                "truncated_bptt_windows requires a cache-processor variant"
             )
         if self.activation_checkpoint_windows and self.model.variant == "tf":
             raise ValueError(

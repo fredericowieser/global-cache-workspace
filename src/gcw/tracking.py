@@ -28,7 +28,12 @@ class RunTracker:
         model: Any | None = None,
     ) -> RunTracker:
         """Create a local training record and its optional W&B mirror."""
-        name = config.wandb.name or Path(config.output_dir).name
+        method = (
+            "truncated-bptt"
+            if config.truncated_bptt_windows
+            else "full-bptt"
+        )
+        name = config.wandb.name or f"{Path(config.output_dir).name}-{method}"
         record = RunRecord.create(
             kind="training",
             experiment_name=name,
@@ -116,11 +121,16 @@ def _start_wandb(
         import wandb
 
         os.environ.setdefault("WANDB_DIR", str(record.paths.root / "_wandb"))
+        method = (
+            "truncated-bptt"
+            if config.truncated_bptt_windows
+            else "full-bptt"
+        )
         init_kwargs: dict[str, Any] = {
             "project": config.wandb.project,
-            "name": config.wandb.name or Path(config.output_dir).name,
+            "name": config.wandb.name or f"{Path(config.output_dir).name}-{method}",
             "group": config.wandb.group,
-            "tags": config.wandb.tags,
+            "tags": [*config.wandb.tags, method],
             "config": {**to_dict(config), "run_budget": dict(metadata)},
         }
         if config.wandb.entity:
@@ -137,6 +147,12 @@ def _start_wandb(
         run.define_metric("train/step")
         run.define_metric("*", step_metric="train/step")
         run.summary["architecture"] = config.model.architecture_name
+        run.summary["training_method"] = (
+            "truncated_bptt"
+            if config.truncated_bptt_windows
+            else "full_bptt"
+        )
+        run.summary["truncated_bptt_windows"] = config.truncated_bptt_windows
         for key in (
             "non_embedding_params",
             "processor_params",

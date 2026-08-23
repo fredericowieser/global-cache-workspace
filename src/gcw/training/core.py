@@ -239,6 +239,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
                             activation_checkpoint_min_padded_sequence_length=(
                                 config.activation_checkpoint_min_padded_sequence_length
                             ),
+                            truncated_bptt_windows=config.truncated_bptt_windows,
                             longshot_gradient_checkpointing=longshot_checkpointing,
                         )
                     elif config.logical_pair_grouping:
@@ -252,6 +253,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
                             activation_checkpoint_min_padded_sequence_length=(
                                 config.activation_checkpoint_min_padded_sequence_length
                             ),
+                            truncated_bptt_windows=config.truncated_bptt_windows,
                             longshot_gradient_checkpointing=longshot_checkpointing,
                         )
                     else:
@@ -265,6 +267,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
                             activation_checkpoint_min_padded_sequence_length=(
                                 config.activation_checkpoint_min_padded_sequence_length
                             ),
+                            truncated_bptt_windows=config.truncated_bptt_windows,
                             longshot_gradient_checkpointing=longshot_checkpointing,
                         )
                 normalized_loss = (
@@ -368,6 +371,15 @@ def run_training_loop(plan: TrainingPlan) -> None:
             ),
             "train/segmented_window_eager_microbatches": (
                 physical_microsteps - segmented_window_checkpointed_microbatches
+            ),
+            "train/training_method": (
+                "truncated_bptt"
+                if config.truncated_bptt_windows
+                else "full_bptt"
+            ),
+            "train/truncated_bptt_windows": config.truncated_bptt_windows,
+            "train/truncated_bptt_enabled": float(
+                config.truncated_bptt_windows > 0
             ),
             "timing/step_seconds": step_seconds,
             "timing/tokens_per_second": tokens_per_step
@@ -565,6 +577,7 @@ def _eval_loss(
                     activation_checkpoint_min_padded_sequence_length=(
                         config.activation_checkpoint_min_padded_sequence_length
                     ),
+                    truncated_bptt_windows=config.truncated_bptt_windows,
                     longshot_gradient_checkpointing=longshot_checkpointing,
                 )
                 pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
@@ -585,6 +598,7 @@ def _eval_loss(
                     activation_checkpoint_min_padded_sequence_length=(
                         config.activation_checkpoint_min_padded_sequence_length
                     ),
+                    truncated_bptt_windows=config.truncated_bptt_windows,
                     longshot_gradient_checkpointing=longshot_checkpointing,
                 )
                 weight = (y >= 0).sum()

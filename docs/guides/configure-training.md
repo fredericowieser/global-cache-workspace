@@ -182,6 +182,16 @@ Icarus has a rejected benchmark-only post-selection region. It is not a training
 
 Both checkpointing policies increase backward compute. The policies, segment size, minimum padded sequence length, and selected regional backend are runtime provenance and exact-resume fingerprint fields; changing any across resume is rejected.
 
+### Optional truncated BPTT
+
+Cache-processor training can cut autograd history at recurrent cache boundaries without changing the forward recurrence:
+
+```yaml
+truncated_bptt_windows: 1  # zero is full BPTT; positive values are the gradient horizon
+```
+
+The value counts `process_every` windows retained in one autograd horizon. A value of `1` prevents gradients from crossing a cache-processing boundary; larger values retain longer credit assignment. This policy is implemented at the shared windowed-cache boundary, so BT, BGT, Icarus, Longshot, and compatible backbone families use the same behavior. It is training-only in effect and does not alter evaluation losses. `train/training_method`, `train/truncated_bptt_windows`, and the corresponding W&B run metadata identify the method. The setting is part of the training fingerprint and must match for exact resume.
+
 Longshot keeps its model-level switch as the fixed default. Set an adaptive training threshold only when `model.cache_processor.gradient_checkpointing` remains `true`:
 
 ```yaml

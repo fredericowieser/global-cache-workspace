@@ -592,6 +592,12 @@ def assemble_training_execution(
         ),
         "activation_checkpointing": activation_checkpointing_runtime,
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
+        "truncated_bptt_windows": config.truncated_bptt_windows,
+        "training_method": (
+            "truncated_bptt"
+            if config.truncated_bptt_windows
+            else "full_bptt"
+        ),
         **(
             {
                 "triton_cache_movement": triton_cache_movement_metadata(

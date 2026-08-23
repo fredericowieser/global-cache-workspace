@@ -40,6 +40,16 @@ def to_dict(value: Any) -> Any:
         if not value.optimized_step.enabled:
             payload.pop("optimized_step")
         return payload
+    if isinstance(value, TrainConfig):
+        payload = {
+            field.name: to_dict(getattr(value, field.name))
+            for field in fields(value)
+        }
+        # Preserve pre-feature config identities for the disabled default while
+        # retaining the field in serialized provenance when the policy is used.
+        if not value.truncated_bptt_windows:
+            payload.pop("truncated_bptt_windows")
+        return payload
     if is_dataclass(value):
         return {f.name: to_dict(getattr(value, f.name)) for f in fields(value)}
     if isinstance(value, (list, tuple)):

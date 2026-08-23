@@ -70,6 +70,7 @@ class LanguageModel(nn.Module):
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
         activation_checkpoint_min_padded_sequence_length: int = 0,
+        truncated_bptt_windows: int = 0,
         loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         processor = self._processor_config()
@@ -81,6 +82,8 @@ class LanguageModel(nn.Module):
             raise ValueError(
                 "activation_checkpoint_min_padded_sequence_length must be non-negative"
             )
+        if truncated_bptt_windows < 0:
+            raise ValueError("truncated_bptt_windows must be non-negative")
         sequence_length_eligible = (
             activation_checkpoint_min_padded_sequence_length == 0
             or input_ids.shape[1]
@@ -108,6 +111,7 @@ class LanguageModel(nn.Module):
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
                 activation_checkpoint_windows=effective_checkpoint_windows,
+                truncated_bptt_windows=truncated_bptt_windows,
                 loss_backend=loss_backend,
             )
         # The ordinary path prepares once for the complete forward. Generation
@@ -121,6 +125,7 @@ class LanguageModel(nn.Module):
                 process_every=processor.process_every,
                 attention_mask=attention_mask,
                 activation_checkpoint_windows=effective_checkpoint_windows,
+                truncated_bptt_windows=truncated_bptt_windows,
                 loss_backend=loss_backend,
             )
 
