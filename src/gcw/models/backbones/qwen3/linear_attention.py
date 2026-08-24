@@ -110,9 +110,7 @@ class Qwen35GatedDeltaNet(nn.Module):
         query = query.reshape(batch, seq_len, self.num_k_heads, self.head_k_dim)
         key = key.reshape(batch, seq_len, self.num_k_heads, self.head_k_dim)
         value = value.reshape(batch, seq_len, self.num_v_heads, self.head_v_dim)
-        g = -self.dynamics.A_log.float().exp() * F.softplus(
-            a.float() + self.dynamics.dt_bias
-        )
+        g = self.dynamics(a)
         if self.num_v_heads // self.num_k_heads > 1:
             repeats = self.num_v_heads // self.num_k_heads
             query = query.repeat_interleave(repeats, dim=2)

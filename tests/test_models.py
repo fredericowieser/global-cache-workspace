@@ -960,6 +960,26 @@ def test_qwen35_longshot_shares_backbone_gated_delta_dynamics():
         assert dynamics is layer.linear_attn.dynamics
 
 
+def test_qwen35_gated_delta_dynamics_computes_decay_in_forward():
+    dynamics = Qwen35GatedDeltaDynamics(2)
+    with torch.no_grad():
+        dynamics.A_log.copy_(torch.tensor([0.0, 1.0]))
+        dynamics.dt_bias.copy_(torch.tensor([0.5, -0.25]))
+    decay_input = torch.tensor([[[0.25, -0.5], [1.0, 0.75]]])
+
+    expected = -dynamics.A_log.float().exp() * F.softplus(
+        decay_input.float() + dynamics.dt_bias
+    )
+
+    assert dynamics.num_heads == 2
+    assert torch.allclose(dynamics(decay_input), expected)
+    with pytest.raises(
+        ValueError,
+        match="gated-delta decay input has 1 heads; expected 2",
+    ):
+        dynamics(torch.zeros(1, 1))
+
+
 def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
     monkeypatch,
 ):

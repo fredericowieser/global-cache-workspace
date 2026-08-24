@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 Kernel = Callable[..., Any]
 _fla_chunk_gated_delta_rule: Kernel | None = None
@@ -99,15 +100,26 @@ def _has_hf_torch_gated_delta_rule() -> bool:
 
 
 class Qwen35GatedDeltaDynamics(nn.Module):
-    def __init__(self, num_v_heads: int):
+    def __init__(self, num_heads: int):
         super().__init__()
-        self.dt_bias = nn.Parameter(torch.ones(num_v_heads))
-        self.A_log = nn.Parameter(torch.empty(num_v_heads))
+        self.num_heads = num_heads
+        self.dt_bias = nn.Parameter(torch.ones(num_heads))
+        self.A_log = nn.Parameter(torch.empty(num_heads))
 
     @torch.no_grad()
     def init_weights(self) -> None:
         nn.init.ones_(self.dt_bias)
         self.A_log.copy_(torch.empty_like(self.A_log).uniform_(1e-4, 16).log_())
+
+    def forward(self, decay_input: torch.Tensor) -> torch.Tensor:
+        if decay_input.shape[-1] != self.num_heads:
+            raise ValueError(
+                f"gated-delta decay input has {decay_input.shape[-1]} heads; "
+                f"expected {self.num_heads}"
+            )
+        return -self.A_log.float().exp() * F.softplus(
+            decay_input.float() + self.dt_bias
+        )
 
 
 def qwen35_gated_delta_rule(

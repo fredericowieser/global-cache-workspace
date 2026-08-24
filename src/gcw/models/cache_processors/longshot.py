@@ -610,19 +610,16 @@ class GlobalCacheProcessor(CacheProcessorBase):
             update, [key_dim, value_dim, 1, 1], dim=-1
         )
         batch, heads, _ = synthetic_key.shape
-        dynamics_heads = int(dynamics.A_log.shape[0])
-        if heads != dynamics_heads:
+        if heads != dynamics.num_heads:
             raise ValueError(
-                f"linear state head count {heads} does not match layer {layer_idx} value heads {dynamics_heads}"
+                f"linear state head count {heads} does not match layer {layer_idx} "
+                f"value heads {dynamics.num_heads}"
             )
         query = synthetic_key.reshape(batch, 1, heads, key_dim)
         key = query
         value = synthetic_value.reshape(batch, 1, heads, value_dim)
         beta = torch.sigmoid(beta_logit.squeeze(-1)).unsqueeze(1)
-        g = (
-            -dynamics.A_log.float().exp()
-            * F.softplus(decay_input.squeeze(-1).float() + dynamics.dt_bias)
-        ).unsqueeze(1)
+        g = dynamics(decay_input.squeeze(-1)).unsqueeze(1)
         _, final_state = qwen35_gated_delta_rule(
             query,
             key,
