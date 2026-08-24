@@ -206,6 +206,7 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
         config,
         flow_processor=None,
         diffusion_processor=None,
+        legacy_bottleneck_generate=None,
         processor_generation_mode="windowed",
     )
     if config.variant == "longshot":

@@ -89,6 +89,20 @@ def test_processed_models_share_one_explicit_composition_wrapper():
         assert any(key.startswith("cache_processor.") for key in keys)
 
 
+def test_legacy_generation_policy_is_not_reapplied_to_internal_backbone():
+    config = replace(
+        tiny_config("longshot"), legacy_bottleneck_generate=True
+    )
+
+    model = build_model(config)
+
+    assert isinstance(model, LanguageModel)
+    assert model.config.legacy_bottleneck_generate is True
+    assert model.config.processor_generation_mode == "post_prefill_relative"
+    assert model.backbone.config.legacy_bottleneck_generate is None
+    assert model.backbone.config.processor_generation_mode == "windowed"
+
+
 def test_transformer_loss_reduction_none_returns_per_token_cross_entropy():
     torch.manual_seed(123)
     model = build_model(tiny_config("tf"))
