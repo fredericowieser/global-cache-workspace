@@ -43,6 +43,8 @@ SFT_BACKBONE="${SFT_BACKBONE:-/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/l
 TOKENIZER_DIR="${TOKENIZER_DIR:-/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model}"
 LOCAL_GPUS="${LOCAL_GPUS:-}"
 LOCAL_STATE_ROOT="${LOCAL_STATE_ROOT:-$repo_root/slurm_out/.local-array}"
+SLURM_STATE_ROOT="${SLURM_STATE_ROOT:-$repo_root/slurm_out}"
+SLURM_LOG_DIR="${SLURM_LOG_DIR:-$repo_root/slurm_out}"
 LOCAL_STOP_WHEN_IDLE="${LOCAL_STOP_WHEN_IDLE:-1}"
 LOCAL_IDLE_CHECK_INTERVAL="${LOCAL_IDLE_CHECK_INTERVAL:-30}"
 NEBIUS_INSTANCE_ID_FILE="${NEBIUS_INSTANCE_ID_FILE:-/mnt/cloud-metadata/instance-id}"
@@ -71,6 +73,7 @@ Common environment overrides:
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, OUT_DIR
   EVAL_CHECKPOINT_STEP, GENERATION_PROCESS_EVERY
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
+  SLURM_STATE_ROOT, SLURM_LOG_DIR
   LOCAL_GPUS, LOCAL_STATE_ROOT, LOCAL_STOP_WHEN_IDLE, LOCAL_IDLE_CHECK_INTERVAL
   NEBIUS_INSTANCE_ID_FILE, NEBIUS_STOP_PROFILE
 
@@ -351,13 +354,16 @@ claim_next_config() {
     flock -x 200
     touch "$CLAIMED_FILE"
 
-    config="$(
+    if ! config="$(
       awk '
         ARGIND == 1 { claimed[$0] = 1; next }
         /^[[:space:]]*($|#)/ { next }
         !($0 in claimed) { print; exit }
       ' "$CLAIMED_FILE" "$CONFIG_LIST"
-    )"
+    )"; then
+      echo "Failed to read config queue from $CONFIG_LIST" >&2
+      return 1
+    fi
     if [[ -n "$config" ]]; then
       echo "$config" >> "$CLAIMED_FILE"
       echo "$config"
@@ -1018,8 +1024,13 @@ launcher_main() {
     alloc_gpus="$EVAL_GPUS"
   fi
 
-  mkdir -p slurm_out
-  state_dir="$repo_root/slurm_out/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
+  if [[ "$BACKEND" == "slurm" ]]; then
+    mkdir -p "$SLURM_STATE_ROOT" "$SLURM_LOG_DIR"
+    state_dir="$SLURM_STATE_ROOT/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
+  else
+    mkdir -p slurm_out
+    state_dir="$repo_root/slurm_out/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
+  fi
   mkdir -p "$state_dir"
   config_list="$state_dir/configs.txt"
   write_config_list "$config_list" "$configs_file" "${args[@]}"
@@ -1046,7 +1057,7 @@ launcher_main() {
     --cpus-per-task="$CPUS_PER_TASK"
     --mem="$MEM"
     --array="$workers_arg"
-    --output="slurm_out/${JOB_NAME}-%A_%a.out"
+    --output="$SLURM_LOG_DIR/${JOB_NAME}-%A_%a.out"
     --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP,GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS,EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
   )
   if [[ -n "$DEPENDENCY" ]]; then
