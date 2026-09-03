@@ -180,7 +180,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                     "enabled KV-score sidecar requires contiguous WindowedCache storage"
                 )
             synchronize_sidecar(self, cache)
-        learned_initial_selection = (  # TODO: this should be moved to an attribute set at init
+        learned_initial_selection = (
             self.config.head_selection_method == "learned_contextual"
         )
         if self.config.score == "kv_norm" and not select_all:
@@ -243,18 +243,15 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 device=merged.device,
             )
         linear_features: torch.Tensor | None = None
-        linear_head_indices: torch.Tensor | None = None
         topk_heads = self.config.topk_heads
         if linear_inputs is not None:
             linear_features = linear_inputs.features
-            linear_head_indices = linear_inputs.head_indices
             topk_heads += _topk_linear_heads(self.config)
         updated, linear_delta, selected_heads = self.block(
             merged,
             selected_heads,
             kv_hidden=kv_hidden,
             linear_features=linear_features,
-            linear_head_indices=linear_head_indices,
             topk_heads=topk_heads,
             select_all=select_all,
         )
@@ -332,17 +329,17 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if kv_hidden is None or not cache.linear_states:
             return None
         feature_parts: list[torch.Tensor] = []
-        identity_parts: list[torch.Tensor] = []  
         active_specs: list[LinearStateSpec] = []
         context_cache: dict[int, torch.Tensor] = {}
         query_cache: dict[tuple[str, int], torch.Tensor] = {}
-        global_identity_offset = self.num_kv_cache_heads
         for spec in self.linear_state_specs:
-            identity_start = global_identity_offset
-            global_identity_offset += spec.head_count
             state = cache.linear_states.get(spec.layer_idx)
             if state is None or state[0] is None:
-                continue
+                raise RuntimeError(
+                    f"linear state layer {spec.layer_idx} has no recurrent "
+                    "state; cache heads are packed positionally and cannot be "
+                    "processed with a missing group"
+                )
             recurrent_state = state[0]
             if spec.following_cache_idx not in context_cache:
                 context_cache[spec.following_cache_idx] = (
@@ -363,28 +360,19 @@ class GlobalCacheProcessor(CacheProcessorBase):
             query = query_cache[cache_key].to(recurrent_state.dtype)
             readout = torch.einsum("bhk,bhkv->bhv", query, recurrent_state)
             features = torch.cat([query.to(readout.dtype), readout], dim=-1)
-            if features.shape[1] != spec.head_count:  # TODO: why are we adding this in this commit?
+            if features.shape[1] != spec.head_count:
                 raise RuntimeError(
                     f"linear state layer {spec.layer_idx} produced "
                     f"{features.shape[1]} heads but its spec declares "
                     f"{spec.head_count}; head identities would misalign"
                 )
             feature_parts.append(features)
-            identity_parts.append(
-                torch.arange(
-                    identity_start,
-                    global_identity_offset,
-                    dtype=torch.long,
-                    device=features.device,
-                )
-            )
             active_specs.append(spec)
         if not feature_parts:
             return None
         return LinearStateInputs(
             features=torch.cat(feature_parts, dim=1),
             specs=active_specs,
-            head_indices=torch.cat(identity_parts),
         )
 
     def _following_kv_hidden_context(

@@ -152,17 +152,14 @@ class CacheProcessor(nn.Module):
         raise ValueError(f"unknown encoder_method: {self.encoder_method}")
 
     def select_heads(
-        self,
-        hidden: torch.Tensor,
-        head_indices: torch.Tensor,
-        topk_heads: int,
+        self, hidden: torch.Tensor, topk_heads: int
     ) -> torch.Tensor:
         if self.head_selector is None:
             raise RuntimeError(
                 "learned contextual head selection was not configured"
             )
         return _select_heads_from_head_scores(
-            self.head_selector(hidden, head_indices), topk_heads
+            self.head_selector(hidden), topk_heads
         )
 
     def forward(
@@ -172,7 +169,6 @@ class CacheProcessor(nn.Module):
         *,
         kv_hidden: torch.Tensor | None = None,
         linear_features: torch.Tensor | None = None,
-        linear_head_indices: torch.Tensor | None = None,
         topk_heads: int | None = None,
         select_all: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
@@ -190,22 +186,6 @@ class CacheProcessor(nn.Module):
                 [hidden, linear_adapter.encode(linear_features)],
                 dim=1,
             )
-        head_indices = None
-        if (
-            selected_heads is None and not select_all
-        ) or self.config.internal_iteration_score == "learned_contextual":
-            if linear_features is not None and linear_head_indices is None:
-                raise ValueError(
-                    "contextual head selection over linear-state features requires "
-                    "linear_head_indices; packed positions do not identify cache heads"
-                )
-            head_indices = torch.arange(
-                kv_hidden.shape[1], dtype=torch.long, device=hidden.device
-            )
-            if linear_head_indices is not None:
-                head_indices = torch.cat(
-                    [head_indices, linear_head_indices.to(hidden.device)]
-                )
         if topk_heads is None:
             topk_heads = self.config.topk_heads + (
                 _topk_linear_heads(self.config)
@@ -217,11 +197,8 @@ class CacheProcessor(nn.Module):
                 hidden.shape[1], dtype=torch.long, device=hidden.device
             ).expand(hidden.shape[0], -1)
         elif selected_heads is None:
-            assert head_indices is not None
-            selected_heads = self.select_heads(hidden, head_indices, topk_heads)
-        processed = self._iterate_layers(
-            hidden, selected_heads, topk_heads, head_indices
-        )
+            selected_heads = self.select_heads(hidden, topk_heads)
+        processed = self._iterate_layers(hidden, selected_heads, topk_heads)
         gate = self._gate_scale(processed.dtype)
         primary_delta = self.out_proj(processed[:, : x.shape[1]]) * gate
         updated = x[:, :, -1, -self.output_dim :] + primary_delta
@@ -240,7 +217,6 @@ class CacheProcessor(nn.Module):
         h: torch.Tensor,
         selected_heads: torch.Tensor,
         topk_heads: int,
-        head_indices: torch.Tensor | None,
     ) -> torch.Tensor:
         if self.flow is not None:
             return self.flow(
@@ -284,10 +260,7 @@ class CacheProcessor(nn.Module):
                     h = result
             if has_next_iteration:
                 if learned_reselection:
-                    assert head_indices is not None
-                    next_selected_heads = self.select_heads(
-                        h, head_indices, topk_heads
-                    )
+                    next_selected_heads = self.select_heads(h, topk_heads)
                 else:
                     head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
                     next_selected_heads = _select_heads_from_head_scores(

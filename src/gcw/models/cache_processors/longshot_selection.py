@@ -62,30 +62,12 @@ class ContextualHeadSelector(nn.Module):
         else:
             self.register_parameter("identity_bias", None)
 
-    def forward(
-        self, hidden: torch.Tensor, head_indices: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         if hidden.ndim != 3:
             raise ValueError(
                 "contextual head selector hidden must have shape "
                 "(batch, active_heads, hidden_size)"
             )
-        if not hidden.shape[1]:
-            raise ValueError(
-                "contextual head selector requires at least one active head"
-            )
-        if head_indices.shape != (hidden.shape[1],):
-            raise ValueError(
-                "contextual head selector head_indices must be one-dimensional "
-                "and match the active head count"
-            )
-        try:
-            torch.iinfo(head_indices.dtype)
-        except TypeError:
-            raise TypeError(
-                "contextual head selector head_indices must have an integer dtype"
-            ) from None
-
         normalized = self.norm(hidden)
         context_hidden = self.context_proj(normalized.mean(dim=1)).float()
         candidate_hidden = self.candidate_proj(normalized).float()
@@ -93,10 +75,8 @@ class ContextualHeadSelector(nn.Module):
             torch.einsum("bd,bhd->bh", context_hidden, candidate_hidden)
             * self.scale
         )
-        if self.identity_bias is not None:  # TODO: Why do we need head_indices? Do they ever get shuffled?
-            scores = scores + self.identity_bias.float().index_select(
-                0, head_indices.to(self.identity_bias.device, torch.long)
-            )
+        if self.identity_bias is not None:
+            scores = scores + self.identity_bias.float()
         return scores
 
 

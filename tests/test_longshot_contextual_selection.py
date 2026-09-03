@@ -49,16 +49,14 @@ def test_contextual_selector_scores_match_controlled_projections():
             [[4.0, 1.0, 0.0, 2.0], [1.0, 1.0, 1.0, 1.0], [2.0, 3.0, 4.0, 5.0]],
         ]
     )
-    identities = torch.tensor([2, 0, 1])
-
     normalized = torch.nn.functional.rms_norm(hidden, (4,), eps=0.0)
     context = normalized.mean(dim=1)
     context_projected = context[..., :2]
     candidate_projected = normalized[..., 2:]
     expected = (context_projected[:, None] * candidate_projected).sum(
         dim=-1
-    ) / math.sqrt(2) + selector.identity_bias[identities][None]
-    actual = selector(hidden, identities)
+    ) / math.sqrt(2) + selector.identity_bias[None]
+    actual = selector(hidden)
 
     assert actual.dtype == torch.float32
     assert torch.isfinite(actual).all()
@@ -71,18 +69,14 @@ def test_contextual_selector_is_batch_independent_and_permutation_equivariant():
         5, 3, 6, norm_eps=1e-6, use_identity_bias=False
     )
     hidden = torch.randn(2, 4, 5)
-    identities = torch.tensor([5, 1, 3, 0])
-    scores = selector(hidden, identities)
+    scores = selector(hidden)
     changed_other_batch = hidden.clone()
     changed_other_batch[1].mul_(100.0)
     permutation = torch.tensor([2, 0, 3, 1])
 
+    torch.testing.assert_close(selector(changed_other_batch)[0], scores[0])
     torch.testing.assert_close(
-        selector(changed_other_batch, identities)[0], scores[0]
-    )
-    torch.testing.assert_close(
-        selector(hidden[:, permutation], identities[permutation]),
-        scores[:, permutation],
+        selector(hidden[:, permutation]), scores[:, permutation]
     )
 
 
@@ -90,85 +84,10 @@ def test_contextual_selector_returns_fp32_from_mixed_precision_hidden():
     selector = ContextualHeadSelector(
         8, 4, 3, norm_eps=1e-6, use_identity_bias=True
     ).to(torch.bfloat16)
-    scores = selector(torch.randn(2, 3, 8).to(torch.bfloat16), torch.arange(3))
+    scores = selector(torch.randn(2, 3, 8).to(torch.bfloat16))
 
     assert scores.dtype == torch.float32
     assert torch.isfinite(scores).all()
-
-
-@pytest.mark.parametrize(
-    ("head_indices", "error"),
-    [
-        (torch.tensor([[0, 1]]), "one-dimensional"),
-        (torch.tensor([0]), "active head count"),
-        (torch.tensor([0.0, 1.0]), "integer dtype"),
-    ],
-)
-def test_contextual_selector_validates_head_identities(head_indices, error):
-    selector = ContextualHeadSelector(
-        4, 2, 4, norm_eps=1e-6, use_identity_bias=True
-    )
-    with pytest.raises((TypeError, ValueError), match=error):
-        selector(torch.randn(1, 2, 4), head_indices)
-
-
-def test_contextual_selector_validation_does_not_synchronize_on_indices():
-    selector = ContextualHeadSelector(
-        4, 2, 4, norm_eps=1e-6, use_identity_bias=True
-    )
-    head_indices = torch.arange(2)
-    reads = []
-
-    class TracingIndices(torch.Tensor):
-        @classmethod
-        def __torch_function__(cls, func, types, args=(), kwargs=None):
-            if func in (
-                torch.Tensor.item,
-                torch.Tensor.tolist,
-                torch.Tensor.any,
-            ):
-                reads.append(func)
-            return super().__torch_function__(func, types, args, kwargs or {})
-
-    selector(torch.randn(1, 2, 4), head_indices.as_subclass(TracingIndices))
-
-    assert reads == []
-
-
-def test_packed_linear_features_without_identities_are_rejected():
-    config = _processor_config(
-        head_selection_method="learned_contextual",
-        topk_heads=1,
-        topk_linear_heads=2,
-    )
-    model_config = ModelConfig(
-        variant="longshot",
-        vocab_size=32,
-        hidden_size=32,
-        intermediate_size=64,
-        num_layers=2,
-        num_heads=4,
-        num_kv_heads=2,
-        head_dim=8,
-        cache_processor=config,
-    )
-    block = CacheProcessor(
-        16,
-        6,
-        config,
-        kv_cache_heads=2,
-        model_config=model_config,
-        linear_state_specs=[LinearStateSpec(0, 0, 2), LinearStateSpec(1, 1, 2)],
-    )
-
-    with pytest.raises(ValueError, match="linear_head_indices"):
-        block(
-            torch.randn(1, 2, 3, 16),
-            None,
-            kv_hidden=torch.randn(1, 2, 8),
-            linear_features=torch.randn(1, 4, 16),
-            topk_heads=3,
-        )
 
 
 def test_selector_is_optional_and_shared_by_initial_and_iterative_selection():
@@ -205,7 +124,7 @@ def test_selector_is_optional_and_shared_by_initial_and_iterative_selection():
         == 1
     )
     with pytest.raises(RuntimeError, match="was not configured"):
-        legacy.select_heads(torch.randn(1, 4, 8), torch.arange(4), 2)
+        legacy.select_heads(torch.randn(1, 4, 8), 2)
 
 
 def test_learned_selection_runs_initially_and_after_each_iteration_boundary():
@@ -373,9 +292,7 @@ def test_hybrid_contextual_selection_uses_one_combined_ranking():
         )
     observed = []
     block.head_selector.register_forward_hook(
-        lambda _module, args, _output: observed.append(
-            (args[0].shape, args[1].clone())
-        )
+        lambda _module, args, _output: observed.append(args[0].shape)
     )
 
     updated, linear_delta, selected = block(
@@ -383,19 +300,17 @@ def test_hybrid_contextual_selection_uses_one_combined_ranking():
         None,
         kv_hidden=torch.randn(1, 2, 8),
         linear_features=torch.randn(1, 4, 16),
-        linear_head_indices=torch.arange(2, 6),
         topk_heads=3,
     )
 
     assert updated.shape == (1, 2, 16)
     assert linear_delta.shape == (1, 4, 16)
     assert len(observed) == 1
-    assert observed[0][0] == torch.Size([1, 6, 8])
-    assert torch.equal(observed[0][1], torch.arange(6))
+    assert observed[0] == torch.Size([1, 6, 8])
     assert set(selected[0].tolist()) == {0, 2, 3}
 
 
-def test_linear_head_identities_do_not_compact_when_a_group_is_absent():
+def test_missing_linear_state_group_is_rejected():
     config = _processor_config(
         encoder_method="query_attention",
         encoder_query_source="final_token",
@@ -440,12 +355,10 @@ def test_linear_head_identities_do_not_compact_when_a_group_is_absent():
         },
     )
 
-    inputs = processor._linear_state_inputs(
-        cache, torch.randn(1, processor.num_kv_cache_heads, 8)
-    )
-
-    assert inputs is not None
-    assert torch.equal(inputs.head_indices, torch.tensor([4, 5]))
+    with pytest.raises(RuntimeError, match="has no recurrent state"):
+        processor._linear_state_inputs(
+            cache, torch.randn(1, processor.num_kv_cache_heads, 8)
+        )
 
 
 def test_global_hybrid_contextual_path_reuses_kv_encoding_and_unifies_budget():
@@ -511,13 +424,13 @@ def test_global_hybrid_contextual_path_reuses_kv_encoding_and_unifies_budget():
         )
     selector_inputs = []
     processor.block.head_selector.register_forward_hook(
-        lambda _module, args, _output: selector_inputs.append(args[1].clone())
+        lambda _module, args, _output: selector_inputs.append(args[0].clone())
     )
 
     _, selected = processor._forward_once(cache)
 
     assert len(encode_calls) == 1
-    assert selector_inputs and torch.equal(selector_inputs[0], torch.arange(6))
+    assert selector_inputs and selector_inputs[0].shape == (1, 6, 8)
     assert selected is not None
     assert selected.shape == (1, 3)
     assert set(selected[0].tolist()) == {0, 2, 3}
@@ -532,17 +445,14 @@ def test_learned_selector_state_dict_round_trip_reproduces_scores():
     restored = CacheProcessor(16, 4, config)
     restored.load_state_dict(source.state_dict(), strict=True)
     hidden = torch.randn(2, 4, 8)
-    identities = torch.tensor([3, 0, 2, 1])
 
     assert restored.head_selector is not None
     assert source.head_selector is not None
     torch.testing.assert_close(
-        restored.head_selector(hidden, identities),
-        source.head_selector(hidden, identities),
+        restored.head_selector(hidden), source.head_selector(hidden)
     )
     assert torch.equal(
-        restored.select_heads(hidden, identities, 2),
-        source.select_heads(hidden, identities, 2),
+        restored.select_heads(hidden, 2), source.select_heads(hidden, 2)
     )
 
 

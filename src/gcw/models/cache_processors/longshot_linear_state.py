@@ -21,7 +21,6 @@ class LinearStateSpec:
 class LinearStateInputs:
     features: torch.Tensor
     specs: list[LinearStateSpec]
-    head_indices: torch.Tensor | None = None
 
 
 def _topk_linear_heads(config: CacheProcessorConfig) -> int:
