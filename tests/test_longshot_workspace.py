@@ -4,6 +4,10 @@ import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
+from gcw.models.cache_processors.longshot_workspace import (
+    deliberate_workspace,
+    write_workspace_for_readout,
+)
 from gcw.models.cache_processors.windowed import WindowedCache
 
 
@@ -56,9 +60,9 @@ def test_workspace_cycle_preserves_source_and_writes_differentiable_values() -> 
     original_values = cache.values.clone()
 
     source = processor.encode_source(cache, select_all=True)
-    workspace_0 = processor.initialise_workspace(source)
-    workspace_1 = processor.deliberate(workspace_0, source)
-    branch = processor.write_for_readout(cache, source, workspace_1)
+    workspace_0 = source.merged[:, :, -1, -processor.block.output_dim :].clone()
+    workspace_1 = deliberate_workspace(processor, workspace_0, source)
+    branch = write_workspace_for_readout(processor, cache, source, workspace_1)
 
     assert workspace_0.shape == (2, 4, 8)
     assert workspace_1.shape == workspace_0.shape

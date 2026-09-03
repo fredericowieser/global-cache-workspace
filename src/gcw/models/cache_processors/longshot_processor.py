@@ -125,8 +125,14 @@ class CacheProcessor(nn.Module):
         if self.config.out_proj_init == "zero":
             _zero_projection(self.out_proj)
 
-    def encode_input(self, x: torch.Tensor) -> torch.Tensor:
-        return self._encode_time(self.in_norm(x))
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.in_norm(x)
+        if self.encoder_method == "linear":
+            x = _fit_time_length(x, self.encoder_seq_len)
+            return self.in_proj(x.flatten(start_dim=2))
+        if self.encoder_method == "query_attention":
+            return self.in_proj(self.time_encoder(x))
+        raise ValueError(f"unknown encoder_method: {self.encoder_method}")
 
     def process_hidden(
         self,
@@ -185,18 +191,12 @@ class CacheProcessor(nn.Module):
                 selected_heads = next_selected_heads
         return self.out_norm(h)
 
-    def project_output(self, h: torch.Tensor) -> torch.Tensor:
-        return self.out_proj(h)
-
     def compute_update(
         self, x: torch.Tensor, selected_heads: torch.Tensor
     ) -> torch.Tensor:
-        return self.project_output(
-            self.process_hidden(self.encode_input(x), selected_heads)
+        return self.out_proj(
+            self.process_hidden(self.encode(x), selected_heads)
         )
-
-    def has_linear_state_adapter(self) -> bool:
-        return self.linear_state_adapter is not None
 
     def linear_state_query(
         self, layer_idx: int, following_cache_idx: int, context: torch.Tensor
@@ -247,7 +247,7 @@ class CacheProcessor(nn.Module):
             topk_heads=self.config.topk_heads + _topk_linear_heads(self.config),
         )
         gate = self._gate_scale(processed.dtype)
-        primary_delta = self.project_output(processed[:, : x.shape[1]]) * gate
+        primary_delta = self.out_proj(processed[:, : x.shape[1]]) * gate
         auxiliary_delta = self.linear_state_adapter.output_proj(
             processed[:, x.shape[1] :]
         )
@@ -341,8 +341,8 @@ class CacheProcessor(nn.Module):
     def scaled_update(
         self, x: torch.Tensor, selected_heads: torch.Tensor
     ) -> torch.Tensor:
-        delta = self.project_output(
-            self.process_hidden(self.encode_input(x), selected_heads)
+        delta = self.out_proj(
+            self.process_hidden(self.encode(x), selected_heads)
         )
         return delta * self._gate_scale(delta.dtype)
 
@@ -357,13 +357,13 @@ class CacheProcessor(nn.Module):
                 "Longshot cache processor requires at least one selected time position"
             )
         residual = x[:, :, -1, -self.output_dim :]
-        delta = self.project_output(self.process_hidden(hidden, selected_heads))
+        delta = self.out_proj(self.process_hidden(hidden, selected_heads))
         return residual + delta * self._gate_scale(delta.dtype)
 
     def forward(
         self, x: torch.Tensor, selected_heads: torch.Tensor
     ) -> torch.Tensor:
-        return self.forward_from_hidden(x, self.encode_input(x), selected_heads)
+        return self.forward_from_hidden(x, self.encode(x), selected_heads)
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
         if self.config.gate_mode == "sigmoid":
@@ -373,11 +373,3 @@ class CacheProcessor(nn.Module):
         raise ValueError(
             f"unsupported cache processor gate_mode: {self.config.gate_mode}"
         )
-
-    def _encode_time(self, x: torch.Tensor) -> torch.Tensor:
-        if self.encoder_method == "linear":
-            x = _fit_time_length(x, self.encoder_seq_len)
-            return self.in_proj(x.flatten(start_dim=2))
-        if self.encoder_method == "query_attention":
-            return self.in_proj(self.time_encoder(x))
-        raise ValueError(f"unknown encoder_method: {self.encoder_method}")

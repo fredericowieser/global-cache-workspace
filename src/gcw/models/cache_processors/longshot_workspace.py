@@ -9,6 +9,7 @@ from gcw.models.cache_processors.ops import (
     scatter_latest_values as _scatter_latest_values,
     split_merged_cache_values as _split_merged_values,
 )
+from gcw.models.cache_processors.longshot_selection import refresh_sidecar
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
 
@@ -140,6 +141,5 @@ def write_workspace_for_readout(
         _scatter_latest_values(branch, source.latest_indices, values),
     )
     return cast(
-        WindowedCache,
-        processor._refresh_kv_score_sidecar(branch, source.latest_indices),
+        WindowedCache, refresh_sidecar(processor, branch, source.latest_indices)
     )

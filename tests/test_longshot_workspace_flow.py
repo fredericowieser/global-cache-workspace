@@ -12,6 +12,11 @@ from gcw.config import (
 )
 from gcw.models import LanguageModel, build_model
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
+from gcw.models.cache_processors.longshot_workspace import (
+    deliberate_workspace,
+    refine_workspace,
+    write_workspace_for_readout,
+)
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.params import processor_params
 
@@ -65,9 +70,9 @@ def _workspace(
     processor: GlobalCacheProcessor, cache: WindowedCache, cycles: int
 ):
     source = processor.encode_source(cache, select_all=True)
-    workspace = processor.initialise_workspace(source)
+    workspace = source.merged[:, :, -1, -processor.block.output_dim :].clone()
     for _ in range(cycles):
-        workspace = processor.deliberate(workspace, source)
+        workspace = deliberate_workspace(processor, workspace, source)
     return source, workspace
 
 
@@ -90,8 +95,8 @@ def test_workspace_flow_preserves_k_and_solver_step_shapes(
     cache = _cache()
     source, workspace = _workspace(processor, cache, cycles)
 
-    refined = processor.refine_workspace(workspace, source)
-    branch = processor.write_for_readout(cache, source, workspace)
+    refined = refine_workspace(processor, workspace, source)
+    branch = write_workspace_for_readout(processor, cache, source, workspace)
 
     assert workspace.shape == refined.shape == (2, 4, 8)
     assert branch.keys.shape == cache.keys.shape
@@ -115,8 +120,8 @@ def test_zero_output_workspace_field_is_exact_identity(
     cache = _cache()
     source, workspace = _workspace(processor, cache, cycles=0)
 
-    refined = processor.refine_workspace(workspace, source)
-    branch = processor.write_for_readout(cache, source, workspace)
+    refined = refine_workspace(processor, workspace, source)
+    branch = write_workspace_for_readout(processor, cache, source, workspace)
 
     assert torch.equal(refined, workspace)
     assert torch.equal(branch.keys, cache.keys)
@@ -137,7 +142,7 @@ def test_workspace_flow_is_bounded_and_backpropagates() -> None:
     source = replace(source, merged=source.merged.detach().requires_grad_(True))
     workspace = initial.detach().requires_grad_(True)
 
-    refined = processor.refine_workspace(workspace, source)
+    refined = refine_workspace(processor, workspace, source)
     refined.square().mean().backward()
 
     assert (refined - workspace).abs().max().item() <= max_velocity + 1e-6
@@ -176,8 +181,8 @@ def test_workspace_flow_keeps_frozen_backbone_frozen_and_processor_trainable() -
     cache = _cache()
     source, workspace = _workspace(processor, cache, cycles=1)
 
-    processor.write_for_readout(
-        cache, source, workspace
+    write_workspace_for_readout(
+        processor, cache, source, workspace
     ).values.square().mean().backward()
 
     assert all(
@@ -225,8 +230,8 @@ def test_workspace_flow_opt_out_preserves_existing_readout_semantics() -> None:
     cache = _cache()
     source, workspace = _workspace(processor, cache, cycles=2)
 
-    assert processor.refine_workspace(workspace, source) is workspace
-    branch = processor.write_for_readout(cache, source, workspace)
+    assert refine_workspace(processor, workspace, source) is workspace
+    branch = write_workspace_for_readout(processor, cache, source, workspace)
     expected_values = cache.values.clone()
     expected_values[:, :, :, -1] = workspace.view(2, 2, 2, 8).permute(
         1, 0, 2, 3

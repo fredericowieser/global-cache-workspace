@@ -11,7 +11,6 @@ from torch.utils.checkpoint import checkpoint  # noqa: F401
 
 from gcw.config import (
     ModelConfig,
-    WorkspaceFlowRefinementConfig,
     linear_attention_following_cache_indices,
 )
 from gcw.models.cache_processors.base import CacheProcessorBase
@@ -28,14 +27,6 @@ from gcw.models.cache_processors.ops import (
 )
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
-from gcw.models.cache_processors.longshot_workspace import (
-    deliberate_workspace,
-    refine_workspace,
-    validate_workspace_shape,
-    workspace_cycle_input,
-    workspace_velocity,
-    write_workspace_for_readout,
-)
 from gcw.models.cache_processors.longshot_selection import (
     cache_movement_backend,
     refresh_sidecar,
@@ -209,7 +200,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
         self, cache: CacheLike, *, select_all: bool = False
     ) -> LongshotWorkspaceSource:
         if self.config.score == "kv_norm" and not select_all:
-            merged, scores, indices = self._select_kv_norm_history(cache)
+            merged, scores, indices = select_kv_norm_history(self, cache)
             if indices.shape[-1] == 0:
                 raise ValueError(
                     "Longshot workspace source requires at least one selected position"
@@ -242,7 +233,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
-                backend=self._cache_movement_backend(),
+                backend=cache_movement_backend(self),
             )
             head_scores = chunked_fp32_l2_norm(merged)
         if select_all:
@@ -266,61 +257,6 @@ class GlobalCacheProcessor(CacheProcessorBase):
             latest_indices=latest_shared_indices(indices),
         )
 
-    def initialise_workspace(
-        self, source: LongshotWorkspaceSource
-    ) -> torch.Tensor:
-        return source.merged[:, :, -1, -self.block.output_dim :].clone()
-
-    def _validate_workspace_shape(
-        self,
-        workspace: torch.Tensor,
-        source: LongshotWorkspaceSource,
-    ) -> None:
-        validate_workspace_shape(workspace, source, self.block.output_dim)
-
-    def deliberate(
-        self, workspace: torch.Tensor, source: LongshotWorkspaceSource
-    ) -> torch.Tensor:
-        return deliberate_workspace(self, workspace, source)
-
-    def _workspace_cycle_input(
-        self,
-        workspace: torch.Tensor,
-        source: LongshotWorkspaceSource,
-    ) -> torch.Tensor:
-        return workspace_cycle_input(workspace, source, self.block.output_dim)
-
-    def refine_workspace(
-        self,
-        workspace: torch.Tensor,
-        source: LongshotWorkspaceSource,
-    ) -> torch.Tensor:
-        """Integrate the opt-in tied workspace field without changing source state."""
-        return refine_workspace(self, workspace, source)
-
-    def _workspace_velocity(
-        self,
-        workspace: torch.Tensor,
-        time: float,
-        source: LongshotWorkspaceSource,
-        config: WorkspaceFlowRefinementConfig,
-    ) -> torch.Tensor:
-        return workspace_velocity(self, workspace, time, source, config)
-
-    def write_for_readout(
-        self,
-        cache: CacheLike,
-        source: LongshotWorkspaceSource,
-        workspace: torch.Tensor,
-    ) -> WindowedCache:
-        return write_workspace_for_readout(self, cache, source, workspace)
-
-    def _select_kv_norm_history(
-        self,
-        cache: CacheLike,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return select_kv_norm_history(self, cache)
-
     def _forward_once(
         self, cache: CacheLike, *, select_all: bool = False
     ) -> tuple[CacheLike, torch.Tensor | None]:
@@ -331,9 +267,9 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 raise TypeError(
                     "enabled KV-score sidecar requires contiguous WindowedCache storage"
                 )
-            self._synchronize_kv_score_sidecar(cache)
+            synchronize_sidecar(self, cache)
         if self.config.score == "kv_norm" and not select_all:
-            merged, scores, indices = self._select_kv_norm_history(cache)
+            merged, scores, indices = select_kv_norm_history(self, cache)
             if indices.shape[-1] == 0:
                 return cache, None
             kv_head_scores = (
@@ -362,13 +298,14 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rope_theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
-                backend=self._cache_movement_backend(),
+                backend=cache_movement_backend(self),
             )
             kv_head_scores = chunked_fp32_l2_norm(merged)
         latest = latest_shared_indices(indices)
         kv_hidden = (
-            self.block.encode_input(merged)
-            if self.block.has_linear_state_adapter() and cache.linear_states
+            self.block.encode(merged)
+            if self.block.linear_state_adapter is not None
+            and cache.linear_states
             else None
         )
         linear_inputs = self._linear_state_inputs(cache, kv_hidden)
@@ -411,7 +348,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 self.head_dim,
             )
             cache = _scatter_latest_values(cache, latest, values)
-            return self._refresh_kv_score_sidecar(cache, latest), selected_heads
+            return refresh_sidecar(self, cache, latest), selected_heads
         keys, values = _split_merged(
             updated[:, :, None, :],
             self.num_layers,
@@ -427,18 +364,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_dim=self.rotary_dim,
             )
         cache = _scatter_latest(cache, latest, keys, values)
-        return self._refresh_kv_score_sidecar(cache, latest), selected_heads
-
-    def _synchronize_kv_score_sidecar(self, cache: WindowedCache) -> None:
-        synchronize_sidecar(self, cache)
-
-    def _refresh_kv_score_sidecar(
-        self, cache: CacheLike, positions: torch.Tensor
-    ) -> CacheLike:
-        return refresh_sidecar(self, cache, positions)
-
-    def _cache_movement_backend(self) -> str:
-        return cache_movement_backend(self)
+        return refresh_sidecar(self, cache, latest), selected_heads
 
     def _select_combined_heads(
         self,
@@ -523,37 +449,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
         end = start + self.num_kv_heads
         return kv_hidden[:, start:end].mean(dim=1)
 
-    def _linear_state_forward(
-        self,
-        layer_idx: int,
-        recurrent_state: torch.Tensor,
-        query: torch.Tensor,
-    ) -> torch.Tensor:
-        from gcw.models.backbones.qwen3 import qwen35_gated_delta_rule
-
-        dynamics = self.linear_state_dynamics.get(layer_idx)
-        if dynamics is None:
-            raise RuntimeError(
-                f"missing linear state dynamics for layer {layer_idx}"
-            )
-        key, value, g, beta = dynamics(query)
-        _, final_state = qwen35_gated_delta_rule(
-            query,
-            key,
-            value,
-            g=g,
-            beta=beta,
-            initial_state=recurrent_state,
-        )
-        return final_state.to(recurrent_state.dtype)
-
     def _scatter_linear_state_updates(
         self,
         cache: CacheLike,
         linear_delta: torch.Tensor,
         specs: list[LinearStateSpec],
     ) -> CacheLike:
-        if not self.block.has_linear_state_adapter() or not specs:
+        if self.block.linear_state_adapter is None or not specs:
             return cache
         states = (
             {} if cache.linear_states is None else dict(cache.linear_states)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import copy
 import os
-from types import MethodType
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -11,6 +11,7 @@ import torch
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.data.training import RandomCursor
 from gcw.models import build_model
+from gcw.models.cache_processors import longshot as longshot_module
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.performance.config import LongshotFullHistoryConfig
@@ -100,7 +101,7 @@ def _trajectory_step(
     list[torch.Tensor | None],
 ]:
     optimizer.zero_grad(set_to_none=True)
-    selected = processor._select_kv_norm_history(cache)[2]
+    selected = longshot_module.select_kv_norm_history(processor, cache)[2]
     with torch.autocast("cuda", dtype=torch.bfloat16):
         output = processor(cache)
         row_losses = output.keys.float().square().mean(dim=(0, 2, 3, 4))
@@ -230,22 +231,6 @@ def _language_model(*, unrope_keys: bool = False) -> torch.nn.Module:
     return model.cuda().train()
 
 
-def _install_position_trace(model: torch.nn.Module) -> list[torch.Tensor]:
-    processor = model.cache_processor
-    original = processor._select_kv_norm_history
-    trace: list[torch.Tensor] = []
-
-    def traced(_self: GlobalCacheProcessor, cache: WindowedCache):
-        result = original(cache)
-        trace.append(result[2].detach().clone())
-        return result
-
-    object.__setattr__(
-        processor, "_select_kv_norm_history", MethodType(traced, processor)
-    )
-    return trace
-
-
 def _language_model_step(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -257,7 +242,21 @@ def _language_model_step(
 ]:
     optimizer.zero_grad(set_to_none=True)
     trace.clear()
-    with torch.autocast("cuda", dtype=torch.bfloat16):
+    select_history = longshot_module.select_kv_norm_history
+
+    def traced(owner: GlobalCacheProcessor, cache: WindowedCache):
+        result = select_history(owner, cache)
+        trace.append(result[2].detach().clone())
+        return result
+
+    with (
+        patch.object(
+            longshot_module,
+            "select_kv_norm_history",
+            side_effect=traced,
+        ),
+        torch.autocast("cuda", dtype=torch.bfloat16),
+    ):
         row_sums, row_counts = row_loss_sums_and_counts(
             model,
             inputs,
@@ -289,8 +288,8 @@ def test_cuda_bf16_segmented_language_model_pair_loss_trajectory(
     configure_longshot_full_history_execution(
         optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=4096)
     )
-    reference_trace = _install_position_trace(reference)
-    optimized_trace = _install_position_trace(optimized)
+    reference_trace: list[torch.Tensor] = []
+    optimized_trace: list[torch.Tensor] = []
     reference_optimizer = torch.optim.AdamW(
         reference.cache_processor.parameters(), lr=3e-4
     )
@@ -351,7 +350,7 @@ def test_cuda_peak_memory_and_counters_prove_selected_only_materialization(
 
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
-    reference_result = reference._select_kv_norm_history(cache)
+    reference_result = longshot_module.select_kv_norm_history(reference, cache)
     torch.cuda.synchronize()
     reference_peak = torch.cuda.max_memory_allocated()
     reference_cpu = tuple(tensor.cpu() for tensor in reference_result)
@@ -359,7 +358,7 @@ def test_cuda_peak_memory_and_counters_prove_selected_only_materialization(
     torch.cuda.empty_cache()
 
     torch.cuda.reset_peak_memory_stats()
-    optimized_result = optimized._select_kv_norm_history(cache)
+    optimized_result = longshot_module.select_kv_norm_history(optimized, cache)
     torch.cuda.synchronize()
     optimized_peak = torch.cuda.max_memory_allocated()
     metrics = pop_longshot_full_history_metrics(optimized)
@@ -465,7 +464,7 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
         torch.cuda.empty_cache()
         reference_baseline = torch.cuda.memory_allocated()
         torch.cuda.reset_peak_memory_stats()
-        expected = reference._select_kv_norm_history(cache)
+        expected = longshot_module.select_kv_norm_history(reference, cache)
         torch.cuda.synchronize()
         reference_end = torch.cuda.memory_allocated()
         reference_peak = torch.cuda.max_memory_allocated()
@@ -491,7 +490,7 @@ def test_h200_production_qwen3_unrope_peak_memory_and_exact_outputs(
             torch.cuda.empty_cache()
             baseline = torch.cuda.memory_allocated()
             torch.cuda.reset_peak_memory_stats()
-            actual = optimized._select_kv_norm_history(cache)
+            actual = longshot_module.select_kv_norm_history(optimized, cache)
             torch.cuda.synchronize()
             end = torch.cuda.memory_allocated()
             peak = torch.cuda.max_memory_allocated()
@@ -566,7 +565,7 @@ def test_cuda_bf16_unrope_full_checkpoint_resume_replays_exactly(
     model = _language_model(unrope_keys=True)
     configure_longshot_full_history_execution(model, history)
     optimizer = torch.optim.AdamW(model.cache_processor.parameters(), lr=3e-4)
-    trace = _install_position_trace(model)
+    trace: list[torch.Tensor] = []
     inputs = torch.randint(0, 64, (4, 12), device="cuda")
     targets = torch.randint(0, 64, (4, 12), device="cuda")
     _language_model_step(model, optimizer, trace, inputs, targets)
@@ -602,8 +601,8 @@ def test_cuda_bf16_unrope_full_checkpoint_resume_replays_exactly(
     checkpoint.restore_optimizer(restored_optimizer, device="cuda")
     assert checkpoint.resume_state == resume
 
-    expected_trace = _install_position_trace(model)
-    actual_trace = _install_position_trace(restored)
+    expected_trace: list[torch.Tensor] = []
+    actual_trace: list[torch.Tensor] = []
     next_inputs = torch.randint(0, 64, (4, 12), device="cuda")
     next_targets = torch.randint(0, 64, (4, 12), device="cuda")
     expected = _language_model_step(
