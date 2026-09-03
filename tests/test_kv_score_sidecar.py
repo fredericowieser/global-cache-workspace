@@ -28,6 +28,7 @@ from gcw.models.backbones.transformer import (
     _unflatten_windowed_cache,
 )
 from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors import longshot_selection
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
@@ -445,7 +446,7 @@ def test_select_all_refreshes_sidecar_and_disabled_path_does_not_touch_lifecycle
     reference = _processor(update_stream="v")
     disabled_cache = _cache(sequence=8)
     monkeypatch.setattr(
-        longshot_module,
+        longshot_selection,
         "synchronize_kv_score_sidecar",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("disabled lifecycle call")

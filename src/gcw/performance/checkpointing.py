@@ -14,7 +14,7 @@ import torch
 
 from gcw.config import TrainConfig
 from gcw.models.backbones.transformer import Block
-from gcw.models.cache_processors.longshot import (
+from gcw.models.cache_processors.longshot_layers import (
     longshot_gradient_checkpointing_override,
 )
 

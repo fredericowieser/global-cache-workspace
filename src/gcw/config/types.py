@@ -16,9 +16,10 @@ CacheProcessorMode = Literal[
 ]
 CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
+CacheHeadSelectionMethod = Literal["magnitude", "learned_contextual"]
 CacheProcessorIterationMode = Literal["internal", "external"]
 CacheProcessorInternalIterationScore = Literal[
-    "attn_l2", "cache_head_attention", "kv_norm"
+    "attn_l2", "cache_head_attention", "kv_norm", "learned_contextual"
 ]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 CacheLinearStateUpdateMode = Literal["outer_product", "gated_delta"]

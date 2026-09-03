@@ -5,10 +5,6 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-# Re-exported so ``longshot_processor`` can look it up via ``getattr(ls_pkg, "checkpoint")``;
-# tests monkeypatch ``longshot.checkpoint`` to assert checkpointing call counts.
-from torch.utils.checkpoint import checkpoint  # noqa: F401
-
 from gcw.config import (
     ModelConfig,
     linear_attention_following_cache_indices,
@@ -28,6 +24,7 @@ from gcw.models.cache_processors.ops import (
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.models.cache_processors.longshot_selection import (
+    _select_heads_from_head_scores,
     cache_movement_backend,
     refresh_sidecar,
     select_kv_norm_history,
@@ -35,7 +32,6 @@ from gcw.models.cache_processors.longshot_selection import (
 )
 from gcw.models.cache_processors.longshot_layers import (
     EncoderMethod,
-    _select_heads_from_head_scores,
 )
 from gcw.models.cache_processors.longshot_processor import CacheProcessor
 from gcw.models.cache_processors.longshot_linear_state import (
@@ -45,29 +41,9 @@ from gcw.models.cache_processors.longshot_linear_state import (
 )
 from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
-    # Re-exported: ``longshot_selection`` reaches it via ``ls_pkg`` and tests
-    # monkeypatch it to compare eager vs optimized scoring.
-    chunked_fp32_squared_l2,  # noqa: F401
 )
-from gcw.performance.kv_score_sidecar import (
-    kv_score_sidecar_execution,
-    # Re-exported: ``longshot_selection`` reaches these via ``getattr(ls_pkg, ...)``
-    # and tests monkeypatch them to assert sidecar lifecycle behavior.
-    refresh_kv_score_sidecar,  # noqa: F401
-    synchronize_kv_score_sidecar,  # noqa: F401
-)
+from gcw.performance.kv_score_sidecar import kv_score_sidecar_execution
 
-# Re-exported for backward compatibility: downstream modules and tests import
-# these layer primitives from the historical monolithic ``longshot`` module
-# location rather than from ``longshot_layers``.
-from gcw.models.cache_processors.longshot_layers import (  # noqa: F401
-    ProcessorAttention,
-    QueryAttentionTimeEncoder,
-    _gradient_checkpointing_enabled,
-    longshot_gradient_checkpointing_override,
-)
-
-# The cache object any processor path accepts: static, mutable, or windowed.
 CacheLike = CacheState | StaticCacheState | WindowedCache
 
 
@@ -204,15 +180,20 @@ class GlobalCacheProcessor(CacheProcessorBase):
                     "enabled KV-score sidecar requires contiguous WindowedCache storage"
                 )
             synchronize_sidecar(self, cache)
+        learned_initial_selection = (  # TODO: this should be moved to an attribute set at init
+            self.config.head_selection_method == "learned_contextual"
+        )
         if self.config.score == "kv_norm" and not select_all:
             merged, scores, indices = select_kv_norm_history(self, cache)
             if indices.shape[-1] == 0:
                 return cache, None
-            kv_head_scores = (
-                gather_per_cache_head_scores(scores, indices)
-                .float()
-                .sum(dim=-1)
-            )
+            kv_head_scores = None
+            if not learned_initial_selection:
+                kv_head_scores = (
+                    gather_per_cache_head_scores(scores, indices)
+                    .float()
+                    .sum(dim=-1)
+                )
         else:
             if select_all:
                 indices = expand_cache_head_indices(
@@ -236,7 +217,11 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 rotary_dim=self.rotary_dim,
                 backend=cache_movement_backend(self),
             )
-            kv_head_scores = chunked_fp32_l2_norm(merged)
+            kv_head_scores = (
+                None
+                if learned_initial_selection
+                else chunked_fp32_l2_norm(merged)
+            )
         latest = latest_shared_indices(indices)
         kv_hidden = (
             self.block.encode(merged)
@@ -245,34 +230,39 @@ class GlobalCacheProcessor(CacheProcessorBase):
             else None
         )
         linear_inputs = self._linear_state_inputs(cache, kv_hidden)
-        selected_heads = self._select_combined_heads(
-            batch=merged.shape[0],
-            kv_head_scores=kv_head_scores,
-            linear_inputs=linear_inputs,
-            select_all=select_all,
-            device=merged.device,
-        )
-        if linear_inputs is None:
-            updated = (
-                self.block(merged, selected_heads)
-                if kv_hidden is None
-                else self.block.forward_from_hidden(
-                    merged, kv_hidden, selected_heads
-                )
-            )
+        if learned_initial_selection:
+            selected_heads = None
         else:
-            if kv_hidden is None:
-                raise RuntimeError(
-                    "linear state inputs require encoded KV cache features"
-                )
-            updated, linear_delta = (
-                self.block.forward_with_linear_state_features(
-                    merged,
-                    kv_hidden,
-                    linear_inputs.features,
-                    selected_heads,
-                )
+            if kv_head_scores is None:
+                raise RuntimeError("magnitude head scores were not computed")
+            selected_heads = self._select_combined_heads(
+                batch=merged.shape[0],
+                kv_head_scores=kv_head_scores,
+                linear_inputs=linear_inputs,
+                select_all=select_all,
+                device=merged.device,
             )
+        linear_features: torch.Tensor | None = None
+        linear_head_indices: torch.Tensor | None = None
+        topk_heads = self.config.topk_heads
+        if linear_inputs is not None:
+            linear_features = linear_inputs.features
+            linear_head_indices = linear_inputs.head_indices
+            topk_heads += _topk_linear_heads(self.config)
+        updated, linear_delta, selected_heads = self.block(
+            merged,
+            selected_heads,
+            kv_hidden=kv_hidden,
+            linear_features=linear_features,
+            linear_head_indices=linear_head_indices,
+            topk_heads=topk_heads,
+            select_all=select_all,
+        )
+        if linear_inputs is not None:
+            if linear_delta is None:
+                raise RuntimeError(
+                    "linear state processor did not produce an update"
+                )
             cache = self._scatter_linear_state_updates(
                 cache, linear_delta, linear_inputs.specs
             )
@@ -324,7 +314,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if linear_inputs is None:
             return _select_heads_from_head_scores(kv_head_scores, topk_heads)
         selected = [_select_heads_from_head_scores(kv_head_scores, topk_heads)]
-        topk_linear = int(_topk_linear_heads(self.config) or 0)
+        topk_linear = _topk_linear_heads(self.config)
         if topk_linear > 0:
             key_dim = self.block.linear_state_update_dims()[0]
             linear_head_scores = (
@@ -342,14 +332,18 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if kv_hidden is None or not cache.linear_states:
             return None
         feature_parts: list[torch.Tensor] = []
+        identity_parts: list[torch.Tensor] = []  
         active_specs: list[LinearStateSpec] = []
         context_cache: dict[int, torch.Tensor] = {}
         query_cache: dict[tuple[str, int], torch.Tensor] = {}
+        global_identity_offset = self.num_kv_cache_heads
         for spec in self.linear_state_specs:
+            identity_start = global_identity_offset
+            global_identity_offset += spec.head_count
             state = cache.linear_states.get(spec.layer_idx)
-            if state is None or state[1] is None:
+            if state is None or state[0] is None:
                 continue
-            recurrent_state = state[1]
+            recurrent_state = state[0]
             if spec.following_cache_idx not in context_cache:
                 context_cache[spec.following_cache_idx] = (
                     self._following_kv_hidden_context(
@@ -369,13 +363,28 @@ class GlobalCacheProcessor(CacheProcessorBase):
             query = query_cache[cache_key].to(recurrent_state.dtype)
             readout = torch.einsum("bhk,bhkv->bhv", query, recurrent_state)
             features = torch.cat([query.to(readout.dtype), readout], dim=-1)
+            if features.shape[1] != spec.head_count:  # TODO: why are we adding this in this commit?
+                raise RuntimeError(
+                    f"linear state layer {spec.layer_idx} produced "
+                    f"{features.shape[1]} heads but its spec declares "
+                    f"{spec.head_count}; head identities would misalign"
+                )
             feature_parts.append(features)
+            identity_parts.append(
+                torch.arange(
+                    identity_start,
+                    global_identity_offset,
+                    dtype=torch.long,
+                    device=features.device,
+                )
+            )
             active_specs.append(spec)
         if not feature_parts:
             return None
         return LinearStateInputs(
             features=torch.cat(feature_parts, dim=1),
             specs=active_specs,
+            head_indices=torch.cat(identity_parts),
         )
 
     def _following_kv_hidden_context(
@@ -403,7 +412,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             offset += spec.head_count
             if spec.layer_idx not in states:
                 continue
-            conv_state, recurrent_state = states[spec.layer_idx]
+            recurrent_state, conv_state = states[spec.layer_idx]
             if recurrent_state is None:
                 continue
             if self.config.linear_state_update_mode == "gated_delta":
@@ -412,7 +421,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                     update,
                     recurrent_state,
                 )
-                states[spec.layer_idx] = (conv_state, new_recurrent)
+                states[spec.layer_idx] = (new_recurrent, conv_state)
                 continue
             delta_key, delta_value = torch.split(
                 update, [key_dim, value_dim], dim=-1
@@ -424,8 +433,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 "bhk,bhv->bhkv", delta_key.float(), delta_value.float()
             )
             states[spec.layer_idx] = (
-                conv_state,
                 recurrent_state + delta_state.to(recurrent_state.dtype),
+                conv_state,
             )
         cache.linear_states = states
         return cache

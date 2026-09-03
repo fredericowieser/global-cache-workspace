@@ -54,22 +54,6 @@ def _gather_cache_heads(
     return torch.gather(x, dim=1, index=index)
 
 
-def _select_heads_from_head_scores(
-    head_scores: torch.Tensor, topk_heads: int
-) -> torch.Tensor:
-    if topk_heads <= 0:
-        raise ValueError(
-            f"topk_heads must select at least one cache head, got {topk_heads}"
-        )
-    if topk_heads >= head_scores.shape[-1]:
-        return torch.arange(
-            head_scores.shape[-1], device=head_scores.device
-        ).expand(head_scores.shape[0], -1)
-    return torch.topk(
-        head_scores, k=topk_heads, dim=-1, largest=True, sorted=True
-    ).indices
-
-
 def _zero_projection(projection: nn.Module) -> None:
     zero_projection(projection, per_head_type=PerCacheHeadLinear)
 
@@ -159,9 +143,9 @@ class ProcessorAttention(nn.Module):
         score_kv_norm = (
             return_attn_scores and self.internal_iteration_score == "kv_norm"
         )
-        assert (
-            selected_heads.shape[-1] > 0
-        ), "selected_heads must include at least one cache head"
+        assert selected_heads.shape[-1] > 0, (
+            "selected_heads must include at least one cache head"
+        )
         q = self.q_proj(x).view(
             batch, cache_heads, self.num_heads, self.head_dim
         )
@@ -220,9 +204,9 @@ class ProcessorAttention(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
-        assert (
-            selected_count > 0
-        ), "selected_heads must include at least one cache head"
+        assert selected_count > 0, (
+            "selected_heads must include at least one cache head"
+        )
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(
@@ -292,9 +276,9 @@ class ProcessorAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
-        assert (
-            selected_count > 0
-        ), "selected_heads must include at least one cache head"
+        assert selected_count > 0, (
+            "selected_heads must include at least one cache head"
+        )
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(

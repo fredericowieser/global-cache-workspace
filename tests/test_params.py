@@ -52,6 +52,7 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
             encoder_query_source="final_token",
             per_cache_head_projections=True,
         ),
+        replace(base_cp, head_selection_method="learned_contextual"),
     ):
         cfg = ModelConfig(
             variant="longshot",
@@ -136,13 +137,23 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
     gated_cfg = replace(
         cfg, cache_processor=replace(cp, linear_state_update_mode="gated_delta")
     )
+    learned_cfg = replace(
+        cfg,
+        cache_processor=replace(
+            cp, head_selection_method="learned_contextual"
+        ),
+    )
     gated_model = build_model(gated_cfg)
+    learned_model = build_model(learned_cfg)
 
     assert processor_params(cfg) == sum(
         p.numel() for p in model.cache_processor.parameters()
     )
     assert processor_params(gated_cfg) == sum(
         p.numel() for p in gated_model.cache_processor.parameters()
+    )
+    assert processor_params(learned_cfg) == sum(
+        p.numel() for p in learned_model.cache_processor.parameters()
     )
     assert processor_params(gated_cfg) > processor_params(cfg)
     assert processor_params(cfg) > processor_params(default_cfg)

@@ -268,10 +268,16 @@ def processor_forward_flops_per_sequence(
             )
         elif config.variant == "longshot":
             linear_heads = _longshot_linear_state_heads(config)
-            selected_heads = min(cp.topk_heads, cache_heads) + min(
-                _longshot_topk_linear_heads(cp),
-                linear_heads,
-            )
+            if cp.head_selection_method == "learned_contextual":
+                head_budget = cp.topk_heads + (
+                    _longshot_topk_linear_heads(cp) if linear_heads > 0 else 0
+                )
+                selected_heads = min(head_budget, cache_heads + linear_heads)
+            else:
+                selected_heads = min(cp.topk_heads, cache_heads) + min(
+                    _longshot_topk_linear_heads(cp),
+                    linear_heads,
+                )
             if cp.include_self_head_kv:
                 selected_heads += 1
             total += _longshot_processor_block_flops_per_call(
@@ -407,11 +413,97 @@ def _longshot_processor_block_flops_per_call(
         * selected_heads
     )
     field = layer_matmul + attention
+    initial_selection = _longshot_initial_head_selection_flops(
+        input_dim,
+        config,
+        selected,
+        cache_heads,
+        linear_heads,
+        model_config,
+    )
     if config.iteration_mode == "external":
         return float(
-            config.iterations * (encode_decode + field_evaluations * field)
+            config.iterations
+            * (encode_decode + field_evaluations * field + initial_selection)
         )
-    return float(encode_decode + config.iterations * field_evaluations * field)
+    reselection = 0
+    if model_config is None or model_config.flow_processor is None:
+        reselection = (config.iterations - 1) * (
+            _longshot_iteration_head_selection_flops(
+                config, total_heads, selected_heads
+            )
+        )
+    return float(
+        encode_decode
+        + initial_selection
+        + config.iterations * field_evaluations * field
+        + reselection
+    )
+
+
+def _longshot_contextual_head_selection_flops(
+    config: CacheProcessorConfig, heads: int
+) -> int:
+    hidden = config.hidden_size
+    selector_hidden = config.head_selector_hidden_size
+    norm_and_context = 4 * heads * hidden
+    projections = 2 * (heads + 1) * hidden * selector_hidden
+    dot_products = 2 * heads * selector_hidden
+    identity_bias = heads if config.head_selector_use_identity_bias else 0
+    return norm_and_context + projections + dot_products + identity_bias
+
+
+def _longshot_initial_head_selection_flops(
+    input_dim: int,
+    config: CacheProcessorConfig,
+    selected_positions: int,
+    cache_heads: int,
+    linear_heads: int,
+    model_config: ModelConfig | None,
+) -> int:
+    if config.head_selection_method == "learned_contextual":
+        return _longshot_contextual_head_selection_flops(
+            config, cache_heads + linear_heads
+        )
+    if config.score == "kv_norm":
+        kv_score = cache_heads * selected_positions
+    else:
+        kv_score = 2 * cache_heads * selected_positions * input_dim
+    linear_score = 0
+    if model_config is not None and linear_heads > 0:
+        linear_value_dim = int(
+            model_config.linear_value_head_dim
+            or model_config.linear_key_head_dim
+            or _head_dim(model_config)
+        )
+        linear_score = 2 * linear_heads * linear_value_dim
+    return kv_score + linear_score
+
+
+def _longshot_iteration_head_selection_flops(
+    config: CacheProcessorConfig,
+    heads: int,
+    selected_heads: int,
+) -> int:
+    method = config.internal_iteration_score
+    if method == "learned_contextual":
+        return _longshot_contextual_head_selection_flops(config, heads)
+    if method == "attn_l2":
+        return 2 * config.num_layers * heads * config.hidden_size
+    if method == "kv_norm":
+        kv_dim = config.num_kv_heads * config.hidden_size // config.num_heads
+        return 4 * config.num_layers * heads * kv_dim
+    if method == "cache_head_attention":
+        full_score_attention = (
+            2
+            * config.num_layers
+            * config.hidden_size
+            * heads
+            * max(heads - selected_heads, 0)
+        )
+        score_reduction = config.num_layers * config.num_heads * heads * heads
+        return full_score_attention + score_reduction
+    raise ValueError(f"unsupported internal_iteration_score: {method}")
 
 
 def _longshot_linear_state_heads(config: ModelConfig) -> int:

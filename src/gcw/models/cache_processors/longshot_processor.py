@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from typing import cast
+
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
-import gcw.models.cache_processors.longshot as longshot_pkg
 
 from gcw.config import (
     CacheProcessorConfig,
@@ -21,13 +21,16 @@ from gcw.models.cache_processors.longshot_layers import (
     QueryAttentionTimeEncoder,
     _fit_time_length,
     _gradient_checkpointing_enabled,
-    _select_heads_from_head_scores,
     _zero_projection,
 )
 from gcw.models.cache_processors.longshot_linear_state import (
     LinearStateAdapter,
     LinearStateSpec,
     _topk_linear_heads,
+)
+from gcw.models.cache_processors.longshot_selection import (
+    ContextualHeadSelector,
+    _select_heads_from_head_scores,
 )
 
 
@@ -94,6 +97,20 @@ class CacheProcessor(nn.Module):
         )
         self._selected_head_overlap_totals: dict[int, torch.Tensor] = {}
         self._selected_head_overlap_counts: dict[int, int] = {}
+        self.head_selector: ContextualHeadSelector | None
+        if (
+            config.head_selection_method == "learned_contextual"
+            or config.internal_iteration_score == "learned_contextual"
+        ):
+            self.head_selector = ContextualHeadSelector(
+                config.hidden_size,
+                config.head_selector_hidden_size,
+                num_cache_heads,
+                norm_eps=config.norm_eps,
+                use_identity_bias=config.head_selector_use_identity_bias,
+            )
+        else:
+            self.head_selector = None
         self.linear_state_adapter: LinearStateAdapter | None
         self.init_weights()
         if linear_state_specs:
@@ -134,12 +151,96 @@ class CacheProcessor(nn.Module):
             return self.in_proj(self.time_encoder(x))
         raise ValueError(f"unknown encoder_method: {self.encoder_method}")
 
-    def process_hidden(
+    def select_heads(
+        self,
+        hidden: torch.Tensor,
+        head_indices: torch.Tensor,
+        topk_heads: int,
+    ) -> torch.Tensor:
+        if self.head_selector is None:
+            raise RuntimeError(
+                "learned contextual head selection was not configured"
+            )
+        return _select_heads_from_head_scores(
+            self.head_selector(hidden, head_indices), topk_heads
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        selected_heads: torch.Tensor | None = None,
+        *,
+        kv_hidden: torch.Tensor | None = None,
+        linear_features: torch.Tensor | None = None,
+        linear_head_indices: torch.Tensor | None = None,
+        topk_heads: int | None = None,
+        select_all: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
+        if x.shape[2] == 0:
+            raise ValueError(
+                "Longshot cache processor requires at least one selected time position"
+            )
+        kv_hidden = self.encode(x) if kv_hidden is None else kv_hidden
+        hidden = kv_hidden
+        linear_adapter = self.linear_state_adapter
+        if linear_features is not None:
+            if linear_adapter is None:
+                raise ValueError("linear state adapter is not configured")
+            hidden = torch.cat(
+                [hidden, linear_adapter.encode(linear_features)],
+                dim=1,
+            )
+        head_indices = None
+        if (
+            selected_heads is None and not select_all
+        ) or self.config.internal_iteration_score == "learned_contextual":
+            if linear_features is not None and linear_head_indices is None:
+                raise ValueError(
+                    "contextual head selection over linear-state features requires "
+                    "linear_head_indices; packed positions do not identify cache heads"
+                )
+            head_indices = torch.arange(
+                kv_hidden.shape[1], dtype=torch.long, device=hidden.device
+            )
+            if linear_head_indices is not None:
+                head_indices = torch.cat(
+                    [head_indices, linear_head_indices.to(hidden.device)]
+                )
+        if topk_heads is None:
+            topk_heads = self.config.topk_heads + (
+                _topk_linear_heads(self.config)
+                if linear_features is not None
+                else 0
+            )
+        if select_all:
+            selected_heads = torch.arange(
+                hidden.shape[1], dtype=torch.long, device=hidden.device
+            ).expand(hidden.shape[0], -1)
+        elif selected_heads is None:
+            assert head_indices is not None
+            selected_heads = self.select_heads(hidden, head_indices, topk_heads)
+        processed = self._iterate_layers(
+            hidden, selected_heads, topk_heads, head_indices
+        )
+        gate = self._gate_scale(processed.dtype)
+        primary_delta = self.out_proj(processed[:, : x.shape[1]]) * gate
+        updated = x[:, :, -1, -self.output_dim :] + primary_delta
+        linear_delta = None
+        if linear_features is not None:
+            assert linear_adapter is not None
+            linear_delta = linear_adapter.output_proj(
+                processed[:, x.shape[1] :]
+            )
+            if self.config.gate_linear_state_delta:
+                linear_delta = linear_delta * gate
+        return updated, linear_delta, selected_heads
+
+    def _iterate_layers(
         self,
         h: torch.Tensor,
         selected_heads: torch.Tensor,
-        *,
-        topk_heads: int | None = None,
+        topk_heads: int,
+        head_indices: torch.Tensor | None,
     ) -> torch.Tensor:
         if self.flow is not None:
             return self.flow(
@@ -148,16 +249,17 @@ class CacheProcessor(nn.Module):
                     self._run_flow_field(state, selected_heads)
                 ),
             )
-        topk_heads = (
-            self.config.topk_heads if topk_heads is None else topk_heads
-        )
         iterations = (
             self.config.iterations
             if self.config.iteration_mode == "internal"
             else 1
         )
+        learned_reselection = (
+            self.config.internal_iteration_score == "learned_contextual"
+        )
         for iteration in range(iterations):
-            return_attn_scores = iteration + 1 < iterations
+            has_next_iteration = iteration + 1 < iterations
+            return_attn_scores = has_next_iteration and not learned_reselection
             layer_scores = []
             for module in self.layers:
                 layer = cast(ProcessorLayer, module)
@@ -180,23 +282,22 @@ class CacheProcessor(nn.Module):
                             "processor layer returned unexpected iteration scores"
                         )
                     h = result
-            if return_attn_scores:
-                head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
-                next_selected_heads = _select_heads_from_head_scores(
-                    head_scores, topk_heads
-                )
+            if has_next_iteration:
+                if learned_reselection:
+                    assert head_indices is not None
+                    next_selected_heads = self.select_heads(
+                        h, head_indices, topk_heads
+                    )
+                else:
+                    head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
+                    next_selected_heads = _select_heads_from_head_scores(
+                        head_scores, topk_heads
+                    )
                 self.record_selected_head_overlap(
                     iteration + 1, selected_heads, next_selected_heads
                 )
                 selected_heads = next_selected_heads
         return self.out_norm(h)
-
-    def compute_update(
-        self, x: torch.Tensor, selected_heads: torch.Tensor
-    ) -> torch.Tensor:
-        return self.out_proj(
-            self.process_hidden(self.encode(x), selected_heads)
-        )
 
     def linear_state_query(
         self, layer_idx: int, following_cache_idx: int, context: torch.Tensor
@@ -223,38 +324,6 @@ class CacheProcessor(nn.Module):
             self.linear_state_adapter.linear_key_dim,
             self.linear_state_adapter.linear_value_dim,
         )
-
-    def forward_with_linear_state_features(
-        self,
-        x: torch.Tensor,
-        kv_hidden: torch.Tensor,
-        linear_features: torch.Tensor,
-        selected_heads: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.linear_state_adapter is None:
-            raise ValueError("linear state adapter is not configured")
-        if x.shape[2] == 0:
-            raise ValueError(
-                "Longshot cache processor requires at least one selected time position"
-            )
-        hidden = torch.cat(
-            [kv_hidden, self.linear_state_adapter.encode(linear_features)],
-            dim=1,
-        )
-        processed = self.process_hidden(
-            hidden,
-            selected_heads,
-            topk_heads=self.config.topk_heads + _topk_linear_heads(self.config),
-        )
-        gate = self._gate_scale(processed.dtype)
-        primary_delta = self.out_proj(processed[:, : x.shape[1]]) * gate
-        auxiliary_delta = self.linear_state_adapter.output_proj(
-            processed[:, x.shape[1] :]
-        )
-        if self.config.gate_linear_state_delta:
-            auxiliary_delta = auxiliary_delta * gate
-        residual = x[:, :, -1, -self.output_dim :]
-        return residual + primary_delta, auxiliary_delta
 
     def _run_flow_field(
         self, state: torch.Tensor, selected_heads: torch.Tensor
@@ -284,8 +353,7 @@ class CacheProcessor(nn.Module):
             and self.training
             and torch.is_grad_enabled()
         ):
-            checkpoint_fn = getattr(longshot_pkg, "checkpoint", checkpoint)
-            return checkpoint_fn(
+            return checkpoint(
                 layer,
                 h,
                 selected_heads,
@@ -319,12 +387,12 @@ class CacheProcessor(nn.Module):
     ) -> None:
         if cache_processor_recomputation_id() is not None:
             return
-        assert (
-            selected_heads.shape[-1] > 0
-        ), "selected_heads must include at least one cache head"
-        assert (
-            next_selected_heads.shape[-1] > 0
-        ), "next_selected_heads must include at least one cache head"
+        assert selected_heads.shape[-1] > 0, (
+            "selected_heads must include at least one cache head"
+        )
+        assert next_selected_heads.shape[-1] > 0, (
+            "next_selected_heads must include at least one cache head"
+        )
         maintained = (
             selected_heads[:, :, None] == next_selected_heads[:, None, :]
         ).any(dim=-1)
@@ -337,33 +405,6 @@ class CacheProcessor(nn.Module):
         else:
             self._selected_head_overlap_totals[iteration] = overlap
             self._selected_head_overlap_counts[iteration] = 1
-
-    def scaled_update(
-        self, x: torch.Tensor, selected_heads: torch.Tensor
-    ) -> torch.Tensor:
-        delta = self.out_proj(
-            self.process_hidden(self.encode(x), selected_heads)
-        )
-        return delta * self._gate_scale(delta.dtype)
-
-    def forward_from_hidden(
-        self,
-        x: torch.Tensor,
-        hidden: torch.Tensor,
-        selected_heads: torch.Tensor,
-    ) -> torch.Tensor:
-        if x.shape[2] == 0:
-            raise ValueError(
-                "Longshot cache processor requires at least one selected time position"
-            )
-        residual = x[:, :, -1, -self.output_dim :]
-        delta = self.out_proj(self.process_hidden(hidden, selected_heads))
-        return residual + delta * self._gate_scale(delta.dtype)
-
-    def forward(
-        self, x: torch.Tensor, selected_heads: torch.Tensor
-    ) -> torch.Tensor:
-        return self.forward_from_hidden(x, self.encode(x), selected_heads)
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
         if self.config.gate_mode == "sigmoid":

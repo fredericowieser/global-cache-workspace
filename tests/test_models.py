@@ -20,6 +20,7 @@ from gcw.models.backbones import gemma4 as gemma4_module
 from gcw.models.backbones.gemma4 import _gemma4_attention
 from gcw.models.cache_processors import icarus as icarus_module
 from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors import longshot_processor
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
@@ -54,10 +55,10 @@ from gcw.models.cache_processors.longshot import (
 from gcw.models.cache_processors.longshot import (
     CacheProcessor as LongshotCacheProcessor,
 )
-from gcw.models.cache_processors.longshot import (
+from gcw.models.cache_processors.longshot_layers import (
     ProcessorAttention as LongshotProcessorAttention,
+    QueryAttentionTimeEncoder,
 )
-from gcw.models.cache_processors.longshot import QueryAttentionTimeEncoder
 from gcw.models.cache_processors.longshot_layers import (
     _gather_cache_heads as _longshot_gather_cache_heads,
 )
@@ -90,9 +91,7 @@ def test_processed_models_share_one_explicit_composition_wrapper():
 
 
 def test_legacy_generation_policy_is_not_reapplied_to_internal_backbone():
-    config = replace(
-        tiny_config("longshot"), legacy_bottleneck_generate=True
-    )
+    config = replace(tiny_config("longshot"), legacy_bottleneck_generate=True)
 
     model = build_model(config)
 
@@ -849,11 +848,11 @@ def test_qwen35_longshot_internal_reselection_uses_one_budget_across_kv_and_line
     )
     linear_features = torch.randn(1, processor.num_linear_state_heads, 8)
 
-    block.forward_with_linear_state_features(
+    block(
         merged,
-        kv_hidden,
-        linear_features,
         torch.tensor([[0, 2, 3]]),
+        kv_hidden=kv_hidden,
+        linear_features=linear_features,
     )
 
     assert len(layer.calls) == 2
@@ -884,14 +883,14 @@ def test_qwen35_longshot_linear_state_processor_updates_recurrent_state_only(
     with torch.no_grad():
         _, cache = model.backbone.forward_chunk(x, 0)
         before = {
-            layer_idx: (conv.clone(), recurrent.clone())
-            for layer_idx, (conv, recurrent) in cache.linear_states.items()
+            layer_idx: (recurrent.clone(), conv.clone())
+            for layer_idx, (recurrent, conv) in cache.linear_states.items()
         }
         model.cache_processor(cache, select_all=True)
 
     assert cache.linear_states is not None
-    for layer_idx, (old_conv, old_recurrent) in before.items():
-        new_conv, new_recurrent = cache.linear_states[layer_idx]
+    for layer_idx, (old_recurrent, old_conv) in before.items():
+        new_recurrent, new_conv = cache.linear_states[layer_idx]
         assert torch.equal(new_conv, old_conv)
         assert not torch.allclose(new_recurrent, old_recurrent)
 
@@ -925,12 +924,12 @@ def test_qwen35_longshot_linear_state_delta_gate_can_be_disabled(
             _, cache = model.backbone.forward_chunk(x, 0)
             before = {
                 layer_idx: recurrent.clone()
-                for layer_idx, (_, recurrent) in cache.linear_states.items()
+                for layer_idx, (recurrent, _) in cache.linear_states.items()
             }
             model.cache_processor(cache, select_all=True)
 
         changed_by_gate_setting[gate_linear_state_delta] = any(
-            not torch.allclose(cache.linear_states[layer_idx][1], old_recurrent)
+            not torch.allclose(cache.linear_states[layer_idx][0], old_recurrent)
             for layer_idx, old_recurrent in before.items()
         )
 
@@ -1006,7 +1005,7 @@ def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
         keys=[],
         values=[],
         scores=torch.zeros(1, 0),
-        linear_states={spec.layer_idx: (conv, recurrent)},
+        linear_states={spec.layer_idx: (recurrent, conv)},
     )
     update = torch.randn(1, spec.head_count, 10)
     records = {}
@@ -1037,10 +1036,10 @@ def test_qwen35_longshot_gated_delta_synthetic_shapes_and_layer_controls(
     assert records["key"].shape == (1, 1, 2, 4)
     assert records["value"].shape == (1, 1, 2, 4)
     assert records["initial_state"] is recurrent
-    assert torch.equal(cache.linear_states[spec.layer_idx][0], conv)
-    assert not torch.allclose(cache.linear_states[spec.layer_idx][1], recurrent)
+    assert torch.equal(cache.linear_states[spec.layer_idx][1], conv)
+    assert not torch.allclose(cache.linear_states[spec.layer_idx][0], recurrent)
 
-    cache.linear_states[spec.layer_idx][1].sum().backward()
+    cache.linear_states[spec.layer_idx][0].sum().backward()
     assert dynamics.A_log.grad is not None
     assert dynamics.dt_bias.grad is not None
 
@@ -1391,13 +1390,13 @@ def test_tiny_longshot_uses_longshot_processor_and_configured_encoder():
     assert linear.cache_processor.block.encoder_method == "linear"
     x = torch.randn(2, 4, 6, 16)
     selected_heads = torch.tensor([[0, 2], [1, 3]])
-    out = linear.cache_processor.block(x, selected_heads)
+    out, _, _ = linear.cache_processor.block(x, selected_heads)
     assert out.shape == (2, 4, 16)
 
     value_only = build_model(
         tiny_config("longshot", encoder_seq_len=6, update_stream="v")
     )
-    value_out = value_only.cache_processor.block(x, selected_heads)
+    value_out, _, _ = value_only.cache_processor.block(x, selected_heads)
     assert value_out.shape == (2, 4, 8)
 
     query = build_model(
@@ -1497,11 +1496,11 @@ def test_longshot_iterative_checkpointing_includes_score_collection(
         gradient_checkpointing=True,
     )
     block = LongshotCacheProcessor(16, 2, config).train()
-    monkeypatch.setattr(longshot_module, "checkpoint", fake_checkpoint)
+    monkeypatch.setattr(longshot_processor, "checkpoint", fake_checkpoint)
     x = torch.randn(1, 2, 3, 16, requires_grad=True)
     selected_heads = torch.tensor([[0]])
 
-    block.compute_update(x, selected_heads).sum().backward()
+    block(x, selected_heads)[0].sum().backward()
 
     assert calls == [
         {"use_reentrant": False},
@@ -1837,17 +1836,17 @@ def test_icarus_and_longshot_pass_per_head_positions_to_block():
         cache.keys[1][0, 1, 2] = 10.0
         calls = []
 
-        def forward(self, *args):
-            if variant == "icarus":
-                x, positions, selected_heads = args
-                calls.append((positions.clone(), selected_heads.clone()))
-                return x
-            x, selected_heads = args
-            calls.append((x.clone(), selected_heads.clone()))
-            return x[:, :, -1, :]
+        def forward(self, x, positions, selected_heads):
+            calls.append((positions.clone(), selected_heads.clone()))
+            return x
 
-        model.cache_processor.block.forward = types.MethodType(
-            forward, model.cache_processor.block
+        def longshot_forward(self, x, selected_heads, **kwargs):
+            calls.append((x.clone(), selected_heads.clone()))
+            return x[:, :, -1, :], None, selected_heads
+
+        block = model.cache_processor.block
+        block.forward = types.MethodType(
+            forward if variant == "icarus" else longshot_forward, block
         )
         model.cache_processor(cache)
 
@@ -1867,17 +1866,17 @@ def test_icarus_and_longshot_default_attn_l2_uses_shared_token_positions():
         cache = _random_cache(model.config)
         calls = []
 
-        def forward(self, *args):
-            if variant == "icarus":
-                x, positions, selected_heads = args
-                calls.append((positions.clone(), selected_heads.clone()))
-                return x
-            x, selected_heads = args
-            calls.append((x.clone(), selected_heads.clone()))
-            return x[:, :, -1, :]
+        def forward(self, x, positions, selected_heads):
+            calls.append((positions.clone(), selected_heads.clone()))
+            return x
 
-        model.cache_processor.block.forward = types.MethodType(
-            forward, model.cache_processor.block
+        def longshot_forward(self, x, selected_heads, **kwargs):
+            calls.append((x.clone(), selected_heads.clone()))
+            return x[:, :, -1, :], None, selected_heads
+
+        block = model.cache_processor.block
+        block.forward = types.MethodType(
+            forward if variant == "icarus" else longshot_forward, block
         )
         model.cache_processor(cache)
 
@@ -2431,7 +2430,7 @@ def test_longshot_iterative_processor_reselects_heads_between_iterations():
     block.layers = nn.ModuleList([layer])
     x = torch.randn(1, 4, 3, 16)
 
-    out = block.compute_update(x, torch.tensor([[0, 2]]))
+    out, _, _ = block(x, torch.tensor([[0, 2]]))
 
     assert out.shape == (1, 4, 16)
     assert len(layer.calls) == 3
@@ -2482,7 +2481,7 @@ def test_longshot_iterative_processor_can_reselect_from_cache_head_attention_sco
     block.layers[0].attn = attention
     x = torch.randn(1, 4, 3, 16)
 
-    out = block.compute_update(x, torch.tensor([[0, 2]]))
+    out, _, _ = block(x, torch.tensor([[0, 2]]))
 
     assert out.shape == (1, 4, 16)
     assert len(attention.calls) == 2

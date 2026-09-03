@@ -5,12 +5,14 @@ import torch
 import torch.nn as nn
 
 from gcw.config import CacheProcessorConfig
-from gcw.models.cache_processors.longshot import ProcessorAttention
 from gcw.models.cache_processors.longshot_layers import (
     PerCacheHeadLinear,
+    ProcessorAttention,
     _fit_time_length,
-    _select_heads_from_head_scores,
     _zero_projection,
+)
+from gcw.models.cache_processors.longshot_selection import (
+    _select_heads_from_head_scores,
 )
 
 

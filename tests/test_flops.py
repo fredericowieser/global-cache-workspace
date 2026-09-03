@@ -172,6 +172,7 @@ def test_longshot_processor_flops_scale_with_iterations():
     cp = CacheProcessorConfig(
         process_every=32,
         topk=8,
+        topk_heads=1,
         hidden_size=64,
         intermediate_size=256,
         num_heads=1,
@@ -180,6 +181,26 @@ def test_longshot_processor_flops_scale_with_iterations():
     once = replace(backbone, variant="longshot", cache_processor=cp)
     twice = replace(
         backbone, variant="longshot", cache_processor=replace(cp, iterations=2)
+    )
+    twice_learned = replace(
+        twice,
+        cache_processor=replace(
+            twice.cache_processor,
+            internal_iteration_score="learned_contextual",
+        ),
+    )
+    twice_kv_norm = replace(
+        twice,
+        cache_processor=replace(
+            twice.cache_processor, internal_iteration_score="kv_norm"
+        ),
+    )
+    twice_cache_head_attention = replace(
+        twice,
+        cache_processor=replace(
+            twice.cache_processor,
+            internal_iteration_score="cache_head_attention",
+        ),
     )
     twice_external = replace(
         backbone,
@@ -192,6 +213,10 @@ def test_longshot_processor_flops_scale_with_iterations():
     external_flops = processor_forward_flops_per_sequence(twice_external, 128)
 
     assert once_flops < internal_flops < 2 * once_flops
+    for scored in (twice_learned, twice_kv_norm, twice_cache_head_attention):
+        assert (
+            processor_forward_flops_per_sequence(scored, 128) > internal_flops
+        )
     assert external_flops == 2 * once_flops
 
 
@@ -260,6 +285,13 @@ def test_qwen35_longshot_linear_state_flops_are_counted():
             enabled.cache_processor, linear_state_update_mode="gated_delta"
         ),
     )
+    learned = replace(
+        enabled,
+        cache_processor=replace(
+            enabled.cache_processor,
+            head_selection_method="learned_contextual",
+        ),
+    )
 
     assert processor_forward_flops_per_sequence(
         enabled, 16
@@ -278,6 +310,9 @@ def test_qwen35_longshot_linear_state_flops_are_counted():
     ) < processor_forward_flops_per_sequence(per_linear_state, 16)
     assert processor_forward_flops_per_sequence(
         gated, 16
+    ) > processor_forward_flops_per_sequence(enabled, 16)
+    assert processor_forward_flops_per_sequence(
+        learned, 16
     ) > processor_forward_flops_per_sequence(enabled, 16)
 
 

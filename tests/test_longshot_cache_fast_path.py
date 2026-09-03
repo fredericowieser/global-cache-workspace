@@ -10,6 +10,7 @@ from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.models.cache_processors.base import cache_processor_recomputation
 from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors import longshot_selection
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
@@ -420,7 +421,7 @@ def test_default_windowed_kv_norm_path_remains_eager() -> None:
     cache, _, _ = _cache(requires_grad=False)
 
     with patch.object(
-        longshot_module,
+        longshot_selection,
         "gather_per_cache_head_kv",
         wraps=gather_per_cache_head_kv,
     ) as gather:
@@ -445,7 +446,7 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(
     cache, _, _ = _cache(requires_grad=False)
 
     with patch.object(
-        longshot_module,
+        longshot_selection,
         "gather_per_cache_head_kv",
         side_effect=AssertionError(
             "windowed kv_norm must gather selected history only"

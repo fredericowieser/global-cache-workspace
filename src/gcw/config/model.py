@@ -15,6 +15,7 @@ from gcw.config.types import (
     CacheEncoderMethod,
     CacheEncoderQuerySource,
     CacheGateMode,
+    CacheHeadSelectionMethod,
     CacheLinearStateQueryMode,
     CacheLinearStateUpdateMode,
     CacheOutProjInit,
@@ -49,6 +50,9 @@ class CacheProcessorConfig:
     topk_heads: int = 32
     topk_linear_heads: int | None = None
     score: str = "attn_l2"
+    head_selection_method: CacheHeadSelectionMethod = "magnitude"
+    head_selector_hidden_size: int = 64
+    head_selector_use_identity_bias: bool = True
     hidden_size: int = 512
     intermediate_size: int = 2048
     num_layers: int = 1
@@ -94,6 +98,25 @@ class CacheProcessorConfig:
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError(
                 "cache_processor.score must be 'attn_l2' or 'kv_norm'"
+            )
+        if self.head_selection_method not in {
+            "magnitude",
+            "learned_contextual",
+        }:
+            raise ValueError(
+                "cache_processor.head_selection_method must be 'magnitude' or 'learned_contextual'"
+            )
+        if (
+            isinstance(self.head_selector_hidden_size, bool)
+            or not isinstance(self.head_selector_hidden_size, int)
+            or self.head_selector_hidden_size <= 0
+        ):
+            raise ValueError(
+                "cache_processor.head_selector_hidden_size must be a positive integer"
+            )
+        if not isinstance(self.head_selector_use_identity_bias, bool):
+            raise ValueError(
+                "cache_processor.head_selector_use_identity_bias must be a boolean"
             )
         if self.topk_heads <= 0:
             raise ValueError("cache_processor.topk_heads must be positive")
@@ -155,9 +178,10 @@ class CacheProcessorConfig:
             "attn_l2",
             "cache_head_attention",
             "kv_norm",
+            "learned_contextual",
         }:
             raise ValueError(
-                "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', or 'kv_norm'"
+                "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', 'kv_norm', or 'learned_contextual'"
             )
         if self.linear_state_query_mode not in {
             "per_linear_state",

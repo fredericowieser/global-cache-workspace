@@ -7,6 +7,7 @@ import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors import longshot_selection
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
@@ -148,7 +149,9 @@ def test_longshot_modes_match_eager_forward_and_backward(
     optimized_loss.backward()
 
     monkeypatch.setattr(
-        longshot_module, "chunked_fp32_squared_l2", eager_fp32_squared_l2
+        longshot_selection,
+        "chunked_fp32_squared_l2",
+        eager_fp32_squared_l2,
     )
     monkeypatch.setattr(
         longshot_module, "chunked_fp32_l2_norm", eager_fp32_l2_norm
