@@ -1,0 +1,1 @@
+Read AGENTS.md for general guidelines and code practices before making any changes.
