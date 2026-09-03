@@ -35,7 +35,6 @@ from gcw.models.cache_processors.longshot_selection import (
 )
 from gcw.models.cache_processors.longshot_layers import (
     EncoderMethod,
-    LongshotWorkspaceSource,
     _select_heads_from_head_scores,
 )
 from gcw.models.cache_processors.longshot_processor import CacheProcessor
@@ -87,13 +86,11 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if model_config.cache_processor is None:
             raise ValueError("Longshot requires cache_processor config")
         self.config = model_config.cache_processor
-        self.workspace_flow_refinement = model_config.workspace_flow_refinement
         self._gcw_longshot_model_composition = (
             model_config.variant,
             model_config.family,
             model_config.flow_processor is not None,
             model_config.diffusion_processor is not None,
-            model_config.workspace_flow_refinement is not None,
         )
         if self.config.processor_mode != "standard":
             raise ValueError(
@@ -195,67 +192,6 @@ class GlobalCacheProcessor(CacheProcessorBase):
             return cache
         cache, _ = self._forward_once(cache, select_all=select_all)
         return cache
-
-    def encode_source(
-        self, cache: CacheLike, *, select_all: bool = False
-    ) -> LongshotWorkspaceSource:
-        if self.config.score == "kv_norm" and not select_all:
-            merged, scores, indices = select_kv_norm_history(self, cache)
-            if indices.shape[-1] == 0:
-                raise ValueError(
-                    "Longshot workspace source requires at least one selected position"
-                )
-            head_scores = (
-                gather_per_cache_head_scores(scores, indices)
-                .float()
-                .sum(dim=-1)
-            )
-        else:
-            if select_all:
-                indices = expand_cache_head_indices(
-                    cache.all_indices(), self.num_kv_cache_heads
-                )
-            else:
-                indices = expand_cache_head_indices(
-                    cache.select_indices(
-                        self.config.process_every, self.config.topk
-                    ),
-                    self.num_kv_cache_heads,
-                )
-            if indices.shape[-1] == 0:
-                raise ValueError(
-                    "Longshot workspace source requires at least one selected position"
-                )
-            merged = gather_per_cache_head_kv(
-                cache,
-                indices,
-                unrope_keys=self.config.unrope_keys,
-                rope_theta=self.rope_theta,
-                rotary_style=self.rotary_style,
-                rotary_dim=self.rotary_dim,
-                backend=cache_movement_backend(self),
-            )
-            head_scores = chunked_fp32_l2_norm(merged)
-        if select_all:
-            selected_heads = (
-                torch.arange(
-                    self.num_kv_cache_heads,
-                    dtype=torch.long,
-                    device=merged.device,
-                )
-                .unsqueeze(0)
-                .expand(merged.shape[0], -1)
-            )
-        else:
-            selected_heads = _select_heads_from_head_scores(
-                head_scores, self.config.topk_heads
-            )
-        return LongshotWorkspaceSource(
-            merged=merged,
-            indices=indices,
-            selected_heads=selected_heads,
-            latest_indices=latest_shared_indices(indices),
-        )
 
     def _forward_once(
         self, cache: CacheLike, *, select_all: bool = False

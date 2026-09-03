@@ -83,8 +83,6 @@ _MODEL_CONFIG_VALIDATION_CODES = {
     "linear_state_query",
     "linear_state_variant",
     "linear_state_write",
-    "workspace_refinement_variant",
-    "workspace_refinement_write",
 }
 _TRAIN_CONFIG_VALIDATION_CODES = {
     "backbone_with_init",

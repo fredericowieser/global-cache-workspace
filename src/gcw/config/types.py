@@ -22,7 +22,6 @@ CacheProcessorInternalIterationScore = Literal[
 ]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 CacheLinearStateUpdateMode = Literal["outer_product", "gated_delta"]
-WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
 ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
 BackboneChunkBackend = Literal[

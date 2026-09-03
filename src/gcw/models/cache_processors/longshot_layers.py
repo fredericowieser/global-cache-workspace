@@ -4,8 +4,6 @@ import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -40,14 +38,6 @@ def longshot_gradient_checkpointing_override(enabled: bool) -> Iterator[None]:
 def _gradient_checkpointing_enabled(configured: bool) -> bool:
     override = _GRADIENT_CHECKPOINTING_OVERRIDE.get()
     return configured if override is None else override
-
-
-@dataclass(frozen=True)
-class LongshotWorkspaceSource:
-    merged: torch.Tensor
-    indices: torch.Tensor
-    selected_heads: torch.Tensor
-    latest_indices: torch.Tensor
 
 
 def _gather_cache_heads(

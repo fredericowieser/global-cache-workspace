@@ -292,19 +292,6 @@ def _memory_domains(
                 ),
             )
         )
-    if config.variant == "longshot":
-        domains.append(
-            MemoryDomainDescriptor(
-                domain="longshot_workspace",
-                layout="persistent_selected_cache_heads",
-                positional_frame="selected_frontier",
-                addressable=True,
-                branchable=True,
-                exact_truncate_replay=True,
-                differentiable=True,
-                allowed_writes=("workspace", "frontier_writeback"),
-            )
-        )
     return tuple(domains)
 
 

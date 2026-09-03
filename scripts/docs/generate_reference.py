@@ -18,7 +18,6 @@ from gcw.config import (
     ResumeConfig,
     TrainConfig,
     WandbConfig,
-    WorkspaceFlowRefinementConfig,
 )
 from gcw.performance.config import (
     AdaptiveBatchingConfig,
@@ -34,7 +33,6 @@ CONFIG_TYPES = (
     ModelConfig,
     CacheProcessorConfig,
     FlowProcessorConfig,
-    WorkspaceFlowRefinementConfig,
     DataConfig,
     PhysicalBatchBandConfig,
     AdaptiveBatchingConfig,

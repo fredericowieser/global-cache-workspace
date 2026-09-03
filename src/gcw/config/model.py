@@ -28,7 +28,6 @@ from gcw.config.types import (
     ProcessorGenerationMode,
     RotaryStyle,
     Variant,
-    WorkspaceFlowSolver,
     _validated_float32,
 )
 
@@ -268,32 +267,6 @@ class DiffusionProcessorConfig:
 
 
 @dataclass
-class WorkspaceFlowRefinementConfig:
-    solver: WorkspaceFlowSolver = "euler"
-    solver_steps: int = 1
-    max_velocity: float = 0.75
-
-    def __post_init__(self) -> None:
-        if self.solver not in {"euler", "midpoint"}:
-            raise ValueError(
-                "workspace_flow_refinement.solver must be 'euler' or 'midpoint'"
-            )
-        if (
-            isinstance(self.solver_steps, bool)
-            or not isinstance(self.solver_steps, int)
-            or self.solver_steps <= 0
-        ):
-            raise ValueError(
-                "workspace_flow_refinement.solver_steps must be a positive integer"
-            )
-        self.max_velocity = _validated_float32(
-            "workspace_flow_refinement.max_velocity",
-            self.max_velocity,
-            positive=True,
-        )
-
-
-@dataclass
 class LoRAConfig:
     rank: int = 32
     alpha: float = 32.0
@@ -344,7 +317,6 @@ class ModelConfig:
     flow_processor: FlowProcessorConfig | None = None
     diffusion_processor: DiffusionProcessorConfig | None = None
     processor_generation_mode: ProcessorGenerationMode = "windowed"
-    workspace_flow_refinement: WorkspaceFlowRefinementConfig | None = None
     layer_types: list[str] | None = None
     processor_layer_indices: list[int] | None = None
     partial_rotary_factor: float = 1.0
@@ -412,10 +384,6 @@ class ModelConfig:
         ):
             raise ValueError(
                 "processor_generation_mode requires a cache processor"
-            )
-        if isinstance(self.workspace_flow_refinement, dict):
-            self.workspace_flow_refinement = WorkspaceFlowRefinementConfig(
-                **self.workspace_flow_refinement
             )
         if (
             self.variant in {"bt", "bgt", "icarus", "longshot"}

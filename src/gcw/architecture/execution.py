@@ -186,12 +186,9 @@ def _validate_longshot_full_history(config: "TrainConfig") -> None:
         raise ValueError(
             "performance.longshot_full_history does not support linear recurrent cache state"
         )
-    if (
-        config.model.flow_processor is not None
-        or config.model.workspace_flow_refinement is not None
-    ):
+    if config.model.flow_processor is not None:
         raise ValueError(
-            "performance.longshot_full_history does not support Flow or workspace refinement"
+            "performance.longshot_full_history does not support Flow"
         )
     if config.activation_checkpointing != "none":
         raise ValueError(
@@ -273,10 +270,9 @@ def _validate_kv_score_sidecar(config: "TrainConfig") -> None:
     if (
         config.model.flow_processor is not None
         or config.model.diffusion_processor is not None
-        or config.model.workspace_flow_refinement is not None
     ):
         raise ValueError(
-            "performance.kv_score_sidecar does not compose with Flow, Diffusion, or workspace refinement"
+            "performance.kv_score_sidecar does not compose with Flow or Diffusion"
         )
     if config.activation_checkpointing != "none":
         raise ValueError(

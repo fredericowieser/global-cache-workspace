@@ -364,7 +364,6 @@ def assemble_training_execution(
                 for value in (
                     config.model.flow_processor,
                     config.model.diffusion_processor,
-                    config.model.workspace_flow_refinement,
                 )
             ),
         ),

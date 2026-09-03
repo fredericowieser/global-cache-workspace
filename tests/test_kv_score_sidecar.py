@@ -704,7 +704,7 @@ def test_invalid_policy_compositions_fail_closed(
         ),
         (
             _sidecar_context(incompatible_refinement_enabled=True),
-            "Flow, Diffusion",
+            "Flow or Diffusion",
         ),
     ],
 )
