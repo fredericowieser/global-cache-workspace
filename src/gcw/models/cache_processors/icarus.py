@@ -313,6 +313,7 @@ class CacheProcessor(nn.Module):
         else:
             self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        self._gate_value: torch.Tensor | None = None
         self.flow = (
             LatentFlow(config.hidden_size, flow_config)
             if flow_config is not None
@@ -394,12 +395,15 @@ class CacheProcessor(nn.Module):
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
         if self.config.gate_mode == "sigmoid":
-            return torch.sigmoid(self.gate).to(dtype)
-        if self.config.gate_mode == "direct":
-            return self.gate.to(dtype)
-        raise ValueError(
-            f"unsupported cache processor gate_mode: {self.config.gate_mode}"
-        )
+            scale = torch.sigmoid(self.gate).to(dtype)
+        elif self.config.gate_mode == "direct":
+            scale = self.gate.to(dtype)
+        else:
+            raise ValueError(
+                f"unsupported cache processor gate_mode: {self.config.gate_mode}"
+            )
+        self._gate_value = scale.detach()
+        return scale
 
 
 class GlobalCacheProcessor(CacheProcessorBase):

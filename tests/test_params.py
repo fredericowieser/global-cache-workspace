@@ -139,9 +139,7 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
     )
     learned_cfg = replace(
         cfg,
-        cache_processor=replace(
-            cp, head_selection_method="learned_contextual"
-        ),
+        cache_processor=replace(cp, head_selection_method="learned_contextual"),
     )
     gated_model = build_model(gated_cfg)
     learned_model = build_model(learned_cfg)

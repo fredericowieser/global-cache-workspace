@@ -19,6 +19,7 @@ from gcw.config.serialization import (
 )
 from gcw.config.training import (
     EvalConfig,
+    LongshotSelectorTrainingConfig,
     ResumeConfig,
     TrainConfig,
     WandbConfig,
@@ -76,6 +77,7 @@ __all__ = [
     "FlowProcessorConfig",
     "LoRAConfig",
     "LossBackend",
+    "LongshotSelectorTrainingConfig",
     "ModelConfig",
     "MoeExpertsImplementation",
     "PerformanceConfig",

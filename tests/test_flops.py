@@ -1,6 +1,10 @@
 from dataclasses import replace
 
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    LongshotSelectorTrainingConfig,
+    ModelConfig,
+)
 from gcw.flops import (
     backbone_flops_per_token,
     processor_forward_flops_per_sequence,
@@ -29,6 +33,57 @@ def test_training_flops_include_processor_work():
         total_training_flops(bgt, tokens=1024, seq_len=128)
         == training_flops_per_token(bgt, 128) * 1024
     )
+
+
+def test_longshot_selector_training_flops_follow_routing_phase():
+    backbone = replace(
+        smollm360m_backbone(num_layers=2),
+        hidden_size=64,
+        intermediate_size=128,
+        num_heads=4,
+        num_kv_heads=2,
+    )
+    config = replace(
+        backbone,
+        variant="longshot",
+        cache_processor=CacheProcessorConfig(
+            process_every=8,
+            topk=0,
+            topk_heads=1,
+            hidden_size=16,
+            intermediate_size=32,
+            num_heads=2,
+            num_kv_heads=1,
+            iterations=2,
+            head_selection_method="learned_contextual",
+            internal_iteration_score="learned_contextual",
+        ),
+    )
+    routing = LongshotSelectorTrainingConfig()
+    hard = processor_forward_flops_per_sequence(config, 24)
+    warmup = processor_forward_flops_per_sequence(
+        config,
+        24,
+        selector_training=routing,
+        training_progress=0.0,
+    )
+    soft = processor_forward_flops_per_sequence(
+        config,
+        24,
+        selector_training=routing,
+        training_progress=0.2,
+    )
+    transitioned_hard = processor_forward_flops_per_sequence(
+        config,
+        24,
+        selector_training=routing,
+        training_progress=0.9,
+    )
+
+    assert soft > warmup
+    assert soft > hard
+    assert warmup != hard
+    assert transitioned_hard == hard
 
 
 def test_processor_layer_subset_does_not_reduce_backbone_attention_flops():

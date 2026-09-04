@@ -8,6 +8,7 @@ from gcw.config import CacheProcessorConfig
 from gcw.models.cache_processors.longshot_layers import (
     PerCacheHeadLinear,
     ProcessorAttention,
+    ProcessorLayer,
     _fit_time_length,
     _zero_projection,
 )
@@ -93,6 +94,126 @@ def test_processor_attention_can_return_attention_output_scores():
         assert torch.allclose(
             scores, output.float().pow(2).sum(dim=-1), atol=1e-6, rtol=1e-6
         )
+
+
+@pytest.mark.parametrize("include_self_head_kv", [False, True])
+def test_processor_attention_all_one_routing_matches_dense_attention(
+    include_self_head_kv,
+):
+    torch.manual_seed(26)
+    attn = ProcessorAttention(
+        CacheProcessorConfig(
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=2,
+            num_kv_heads=1,
+            attention_dropout=0.0,
+            include_self_head_kv=include_self_head_kv,
+        )
+    ).eval()
+    x = torch.randn(2, 4, 8)
+    all_heads = torch.arange(4).expand(2, -1)
+
+    expected = attn(x, all_heads)
+    actual = attn(x, all_heads, routing_gates=torch.zeros(2, 4))
+
+    torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize("include_self_head_kv", [False, True])
+def test_processor_attention_near_zero_gate_excludes_a_head(
+    include_self_head_kv,
+):
+    torch.manual_seed(27)
+    attn = ProcessorAttention(
+        CacheProcessorConfig(
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=2,
+            num_kv_heads=1,
+            attention_dropout=0.0,
+            include_self_head_kv=include_self_head_kv,
+        )
+    ).eval()
+    x = torch.randn(1, 3, 8)
+    selected = torch.tensor([[0, 2]])
+
+    expected = attn(x, selected)
+    actual = attn(
+        x,
+        selected,
+        routing_gates=torch.log(torch.tensor([[1.0, 0.0, 1.0]]) + 1e-6),
+    )
+
+    torch.testing.assert_close(actual, expected, atol=2e-6, rtol=2e-6)
+
+
+def test_processor_layer_rejects_routing_gates_with_iteration_scores():
+    layer = ProcessorLayer(
+        CacheProcessorConfig(
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=2,
+            num_kv_heads=1,
+            attention_dropout=0.0,
+        )
+    ).eval()
+
+    with pytest.raises(ValueError, match="iterative attention scores"):
+        layer(
+            torch.randn(1, 4, 8),
+            torch.tensor([[0, 2]]),
+            return_attn_scores=True,
+            routing_gates=torch.zeros(1, 4),
+        )
+
+
+def test_processor_attention_routing_gates_receive_gradients():
+    torch.manual_seed(28)
+    attn = ProcessorAttention(
+        CacheProcessorConfig(
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=2,
+            num_kv_heads=1,
+            attention_dropout=0.0,
+        )
+    )
+    x = torch.randn(2, 4, 8)
+    gates = torch.full((2, 4), 0.5, requires_grad=True)
+
+    attn(
+        x,
+        torch.tensor([[0, 1], [2, 3]]),
+        routing_gates=torch.log(gates + 1e-6),
+    ).sum().backward()
+
+    assert gates.grad is not None
+    assert torch.isfinite(gates.grad).all()
+    assert gates.grad.abs().sum() > 0
+
+
+@pytest.mark.parametrize("include_self_head_kv", [False, True])
+def test_processor_attention_routing_supports_bfloat16(include_self_head_kv):
+    attn = ProcessorAttention(
+        CacheProcessorConfig(
+            hidden_size=8,
+            intermediate_size=16,
+            num_heads=2,
+            num_kv_heads=1,
+            include_self_head_kv=include_self_head_kv,
+        )
+    ).to(torch.bfloat16)
+    x = torch.randn(2, 4, 8, dtype=torch.bfloat16)
+
+    output = attn(
+        x,
+        torch.tensor([[0, 1], [2, 3]]),
+        routing_gates=torch.log(torch.full((2, 4), 0.5) + 1e-6),
+    )
+
+    assert output.dtype == torch.bfloat16
+    assert torch.isfinite(output).all()
 
 
 def test_processor_attention_cache_head_attention_scores_match_existing_outputs():

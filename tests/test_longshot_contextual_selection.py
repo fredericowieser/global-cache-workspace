@@ -5,14 +5,24 @@ import torch
 import torch.nn as nn
 
 from gcw.architecture import _config_payload
-from gcw.config import CacheProcessorConfig, ModelConfig, to_dict
+from gcw.config import (
+    CacheProcessorConfig,
+    LongshotSelectorTrainingConfig,
+    ModelConfig,
+    TrainConfig,
+    to_dict,
+)
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.longshot_linear_state import LinearStateSpec
 from gcw.models.cache_processors.longshot_processor import CacheProcessor
 from gcw.models.cache_processors.longshot_selection import (
     ContextualHeadSelector,
+    _soft_topk_mask,
+    selector_routing,
+    set_longshot_selector_training_progress,
 )
 from gcw.models.cache_processors.state import CacheState
+from gcw.training.audit import _training_fingerprint
 
 
 def _processor_config(**overrides) -> CacheProcessorConfig:
@@ -90,6 +100,118 @@ def test_contextual_selector_returns_fp32_from_mixed_precision_hidden():
     assert torch.isfinite(scores).all()
 
 
+@pytest.mark.parametrize("use_identity_bias", [False, True])
+def test_contextual_selector_scores_stay_fp32_under_autocast(use_identity_bias):
+    selector = ContextualHeadSelector(
+        8, 4, 3, norm_eps=1e-6, use_identity_bias=use_identity_bias
+    )
+    hidden = torch.randn(2, 3, 8)
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        scores = selector(hidden)
+
+    assert scores.dtype == torch.float32
+    assert not torch.equal(scores, scores.to(torch.bfloat16).float())
+
+
+def test_soft_topk_mask_has_exact_mass_and_implicit_gradient():
+    scores = torch.tensor([[-1.0, 0.25, 0.5, 2.0]], requires_grad=True)
+    weights = torch.tensor([[0.2, -0.5, 1.5, 0.7]])
+    temperature = 0.6
+
+    mask = _soft_topk_mask(scores, 2, temperature)
+    (mask * weights).sum().backward()
+
+    derivative = mask.detach() * (1.0 - mask.detach())
+    expected = (
+        derivative
+        / temperature
+        * (
+            weights
+            - (weights * derivative).sum(dim=-1, keepdim=True)
+            / derivative.sum(dim=-1, keepdim=True)
+        )
+    )
+    assert mask.dtype == torch.float32
+    torch.testing.assert_close(mask.sum(dim=-1), torch.tensor([2.0]))
+    torch.testing.assert_close(scores.grad, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_soft_topk_mask_bypasses_routing_when_budget_covers_heads():
+    scores = torch.randn(2, 3, requires_grad=True)
+
+    mask = _soft_topk_mask(scores, 3, 0.5)
+
+    assert torch.equal(mask, torch.ones_like(mask))
+
+
+def test_selector_training_schedule_boundaries():
+    config = LongshotSelectorTrainingConfig()
+
+    assert selector_routing(config, 0.049, training=True).mode == "warmup"
+    assert selector_routing(config, 0.05, training=True).mode == "soft"
+    assert selector_routing(config, 0.15, training=True).mode == "soft"
+    middle = selector_routing(config, 0.60, training=True)
+    assert middle.mode == "transition"
+    assert middle.temperature == pytest.approx(0.35)
+    assert middle.hard_blend == pytest.approx(1.0 - math.exp(-2.0))
+    assert selector_routing(config, 0.90, training=True).mode == "hard"
+    assert selector_routing(config, 0.20, training=False).mode == "hard"
+
+
+def test_selector_training_config_admission():
+    with pytest.raises(ValueError, match="learned_contextual"):
+        TrainConfig(
+            model=ModelConfig(
+                variant="longshot",
+                cache_processor=_processor_config(),
+            ),
+            longshot_selector_training={},
+        )
+
+    config = TrainConfig(
+        model=ModelConfig(
+            variant="longshot",
+            cache_processor=_processor_config(
+                head_selection_method="learned_contextual"
+            ),
+        ),
+        longshot_selector_training={},
+    )
+    assert isinstance(
+        config.longshot_selector_training, LongshotSelectorTrainingConfig
+    )
+
+
+def test_selector_training_schedule_is_resume_fingerprinted_only_when_enabled():
+    default = TrainConfig(data={"kind": "random"})
+    enabled = TrainConfig(
+        model=ModelConfig(
+            variant="longshot",
+            cache_processor=_processor_config(
+                head_selection_method="learned_contextual"
+            ),
+        ),
+        data={"kind": "random"},
+        longshot_selector_training={},
+    )
+    changed = TrainConfig(
+        model=enabled.model,
+        data={"kind": "random"},
+        longshot_selector_training={"hard_start": 0.95},
+    )
+
+    default_fingerprint = _training_fingerprint(default, 1, 8, 8, 1)
+    enabled_fingerprint = _training_fingerprint(enabled, 1, 8, 8, 1)
+    changed_fingerprint = _training_fingerprint(changed, 1, 8, 8, 1)
+
+    assert "longshot_selector_training" not in default_fingerprint
+    assert (
+        enabled_fingerprint["longshot_selector_training"]
+        != changed_fingerprint["longshot_selector_training"]
+    )
+
+
 def test_selector_is_optional_and_shared_by_initial_and_iterative_selection():
     legacy = CacheProcessor(16, 4, _processor_config())
     initial = CacheProcessor(
@@ -133,7 +255,13 @@ def test_learned_selection_runs_initially_and_after_each_iteration_boundary():
             super().__init__()
             self.calls = []
 
-        def forward(self, x, selected_heads, return_attn_scores=False):
+        def forward(
+            self,
+            x,
+            selected_heads,
+            return_attn_scores=False,
+            routing_gates=None,
+        ):
             self.calls.append((selected_heads.clone(), return_attn_scores))
             assert return_attn_scores is False
             return x + 1.0
@@ -161,10 +289,58 @@ def test_learned_selection_runs_initially_and_after_each_iteration_boundary():
     assert len(selector_calls) == 3
     assert len(layer.calls) == 3
     assert all(return_scores is False for _, return_scores in layer.calls)
-    assert block.pop_iteration_metrics().keys() == {
+    assert {
         "cache_processor/selected_head_overlap_after_iter_1",
         "cache_processor/selected_head_overlap_after_iter_2",
-    }
+    }.issubset(block.pop_iteration_metrics())
+
+
+def test_selector_training_warmup_bypasses_scoring_and_soft_routing_gradients():
+    block = CacheProcessor(
+        16,
+        4,
+        _processor_config(head_selection_method="learned_contextual"),
+    ).train()
+    config = LongshotSelectorTrainingConfig()
+    calls = []
+    assert block.head_selector is not None
+    block.head_selector.register_forward_hook(
+        lambda _module, _args, _output: calls.append(True)
+    )
+    block.head_selector.set_training_progress(config, 0.0)
+
+    _, _, warmup_selected = block(torch.randn(1, 4, 3, 16), None, topk_heads=2)
+    assert calls == []
+    assert torch.equal(warmup_selected, torch.arange(4)[None])
+
+    block.head_selector.set_training_progress(config, 0.10)
+    output, _, soft_selected = block(
+        torch.randn(1, 4, 3, 16), None, topk_heads=2
+    )
+    output.sum().backward()
+    assert len(calls) == 1
+    assert soft_selected.shape == (1, 2)
+    assert block.head_selector.context_proj.weight.grad is not None
+
+
+def test_selector_training_progress_traverses_wrappers_without_state_keys():
+    block = CacheProcessor(
+        16,
+        4,
+        _processor_config(head_selection_method="learned_contextual"),
+    )
+    wrapper = nn.Sequential(nn.Identity(), block)
+    state_keys = set(wrapper.state_dict())
+    config = LongshotSelectorTrainingConfig()
+
+    set_longshot_selector_training_progress(wrapper, config, 0.4)
+
+    assert block.head_selector is not None
+    assert block.head_selector._training_enabled is True
+    assert block.head_selector._routing_mode == "transition"
+    assert set(wrapper.state_dict()) == state_keys
+    with pytest.raises(ValueError, match="within"):
+        set_longshot_selector_training_progress(wrapper, config, 1.1)
 
 
 def test_select_all_bypasses_contextual_scoring():
@@ -221,7 +397,13 @@ def test_initial_and_iterative_selection_methods_are_independent(
             super().__init__()
             self.return_score_flags = []
 
-        def forward(self, x, selected_heads, return_attn_scores=False):
+        def forward(
+            self,
+            x,
+            selected_heads,
+            return_attn_scores=False,
+            routing_gates=None,
+        ):
             self.return_score_flags.append(return_attn_scores)
             if return_attn_scores:
                 return x + 1.0, torch.arange(4, dtype=torch.float)[None]

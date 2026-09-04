@@ -108,13 +108,18 @@ class ProcessorAttention(nn.Module):
         x: torch.Tensor,
         selected_heads: torch.Tensor,
         return_attn_scores: bool = False,
+        routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if routing_gates is not None and routing_gates.shape != x.shape[:2]:
+            raise ValueError(
+                "routing_gates must have shape (batch, cache_heads)"
+            )
         if self.include_self_head_kv:
             return self.forward_with_self_head_kv(
-                x, selected_heads, return_attn_scores
+                x, selected_heads, return_attn_scores, routing_gates
             )
         return self.forward_selected_head_kv(
-            x, selected_heads, return_attn_scores
+            x, selected_heads, return_attn_scores, routing_gates
         )
 
     def forward_with_iteration_scores(
@@ -138,8 +143,13 @@ class ProcessorAttention(nn.Module):
         x: torch.Tensor,
         selected_heads: torch.Tensor,
         return_attn_scores: bool = False,
+        routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
+        if routing_gates is not None and return_attn_scores:
+            raise ValueError(
+                "routing gates are not supported with iterative attention scores"
+            )
         score_kv_norm = (
             return_attn_scores and self.internal_iteration_score == "kv_norm"
         )
@@ -165,16 +175,20 @@ class ProcessorAttention(nn.Module):
             k = torch.gather(k_all, dim=1, index=gather_index)
             v = torch.gather(v_all, dim=1, index=gather_index)
         else:
-            selected_x = _gather_cache_heads(x, selected_heads)
+            selected_x = (
+                x
+                if routing_gates is not None
+                else _gather_cache_heads(x, selected_heads)
+            )
             k = self.k_proj(selected_x).view(
                 batch,
-                selected_heads.shape[-1],
+                selected_x.shape[1],
                 self.num_kv_heads,
                 self.head_dim,
             )
             v = self.v_proj(selected_x).view(
                 batch,
-                selected_heads.shape[-1],
+                selected_x.shape[1],
                 self.num_kv_heads,
                 self.head_dim,
             )
@@ -185,8 +199,14 @@ class ProcessorAttention(nn.Module):
             q,
             k,
             v,
+            attn_mask=(
+                None
+                if routing_gates is None
+                else routing_gates[:, None, None, :].to(v.dtype)
+            ),
             dropout_p=self.dropout if self.training else 0.0,
             enable_gqa=self.num_kv_heads != self.num_heads,
+            try_flash=routing_gates is None,
         )
         y = y.permute(0, 2, 1, 3).contiguous().view(batch, cache_heads, -1)
         y = self.o_proj(y)
@@ -201,6 +221,7 @@ class ProcessorAttention(nn.Module):
         x: torch.Tensor,
         selected_heads: torch.Tensor,
         return_attn_scores: bool = False,
+        routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
@@ -218,6 +239,34 @@ class ProcessorAttention(nn.Module):
         v_all = self.v_proj(x).view(
             batch, cache_heads, self.num_kv_heads, self.head_dim
         )
+        if routing_gates is not None:
+            if return_attn_scores:
+                raise ValueError(
+                    "routing gates are not supported with iterative attention scores"
+                )
+            q, k_all = q.to(v_all.dtype), k_all.to(v_all.dtype)
+            logits = (
+                torch.einsum("bckgd,bskd->bckgs", q, k_all)
+                * self.head_dim**-0.5
+            ).float()
+            diagonal = torch.eye(
+                cache_heads, dtype=torch.bool, device=x.device
+            )[None, :, None, None, :]
+            attn = torch.softmax(
+                torch.where(
+                    diagonal,
+                    logits,
+                    logits + routing_gates[:, None, None, None, :],
+                ),
+                dim=-1,
+            ).to(v_all.dtype)
+            if self.training and self.dropout > 0.0:
+                attn = F.dropout(attn, p=self.dropout, training=True)
+            y = torch.einsum("bckgs,bskd->bckgd", attn, v_all)
+            y = y.contiguous().view(
+                batch, cache_heads, self.num_heads * self.head_dim
+            )
+            return self.o_proj(y)
         if return_attn_scores and self.internal_iteration_score == "kv_norm":
             iteration_scores = k_all.float().pow(2).sum(
                 dim=(2, 3)
@@ -366,14 +415,19 @@ class ProcessorLayer(nn.Module):
         x: torch.Tensor,
         selected_heads: torch.Tensor,
         return_attn_scores: bool = False,
+        routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if return_attn_scores and routing_gates is not None:
+            raise ValueError(
+                "routing gates are not supported with iterative attention scores"
+            )
         h = self.input_norm(x)
         if return_attn_scores:
             attn_out, attn_scores = self.attn.forward_with_iteration_scores(
                 h, selected_heads
             )
         else:
-            result = self.attn(h, selected_heads)
+            result = self.attn(h, selected_heads, routing_gates=routing_gates)
             if not isinstance(result, torch.Tensor):
                 raise TypeError(
                     "attention returned scores when none were requested"

@@ -38,6 +38,9 @@ from gcw.performance.checkpointing import (
 from gcw.performance.telemetry import (
     cache_processor_metrics as _cache_processor_metrics,
 )
+from gcw.models.cache_processors.longshot_selection import (
+    set_longshot_selector_training_progress,
+)
 from gcw.training.objectives import (
     adjacent_pair_loss_sum,
     logical_pair_grouped_loss as _logical_pair_grouped_loss,
@@ -121,7 +124,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
     micro_tokens = plan.micro_tokens
     micro_rows = plan.micro_rows
     tokens_per_step = plan.tokens_per_step
-    flops_per_tok = plan.flops_per_tok
+    flops_per_tok_by_step = plan.flops_per_tok_by_step
     start_step = plan.start_step
     initial_processor_state = plan.initial_processor_state
     fingerprint = plan.fingerprint
@@ -150,7 +153,16 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 tracker.log({"train/step": 0, **val}, step=0)
 
     model.train()
+    flops_accumulated = tokens_per_step * sum(
+        flops_per_tok_by_step[:start_step]
+    )
     for step in range(start_step, config.max_steps):
+        if config.longshot_selector_training is not None:
+            set_longshot_selector_training_progress(
+                model,
+                config.longshot_selector_training,
+                step / max(1, config.max_steps - 1),
+            )
         step_start = time.perf_counter()
         opt.zero_grad(set_to_none=True)
         # Per-step accumulators for the metrics block below.
@@ -297,7 +309,9 @@ def run_training_loop(plan: TrainingPlan) -> None:
         )
         step_seconds = time.perf_counter() - step_start
         tokens_seen = tokens_per_step * step_num
-        flops_seen = flops_per_tok * tokens_seen
+        step_flops_per_tok = flops_per_tok_by_step[step]
+        flops_accumulated += tokens_per_step * step_flops_per_tok
+        flops_seen = flops_accumulated
         # Reduce the per-step loss across ranks when logical pair grouping is active.
         train_loss = (
             loss_total
@@ -358,7 +372,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
             "timing/step_seconds": step_seconds,
             "timing/tokens_per_second": tokens_per_step
             / max(step_seconds, 1e-12),
-            "timing/flops_per_second": (flops_per_tok * tokens_per_step)
+            "timing/flops_per_second": (step_flops_per_tok * tokens_per_step)
             / max(step_seconds, 1e-12),
             "optim/grad_norm": _maybe_float(grad_norm),
             "optim/weight_decay": weight_decay,

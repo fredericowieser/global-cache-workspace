@@ -3,6 +3,7 @@ import pytest
 from gcw.config import (
     DataConfig,
     LoRAConfig,
+    LongshotSelectorTrainingConfig,
     ModelConfig,
     ResumeConfig,
     TrainConfig,
@@ -26,6 +27,101 @@ def test_train_config_builds_explicit_resume_and_wandb_state():
     assert config.wandb == WandbConfig(
         enabled=True, id="run-123", resume="must"
     )
+
+
+def test_longshot_selector_training_config_serializes_and_validates():
+    config = TrainConfig(
+        model=ModelConfig(
+            variant="longshot",
+            cache_processor={
+                "head_selection_method": "learned_contextual",
+            },
+        ),
+        longshot_selector_training={},
+    )
+
+    assert config.longshot_selector_training == LongshotSelectorTrainingConfig()
+
+    with pytest.raises(ValueError, match="phase boundaries"):
+        LongshotSelectorTrainingConfig(soft_end=0.7, second_hardening_start=0.6)
+    with pytest.raises(ValueError, match="temperatures"):
+        LongshotSelectorTrainingConfig(final_temperature=0.0)
+    with pytest.raises(ValueError, match="suppressions"):
+        LongshotSelectorTrainingConfig(final_suppression=1.0)
+
+
+def test_longshot_selector_training_rejects_unsupported_execution_paths():
+    with pytest.raises(ValueError, match="cannot be combined with flow"):
+        TrainConfig(
+            model=ModelConfig(
+                variant="longshot",
+                flow_processor={},
+                cache_processor={
+                    "head_selection_method": "learned_contextual",
+                },
+            ),
+            longshot_selector_training={},
+        )
+
+    with pytest.raises(ValueError, match="multiple internal iterations"):
+        TrainConfig(
+            model=ModelConfig(
+                variant="longshot",
+                cache_processor={
+                    "head_selection_method": "learned_contextual",
+                    "iterations": 2,
+                    "internal_iteration_score": "attn_l2",
+                },
+            ),
+            longshot_selector_training={},
+        )
+
+
+@pytest.mark.parametrize(
+    "cache_processor",
+    [
+        {
+            "head_selection_method": "magnitude",
+            "internal_iteration_score": "learned_contextual",
+            "iteration_mode": "external",
+            "iterations": 2,
+        },
+        {
+            "head_selection_method": "magnitude",
+            "internal_iteration_score": "learned_contextual",
+            "iteration_mode": "internal",
+            "iterations": 1,
+        },
+    ],
+)
+def test_longshot_selector_training_rejects_unreachable_iterative_selection(
+    cache_processor,
+):
+    with pytest.raises(ValueError, match="multiple internal iterations"):
+        TrainConfig(
+            model=ModelConfig(
+                variant="longshot",
+                cache_processor=cache_processor,
+            ),
+            longshot_selector_training={},
+        )
+
+
+def test_longshot_selector_training_accepts_reachable_iterative_selection():
+    config = TrainConfig(
+        model=ModelConfig(
+            variant="longshot",
+            cache_processor={
+                "head_selection_method": "magnitude",
+                "internal_iteration_score": "learned_contextual",
+                "iteration_mode": "internal",
+                "iterations": 2,
+            },
+        ),
+        longshot_selector_training={},
+    )
+
+    assert config.longshot_selector_training is not None
 
 
 def test_row_and_token_batch_contracts_are_mutually_exclusive():

@@ -36,9 +36,37 @@ def cache_processor_metrics(model: torch.nn.Module) -> dict[str, float]:
         else {}
     )
     block = getattr(processor, "block", None)
+    gates = [
+        gate
+        for candidate in getattr(processor, "blocks", None)
+        or ([block] if block is not None else [])
+        if (gate := getattr(candidate, "_gate_value", None)) is not None
+    ]
+    if gates:
+        metrics["cache_processor/gate"] = float(
+            torch.stack(gates).float().mean().cpu()
+        )
     pop_metrics = getattr(block, "pop_iteration_metrics", None)
     if pop_metrics is not None:
         metrics.update(pop_metrics())
+    selector = getattr(block, "head_selector", None)
+    if selector is not None:
+        for name, parameters in {
+            "projection": (
+                selector.context_proj.weight,
+                selector.candidate_proj.weight,
+            ),
+            "identity_bias": (selector.identity_bias,),
+        }.items():
+            squared_norm = sum(
+                parameter.grad.detach().float().pow(2).sum()
+                for parameter in parameters
+                if parameter is not None and parameter.grad is not None
+            )
+            if not isinstance(squared_norm, int):
+                metrics[f"cache_processor/selector/{name}_grad_norm"] = float(
+                    squared_norm.sqrt().cpu()
+                )
     return metrics
 
 

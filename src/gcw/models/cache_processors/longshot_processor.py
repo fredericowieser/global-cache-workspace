@@ -90,6 +90,7 @@ class CacheProcessor(nn.Module):
         else:
             self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
         self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        self._gate_value: torch.Tensor | None = None
         self.flow = (
             LatentFlow(config.hidden_size, flow_config)
             if flow_config is not None
@@ -108,6 +109,7 @@ class CacheProcessor(nn.Module):
                 num_cache_heads,
                 norm_eps=config.norm_eps,
                 use_identity_bias=config.head_selector_use_identity_bias,
+                kv_cache_heads=self.kv_cache_heads,
             )
         else:
             self.head_selector = None
@@ -192,13 +194,22 @@ class CacheProcessor(nn.Module):
                 if linear_features is not None
                 else 0
             )
+        routing_gates = None
         if select_all:
             selected_heads = torch.arange(
                 hidden.shape[1], dtype=torch.long, device=hidden.device
             ).expand(hidden.shape[0], -1)
         elif selected_heads is None:
-            selected_heads = self.select_heads(hidden, topk_heads)
-        processed = self._iterate_layers(hidden, selected_heads, topk_heads)
+            selected_heads, routing_gates = self._route_heads(
+                hidden, topk_heads, "initial"
+            )
+        processed = self._iterate_layers(
+            hidden,
+            selected_heads,
+            topk_heads,
+            routing_gates,
+            select_all=select_all,
+        )
         gate = self._gate_scale(processed.dtype)
         primary_delta = self.out_proj(processed[:, : x.shape[1]]) * gate
         updated = x[:, :, -1, -self.output_dim :] + primary_delta
@@ -217,6 +228,9 @@ class CacheProcessor(nn.Module):
         h: torch.Tensor,
         selected_heads: torch.Tensor,
         topk_heads: int,
+        routing_gates: torch.Tensor | None = None,
+        *,
+        select_all: bool = False,
     ) -> torch.Tensor:
         if self.flow is not None:
             return self.flow(
@@ -244,6 +258,7 @@ class CacheProcessor(nn.Module):
                     h,
                     selected_heads,
                     return_attn_scores=return_attn_scores,
+                    routing_gates=routing_gates,
                 )
                 if return_attn_scores:
                     if not isinstance(result, tuple):
@@ -259,18 +274,33 @@ class CacheProcessor(nn.Module):
                         )
                     h = result
             if has_next_iteration:
-                if learned_reselection:
-                    next_selected_heads = self.select_heads(h, topk_heads)
+                if learned_reselection and not select_all:
+                    next_selected_heads, routing_gates = self._route_heads(
+                        h, topk_heads, f"iteration_{iteration + 1}"
+                    )
+                elif learned_reselection:
+                    next_selected_heads = selected_heads
+                    routing_gates = None
                 else:
                     head_scores = torch.stack(layer_scores, dim=0).mean(dim=0)
                     next_selected_heads = _select_heads_from_head_scores(
                         head_scores, topk_heads
                     )
+                    routing_gates = None
                 self.record_selected_head_overlap(
                     iteration + 1, selected_heads, next_selected_heads
                 )
                 selected_heads = next_selected_heads
         return self.out_norm(h)
+
+    def _route_heads(
+        self, hidden: torch.Tensor, topk_heads: int, metric_scope: str
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        if self.head_selector is None:
+            raise RuntimeError(
+                "learned contextual head selection was not configured"
+            )
+        return self.head_selector.route(hidden, topk_heads, metric_scope)
 
     def linear_state_query(
         self, layer_idx: int, following_cache_idx: int, context: torch.Tensor
@@ -320,6 +350,7 @@ class CacheProcessor(nn.Module):
         selected_heads: torch.Tensor,
         *,
         return_attn_scores: bool,
+        routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if (
             _gradient_checkpointing_enabled(self.config.gradient_checkpointing)
@@ -331,9 +362,15 @@ class CacheProcessor(nn.Module):
                 h,
                 selected_heads,
                 return_attn_scores,
+                routing_gates,
                 use_reentrant=False,
             )
-        return layer(h, selected_heads, return_attn_scores=return_attn_scores)
+        return layer(
+            h,
+            selected_heads,
+            return_attn_scores=return_attn_scores,
+            routing_gates=routing_gates,
+        )
 
     def pop_iteration_metrics(self) -> dict[str, float]:
         if cache_processor_recomputation_id() is not None:
@@ -348,6 +385,8 @@ class CacheProcessor(nn.Module):
             for total in (self._selected_head_overlap_totals[iteration],)
             if self._selected_head_overlap_counts[iteration] > 0
         }
+        if self.head_selector is not None:
+            metrics.update(self.head_selector.pop_metrics())
         self._selected_head_overlap_totals.clear()
         self._selected_head_overlap_counts.clear()
         return metrics
@@ -381,9 +420,13 @@ class CacheProcessor(nn.Module):
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
         if self.config.gate_mode == "sigmoid":
-            return torch.sigmoid(self.gate).to(dtype)
-        if self.config.gate_mode == "direct":
-            return self.gate.to(dtype)
-        raise ValueError(
-            f"unsupported cache processor gate_mode: {self.config.gate_mode}"
-        )
+            scale = torch.sigmoid(self.gate).to(dtype)
+        elif self.config.gate_mode == "direct":
+            scale = self.gate.to(dtype)
+        else:
+            raise ValueError(
+                f"unsupported cache processor gate_mode: {self.config.gate_mode}"
+            )
+        self._gate_value = scale.detach()
+        return scale
+

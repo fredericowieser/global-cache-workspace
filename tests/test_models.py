@@ -36,6 +36,7 @@ from gcw.models.cache_processors.standard import (
     _split_kv,
 )
 from gcw.models.model import LanguageModel
+from gcw.performance.telemetry import cache_processor_metrics
 from gcw.models.cache_processors.icarus import (
     CacheProcessor as IcarusCacheProcessor,
 )
@@ -325,6 +326,33 @@ def test_tiny_models_forward_backward():
         assert any(
             p.grad is not None for p in model.parameters() if p.requires_grad
         )
+
+
+@pytest.mark.parametrize("variant", ["bgt", "icarus", "longshot"])
+def test_cache_processor_gate_is_reported_for_every_variant(variant):
+    model = build_model(tiny_config(variant, gate_init=-2.0))
+    model.init_weights()
+
+    assert cache_processor_metrics(model) == {}
+
+    model(torch.randint(0, 128, (2, 9)), torch.randint(0, 128, (2, 9)))
+    metrics = cache_processor_metrics(model)
+
+    assert metrics["cache_processor/gate"] == pytest.approx(
+        float(torch.sigmoid(torch.tensor(-2.0))), abs=1e-6
+    )
+
+
+def test_cache_processor_gate_follows_the_gate_mode():
+    model = build_model(
+        tiny_config("longshot", gate_init=0.25, gate_mode="direct")
+    )
+    model.init_weights()
+    model(torch.randint(0, 128, (2, 9)), torch.randint(0, 128, (2, 9)))
+
+    assert cache_processor_metrics(model)[
+        "cache_processor/gate"
+    ] == pytest.approx(0.25, abs=1e-6)
 
 
 def test_tiny_qwen35_forward_backward_and_cache_layers():
@@ -812,7 +840,13 @@ def test_qwen35_longshot_internal_reselection_uses_one_budget_across_kv_and_line
             self.register_buffer("scores", scores)
             self.calls = []
 
-        def forward(self, x, selected_heads, return_attn_scores=False):
+        def forward(
+            self,
+            x,
+            selected_heads,
+            return_attn_scores=False,
+            routing_gates=None,
+        ):
             self.calls.append(selected_heads.detach().clone())
             x = x + 1.0
             if return_attn_scores:
@@ -2407,7 +2441,13 @@ def test_longshot_iterative_processor_reselects_heads_between_iterations():
             self.register_buffer("scores", scores)
             self.calls = []
 
-        def forward(self, x, selected_heads, return_attn_scores=False):
+        def forward(
+            self,
+            x,
+            selected_heads,
+            return_attn_scores=False,
+            routing_gates=None,
+        ):
             self.calls.append(selected_heads.detach().clone())
             x = x + 1.0
             if return_attn_scores:
@@ -2451,7 +2491,13 @@ def test_longshot_iterative_processor_can_reselect_from_cache_head_attention_sco
             self.register_buffer("scores", scores)
             self.calls = []
 
-        def forward(self, x, selected_heads, return_attn_scores=False):
+        def forward(
+            self,
+            x,
+            selected_heads,
+            return_attn_scores=False,
+            routing_gates=None,
+        ):
             assert return_attn_scores is False
             self.calls.append(
                 (selected_heads.detach().clone(), return_attn_scores)
@@ -2519,7 +2565,13 @@ def test_longshot_external_iteration_runs_one_block_iteration_per_global_call():
             super().__init__()
             self.calls = 0
 
-        def forward(self, x, selected_heads, return_attn_scores=False):
+        def forward(
+            self,
+            x,
+            selected_heads,
+            return_attn_scores=False,
+            routing_gates=None,
+        ):
             self.calls += 1
             assert return_attn_scores is False
             return x

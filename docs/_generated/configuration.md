@@ -198,6 +198,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `global_batch_rows` | `int` | `0` |
 | `logical_pair_grouping` | `bool` | `False` |
 | `performance` | `gcw.performance.config.PerformanceConfig` | `PerformanceConfig(adaptive_batching=AdaptiveBatchingConfig(enabled=False, bands=(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2))), reference_loss=ReferenceLossConfig(mode='legacy', max_projected_positions=1024, checkpoint_chunks=False), longshot_full_history=LongshotFullHistoryConfig(enabled=False, max_temp_bytes=33554432), kv_score_sidecar=KVScoreSidecarConfig(enabled=False), triton_cache_movement=TritonCacheMovementConfig(enabled=False), optimized_step=OptimizedStepConfig(enabled=False, profile='combined_v1', receipt_path=None, key_path=None, key_id=None, qualification_id=None), noisy_diffusion=NoisyDiffusionBackendConfig(recurrence_backend='eager'))` |
+| `longshot_selector_training` | `gcw.config.training.LongshotSelectorTrainingConfig \| None` | `None` |
 | `learning_rate` | `float` | `0.0003` |
 | `adam_beta1` | `float` | `0.9` |
 | `adam_beta2` | `float` | `0.95` |
@@ -222,6 +223,21 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `eval_on_start` | `bool` | `False` |
 | `wandb` | `gcw.config.training.WandbConfig` | `WandbConfig(enabled=False, project='global-cache-workspace', entity=None, name=None, group=None, mode=None, id=None, resume=None, tags=[], log_every=1)` |
 | `metadata` | `dict[str, Any]` | `{}` |
+
+## `LongshotSelectorTrainingConfig`
+
+| Field | Type | Default |
+|---|---|---|
+| `warmup_end` | `float` | `0.05` |
+| `soft_end` | `float` | `0.15` |
+| `second_hardening_start` | `float` | `0.6` |
+| `hard_start` | `float` | `0.9` |
+| `initial_temperature` | `float` | `2.0` |
+| `intermediate_temperature` | `float` | `0.35` |
+| `final_temperature` | `float` | `0.1` |
+| `initial_suppression` | `float` | `0.0` |
+| `intermediate_suppression` | `float` | `2.0` |
+| `final_suppression` | `float` | `5.0` |
 
 ## `ResumeConfig`
 

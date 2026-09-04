@@ -74,6 +74,70 @@ class WandbConfig:
             )
 
 
+@dataclass(frozen=True)
+class LongshotSelectorTrainingConfig:
+    warmup_end: float = 0.05
+    soft_end: float = 0.15
+    second_hardening_start: float = 0.60
+    hard_start: float = 0.90
+    initial_temperature: float = 2.0
+    intermediate_temperature: float = 0.35
+    final_temperature: float = 0.1
+    initial_suppression: float = 0.0
+    intermediate_suppression: float = 2.0
+    final_suppression: float = 5.0
+
+    def __post_init__(self) -> None:
+        boundaries = (
+            self.warmup_end,
+            self.soft_end,
+            self.second_hardening_start,
+            self.hard_start,
+        )
+        if not all(math.isfinite(value) for value in boundaries) or not (
+            0.0
+            <= self.warmup_end
+            <= self.soft_end
+            < self.second_hardening_start
+            < self.hard_start
+            <= 1.0
+        ):
+            raise ValueError(
+                "longshot_selector_training phase boundaries must satisfy "
+                "0 <= warmup_end <= soft_end < second_hardening_start < hard_start <= 1"
+            )
+        temperatures = (
+            self.initial_temperature,
+            self.intermediate_temperature,
+            self.final_temperature,
+        )
+        if not all(
+            math.isfinite(value) and value > 0.0 for value in temperatures
+        ) or not (
+            self.initial_temperature
+            >= self.intermediate_temperature
+            >= self.final_temperature
+        ):
+            raise ValueError(
+                "longshot_selector_training temperatures must be finite, positive, and non-increasing"
+            )
+        suppressions = (
+            self.initial_suppression,
+            self.intermediate_suppression,
+            self.final_suppression,
+        )
+        if not all(
+            math.isfinite(value) and value >= 0.0 for value in suppressions
+        ) or not (
+            self.initial_suppression
+            <= self.intermediate_suppression
+            <= self.final_suppression
+        ):
+            raise ValueError(
+                "longshot_selector_training suppressions must be finite, non-negative, and non-decreasing"
+            )
+
+
 @dataclass
 class TrainConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -97,6 +161,7 @@ class TrainConfig:
     global_batch_rows: int = 0
     logical_pair_grouping: bool = False
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
+    longshot_selector_training: LongshotSelectorTrainingConfig | None = None
     learning_rate: float = 3e-4
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
@@ -137,6 +202,48 @@ class TrainConfig:
             self.performance = PerformanceConfig(**self.performance)
         elif not isinstance(self.performance, PerformanceConfig):
             raise ValueError("performance must be a mapping")
+        if isinstance(self.longshot_selector_training, dict):
+            self.longshot_selector_training = LongshotSelectorTrainingConfig(
+                **self.longshot_selector_training
+            )
+        elif self.longshot_selector_training is not None and not isinstance(
+            self.longshot_selector_training, LongshotSelectorTrainingConfig
+        ):
+            raise ValueError("longshot_selector_training must be a mapping")
+        selector_training = self.longshot_selector_training
+        if selector_training is not None:
+            processor = self.model.cache_processor
+            if self.model.variant != "longshot" or processor is None:
+                raise ValueError(
+                    "longshot_selector_training requires a Longshot cache processor"
+                )
+            learned_initial_selection = (
+                processor.head_selection_method == "learned_contextual"
+            )
+            learned_iterative_selection = (
+                processor.iteration_mode == "internal"
+                and processor.iterations > 1
+                and processor.internal_iteration_score == "learned_contextual"
+            )
+            if not learned_initial_selection and not learned_iterative_selection:
+                raise ValueError(
+                    "longshot_selector_training requires learned_contextual initial "
+                    "selection or learned contextual reselection across multiple "
+                    "internal iterations"
+                )
+            if self.model.flow_processor is not None:
+                raise ValueError(
+                    "longshot_selector_training cannot be combined with flow"
+                )
+            if (
+                processor.iteration_mode == "internal"
+                and processor.iterations > 1
+                and processor.internal_iteration_score != "learned_contextual"
+            ):
+                raise ValueError(
+                    "soft Longshot selector training with multiple internal iterations requires "
+                    "internal_iteration_score='learned_contextual'"
+                )
         if self.freeze_backbone and self.trainable == "all":
             self.trainable = "cache_processor"
         if self.save_cache_processor_only is None:
