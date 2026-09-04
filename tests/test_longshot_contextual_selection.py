@@ -260,6 +260,7 @@ def test_initial_and_iterative_selection_methods_are_independent(
 def test_hybrid_contextual_selection_uses_one_combined_ranking():
     config = _processor_config(
         head_selection_method="learned_contextual",
+        head_selector_use_identity_bias=True,
         topk_heads=1,
         topk_linear_heads=2,
     )
@@ -367,6 +368,7 @@ def test_global_hybrid_contextual_path_reuses_kv_encoding_and_unifies_budget():
         encoder_query_source="final_token",
         linear_state_cache=True,
         head_selection_method="learned_contextual",
+        head_selector_use_identity_bias=True,
         topk_heads=1,
         topk_linear_heads=2,
     )
@@ -469,7 +471,7 @@ def test_contextual_selection_configuration_round_trips_through_model_dict():
             "head_selection_method": "learned_contextual",
             "internal_iteration_score": "learned_contextual",
             "head_selector_hidden_size": 17,
-            "head_selector_use_identity_bias": False,
+            "head_selector_use_identity_bias": True,
         },
     )
     assert model.cache_processor is not None
@@ -478,12 +480,12 @@ def test_contextual_selection_configuration_round_trips_through_model_dict():
         model.cache_processor.internal_iteration_score == "learned_contextual"
     )
     assert model.cache_processor.head_selector_hidden_size == 17
-    assert model.cache_processor.head_selector_use_identity_bias is False
+    assert model.cache_processor.head_selector_use_identity_bias is True
 
     defaults = to_dict(CacheProcessorConfig())
     assert defaults["head_selection_method"] == "magnitude"
     assert defaults["head_selector_hidden_size"] == 64
-    assert defaults["head_selector_use_identity_bias"] is True
+    assert defaults["head_selector_use_identity_bias"] is False
 
 
 @pytest.mark.parametrize(

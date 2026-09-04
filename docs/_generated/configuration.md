@@ -67,7 +67,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `score` | `str` | `'attn_l2'` |
 | `head_selection_method` | `Literal['magnitude', 'learned_contextual']` | `'magnitude'` |
 | `head_selector_hidden_size` | `int` | `64` |
-| `head_selector_use_identity_bias` | `bool` | `True` |
+| `head_selector_use_identity_bias` | `bool` | `False` |
 | `hidden_size` | `int` | `512` |
 | `intermediate_size` | `int` | `2048` |
 | `num_layers` | `int` | `1` |
