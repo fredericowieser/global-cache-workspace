@@ -38,11 +38,13 @@ def _fingerprint_with_current_model_defaults(
     model_payload = saved.get("model")
     if not isinstance(model_payload, dict):
         return saved
-    from gcw.checkpoint import _model_config_from_checkpoint
-    from gcw.config import to_dict
+    from gcw.checkpoint import _without_legacy_workspace_refinement
+    from gcw.config import ModelConfig, to_dict
 
     try:
-        model = to_dict(_model_config_from_checkpoint(model_payload))
+        model = to_dict(
+            ModelConfig(**_without_legacy_workspace_refinement(model_payload))
+        )
     except (TypeError, ValueError) as exc:
         raise CheckpointCompatibilityError(
             f"checkpoint model fingerprint is incompatible: {exc}"

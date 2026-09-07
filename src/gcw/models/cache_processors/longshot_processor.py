@@ -427,12 +427,12 @@ class CacheProcessor(nn.Module):
     ) -> None:
         if cache_processor_recomputation_id() is not None:
             return
-        assert selected_heads.shape[-1] > 0, (
-            "selected_heads must include at least one cache head"
-        )
-        assert next_selected_heads.shape[-1] > 0, (
-            "next_selected_heads must include at least one cache head"
-        )
+        assert (
+            selected_heads.shape[-1] > 0
+        ), "selected_heads must include at least one cache head"
+        assert (
+            next_selected_heads.shape[-1] > 0
+        ), "next_selected_heads must include at least one cache head"
         maintained = (
             selected_heads[:, :, None] == next_selected_heads[:, None, :]
         ).any(dim=-1)

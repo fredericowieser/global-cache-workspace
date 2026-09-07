@@ -432,6 +432,70 @@ def test_legacy_non_null_workspace_fingerprint_is_rejected(tmp_path):
         )
 
 
+def _legacy_generate_model_config() -> ModelConfig:
+    return replace(
+        tiny_model_config(),
+        variant="longshot",
+        cache_processor=CacheProcessorConfig(),
+        legacy_bottleneck_generate=True,
+    )
+
+
+def test_model_fingerprint_upgrade_keeps_legacy_bottleneck_generate(tmp_path):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    current_model = to_dict(_legacy_generate_model_config())
+    legacy_model = copy.deepcopy(current_model)
+    legacy_model["workspace_flow_refinement"] = None
+    for field in (
+        "generation_process_every",
+        "head_selection_method",
+        "head_selector_hidden_size",
+        "head_selector_use_identity_bias",
+    ):
+        legacy_model["cache_processor"].pop(field)
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(
+        path,
+        model,
+        config,
+        optimizer,
+        resume,
+        {**fingerprint, "model": legacy_model},
+    )
+
+    checkpoint = TrainingCheckpoint.open(
+        path,
+        expected_fingerprint={**fingerprint, "model": current_model},
+        topology="same",
+        current_world_size=1,
+    )
+
+    assert checkpoint.resume_state.step == 1
+
+
+def test_current_model_fingerprint_resumes_unchanged(tmp_path):
+    config, model, optimizer, resume, fingerprint = _checkpoint_fixture()
+    current_model = to_dict(_legacy_generate_model_config())
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(
+        path,
+        model,
+        config,
+        optimizer,
+        resume,
+        {**fingerprint, "model": current_model},
+    )
+
+    checkpoint = TrainingCheckpoint.open(
+        path,
+        expected_fingerprint={**fingerprint, "model": current_model},
+        topology="same",
+        current_world_size=1,
+    )
+
+    assert checkpoint.resume_state.step == 1
+
+
 def test_legacy_upgrade_does_not_touch_a_manifest_that_already_records_precision(
     tmp_path,
 ):

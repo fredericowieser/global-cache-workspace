@@ -153,9 +153,9 @@ class ProcessorAttention(nn.Module):
         score_kv_norm = (
             return_attn_scores and self.internal_iteration_score == "kv_norm"
         )
-        assert selected_heads.shape[-1] > 0, (
-            "selected_heads must include at least one cache head"
-        )
+        assert (
+            selected_heads.shape[-1] > 0
+        ), "selected_heads must include at least one cache head"
         q = self.q_proj(x).view(
             batch, cache_heads, self.num_heads, self.head_dim
         )
@@ -225,9 +225,9 @@ class ProcessorAttention(nn.Module):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
-        assert selected_count > 0, (
-            "selected_heads must include at least one cache head"
-        )
+        assert (
+            selected_count > 0
+        ), "selected_heads must include at least one cache head"
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(
@@ -325,9 +325,9 @@ class ProcessorAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch, cache_heads, _ = x.shape
         selected_count = selected_heads.shape[-1]
-        assert selected_count > 0, (
-            "selected_heads must include at least one cache head"
-        )
+        assert (
+            selected_count > 0
+        ), "selected_heads must include at least one cache head"
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(

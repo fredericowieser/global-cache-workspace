@@ -225,7 +225,10 @@ class TrainConfig:
                 and processor.iterations > 1
                 and processor.internal_iteration_score == "learned_contextual"
             )
-            if not learned_initial_selection and not learned_iterative_selection:
+            if (
+                not learned_initial_selection
+                and not learned_iterative_selection
+            ):
                 raise ValueError(
                     "longshot_selector_training requires learned_contextual initial "
                     "selection or learned contextual reselection across multiple "

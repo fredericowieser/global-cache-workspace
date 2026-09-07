@@ -150,7 +150,7 @@ usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
                        [--batch-size BATCH_SIZE]
                        [--dtype {auto,bfloat16,float16,float32}]
                        [--generation-process-every GENERATION_PROCESS_EVERY]
-                       [--out OUT]
+                       [--head-selection-method {random}] [--out OUT]
 ```
 
 | Argument | Contract |
@@ -160,6 +160,7 @@ usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 | `--batch-size` | default: `8`; type: `int` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--generation-process-every` | type: `_positive_int` |
+| `--head-selection-method` | choices: `random` |
 | `--out` | flag |
 
 ## `gcw eval paper7-legacy`
@@ -169,7 +170,7 @@ usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
                               [--batch-size BATCH_SIZE]
                               [--dtype {auto,bfloat16,float16,float32}]
                               [--generation-process-every GENERATION_PROCESS_EVERY]
-                              [--out OUT]
+                              [--head-selection-method {random}] [--out OUT]
 ```
 
 | Argument | Contract |
@@ -179,6 +180,7 @@ usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 | `--batch-size` | default: `8`; type: `int` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--generation-process-every` | type: `_positive_int` |
+| `--head-selection-method` | choices: `random` |
 | `--out` | flag |
 
 ## `gcw eval tasks`
