@@ -105,11 +105,15 @@ def _apply_head_selection_method(config, value: str | None) -> None:
             "evaluation head-selection override supports only 'random'"
         )
     processor_config = getattr(config, "cache_processor", None)
-    if getattr(config, "variant", None) != "longshot" or processor_config is None:
+    if (
+        getattr(config, "variant", None) != "longshot"
+        or processor_config is None
+    ):
         raise ValueError(
             "head_selection_method override requires a Longshot checkpoint"
         )
     processor_config.head_selection_method = value
+    processor_config.internal_iteration_score = value
 
 
 def _load_eval_target(

@@ -9,6 +9,7 @@ import torch
 from gcw.config import ModelConfig
 from gcw.evaluation import legacy
 import gcw.evaluation.lm_eval_adapter as lm_eval_adapter
+from gcw.models.cache_processors.longshot_processor import CacheProcessor
 
 
 def test_paper7_legacy_task_order_and_skip(monkeypatch):
@@ -139,8 +140,18 @@ def test_eval_target_applies_generation_cadence_without_changing_checkpoint(
 def test_eval_target_applies_random_head_selection_after_checkpoint_load(
     monkeypatch,
 ):
-    config = ModelConfig(variant="longshot")
+    config = ModelConfig(
+        variant="longshot",
+        cache_processor={
+            "head_selection_method": "learned_contextual",
+            "internal_iteration_score": "learned_contextual",
+            "iterations": 2,
+            "encoder_seq_len": 3,
+        },
+    )
     assert config.cache_processor is not None
+    processor = CacheProcessor(16, 4, config.cache_processor)
+    assert processor.head_selector is not None
     model = type("Model", (), {"config": config})()
     monkeypatch.setattr(
         lm_eval_adapter,
@@ -164,6 +175,16 @@ def test_eval_target_applies_random_head_selection_after_checkpoint_load(
     assert loaded is model
     assert tokenizer == "tokenizer"
     assert config.cache_processor.head_selection_method == "random"
+    assert config.cache_processor.internal_iteration_score == "random"
+
+    def reject_learned_routing(*_args, **_kwargs):
+        raise AssertionError("runtime override invoked the learned selector")
+
+    monkeypatch.setattr(
+        processor.head_selector, "route", reject_learned_routing
+    )
+    with torch.no_grad():
+        processor(torch.randn(2, 4, 3, 16), topk_heads=2)
 
 
 def test_eval_target_rejects_head_selection_override_for_non_longshot():

@@ -101,7 +101,9 @@ uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7-legacy \
 To evaluate an existing Longshot checkpoint with parameter-free random head
 routing without modifying the checkpoint, add
 `--head-selection-method random`. The checkpoint architecture and weights are
-loaded first, then only the runtime routing method is overridden.
+loaded first, then the initial and internal iterative routing methods are
+overridden at runtime. Any loaded learned-selector parameters remain present
+but are not used for routing.
 
 When evaluating in a pre-synced cluster environment, add `--locked --no-sync` to `uv run` to avoid changing the installed runtime during a Slurm job.
 

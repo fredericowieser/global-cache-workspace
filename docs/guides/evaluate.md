@@ -30,6 +30,11 @@ evaluation runs. Use it for old-checkpoint replication and for new checkpoints t
 must be compared against those legacy result files. The short suite name
 `gcw eval paper7` is an alias for the same path.
 
+For a Longshot random-routing ablation, add `--head-selection-method random`.
+This runtime-only override applies to both the initial head selection and every
+reachable internal reselection. Learned-selector parameters remain loaded from
+the checkpoint but are not used for routing.
+
 The compatibility path intentionally preserves the old protocol:
 
 - task YAMLs are loaded from `configs/tasks_legacy/paper7`;
