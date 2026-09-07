@@ -543,7 +543,9 @@ def run_chat_benchmarks(
         "tokenizer": tokenizer_identity,
         "datasets": dataset_identity,
         "processor_enabled": processor_enabled,
-        "generation_process_every": generation_process_every,
+        "generation_process_every": backend.identity.get(
+            "generation_process_every"
+        ),
         **result,
     }
     encoded = json.dumps(
