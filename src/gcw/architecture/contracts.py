@@ -42,9 +42,10 @@ def _config_payload(value: object) -> object:
             value.head_selection_method != "learned_contextual"
             and value.internal_iteration_score != "learned_contextual"
         ):
-            payload.pop("head_selection_method")
             payload.pop("head_selector_hidden_size")
             payload.pop("head_selector_use_identity_bias")
+            if value.head_selection_method == "magnitude":
+                payload.pop("head_selection_method")
         return payload
     if isinstance(value, PerformanceConfig):
         payload = {

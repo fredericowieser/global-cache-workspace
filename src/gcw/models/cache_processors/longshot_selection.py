@@ -345,6 +345,34 @@ def _select_heads_from_head_scores(
     ).indices
 
 
+def _select_random_heads(
+    batch_size: int,
+    kv_heads: int,
+    linear_heads: int,
+    topk_kv_heads: int,
+    topk_linear_heads: int,
+    device: torch.device,
+) -> torch.Tensor:
+    scores = torch.rand(
+        batch_size,
+        kv_heads + linear_heads,
+        dtype=torch.float32,
+        device=device,
+    )
+    selected = [
+        _select_heads_from_head_scores(
+            scores[:, :kv_heads], min(topk_kv_heads, kv_heads)
+        )
+    ]
+    linear_budget = min(topk_linear_heads, linear_heads)
+    if linear_budget > 0:
+        selected.append(
+            _select_heads_from_head_scores(scores[:, kv_heads:], linear_budget)
+            + kv_heads
+        )
+    return torch.cat(selected, dim=-1)
+
+
 def select_kv_norm_history(
     processor: Any,
     cache: CacheLike,

@@ -31,6 +31,7 @@ from gcw.models.cache_processors.longshot_linear_state import (
 from gcw.models.cache_processors.longshot_selection import (
     ContextualHeadSelector,
     _select_heads_from_head_scores,
+    _select_random_heads,
 )
 
 
@@ -201,7 +202,10 @@ class CacheProcessor(nn.Module):
             ).expand(hidden.shape[0], -1)
         elif selected_heads is None:
             selected_heads, routing_gates = self._route_heads(
-                hidden, topk_heads, "initial"
+                hidden,
+                topk_heads,
+                "initial",
+                self.config.head_selection_method,
             )
         processed = self._iterate_layers(
             hidden,
@@ -244,12 +248,13 @@ class CacheProcessor(nn.Module):
             if self.config.iteration_mode == "internal"
             else 1
         )
-        learned_reselection = (
-            self.config.internal_iteration_score == "learned_contextual"
-        )
+        routing_reselection = self.config.internal_iteration_score in {
+            "learned_contextual",
+            "random",
+        }
         for iteration in range(iterations):
             has_next_iteration = iteration + 1 < iterations
-            return_attn_scores = has_next_iteration and not learned_reselection
+            return_attn_scores = has_next_iteration and not routing_reselection
             layer_scores = []
             for module in self.layers:
                 layer = cast(ProcessorLayer, module)
@@ -274,11 +279,14 @@ class CacheProcessor(nn.Module):
                         )
                     h = result
             if has_next_iteration:
-                if learned_reselection and not select_all:
+                if routing_reselection and not select_all:
                     next_selected_heads, routing_gates = self._route_heads(
-                        h, topk_heads, f"iteration_{iteration + 1}"
+                        h,
+                        topk_heads,
+                        f"iteration_{iteration + 1}",
+                        self.config.internal_iteration_score,
                     )
-                elif learned_reselection:
+                elif routing_reselection:
                     next_selected_heads = selected_heads
                     routing_gates = None
                 else:
@@ -294,13 +302,33 @@ class CacheProcessor(nn.Module):
         return self.out_norm(h)
 
     def _route_heads(
-        self, hidden: torch.Tensor, topk_heads: int, metric_scope: str
+        self,
+        hidden: torch.Tensor,
+        topk_heads: int,
+        metric_scope: str,
+        method: str,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        if self.head_selector is None:
-            raise RuntimeError(
-                "learned contextual head selection was not configured"
+        if method == "random":
+            kv_heads = min(self.kv_cache_heads, hidden.shape[1])
+            linear_heads = hidden.shape[1] - kv_heads
+            return (
+                _select_random_heads(
+                    hidden.shape[0],
+                    kv_heads,
+                    linear_heads,
+                    self.config.topk_heads,
+                    _topk_linear_heads(self.config),
+                    hidden.device,
+                ),
+                None,
             )
-        return self.head_selector.route(hidden, topk_heads, metric_scope)
+        if method == "learned_contextual":
+            if self.head_selector is None:
+                raise RuntimeError(
+                    "learned contextual head selection was not configured"
+                )
+            return self.head_selector.route(hidden, topk_heads, metric_scope)
+        raise ValueError(f"unsupported routed head selection method: {method}")
 
     def linear_state_query(
         self, layer_idx: int, following_cache_idx: int, context: torch.Tensor
@@ -429,4 +457,3 @@ class CacheProcessor(nn.Module):
             )
         self._gate_value = scale.detach()
         return scale
-

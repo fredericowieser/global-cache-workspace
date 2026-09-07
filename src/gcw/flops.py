@@ -511,6 +511,8 @@ def _longshot_initial_head_selection_flops(
     *,
     routing_phase: str = "hard",
 ) -> int:
+    if config.head_selection_method == "random":
+        return 0
     if config.head_selection_method == "learned_contextual":
         if routing_phase == "warmup":
             return 0
@@ -540,6 +542,8 @@ def _longshot_iteration_head_selection_flops(
     routing_phase: str = "hard",
 ) -> int:
     method = config.internal_iteration_score
+    if method == "random":
+        return 0
     if method == "learned_contextual":
         if routing_phase == "warmup":
             return 0

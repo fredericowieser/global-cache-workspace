@@ -53,6 +53,11 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
             per_cache_head_projections=True,
         ),
         replace(base_cp, head_selection_method="learned_contextual"),
+        replace(
+            base_cp,
+            head_selection_method="random",
+            internal_iteration_score="random",
+        ),
     ):
         cfg = ModelConfig(
             variant="longshot",

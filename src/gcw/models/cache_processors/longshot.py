@@ -180,15 +180,16 @@ class GlobalCacheProcessor(CacheProcessorBase):
                     "enabled KV-score sidecar requires contiguous WindowedCache storage"
                 )
             synchronize_sidecar(self, cache)
-        learned_initial_selection = (
-            self.config.head_selection_method == "learned_contextual"
-        )
+        routed_initial_selection = self.config.head_selection_method in {
+            "learned_contextual",
+            "random",
+        }
         if self.config.score == "kv_norm" and not select_all:
             merged, scores, indices = select_kv_norm_history(self, cache)
             if indices.shape[-1] == 0:
                 return cache, None
             kv_head_scores = None
-            if not learned_initial_selection:
+            if not routed_initial_selection:
                 kv_head_scores = (
                     gather_per_cache_head_scores(scores, indices)
                     .float()
@@ -219,7 +220,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
             kv_head_scores = (
                 None
-                if learned_initial_selection
+                if routed_initial_selection
                 else chunked_fp32_l2_norm(merged)
             )
         latest = latest_shared_indices(indices)
@@ -230,7 +231,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             else None
         )
         linear_inputs = self._linear_state_inputs(cache, kv_hidden)
-        if learned_initial_selection:
+        if routed_initial_selection:
             selected_heads = None
         else:
             if kv_head_scores is None:

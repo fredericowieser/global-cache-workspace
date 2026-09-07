@@ -275,6 +275,43 @@ def test_longshot_processor_flops_scale_with_iterations():
     assert external_flops == 2 * once_flops
 
 
+def test_random_longshot_routing_has_no_scoring_flops():
+    backbone = replace(
+        smollm360m_backbone(num_layers=2),
+        hidden_size=128,
+        num_heads=2,
+        num_kv_heads=1,
+    )
+    cp = CacheProcessorConfig(
+        process_every=32,
+        topk=8,
+        topk_heads=1,
+        hidden_size=64,
+        intermediate_size=256,
+        num_heads=1,
+        num_kv_heads=1,
+        iterations=2,
+        head_selection_method="random",
+        internal_iteration_score="random",
+    )
+    random = replace(backbone, variant="longshot", cache_processor=cp)
+    magnitude = replace(
+        random,
+        cache_processor=replace(
+            cp,
+            head_selection_method="magnitude",
+            internal_iteration_score="attn_l2",
+        ),
+    )
+    one_iteration = replace(random, cache_processor=replace(cp, iterations=1))
+
+    random_flops = processor_forward_flops_per_sequence(random, 128)
+    assert random_flops > processor_forward_flops_per_sequence(
+        one_iteration, 128
+    )
+    assert random_flops < processor_forward_flops_per_sequence(magnitude, 128)
+
+
 def test_qwen35_longshot_linear_state_flops_are_counted():
     cp = CacheProcessorConfig(
         process_every=4,
@@ -347,6 +384,17 @@ def test_qwen35_longshot_linear_state_flops_are_counted():
             head_selection_method="learned_contextual",
         ),
     )
+    random = replace(
+        enabled,
+        cache_processor=replace(
+            enabled.cache_processor,
+            head_selection_method="random",
+        ),
+    )
+    random_without_linear_heads = replace(
+        random,
+        cache_processor=replace(random.cache_processor, topk_linear_heads=0),
+    )
 
     assert processor_forward_flops_per_sequence(
         enabled, 16
@@ -369,6 +417,12 @@ def test_qwen35_longshot_linear_state_flops_are_counted():
     assert processor_forward_flops_per_sequence(
         learned, 16
     ) > processor_forward_flops_per_sequence(enabled, 16)
+    assert processor_forward_flops_per_sequence(
+        random, 16
+    ) < processor_forward_flops_per_sequence(enabled, 16)
+    assert processor_forward_flops_per_sequence(
+        random, 16
+    ) > processor_forward_flops_per_sequence(random_without_linear_heads, 16)
 
 
 def test_icarus_value_only_writeback_flops_keep_kv_input_but_reduce_output():

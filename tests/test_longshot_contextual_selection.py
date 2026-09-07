@@ -249,6 +249,103 @@ def test_selector_is_optional_and_shared_by_initial_and_iterative_selection():
         legacy.select_heads(torch.randn(1, 4, 8), 2)
 
 
+def test_random_selection_has_no_selector_parameters_and_is_fingerprinted():
+    legacy = CacheProcessor(16, 4, _processor_config())
+    random = CacheProcessor(
+        16,
+        4,
+        _processor_config(
+            head_selection_method="random",
+            internal_iteration_score="random",
+            head_selector_hidden_size=17,
+            head_selector_use_identity_bias=True,
+        ),
+    )
+
+    assert random.head_selector is None
+    assert set(random.state_dict()) == set(legacy.state_dict())
+    assert sum(p.numel() for p in random.parameters()) == sum(
+        p.numel() for p in legacy.parameters()
+    )
+    payload = _config_payload(random.config)
+    assert payload["head_selection_method"] == "random"
+    assert payload["internal_iteration_score"] == "random"
+    assert "head_selector_hidden_size" not in payload
+    assert "head_selector_use_identity_bias" not in payload
+
+
+@pytest.mark.parametrize(
+    ("kv_budget", "linear_budget", "expected_kv", "expected_linear"),
+    [
+        (2, 3, 2, 3),
+        (2, 0, 2, 0),
+        (20, 20, 4, 3),
+    ],
+)
+def test_random_selection_preserves_separate_kv_and_linear_quotas(
+    kv_budget, linear_budget, expected_kv, expected_linear
+):
+    block = CacheProcessor(
+        16,
+        7,
+        _processor_config(
+            head_selection_method="random",
+            topk_heads=kv_budget,
+            topk_linear_heads=linear_budget,
+        ),
+        kv_cache_heads=4,
+    )
+
+    selected, gates = block._route_heads(
+        torch.zeros(5, 7, 8), 99, "initial", "random"
+    )
+
+    assert gates is None
+    assert selected.shape == (5, expected_kv + expected_linear)
+    for row in selected:
+        assert len(set(row.tolist())) == row.numel()
+        assert ((0 <= row) & (row < 7)).all()
+        assert (row < 4).sum().item() == expected_kv
+        assert (row >= 4).sum().item() == expected_linear
+
+
+def test_random_selection_is_per_example_and_reproduces_restored_rng_state():
+    block = CacheProcessor(
+        16,
+        12,
+        _processor_config(head_selection_method="random", topk_heads=3),
+        kv_cache_heads=12,
+    )
+    hidden = torch.zeros(4, 12, 8)
+    rng_state = torch.random.get_rng_state()
+
+    first, _ = block._route_heads(hidden, 3, "initial", "random")
+    torch.random.set_rng_state(rng_state)
+    reproduced, _ = block._route_heads(hidden, 3, "initial", "random")
+
+    assert torch.equal(first, reproduced)
+    assert torch.unique(first, dim=0).shape[0] > 1
+
+
+def test_random_selection_supports_kv_only_caches():
+    block = CacheProcessor(
+        16,
+        4,
+        _processor_config(
+            head_selection_method="random",
+            topk_heads=2,
+            topk_linear_heads=3,
+        ),
+    )
+
+    selected, _ = block._route_heads(
+        torch.zeros(2, 4, 8), 5, "initial", "random"
+    )
+
+    assert selected.shape == (2, 2)
+    assert (selected < 4).all()
+
+
 def test_learned_selection_runs_initially_and_after_each_iteration_boundary():
     class RecordingLayer(nn.Module):
         def __init__(self):
@@ -289,6 +386,56 @@ def test_learned_selection_runs_initially_and_after_each_iteration_boundary():
     assert len(selector_calls) == 3
     assert len(layer.calls) == 3
     assert all(return_scores is False for _, return_scores in layer.calls)
+    assert {
+        "cache_processor/selected_head_overlap_after_iter_1",
+        "cache_processor/selected_head_overlap_after_iter_2",
+    }.issubset(block.pop_iteration_metrics())
+
+
+def test_random_selection_runs_at_every_internal_iteration_without_scores():
+    class RecordingLayer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def forward(
+            self,
+            x,
+            selected_heads,
+            return_attn_scores=False,
+            routing_gates=None,
+        ):
+            self.calls.append((selected_heads.clone(), return_attn_scores))
+            assert return_attn_scores is False
+            assert routing_gates is None
+            return x + 1.0
+
+    block = CacheProcessor(
+        16,
+        8,
+        _processor_config(
+            head_selection_method="random",
+            internal_iteration_score="random",
+            iterations=3,
+            topk_heads=3,
+        ),
+    )
+    layer = RecordingLayer()
+    block.layers = nn.ModuleList([layer])
+    route_calls = []
+    original_route = block._route_heads
+
+    def recording_route(*args, **kwargs):
+        result = original_route(*args, **kwargs)
+        route_calls.append(result[0].clone())
+        return result
+
+    block._route_heads = recording_route
+    block(torch.randn(2, 8, 3, 16))
+
+    assert len(route_calls) == 3
+    assert len(layer.calls) == 3
+    assert all(not return_scores for _, return_scores in layer.calls)
     assert {
         "cache_processor/selected_head_overlap_after_iter_1",
         "cache_processor/selected_head_overlap_after_iter_2",
@@ -360,6 +507,25 @@ def test_select_all_bypasses_contextual_scoring():
     )
 
     assert calls == []
+    assert torch.equal(selected, torch.arange(4).expand(2, -1))
+
+
+def test_select_all_bypasses_random_sampling_without_consuming_rng():
+    block = CacheProcessor(
+        16,
+        4,
+        _processor_config(
+            head_selection_method="random",
+            internal_iteration_score="random",
+            iterations=3,
+            topk_heads=1,
+        ),
+    )
+    before = torch.random.get_rng_state()
+
+    _, _, selected = block(torch.zeros(2, 4, 3, 16), select_all=True)
+
+    assert torch.equal(torch.random.get_rng_state(), before)
     assert torch.equal(selected, torch.arange(4).expand(2, -1))
 
 
@@ -620,6 +786,71 @@ def test_global_hybrid_contextual_path_reuses_kv_encoding_and_unifies_budget():
     assert set(selected[0].tolist()) == {0, 2, 3}
 
 
+def test_global_hybrid_random_path_skips_magnitude_and_keeps_type_quotas(
+    monkeypatch,
+):
+    config = _processor_config(
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+        linear_state_cache=True,
+        head_selection_method="random",
+        topk_heads=1,
+        topk_linear_heads=2,
+    )
+    model_config = ModelConfig(
+        variant="longshot",
+        family="qwen3_5",
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=4,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+        layer_types=[
+            "linear_attention",
+            "full_attention",
+            "linear_attention",
+            "full_attention",
+        ],
+        processor_layer_indices=[1, 3],
+        linear_key_head_dim=4,
+        linear_value_head_dim=4,
+        linear_num_key_heads=1,
+        linear_num_value_heads=2,
+        cache_processor=config,
+    )
+    processor = GlobalCacheProcessor(model_config)
+    cache = CacheState(
+        keys=[torch.randn(2, 1, 3, 8) for _ in range(2)],
+        values=[torch.randn(2, 1, 3, 8) for _ in range(2)],
+        scores=torch.randn(2, 3),
+        linear_states={
+            spec.layer_idx: (
+                torch.randn(2, spec.head_count, 4, 4),
+                torch.zeros(2, 1, 1),
+            )
+            for spec in processor.linear_state_specs
+        },
+    )
+
+    def unexpected_magnitude(*_args, **_kwargs):
+        raise AssertionError("random initial routing computed magnitude scores")
+
+    monkeypatch.setattr(
+        "gcw.models.cache_processors.longshot.chunked_fp32_l2_norm",
+        unexpected_magnitude,
+    )
+    _, selected = processor._forward_once(cache)
+
+    assert processor.block.head_selector is None
+    assert selected is not None
+    assert selected.shape == (2, 3)
+    assert (selected[:, :1] < processor.num_kv_cache_heads).all()
+    assert (selected[:, 1:] >= processor.num_kv_cache_heads).all()
+
+
 def test_learned_selector_state_dict_round_trip_reproduces_scores():
     config = _processor_config(
         head_selection_method="learned_contextual",
@@ -668,6 +899,20 @@ def test_contextual_selection_configuration_round_trips_through_model_dict():
     assert defaults["head_selection_method"] == "magnitude"
     assert defaults["head_selector_hidden_size"] == 64
     assert defaults["head_selector_use_identity_bias"] is False
+
+
+def test_random_selection_configuration_round_trips_through_model_dict():
+    model = ModelConfig(
+        variant="longshot",
+        cache_processor={
+            "head_selection_method": "random",
+            "internal_iteration_score": "random",
+        },
+    )
+
+    assert model.cache_processor is not None
+    assert model.cache_processor.head_selection_method == "random"
+    assert model.cache_processor.internal_iteration_score == "random"
 
 
 @pytest.mark.parametrize(

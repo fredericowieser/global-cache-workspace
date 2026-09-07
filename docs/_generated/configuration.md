@@ -65,7 +65,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `topk_heads` | `int` | `32` |
 | `topk_linear_heads` | `int \| None` | `None` |
 | `score` | `str` | `'attn_l2'` |
-| `head_selection_method` | `Literal['magnitude', 'learned_contextual']` | `'magnitude'` |
+| `head_selection_method` | `Literal['magnitude', 'learned_contextual', 'random']` | `'magnitude'` |
 | `head_selector_hidden_size` | `int` | `64` |
 | `head_selector_use_identity_bias` | `bool` | `False` |
 | `hidden_size` | `int` | `512` |
@@ -94,7 +94,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `include_self_head_kv` | `bool` | `False` |
 | `iterations` | `int` | `1` |
 | `iteration_mode` | `Literal['internal', 'external']` | `'internal'` |
-| `internal_iteration_score` | `Literal['attn_l2', 'cache_head_attention', 'kv_norm', 'learned_contextual']` | `'attn_l2'` |
+| `internal_iteration_score` | `Literal['attn_l2', 'cache_head_attention', 'kv_norm', 'learned_contextual', 'random']` | `'attn_l2'` |
 | `linear_state_cache` | `bool` | `False` |
 | `linear_state_query_mode` | `Literal['per_linear_state', 'shared', 'global']` | `'global'` |
 | `linear_state_update_mode` | `Literal['outer_product', 'gated_delta']` | `'outer_product'` |

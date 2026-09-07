@@ -102,9 +102,10 @@ class CacheProcessorConfig:
         if self.head_selection_method not in {
             "magnitude",
             "learned_contextual",
+            "random",
         }:
             raise ValueError(
-                "cache_processor.head_selection_method must be 'magnitude' or 'learned_contextual'"
+                "cache_processor.head_selection_method must be 'magnitude', 'learned_contextual', or 'random'"
             )
         if (
             isinstance(self.head_selector_hidden_size, bool)
@@ -179,9 +180,10 @@ class CacheProcessorConfig:
             "cache_head_attention",
             "kv_norm",
             "learned_contextual",
+            "random",
         }:
             raise ValueError(
-                "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', 'kv_norm', or 'learned_contextual'"
+                "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', 'kv_norm', 'learned_contextual', or 'random'"
             )
         if self.linear_state_query_mode not in {
             "per_linear_state",
