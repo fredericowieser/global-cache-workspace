@@ -272,6 +272,14 @@ def run_task_groups(
             if prompt_mode == "plain"
             else prompt_mode.startswith("thinking_")
         ),
-        "generation_process_every": generation_process_every,
+        "generation_process_every": (
+            getattr(
+                getattr(model.config, "cache_processor", None),
+                "generation_process_every",
+                None,
+            )
+            if processor is not None
+            else None
+        ),
     }
     return merged
