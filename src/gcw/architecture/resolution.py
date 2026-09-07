@@ -197,7 +197,7 @@ def _processor_assembly(config: ModelConfig) -> ProcessorAssembly | None:
         "bt": "gcw.processor.per_layer.v1",
         "bgt": "gcw.processor.global.v1",
         "icarus": "gcw.processor.per_head_temporal.v1",
-        "longshot": "gcw.processor.persistent_workspace.v1",
+        "longshot": "gcw.processor.compressed_head.v1",
     }
     writes = ["dense_kv"]
     if processor.linear_state_cache:
@@ -312,8 +312,6 @@ def _model_capabilities(
         capabilities.add("latent_flow")
     if config.diffusion_processor is not None:
         capabilities.add("task_directed_diffusion")
-    if config.variant == "longshot":
-        capabilities.add("persistent_workspace")
     if any(domain.domain == "qwen35_linear_recurrent" for domain in domains):
         capabilities.add("qwen35_recurrent_state")
     return tuple(sorted(capabilities))

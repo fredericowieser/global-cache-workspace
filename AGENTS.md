@@ -4,7 +4,7 @@
 * Read the README before making code changes, changing configs, or launching jobs. If anything is still unclear with regards to the task at hand, look at the docs as well.
 * Make sure you update the docs when necessary, especially when adding new features or changing existing functionality.
 * Keep to the user's explicit requests. Do not change code or launch jobs unless the user has explicitly asked for that action.
-* Never stage, unstage, commit, pull, or push changes without the user's explicit request. 
+* Never stage, unstage, commit, pull, or push changes without the user's explicit request.
 
 ## Code practices
 

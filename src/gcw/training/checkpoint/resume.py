@@ -32,6 +32,24 @@ from gcw.training.checkpoint.types import (
 LEGACY_PRECISION_FINGERPRINT_KEY = "bf16"
 
 
+def _fingerprint_with_current_model_defaults(
+    saved: dict[str, Any],
+) -> dict[str, Any]:
+    model_payload = saved.get("model")
+    if not isinstance(model_payload, dict):
+        return saved
+    from gcw.checkpoint import _model_config_from_checkpoint
+    from gcw.config import to_dict
+
+    try:
+        model = to_dict(_model_config_from_checkpoint(model_payload))
+    except (TypeError, ValueError) as exc:
+        raise CheckpointCompatibilityError(
+            f"checkpoint model fingerprint is incompatible: {exc}"
+        ) from exc
+    return {**saved, "model": model}
+
+
 def _fingerprint_with_legacy_precision(
     saved: dict[str, Any], expected: dict[str, Any]
 ) -> dict[str, Any]:
@@ -114,6 +132,9 @@ class TrainingCheckpoint:
         payloads = _capture_verified_payloads(resolved, manifest)
         saved_fingerprint = manifest.get("training_fingerprint")
         if isinstance(saved_fingerprint, dict):
+            saved_fingerprint = _fingerprint_with_current_model_defaults(
+                saved_fingerprint
+            )
             saved_fingerprint = _fingerprint_with_legacy_precision(
                 saved_fingerprint, expected_fingerprint
             )

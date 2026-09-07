@@ -10,7 +10,7 @@ Implemented model compositions:
 - **BT**: one cache processor per backbone layer.
 - **BGT**: one processor across selected state from all layers.
 - **Icarus**: cache-head selection with frontier writeback.
-- **Longshot**: time compression, cross-head processing, persistent workspace, and recurrence.
+- **Longshot**: time compression, cross-head processing, frontier writeback, and recurrence.
 - **Flow**: deterministic, time-conditioned latent refinement inside BGT, Icarus, or Longshot.
 
 GCW supports scratch FineWeb pretraining and supervised fine-tuning with answer-only or full-sequence cross-entropy. Training can update the backbone, cache processor, or both. Capability admission rejects incompatible compositions before model allocation or output writes.

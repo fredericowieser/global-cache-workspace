@@ -21,3 +21,8 @@ Model checkpoints written while `workspace_flow_refinement` existed remain
 loadable when that serialized field is `null`. A non-null value is rejected
 explicitly because the removed refinement path cannot be reproduced by the
 current runtime.
+
+Training resume applies the same migration to the saved model fingerprint and
+fills current defaults before performing the strict comparison. Receipt hashes
+are not preserved across the workspace sunset: the current hashes identify the
+post-workspace model and configuration contracts.

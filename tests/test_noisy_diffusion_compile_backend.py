@@ -412,9 +412,7 @@ def test_cuda_fullgraph_compiles_field_callable_and_preserves_backward() -> (
     assert before["runner_creation_count"] == 1
 
 
-def test_default_noisy_diffusion_policy_preserves_pre_feature_receipts() -> (
-    None
-):
+def test_workspace_sunset_updates_default_receipts() -> None:
     model = ModelConfig(
         variant="bgt",
         family="smollm",
@@ -433,16 +431,16 @@ def test_default_noisy_diffusion_policy_preserves_pre_feature_receipts() -> (
     _, composition_receipt = resolve_experiment(train, model_receipt).require()
 
     assert model_receipt.model_config_sha256 == (
-        "9dd26b562261322e6eaba070dae228cacc0798a18b114c5750f86952940843a4"
+        "af5e1820986481ef2f0b99e79e10a173e2c91146e0372b9042bc667e0d0faef7"
     )
     assert model_receipt.receipt_sha256 == (
-        "72966699bd2994287c5b1e11fe65c97d468e9eeb5fc9d53016cd3c015cabfc2c"
+        "4067252544760def3a922df3aa431739cc01a846e17cfdb97e9e085d7920f9c7"
     )
     assert composition_receipt.train_config_sha256 == (
-        "5bc9238792f6dc0d1a281d6d57c3dbd48ace12ecedee79bee9ba77f0c1271b1e"
+        "49da481ae4e8ac03f5ec87182109184613e00b61d9cd5eeeda3a9f28419e3a1f"
     )
     assert composition_receipt.receipt_sha256 == (
-        "b3d088b213a2ef5a72c54596639a1ff967e96686bf92bc97cc27d62889faa4b7"
+        "20124b45911238bdd442d2f3256cda2599de5740f04a79a0849916e812f82bc8"
     )
 
 
