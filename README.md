@@ -10,7 +10,7 @@ Implemented model compositions:
 - **BT**: one cache processor per backbone layer.
 - **BGT**: one processor across selected state from all layers.
 - **Icarus**: cache-head selection with frontier writeback.
-- **Longshot**: time compression, cross-head processing, persistent workspace, and recurrence.
+- **Longshot**: time compression, cross-head processing, frontier writeback, and recurrence.
 - **Flow**: deterministic, time-conditioned latent refinement inside BGT, Icarus, or Longshot.
 
 GCW supports scratch FineWeb pretraining and supervised fine-tuning with answer-only or full-sequence cross-entropy. Training can update the backbone, cache processor, or both. Capability admission rejects incompatible compositions before model allocation or output writes.
@@ -97,6 +97,13 @@ uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7-legacy \
   --batch-size 16 \
   --out results/<run>_paper7.json
 ```
+
+To evaluate an existing Longshot checkpoint with parameter-free random head
+routing without modifying the checkpoint, add
+`--head-selection-method random`. The checkpoint architecture and weights are
+loaded first, then the initial and internal iterative routing methods are
+overridden at runtime. Any loaded learned-selector parameters remain present
+but are not used for routing.
 
 When evaluating in a pre-synced cluster environment, add `--locked --no-sync` to `uv run` to avoid changing the installed runtime during a Slurm job.
 

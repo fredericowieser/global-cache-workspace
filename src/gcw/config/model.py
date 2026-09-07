@@ -15,6 +15,7 @@ from gcw.config.types import (
     CacheEncoderMethod,
     CacheEncoderQuerySource,
     CacheGateMode,
+    CacheHeadSelectionMethod,
     CacheLinearStateQueryMode,
     CacheLinearStateUpdateMode,
     CacheOutProjInit,
@@ -28,7 +29,6 @@ from gcw.config.types import (
     ProcessorGenerationMode,
     RotaryStyle,
     Variant,
-    WorkspaceFlowSolver,
     _validated_float32,
 )
 
@@ -50,6 +50,9 @@ class CacheProcessorConfig:
     topk_heads: int = 32
     topk_linear_heads: int | None = None
     score: str = "attn_l2"
+    head_selection_method: CacheHeadSelectionMethod = "magnitude"
+    head_selector_hidden_size: int = 64
+    head_selector_use_identity_bias: bool = False
     hidden_size: int = 512
     intermediate_size: int = 2048
     num_layers: int = 1
@@ -81,11 +84,40 @@ class CacheProcessorConfig:
     linear_state_query_mode: CacheLinearStateQueryMode = "global"
     linear_state_update_mode: CacheLinearStateUpdateMode = "outer_product"
     gate_linear_state_delta: bool = True
+    generation_process_every: int | None = None
 
     def __post_init__(self) -> None:
+        if self.generation_process_every is not None and (
+            isinstance(self.generation_process_every, bool)
+            or not isinstance(self.generation_process_every, int)
+            or self.generation_process_every <= 0
+        ):
+            raise ValueError(
+                "cache_processor.generation_process_every must be a positive integer when set"
+            )
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError(
                 "cache_processor.score must be 'attn_l2' or 'kv_norm'"
+            )
+        if self.head_selection_method not in {
+            "magnitude",
+            "learned_contextual",
+            "random",
+        }:
+            raise ValueError(
+                "cache_processor.head_selection_method must be 'magnitude', 'learned_contextual', or 'random'"
+            )
+        if (
+            isinstance(self.head_selector_hidden_size, bool)
+            or not isinstance(self.head_selector_hidden_size, int)
+            or self.head_selector_hidden_size <= 0
+        ):
+            raise ValueError(
+                "cache_processor.head_selector_hidden_size must be a positive integer"
+            )
+        if not isinstance(self.head_selector_use_identity_bias, bool):
+            raise ValueError(
+                "cache_processor.head_selector_use_identity_bias must be a boolean"
             )
         if self.topk_heads <= 0:
             raise ValueError("cache_processor.topk_heads must be positive")
@@ -147,9 +179,11 @@ class CacheProcessorConfig:
             "attn_l2",
             "cache_head_attention",
             "kv_norm",
+            "learned_contextual",
+            "random",
         }:
             raise ValueError(
-                "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', or 'kv_norm'"
+                "cache_processor.internal_iteration_score must be 'attn_l2', 'cache_head_attention', 'kv_norm', 'learned_contextual', or 'random'"
             )
         if self.linear_state_query_mode not in {
             "per_linear_state",
@@ -259,32 +293,6 @@ class DiffusionProcessorConfig:
 
 
 @dataclass
-class WorkspaceFlowRefinementConfig:
-    solver: WorkspaceFlowSolver = "euler"
-    solver_steps: int = 1
-    max_velocity: float = 0.75
-
-    def __post_init__(self) -> None:
-        if self.solver not in {"euler", "midpoint"}:
-            raise ValueError(
-                "workspace_flow_refinement.solver must be 'euler' or 'midpoint'"
-            )
-        if (
-            isinstance(self.solver_steps, bool)
-            or not isinstance(self.solver_steps, int)
-            or self.solver_steps <= 0
-        ):
-            raise ValueError(
-                "workspace_flow_refinement.solver_steps must be a positive integer"
-            )
-        self.max_velocity = _validated_float32(
-            "workspace_flow_refinement.max_velocity",
-            self.max_velocity,
-            positive=True,
-        )
-
-
-@dataclass
 class LoRAConfig:
     rank: int = 32
     alpha: float = 32.0
@@ -335,7 +343,6 @@ class ModelConfig:
     flow_processor: FlowProcessorConfig | None = None
     diffusion_processor: DiffusionProcessorConfig | None = None
     processor_generation_mode: ProcessorGenerationMode = "windowed"
-    workspace_flow_refinement: WorkspaceFlowRefinementConfig | None = None
     layer_types: list[str] | None = None
     processor_layer_indices: list[int] | None = None
     partial_rotary_factor: float = 1.0
@@ -403,10 +410,6 @@ class ModelConfig:
         ):
             raise ValueError(
                 "processor_generation_mode requires a cache processor"
-            )
-        if isinstance(self.workspace_flow_refinement, dict):
-            self.workspace_flow_refinement = WorkspaceFlowRefinementConfig(
-                **self.workspace_flow_refinement
             )
         if (
             self.variant in {"bt", "bgt", "icarus", "longshot"}

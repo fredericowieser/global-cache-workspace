@@ -87,29 +87,7 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
             "model.diffusion_processor",
         )
 
-    refinement = config.workspace_flow_refinement
-    if refinement is not None and not _has_fields(
-        refinement, "solver", "solver_steps"
-    ):
-        add(
-            "workspace_refinement_config",
-            "workspace_flow_refinement must be a WorkspaceFlowRefinementConfig",
-            "model.workspace_flow_refinement",
-        )
-    if refinement is not None and config.variant != "longshot":
-        add(
-            "workspace_refinement_variant",
-            "workspace_flow_refinement requires variant 'longshot'",
-            "model.workspace_flow_refinement",
-        )
-
     if processor is not None:
-        if refinement is not None and processor.update_stream != "v":
-            add(
-                "workspace_refinement_write",
-                "workspace_flow_refinement requires value-only cache writes",
-                "model.cache_processor.update_stream",
-            )
         if config.variant == "bt":
             if processor.processor_mode != "standard":
                 add(

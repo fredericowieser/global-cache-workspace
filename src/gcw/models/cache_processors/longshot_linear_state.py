@@ -23,7 +23,7 @@ class LinearStateInputs:
     specs: list[LinearStateSpec]
 
 
-def _topk_linear_heads(config: CacheProcessorConfig) -> int | None:
+def _topk_linear_heads(config: CacheProcessorConfig) -> int:
     return (
         config.topk_linear_heads
         if config.topk_linear_heads is not None

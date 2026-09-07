@@ -84,6 +84,38 @@ class ProcessorBypass(nn.Module):
         return cast(Any, self.backbone).generate_fast(*args, **kwargs)
 
 
+def _apply_generation_process_every(config, value: int | None) -> None:
+    if value is None:
+        return
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("generation_process_every must be a positive integer")
+    processor_config = getattr(config, "cache_processor", None)
+    if processor_config is None:
+        raise ValueError(
+            "generation_process_every requires a cache-processor checkpoint"
+        )
+    processor_config.generation_process_every = value
+
+
+def _apply_head_selection_method(config, value: str | None) -> None:
+    if value is None:
+        return
+    if value != "random":
+        raise ValueError(
+            "evaluation head-selection override supports only 'random'"
+        )
+    processor_config = getattr(config, "cache_processor", None)
+    if (
+        getattr(config, "variant", None) != "longshot"
+        or processor_config is None
+    ):
+        raise ValueError(
+            "head_selection_method override requires a Longshot checkpoint"
+        )
+    processor_config.head_selection_method = value
+    processor_config.internal_iteration_score = value
+
+
 def _load_eval_target(
     *,
     checkpoint: str | Path | None,
@@ -91,16 +123,36 @@ def _load_eval_target(
     processor_enabled: bool,
     device: torch.device,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
+    head_selection_method: str | None = None,
 ):
     if (checkpoint is None) == (hf_model is None):
         raise ValueError(
             "choose exactly one evaluation target: checkpoint or hf_model"
         )
     if hf_model is not None:
+        if generation_process_every is not None:
+            raise ValueError(
+                "generation_process_every applies only to GCW checkpoints"
+            )
+        if head_selection_method is not None:
+            raise ValueError(
+                "head_selection_method applies only to GCW checkpoints"
+            )
         return _load_hf_eval_target(hf_model, device)
+    if generation_process_every is not None and not processor_enabled:
+        raise ValueError(
+            "generation_process_every requires processor_enabled=True"
+        )
+    if head_selection_method is not None and not processor_enabled:
+        raise ValueError(
+            "head_selection_method requires processor_enabled=True"
+        )
     model, cfg, state = load_checkpoint(
         cast(str | Path, checkpoint), device=device, dtype=dtype
     )
+    _apply_generation_process_every(cfg, generation_process_every)
+    _apply_head_selection_method(cfg, head_selection_method)
     tokenizer = tokenizer_for_checkpoint(cfg, state)
     if not processor_enabled and hasattr(model, "backbone"):
         model = ProcessorBypass(model)

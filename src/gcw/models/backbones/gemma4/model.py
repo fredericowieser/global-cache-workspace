@@ -13,6 +13,7 @@ from gcw.models.backbones.transformer import (
     TF,
     _autocast_dtype,
     _matches_stop_sequence,
+    _should_process_decoding_cache,
 )
 from gcw.models.backbones.gemma4.block import Gemma4Block
 from gcw.models.backbones.gemma4.norms import (
@@ -316,6 +317,7 @@ class Gemma4TF(TF):
         relative_generation_cadence: bool = False,
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
+        generation_process_every: int | None = None,
     ) -> torch.Tensor:
         if self._uniform_cache_shape():
             return super().generate_fast(
@@ -324,6 +326,7 @@ class Gemma4TF(TF):
                 eos_token_id=eos_token_id,
                 processor=processor,
                 process_every=process_every,
+                generation_process_every=generation_process_every,
                 process_prefill_windows=process_prefill_windows,
                 process_after_prefill=process_after_prefill,
                 relative_generation_cadence=relative_generation_cadence,
@@ -375,15 +378,14 @@ class Gemma4TF(TF):
                 break
             pos = out.shape[1] - 1
             if processor is not None:
-                if relative_generation_cadence:
-                    should_process = (
-                        generated_idx == 0 and process_after_prefill
-                    )
-                    should_process = should_process or (
-                        generated_idx > 0 and generated_idx % process_every == 0
-                    )
-                else:
-                    should_process = pos > 0 and pos % process_every == 0
+                should_process = _should_process_decoding_cache(
+                    generated_idx,
+                    pos,
+                    process_every,
+                    generation_process_every,
+                    process_after_prefill,
+                    relative_generation_cadence,
+                )
                 if should_process:
                     cache = processor(
                         cache,

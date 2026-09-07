@@ -5,6 +5,7 @@ import os
 import pickle
 import subprocess
 import sys
+from unittest.mock import patch
 from dataclasses import replace
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from gcw.models.backbones.transformer import (
     _unflatten_windowed_cache,
 )
 from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors import longshot_selection
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
@@ -213,16 +215,16 @@ def test_score_table_bitwise_oracle_parity_bootstrap_append_ties_and_refresh(
     _assert_fp32_bits_equal(state.scores, _oracle_scores(processor, cache))
 
 
-def _install_selection_trace(
-    processor: GlobalCacheProcessor,
-) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+def _run_with_selection_trace(
+    processor: GlobalCacheProcessor, cache: WindowedCache
+) -> tuple[WindowedCache, list[torch.Tensor], list[torch.Tensor]]:
     token_trace: list[torch.Tensor] = []
     head_trace: list[torch.Tensor] = []
-    select_tokens = processor._select_kv_norm_history
+    select_tokens = longshot_module.select_kv_norm_history
     select_heads = processor._select_combined_heads
 
-    def traced_tokens(cache: WindowedCache):
-        result = select_tokens(cache)
+    def traced_tokens(owner: GlobalCacheProcessor, current: WindowedCache):
+        result = select_tokens(owner, current)
         token_trace.append(result[2].detach().clone())
         return result
 
@@ -231,9 +233,18 @@ def _install_selection_trace(
         head_trace.append(result.detach().clone())
         return result
 
-    object.__setattr__(processor, "_select_kv_norm_history", traced_tokens)
-    object.__setattr__(processor, "_select_combined_heads", traced_heads)
-    return token_trace, head_trace
+    with (
+        patch.object(
+            longshot_module,
+            "select_kv_norm_history",
+            side_effect=traced_tokens,
+        ),
+        patch.object(
+            processor, "_select_combined_heads", side_effect=traced_heads
+        ),
+    ):
+        result = processor(cache)
+    return result, token_trace, head_trace
 
 
 def test_policy_selection_keeps_full_live_gather_and_refreshes_value_and_kv_writes() -> (
@@ -259,23 +270,23 @@ def test_policy_selection_keeps_full_live_gather_and_refreshes_value_and_kv_writ
             actual_cache = _clone_cache(source, requires_grad=True)
 
             expected_merged, expected_scores, expected_indices = (
-                reference._select_kv_norm_history(expected_cache)
+                longshot_module.select_kv_norm_history(
+                    reference, expected_cache
+                )
             )
             actual_merged, actual_scores, actual_indices = (
-                sidecar._select_kv_norm_history(actual_cache)
+                longshot_module.select_kv_norm_history(sidecar, actual_cache)
             )
             assert torch.equal(actual_indices, expected_indices)
             assert torch.equal(actual_merged, expected_merged)
             _assert_fp32_bits_equal(actual_scores, expected_scores)
 
-            expected_token_trace, expected_head_trace = (
-                _install_selection_trace(reference)
+            expected, expected_token_trace, expected_head_trace = (
+                _run_with_selection_trace(reference, expected_cache)
             )
-            actual_token_trace, actual_head_trace = _install_selection_trace(
-                sidecar
+            actual, actual_token_trace, actual_head_trace = (
+                _run_with_selection_trace(sidecar, actual_cache)
             )
-            expected = reference(expected_cache)
-            actual = sidecar(actual_cache)
             assert (
                 len(actual_token_trace)
                 == len(expected_token_trace)
@@ -435,7 +446,7 @@ def test_select_all_refreshes_sidecar_and_disabled_path_does_not_touch_lifecycle
     reference = _processor(update_stream="v")
     disabled_cache = _cache(sequence=8)
     monkeypatch.setattr(
-        longshot_module,
+        longshot_selection,
         "synchronize_kv_score_sidecar",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("disabled lifecycle call")
@@ -694,7 +705,7 @@ def test_invalid_policy_compositions_fail_closed(
         ),
         (
             _sidecar_context(incompatible_refinement_enabled=True),
-            "Flow, Diffusion",
+            "Flow or Diffusion",
         ),
     ],
 )

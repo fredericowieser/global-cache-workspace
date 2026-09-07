@@ -155,6 +155,15 @@ def _training_fingerprint(
         "activation_checkpoint_min_padded_sequence_length": (
             config.activation_checkpoint_min_padded_sequence_length
         ),
+        **(
+            {
+                "longshot_selector_training": to_dict(
+                    config.longshot_selector_training
+                )
+            }
+            if config.longshot_selector_training is not None
+            else {}
+        ),
         "loss_backend": config.loss_backend,
         **(
             {

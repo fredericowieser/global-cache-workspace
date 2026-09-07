@@ -139,6 +139,7 @@ class TrainingPlan:
     micro_rows: int
     tokens_per_step: int
     flops_per_tok: float
+    flops_per_tok_by_step: tuple[float, ...]
     start_step: int
     smooth_loss: float
     initial_processor_state: dict[str, torch.Tensor] | None
@@ -364,7 +365,6 @@ def assemble_training_execution(
                 for value in (
                     config.model.flow_processor,
                     config.model.diffusion_processor,
-                    config.model.workspace_flow_refinement,
                 )
             ),
         ),
@@ -438,9 +438,18 @@ def assemble_training_execution(
         ):
             model = maybe_compile_whole_model(model)
         if config.distributed == "ddp" and torch.distributed.is_initialized():
+            learned_head_selection = (
+                config.model.cache_processor is not None
+                and "learned_contextual"
+                in {
+                    config.model.cache_processor.head_selection_method,
+                    config.model.cache_processor.internal_iteration_score,
+                }
+            )
             model = DDP(
                 model,
                 device_ids=[device.index] if device.type == "cuda" else None,
+                find_unused_parameters=learned_head_selection,
             )
 
     icarus_admitted_batches = (
@@ -474,7 +483,34 @@ def assemble_training_execution(
     )
 
     target_tokens = tokens_per_step * config.max_steps
-    flops_per_tok = training_flops_per_token(config.model, config.sequence_len)
+    selector_training = config.longshot_selector_training
+    if selector_training is None:
+        flops_per_tok = training_flops_per_token(
+            config.model, config.sequence_len
+        )
+        flops_per_tok_by_step = (flops_per_tok,) * config.max_steps
+    else:
+        denominator = max(1, config.max_steps - 1)
+        phase_flops: dict[float, float] = {}
+        by_step = []
+        for step in range(config.max_steps):
+            progress = step / denominator
+            if progress < selector_training.warmup_end:
+                probe = 0.0
+            elif progress < selector_training.hard_start:
+                probe = selector_training.warmup_end
+            else:
+                probe = 1.0
+            if probe not in phase_flops:
+                phase_flops[probe] = training_flops_per_token(
+                    config.model,
+                    config.sequence_len,
+                    selector_training=selector_training,
+                    training_progress=probe,
+                )
+            by_step.append(phase_flops[probe])
+        flops_per_tok_by_step = tuple(by_step)
+        flops_per_tok = sum(flops_per_tok_by_step) / config.max_steps
     run_meta = {
         "step": 0,
         "batch_size": config.batch_size,
@@ -494,8 +530,12 @@ def assemble_training_execution(
         ),
         "total_training_tokens": target_tokens,
         "training_flops_per_token": flops_per_tok,
-        "total_training_flops": total_training_flops(
-            config.model, target_tokens, config.sequence_len
+        "total_training_flops": (
+            total_training_flops(
+                config.model, target_tokens, config.sequence_len
+            )
+            if config.longshot_selector_training is None
+            else tokens_per_step * sum(flops_per_tok_by_step)
         ),
         "non_embedding_params": total_non_embedding_params(config.model),
         "processor_params": processor_params(config.model),
@@ -654,6 +694,7 @@ def assemble_training_execution(
         micro_rows=micro_rows,
         tokens_per_step=tokens_per_step,
         flops_per_tok=flops_per_tok,
+        flops_per_tok_by_step=flops_per_tok_by_step,
         start_step=start_step,
         smooth_loss=smooth_loss,
         initial_processor_state=initial_processor_state,

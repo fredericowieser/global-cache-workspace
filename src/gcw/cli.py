@@ -12,6 +12,13 @@ def convert_hf(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the GCW command-line parser without importing execution systems."""
     parser = argparse.ArgumentParser(prog="gcw")
@@ -43,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
             choices=["auto", "bfloat16", "float16", "float32"],
             default="auto",
         )
+        legacy.add_argument(
+            "--generation-process-every", type=_positive_int, default=None
+        )
+        legacy.add_argument(
+            "--head-selection-method", choices=["random"], default=None
+        )
         legacy.add_argument("--out", default=None)
     for suite in ("all", "math", "general", "tasks"):
         command = eval_sub.add_parser(suite)
@@ -50,6 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
         target.add_argument("--checkpoint")
         target.add_argument("--hf-model")
         command.add_argument("--processor", choices=["on", "off"], default="on")
+        command.add_argument(
+            "--generation-process-every", type=_positive_int, default=None
+        )
         command.add_argument("--limit", type=int, default=None)
         command.add_argument("--batch-size", type=int, default=8)
         command.add_argument(
@@ -71,6 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("--hf-model")
     chat.add_argument("--tokenizer-path")
     chat.add_argument("--processor", choices=["on", "off"], default="on")
+    chat.add_argument(
+        "--generation-process-every", type=_positive_int, default=None
+    )
     chat.add_argument("--tasks", nargs="+", required=True)
     chat.add_argument(
         "--mode", choices=["thinking_off", "thinking_on"], required=True
@@ -170,6 +189,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 hf_model=args.hf_model,
                 tokenizer_path=args.tokenizer_path,
                 processor_enabled=args.processor == "on",
+                generation_process_every=args.generation_process_every,
             )
         elif args.suite in {"paper7", "paper7-legacy"}:
             from gcw.evaluation.legacy import run_paper7_legacy
@@ -179,6 +199,8 @@ def dispatch(args: argparse.Namespace) -> None:
                 limit=args.limit,
                 batch_size=args.batch_size,
                 dtype=args.dtype,
+                generation_process_every=args.generation_process_every,
+                head_selection_method=args.head_selection_method,
             )
         else:
             from gcw.evaluation.core import run_tasks
@@ -192,6 +214,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 "hf_model": args.hf_model,
                 "processor_enabled": args.processor == "on",
                 "dtype": args.dtype,
+                "generation_process_every": args.generation_process_every,
             }
             results = (
                 run_tasks(args.tasks, **common)

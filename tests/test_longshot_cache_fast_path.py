@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-from types import MethodType
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +10,7 @@ from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.models.cache_processors.base import cache_processor_recomputation
 from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors import longshot_selection
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
@@ -175,7 +175,7 @@ def test_layer_major_kv_score_saves_sources_not_full_merged_history() -> None:
     )
     saved: list[torch.Tensor] = []
     with torch.autograd.graph.saved_tensors_hooks(
-        lambda tensor: (saved.append(tensor) or tensor),
+        lambda tensor: saved.append(tensor) or tensor,
         lambda tensor: tensor,
     ):
         chunked_fp32_concatenated_kv_squared_l2(
@@ -303,8 +303,8 @@ def test_qwen3_backbone_cache_positions_drive_exact_llama_unrope_history_scoring
     configure_longshot_full_history_execution(
         optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
-    actual = optimized._select_kv_norm_history(cache)
-    expected = reference._select_kv_norm_history(cache)
+    actual = longshot_module.select_kv_norm_history(optimized, cache)
+    expected = longshot_module.select_kv_norm_history(reference, cache)
     for actual_tensor, expected_tensor in zip(actual, expected, strict=True):
         assert torch.equal(actual_tensor, expected_tensor)
 
@@ -326,7 +326,7 @@ def test_windowed_kv_norm_scores_indices_and_selected_history_match_reference(
     reference_cache, _, _ = _cache(requires_grad=True)
 
     actual_merged, actual_scores, actual_indices = (
-        processor._select_kv_norm_history(cache)
+        longshot_module.select_kv_norm_history(processor, cache)
     )
     expected_merged, expected_scores, expected_indices = (
         _reference_kv_norm_history(processor, reference_cache)
@@ -360,11 +360,6 @@ def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
         optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
     reference = copy.deepcopy(optimized)
-    object.__setattr__(
-        reference,
-        "_select_kv_norm_history",
-        MethodType(_reference_kv_norm_history, reference),
-    )
     optimized_state = {
         name: value.clone() for name, value in optimized.state_dict().items()
     }
@@ -373,22 +368,12 @@ def test_windowed_kv_norm_fast_path_matches_reference_recurrence(
     }
 
     optimized_result = _run_processor(optimized)
-    reference_result = _run_processor(reference)
+    reference_result = _run_processor(
+        reference, selection_fn=_reference_kv_norm_history
+    )
 
-    assert torch.equal(
-        optimized_result.source.indices, reference_result.source.indices
-    )
-    assert torch.equal(
-        optimized_result.source.selected_heads,
-        reference_result.source.selected_heads,
-    )
-    assert torch.equal(
-        optimized_result.source.latest_indices,
-        reference_result.source.latest_indices,
-    )
-    assert torch.equal(
-        optimized_result.source.merged, reference_result.source.merged
-    )
+    assert torch.equal(optimized_result.history[2], reference_result.history[2])
+    assert torch.equal(optimized_result.history[0], reference_result.history[0])
     assert len(optimized_result.selection_trace) == len(
         reference_result.selection_trace
     )
@@ -436,11 +421,11 @@ def test_default_windowed_kv_norm_path_remains_eager() -> None:
     cache, _, _ = _cache(requires_grad=False)
 
     with patch.object(
-        longshot_module,
+        longshot_selection,
         "gather_per_cache_head_kv",
         wraps=gather_per_cache_head_kv,
     ) as gather:
-        processor.encode_source(cache)
+        processor(cache)
 
     gather.assert_called_once()
 
@@ -461,18 +446,16 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(
     cache, _, _ = _cache(requires_grad=False)
 
     with patch.object(
-        longshot_module,
+        longshot_selection,
         "gather_per_cache_head_kv",
         side_effect=AssertionError(
             "windowed kv_norm must gather selected history only"
         ),
     ):
-        source = processor.encode_source(cache)
         processor(cache)
 
-    assert source.indices.shape[-1] > 0
     metrics = pop_longshot_full_history_metrics(processor)
-    assert metrics["performance/longshot_full_history_events"] == 2.0
+    assert metrics["performance/longshot_full_history_events"] == 1.0
     assert (
         metrics[
             "performance/longshot_full_history_selected_history_logical_payload_bytes"
@@ -499,7 +482,11 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(
             ]
         )
         full_rows = 2 * 2 * 2 * 6
-        selected_rows = full_rows // 6 * source.indices.shape[-1]
+        selected_positions = min(
+            cache.keys.shape[3],
+            processor.config.process_every + processor.config.topk,
+        )
+        selected_rows = full_rows // 6 * selected_positions
         score_row_bound = unroped_score_estimated_temp_bytes_per_row(
             dtype=torch.float32, head_dim=8, rotary_dim=8
         )
@@ -532,7 +519,9 @@ def test_windowed_kv_norm_path_does_not_call_full_history_gather(
         )
 
     with pytest.raises(TypeError, match="WindowedCache"):
-        processor._select_kv_norm_history(cache.to_cache_state())
+        longshot_module.select_kv_norm_history(
+            processor, cache.to_cache_state()
+        )
 
 
 def test_enabled_full_history_admits_bounded_chunk_local_unrope() -> None:
@@ -546,9 +535,9 @@ def test_enabled_full_history_admits_bounded_chunk_local_unrope() -> None:
         processor, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
     assert (
-        processor._select_kv_norm_history(_cache(requires_grad=False)[0])[
-            2
-        ].shape[-1]
+        longshot_module.select_kv_norm_history(
+            processor, _cache(requires_grad=False)[0]
+        )[2].shape[-1]
         > 0
     )
 
@@ -615,27 +604,27 @@ def test_segmented_backward_records_full_history_events_once_per_original_forwar
         model, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
     processor = model.cache_processor
-    original_select = processor._select_kv_norm_history
+    original_select = longshot_module.select_kv_norm_history
     calls = 0
 
-    def traced(_self: GlobalCacheProcessor, cache: WindowedCache):
+    def traced(owner: GlobalCacheProcessor, cache: WindowedCache):
         nonlocal calls
         calls += 1
-        return original_select(cache)
+        return original_select(owner, cache)
 
-    object.__setattr__(
-        processor, "_select_kv_norm_history", MethodType(traced, processor)
-    )
-    inputs = torch.randint(0, config.vocab_size, (2, 6))
-    targets = torch.randint(0, config.vocab_size, (2, 6))
-    row_sums, row_counts = row_loss_sums_and_counts(
-        model,
-        inputs,
-        targets,
-        activation_checkpoint_windows=2,
-        longshot_gradient_checkpointing=True,
-    )
-    (row_sums / row_counts).mean().backward()
+    with patch.object(
+        longshot_module, "select_kv_norm_history", side_effect=traced
+    ):
+        inputs = torch.randint(0, config.vocab_size, (2, 6))
+        targets = torch.randint(0, config.vocab_size, (2, 6))
+        row_sums, row_counts = row_loss_sums_and_counts(
+            model,
+            inputs,
+            targets,
+            activation_checkpoint_windows=2,
+            longshot_gradient_checkpointing=True,
+        )
+        (row_sums / row_counts).mean().backward()
 
     metrics = pop_longshot_full_history_metrics(processor)
     assert calls == 4
@@ -646,14 +635,14 @@ class _RunResult:
     def __init__(
         self,
         *,
-        source,
+        history: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
         output: WindowedCache,
         selection_trace: list[torch.Tensor],
         key_grad: torch.Tensor,
         value_grad: torch.Tensor,
         iteration_metrics: dict[str, float],
     ) -> None:
-        self.source = source
+        self.history = history
         self.output = output
         self.selection_trace = selection_trace
         self.key_grad = key_grad
@@ -661,7 +650,11 @@ class _RunResult:
         self.iteration_metrics = iteration_metrics
 
 
-def _run_processor(processor: GlobalCacheProcessor) -> _RunResult:
+def _run_processor(
+    processor: GlobalCacheProcessor,
+    *,
+    selection_fn=None,
+) -> _RunResult:
     source_cache, _, _ = _cache(requires_grad=False)
     cache, input_keys, input_values = _cache(requires_grad=True)
     trace: list[torch.Tensor] = []
@@ -672,12 +665,26 @@ def _run_processor(processor: GlobalCacheProcessor) -> _RunResult:
         trace.append(selected.detach().clone())
         return selected
 
-    with patch.object(
-        longshot_module,
-        "_select_heads_from_head_scores",
-        side_effect=traced_selector,
+    selection_fn = selection_fn or longshot_module.select_kv_norm_history
+
+    def select_history(owner, current_cache):
+        return selection_fn(owner, current_cache)
+
+    with (
+        patch.object(
+            longshot_module,
+            "_select_heads_from_head_scores",
+            side_effect=traced_selector,
+        ),
+        patch.object(
+            longshot_module,
+            "select_kv_norm_history",
+            side_effect=select_history,
+        ),
     ):
-        source = processor.encode_source(source_cache)
+        history = longshot_module.select_kv_norm_history(
+            processor, source_cache
+        )
         output = processor(cache)
     loss = (
         output.keys.float().pow(2).mean() + output.values.float().pow(2).mean()
@@ -686,7 +693,7 @@ def _run_processor(processor: GlobalCacheProcessor) -> _RunResult:
     assert input_keys.grad is not None
     assert input_values.grad is not None
     return _RunResult(
-        source=source,
+        history=history,
         output=output,
         selection_trace=trace,
         key_grad=input_keys.grad,
@@ -712,16 +719,12 @@ def test_selected_history_matches_native_checkpoint_recomputation(
         optimized, LongshotFullHistoryConfig(enabled=True, max_temp_bytes=1024)
     )
     reference = copy.deepcopy(optimized)
-    object.__setattr__(
-        reference,
-        "_select_kv_norm_history",
-        MethodType(_reference_kv_norm_history, reference),
+    actual = _run_processor(optimized)
+    expected = _run_processor(
+        reference, selection_fn=_reference_kv_norm_history
     )
 
-    actual = _run_processor(optimized)
-    expected = _run_processor(reference)
-
-    assert torch.equal(actual.source.indices, expected.source.indices)
+    assert torch.equal(actual.history[2], expected.history[2])
     assert torch.equal(actual.output.keys, expected.output.keys)
     assert torch.equal(actual.output.values, expected.output.values)
     assert torch.equal(actual.key_grad, expected.key_grad)

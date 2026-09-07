@@ -168,9 +168,11 @@ def _longshot_processor_params(config: ModelConfig) -> int:
     )
     out_proj_dim = _head_dim(config) if cp.update_stream == "v" else input_dim
     query = _longshot_query_params(input_dim, cache_heads, cp)
+    linear_heads = _longshot_linear_state_heads(config)
     return (
         query
         + _longshot_linear_state_params(config)
+        + _longshot_head_selector_params(cp, cache_heads + linear_heads)
         + _processor_block_params_with_dims(
             input_norm_dim=input_dim,
             in_proj_dim=in_proj_dim,
@@ -178,6 +180,21 @@ def _longshot_processor_params(config: ModelConfig) -> int:
             config=cp,
             projection_count=projection_count,
         )
+    )
+
+
+def _longshot_head_selector_params(
+    config: CacheProcessorConfig, cache_heads: int
+) -> int:
+    if (
+        config.head_selection_method != "learned_contextual"
+        and config.internal_iteration_score != "learned_contextual"
+    ):
+        return 0
+    return (
+        config.hidden_size
+        + 2 * config.hidden_size * config.head_selector_hidden_size
+        + (cache_heads if config.head_selector_use_identity_bias else 0)
     )
 
 

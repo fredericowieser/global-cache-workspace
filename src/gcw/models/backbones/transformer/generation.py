@@ -30,6 +30,23 @@ def _matches_stop_sequence(
     return matched
 
 
+def _should_process_decoding_cache(
+    generated_idx: int,
+    position: int,
+    process_every: int,
+    generation_process_every: int | None,
+    process_after_prefill: bool,
+    relative_generation_cadence: bool,
+) -> bool:
+    if generation_process_every is not None:
+        return generated_idx % generation_process_every == 0
+    if relative_generation_cadence:
+        return (generated_idx == 0 and process_after_prefill) or (
+            generated_idx > 0 and generated_idx % process_every == 0
+        )
+    return position > 0 and position % process_every == 0
+
+
 @torch.no_grad()
 def generate_tf(
     model: Any,
@@ -41,6 +58,7 @@ def generate_tf(
     process_prefill_windows: bool = True,
     process_after_prefill: bool = False,
     relative_generation_cadence: bool = False,
+    generation_process_every: int | None = None,
 ) -> torch.Tensor:
     out = input_ids[:, -model.config.sequence_len :]
     cache: Any = CacheState(
@@ -65,13 +83,14 @@ def generate_tf(
             break
         pos = out.shape[1] - 1
         if processor is not None:
-            if relative_generation_cadence:
-                should_process = generated_idx == 0 and process_after_prefill
-                should_process = should_process or (
-                    generated_idx > 0 and generated_idx % process_every == 0
-                )
-            else:
-                should_process = pos > 0 and pos % process_every == 0
+            should_process = _should_process_decoding_cache(
+                generated_idx,
+                pos,
+                process_every,
+                generation_process_every,
+                process_after_prefill,
+                relative_generation_cadence,
+            )
             if should_process:
                 cache = processor(
                     cache,
@@ -95,6 +114,7 @@ def generate_fast_tf(
     relative_generation_cadence: bool = False,
     stop_sequences: list[list[int]] | None = None,
     pad_token_id: int | None = None,
+    generation_process_every: int | None = None,
 ) -> torch.Tensor:
     out = input_ids[:, -model.config.sequence_len :]
     if out.shape[1] == 0:
@@ -145,13 +165,14 @@ def generate_fast_tf(
             break
         pos = out.shape[1] - 1
         if processor is not None:
-            if relative_generation_cadence:
-                should_process = generated_idx == 0 and process_after_prefill
-                should_process = should_process or (
-                    generated_idx > 0 and generated_idx % process_every == 0
-                )
-            else:
-                should_process = pos > 0 and pos % process_every == 0
+            should_process = _should_process_decoding_cache(
+                generated_idx,
+                pos,
+                process_every,
+                generation_process_every,
+                process_after_prefill,
+                relative_generation_cadence,
+            )
             if should_process:
                 cache = cast(
                     StaticCacheState,

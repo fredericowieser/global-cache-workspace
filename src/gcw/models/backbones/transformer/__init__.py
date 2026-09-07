@@ -15,6 +15,7 @@ from gcw.models.backbones.transformer.cache import (
 from gcw.models.backbones.transformer.generation import (
     estimate_non_embedding_params,
     _matches_stop_sequence,
+    _should_process_decoding_cache,
 )
 from gcw.models.backbones.transformer.layers import (
     Linear,
@@ -66,6 +67,7 @@ __all__ = [
     "_causal_chunk_mask",
     "_flatten_windowed_cache",
     "_matches_stop_sequence",
+    "_should_process_decoding_cache",
     "_unflatten_windowed_cache",
     "_window_checkpoint_contexts",
 ]

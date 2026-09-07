@@ -128,14 +128,14 @@ def configure_kv_score_sidecar_execution(
         )
     if context.incompatible_refinement_enabled:
         raise ValueError(
-            "KV-score sidecar does not compose with Flow, Diffusion, or workspace refinement"
+            "KV-score sidecar does not compose with Flow or Diffusion"
         )
     if type(processor).__module__ != "gcw.models.cache_processors.longshot":
         raise ValueError("KV-score sidecar found no Longshot cache processor")
     composition = getattr(processor, "_gcw_longshot_model_composition", None)
     if (
         type(composition) is not tuple
-        or len(composition) != 5
+        or len(composition) != 4
         or type(composition[0]) is not str
         or type(composition[1]) is not str
         or any(type(value) is not bool for value in composition[2:])
@@ -143,10 +143,8 @@ def configure_kv_score_sidecar_execution(
         raise RuntimeError(
             "Longshot cache processor has no valid model-composition identity"
         )
-    actual_variant, actual_family, has_flow, has_diffusion, has_workspace = (
-        composition
-    )
-    actual_incompatible_refinement = has_flow or has_diffusion or has_workspace
+    actual_variant, actual_family, has_flow, has_diffusion = composition
+    actual_incompatible_refinement = has_flow or has_diffusion
     if (
         context.model_variant != actual_variant
         or context.model_family != actual_family
@@ -165,9 +163,7 @@ def configure_kv_score_sidecar_execution(
             "KV-score sidecar actual model composition is unsupported"
         )
     if actual_incompatible_refinement:
-        raise ValueError(
-            "KV-score sidecar actual model has Flow, Diffusion, or workspace refinement"
-        )
+        raise ValueError("KV-score sidecar actual model has Flow or Diffusion")
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         if torch.distributed.get_world_size() != 1:
             raise ValueError(

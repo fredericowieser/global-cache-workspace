@@ -18,8 +18,8 @@ from gcw.config import (
     to_dict,
 )
 from gcw.models import build_model
-from gcw.models.cache_processors import longshot as longshot_module
-from gcw.models.cache_processors.longshot import (
+from gcw.models.cache_processors import longshot_processor
+from gcw.models.cache_processors.longshot_layers import (
     _gradient_checkpointing_enabled,
     longshot_gradient_checkpointing_override,
 )
@@ -104,7 +104,7 @@ def test_threshold_boundary_controls_all_longshot_recurrence(
         calls.append(kwargs)
         return function(*args)
 
-    monkeypatch.setattr(longshot_module, "checkpoint", fake_checkpoint)
+    monkeypatch.setattr(longshot_processor, "checkpoint", fake_checkpoint)
     config = _train_config(tmp_path, threshold=8)
     config.model.cache_processor.iteration_mode = iteration_mode  # type: ignore[union-attr,assignment]
     config.model.cache_processor.iterations = 2  # type: ignore[union-attr]

@@ -28,7 +28,6 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `flow_processor` | `gcw.config.model.FlowProcessorConfig \| None` | `None` |
 | `diffusion_processor` | `gcw.config.model.DiffusionProcessorConfig \| None` | `None` |
 | `processor_generation_mode` | `Literal['windowed', 'post_prefill_relative']` | `'windowed'` |
-| `workspace_flow_refinement` | `gcw.config.model.WorkspaceFlowRefinementConfig \| None` | `None` |
 | `layer_types` | `list[str] \| None` | `None` |
 | `processor_layer_indices` | `list[int] \| None` | `None` |
 | `partial_rotary_factor` | `float` | `1.0` |
@@ -66,6 +65,9 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `topk_heads` | `int` | `32` |
 | `topk_linear_heads` | `int \| None` | `None` |
 | `score` | `str` | `'attn_l2'` |
+| `head_selection_method` | `Literal['magnitude', 'learned_contextual', 'random']` | `'magnitude'` |
+| `head_selector_hidden_size` | `int` | `64` |
+| `head_selector_use_identity_bias` | `bool` | `False` |
 | `hidden_size` | `int` | `512` |
 | `intermediate_size` | `int` | `2048` |
 | `num_layers` | `int` | `1` |
@@ -92,11 +94,12 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `include_self_head_kv` | `bool` | `False` |
 | `iterations` | `int` | `1` |
 | `iteration_mode` | `Literal['internal', 'external']` | `'internal'` |
-| `internal_iteration_score` | `Literal['attn_l2', 'cache_head_attention', 'kv_norm']` | `'attn_l2'` |
+| `internal_iteration_score` | `Literal['attn_l2', 'cache_head_attention', 'kv_norm', 'learned_contextual', 'random']` | `'attn_l2'` |
 | `linear_state_cache` | `bool` | `False` |
 | `linear_state_query_mode` | `Literal['per_linear_state', 'shared', 'global']` | `'global'` |
 | `linear_state_update_mode` | `Literal['outer_product', 'gated_delta']` | `'outer_product'` |
 | `gate_linear_state_delta` | `bool` | `True` |
+| `generation_process_every` | `int \| None` | `None` |
 
 ## `FlowProcessorConfig`
 
@@ -106,14 +109,6 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `time_conditioning` | `bool` | `True` |
 | `eta_max` | `float` | `1.0` |
 | `flow_gate_init` | `float` | `-4.0` |
-
-## `WorkspaceFlowRefinementConfig`
-
-| Field | Type | Default |
-|---|---|---|
-| `solver` | `Literal['euler', 'midpoint']` | `'euler'` |
-| `solver_steps` | `int` | `1` |
-| `max_velocity` | `float` | `0.75` |
 
 ## `DataConfig`
 
@@ -182,7 +177,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 
 | Field | Type | Default |
 |---|---|---|
-| `model` | `gcw.config.model.ModelConfig` | `ModelConfig(variant='tf', family='smollm', sequence_len=2048, vocab_size=49152, hidden_size=960, intermediate_size=2560, num_layers=32, num_heads=15, num_kv_heads=5, head_dim=64, rope_theta=10000.0, norm_eps=1e-05, tie_embeddings=True, qk_norm=False, rotary_style='ppt', cache_processor=None, lora=None, flow_processor=None, diffusion_processor=None, processor_generation_mode='windowed', workspace_flow_refinement=None, layer_types=None, processor_layer_indices=None, partial_rotary_factor=1.0, linear_conv_kernel_dim=4, linear_key_head_dim=None, linear_value_head_dim=None, linear_num_key_heads=None, linear_num_value_heads=None, moe_intermediate_size=None, num_experts=0, num_experts_per_tok=0, shared_expert_intermediate_size=None, hidden_act='silu', moe_experts_implementation='grouped_mm', router_aux_loss_coef=0.0, output_router_logits=False, sliding_window=None, num_global_key_value_heads=None, global_head_dim=None, attention_k_eq_v=False, num_kv_shared_layers=0, hidden_size_per_layer_input=0, vocab_size_per_layer_input=None, final_logit_softcapping=None, rope_parameters=None, use_double_wide_mlp=False, legacy_bottleneck_generate=None)` |
+| `model` | `gcw.config.model.ModelConfig` | `ModelConfig(variant='tf', family='smollm', sequence_len=2048, vocab_size=49152, hidden_size=960, intermediate_size=2560, num_layers=32, num_heads=15, num_kv_heads=5, head_dim=64, rope_theta=10000.0, norm_eps=1e-05, tie_embeddings=True, qk_norm=False, rotary_style='ppt', cache_processor=None, lora=None, flow_processor=None, diffusion_processor=None, processor_generation_mode='windowed', layer_types=None, processor_layer_indices=None, partial_rotary_factor=1.0, linear_conv_kernel_dim=4, linear_key_head_dim=None, linear_value_head_dim=None, linear_num_key_heads=None, linear_num_value_heads=None, moe_intermediate_size=None, num_experts=0, num_experts_per_tok=0, shared_expert_intermediate_size=None, hidden_act='silu', moe_experts_implementation='grouped_mm', router_aux_loss_coef=0.0, output_router_logits=False, sliding_window=None, num_global_key_value_heads=None, global_head_dim=None, attention_k_eq_v=False, num_kv_shared_layers=0, hidden_size_per_layer_input=0, vocab_size_per_layer_input=None, final_logit_softcapping=None, rope_parameters=None, use_double_wide_mlp=False, legacy_bottleneck_generate=None)` |
 | `data` | `gcw.config.data.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, validation_dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None, experiment_manifest=None)` |
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
@@ -203,6 +198,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `global_batch_rows` | `int` | `0` |
 | `logical_pair_grouping` | `bool` | `False` |
 | `performance` | `gcw.performance.config.PerformanceConfig` | `PerformanceConfig(adaptive_batching=AdaptiveBatchingConfig(enabled=False, bands=(PhysicalBatchBandConfig(max_padded_tokens=1024, physical_rows=16), PhysicalBatchBandConfig(max_padded_tokens=2048, physical_rows=8), PhysicalBatchBandConfig(max_padded_tokens=3072, physical_rows=4), PhysicalBatchBandConfig(max_padded_tokens=4096, physical_rows=2))), reference_loss=ReferenceLossConfig(mode='legacy', max_projected_positions=1024, checkpoint_chunks=False), longshot_full_history=LongshotFullHistoryConfig(enabled=False, max_temp_bytes=33554432), kv_score_sidecar=KVScoreSidecarConfig(enabled=False), triton_cache_movement=TritonCacheMovementConfig(enabled=False), optimized_step=OptimizedStepConfig(enabled=False, profile='combined_v1', receipt_path=None, key_path=None, key_id=None, qualification_id=None), noisy_diffusion=NoisyDiffusionBackendConfig(recurrence_backend='eager'))` |
+| `longshot_selector_training` | `gcw.config.training.LongshotSelectorTrainingConfig \| None` | `None` |
 | `learning_rate` | `float` | `0.0003` |
 | `adam_beta1` | `float` | `0.9` |
 | `adam_beta2` | `float` | `0.95` |
@@ -212,7 +208,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `warmdown_ratio` | `float` | `0.2` |
 | `final_lr_frac` | `float` | `0.0` |
 | `grad_clip` | `float` | `1.0` |
-| `precision` | `Optional[Literal['auto', 'fp32', 'bf16', 'fp16', 'bf16_mixed', 'fp16_mixed']]` | `None` |
+| `precision` | `Optional[Literal['fp32', 'bf16_mixed', 'bf16']]` | `None` |
 | `bf16` | `bool` | `False` |
 | `loss` | `str \| None` | `None` |
 | `save_cache_processor_only` | `bool \| None` | `None` |
@@ -227,6 +223,21 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `eval_on_start` | `bool` | `False` |
 | `wandb` | `gcw.config.training.WandbConfig` | `WandbConfig(enabled=False, project='global-cache-workspace', entity=None, name=None, group=None, mode=None, id=None, resume=None, tags=[], log_every=1)` |
 | `metadata` | `dict[str, Any]` | `{}` |
+
+## `LongshotSelectorTrainingConfig`
+
+| Field | Type | Default |
+|---|---|---|
+| `warmup_end` | `float` | `0.05` |
+| `soft_end` | `float` | `0.15` |
+| `second_hardening_start` | `float` | `0.6` |
+| `hard_start` | `float` | `0.9` |
+| `initial_temperature` | `float` | `2.0` |
+| `intermediate_temperature` | `float` | `0.35` |
+| `final_temperature` | `float` | `0.1` |
+| `initial_suppression` | `float` | `0.0` |
+| `intermediate_suppression` | `float` | `2.0` |
+| `final_suppression` | `float` | `5.0` |
 
 ## `ResumeConfig`
 

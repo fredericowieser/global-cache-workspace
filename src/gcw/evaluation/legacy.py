@@ -109,6 +109,8 @@ def run_paper7_legacy(
     limit: int | None = None,
     batch_size: int = 8,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
+    head_selection_method: str | None = None,
 ) -> dict:
     return run_paper7_legacy_groups(
         checkpoint,
@@ -116,6 +118,8 @@ def run_paper7_legacy(
         limit=limit,
         batch_size=batch_size,
         dtype=dtype,
+        generation_process_every=generation_process_every,
+        head_selection_method=head_selection_method,
     )
 
 
@@ -125,6 +129,8 @@ def run_paper7_legacy_groups(
     limit: int | None = None,
     batch_size: int = 8,
     dtype: torch.dtype | str | None = "auto",
+    generation_process_every: int | None = None,
+    head_selection_method: str | None = None,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -150,6 +156,8 @@ def run_paper7_legacy_groups(
         processor_enabled=True,
         device=device,
         dtype=dtype,
+        generation_process_every=generation_process_every,
+        head_selection_method=head_selection_method,
     )
     lm = LegacyPaper7EvalLM(model, tokenizer, batch_size=batch_size)
     apply_chat_template = bool(

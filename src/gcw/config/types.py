@@ -16,13 +16,13 @@ CacheProcessorMode = Literal[
 ]
 CacheEncoderMethod = Literal["linear", "query_attention"]
 CacheEncoderQuerySource = Literal["learned", "final_token"]
+CacheHeadSelectionMethod = Literal["magnitude", "learned_contextual", "random"]
 CacheProcessorIterationMode = Literal["internal", "external"]
 CacheProcessorInternalIterationScore = Literal[
-    "attn_l2", "cache_head_attention", "kv_norm"
+    "attn_l2", "cache_head_attention", "kv_norm", "learned_contextual", "random"
 ]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 CacheLinearStateUpdateMode = Literal["outer_product", "gated_delta"]
-WorkspaceFlowSolver = Literal["euler", "midpoint"]
 TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
 ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
 BackboneChunkBackend = Literal[

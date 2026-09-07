@@ -31,6 +31,9 @@ EVAL_ONLY="${EVAL_ONLY:-0}"
 EVAL_SUITE="${EVAL_SUITE:-paper7-legacy}"
 EVAL_GPUS="${EVAL_GPUS:-1}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
+EVAL_CHECKPOINT_STEP="${EVAL_CHECKPOINT_STEP:-}"
+GENERATION_PROCESS_EVERY="${GENERATION_PROCESS_EVERY:-}"
+EVAL_HEAD_SELECTION_METHOD="${EVAL_HEAD_SELECTION_METHOD:-}"
 GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"
 KEEP_STEP_CHECKPOINTS="${KEEP_STEP_CHECKPOINTS:-auto}"
 KEEP_STEP_CHECKPOINT_EVERY="${KEEP_STEP_CHECKPOINT_EVERY:-1000}"
@@ -41,6 +44,8 @@ SFT_BACKBONE="${SFT_BACKBONE:-/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/l
 TOKENIZER_DIR="${TOKENIZER_DIR:-/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model}"
 LOCAL_GPUS="${LOCAL_GPUS:-}"
 LOCAL_STATE_ROOT="${LOCAL_STATE_ROOT:-$repo_root/slurm_out/.local-array}"
+SLURM_STATE_ROOT="${SLURM_STATE_ROOT:-$repo_root/slurm_out}"
+SLURM_LOG_DIR="${SLURM_LOG_DIR:-$repo_root/slurm_out}"
 LOCAL_STOP_WHEN_IDLE="${LOCAL_STOP_WHEN_IDLE:-1}"
 LOCAL_IDLE_CHECK_INTERVAL="${LOCAL_IDLE_CHECK_INTERVAL:-30}"
 NEBIUS_INSTANCE_ID_FILE="${NEBIUS_INSTANCE_ID_FILE:-/mnt/cloud-metadata/instance-id}"
@@ -67,7 +72,10 @@ Common environment overrides:
   BACKEND, JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
   EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, OUT_DIR
+  EVAL_CHECKPOINT_STEP, GENERATION_PROCESS_EVERY
+  EVAL_HEAD_SELECTION_METHOD
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
+  SLURM_STATE_ROOT, SLURM_LOG_DIR
   LOCAL_GPUS, LOCAL_STATE_ROOT, LOCAL_STOP_WHEN_IDLE, LOCAL_IDLE_CHECK_INTERVAL
   NEBIUS_INSTANCE_ID_FILE, NEBIUS_STOP_PROFILE
 
@@ -218,6 +226,13 @@ run_eval() {
   if [[ -n "$EVAL_BATCH_SIZE" ]]; then
     gcw_args+=(--batch-size "$EVAL_BATCH_SIZE")
   fi
+  if [[ -n "$GENERATION_PROCESS_EVERY" ]]; then
+    positive_int GENERATION_PROCESS_EVERY "$GENERATION_PROCESS_EVERY"
+    gcw_args+=(--generation-process-every "$GENERATION_PROCESS_EVERY")
+  fi
+  if [[ -n "$EVAL_HEAD_SELECTION_METHOD" ]]; then
+    gcw_args+=(--head-selection-method "$EVAL_HEAD_SELECTION_METHOD")
+  fi
   if [[ "$EVAL_SUITE" == "fineweb" && -n "${DATA_DIR:-}" ]]; then
     gcw_args+=(--data-dir "$DATA_DIR")
   fi
@@ -317,6 +332,14 @@ run_one_config() {
   worker_uv_run_eval python scripts/cluster/check_cuda_env.py || return $?
   if [[ -n "${CHECKPOINT:-}" || -n "${OUT:-}" ]]; then
     run_eval "${CHECKPOINT:-$output_dir/checkpoint}" "${OUT:-${OUT_DIR}/${run_name}_${OUT_SUFFIX:-final}_${EVAL_SUITE}.json}"
+  elif [[ -n "$EVAL_CHECKPOINT_STEP" ]]; then
+    positive_int EVAL_CHECKPOINT_STEP "$EVAL_CHECKPOINT_STEP"
+    out="${OUT_DIR}/${run_name}_step${EVAL_CHECKPOINT_STEP}"
+    if [[ -n "${OUT_SUFFIX:-}" ]]; then
+      out+="_${OUT_SUFFIX}"
+    fi
+    out+="_${EVAL_SUITE}.json"
+    run_eval "$output_dir/checkpoint-$EVAL_CHECKPOINT_STEP" "$out"
   elif [[ "$keep_step_checkpoints" == "1" ]]; then
     manifest="${EVAL_MANIFEST:-slurm_out/${run_name}_${EVAL_SUITE}_checkpoints.tsv}"
     : > "$manifest"
@@ -336,13 +359,16 @@ claim_next_config() {
     flock -x 200
     touch "$CLAIMED_FILE"
 
-    config="$(
+    if ! config="$(
       awk '
         ARGIND == 1 { claimed[$0] = 1; next }
         /^[[:space:]]*($|#)/ { next }
         !($0 in claimed) { print; exit }
       ' "$CLAIMED_FILE" "$CONFIG_LIST"
-    )"
+    )"; then
+      echo "Failed to read config queue from $CONFIG_LIST" >&2
+      return 1
+    fi
     if [[ -n "$config" ]]; then
       echo "$config" >> "$CLAIMED_FILE"
       echo "$config"
@@ -648,6 +674,9 @@ start_local_worker() {
     "EVAL_ONLY=$EVAL_ONLY"
     "EVAL_SUITE=$EVAL_SUITE"
     "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE"
+    "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP"
+    "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY"
+    "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD"
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS"
     "WANDB_MODE=$WANDB_MODE"
     "PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF"
@@ -955,6 +984,24 @@ launcher_main() {
   positive_int ARRAY_WORKERS "$ARRAY_WORKERS"
   positive_int GPUS "$GPUS"
   positive_int EVAL_GPUS "$EVAL_GPUS"
+  if [[ -n "$GENERATION_PROCESS_EVERY" ]]; then
+    positive_int GENERATION_PROCESS_EVERY "$GENERATION_PROCESS_EVERY"
+    if [[ "$EVAL_SUITE" == "fineweb" ]]; then
+      echo "GENERATION_PROCESS_EVERY is not supported for fineweb evaluation" >&2
+      return 1
+    fi
+  fi
+  if [[ -n "$EVAL_HEAD_SELECTION_METHOD" && "$EVAL_HEAD_SELECTION_METHOD" != "random" ]]; then
+    echo "EVAL_HEAD_SELECTION_METHOD must be random when set; got '$EVAL_HEAD_SELECTION_METHOD'" >&2
+    return 1
+  fi
+  if [[ -n "$EVAL_HEAD_SELECTION_METHOD" && "$EVAL_SUITE" != "paper7" && "$EVAL_SUITE" != "paper7-legacy" ]]; then
+    echo "EVAL_HEAD_SELECTION_METHOD is supported only for paper7 evaluation" >&2
+    return 1
+  fi
+  if [[ -n "$EVAL_CHECKPOINT_STEP" ]]; then
+    positive_int EVAL_CHECKPOINT_STEP "$EVAL_CHECKPOINT_STEP"
+  fi
   validate_backend "$BACKEND"
   if [[ "$BACKEND" == "auto" ]]; then
     if command -v sbatch >/dev/null 2>&1; then
@@ -991,8 +1038,13 @@ launcher_main() {
     alloc_gpus="$EVAL_GPUS"
   fi
 
-  mkdir -p slurm_out
-  state_dir="$repo_root/slurm_out/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
+  if [[ "$BACKEND" == "slurm" ]]; then
+    mkdir -p "$SLURM_STATE_ROOT" "$SLURM_LOG_DIR"
+    state_dir="$SLURM_STATE_ROOT/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
+  else
+    mkdir -p slurm_out
+    state_dir="$repo_root/slurm_out/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
+  fi
   mkdir -p "$state_dir"
   config_list="$state_dir/configs.txt"
   write_config_list "$config_list" "$configs_file" "${args[@]}"
@@ -1019,8 +1071,8 @@ launcher_main() {
     --cpus-per-task="$CPUS_PER_TASK"
     --mem="$MEM"
     --array="$workers_arg"
-    --output="slurm_out/${JOB_NAME}-%A_%a.out"
-    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS,EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
+    --output="$SLURM_LOG_DIR/${JOB_NAME}-%A_%a.out"
+    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP,GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY,EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS,EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
   )
   if [[ -n "$DEPENDENCY" ]]; then
     sbatch_cmd+=(--dependency="$DEPENDENCY")

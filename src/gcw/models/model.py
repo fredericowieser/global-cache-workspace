@@ -141,6 +141,7 @@ class LanguageModel(nn.Module):
             eos_token_id=eos_token_id,
             processor=self.cache_processor,
             process_every=processor.process_every,
+            generation_process_every=processor.generation_process_every,
             process_prefill_windows=not relative,
             process_after_prefill=relative,
             relative_generation_cadence=relative,
@@ -165,6 +166,7 @@ class LanguageModel(nn.Module):
             eos_token_id=eos_token_id,
             processor=self.cache_processor,
             process_every=processor.process_every,
+            generation_process_every=processor.generation_process_every,
             process_prefill_windows=not relative,
             process_after_prefill=relative,
             relative_generation_cadence=relative,
@@ -204,12 +206,9 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
         config,
         flow_processor=None,
         diffusion_processor=None,
+        legacy_bottleneck_generate=None,
         processor_generation_mode="windowed",
     )
-    if config.variant == "longshot":
-        backbone_config = replace(
-            backbone_config, workspace_flow_refinement=None
-        )
     backbone = build_backbone(backbone_config)
     linear_state_dynamics = None
     if (

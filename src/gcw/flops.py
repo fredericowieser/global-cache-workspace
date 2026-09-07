@@ -219,7 +219,11 @@ def _selected_count(valid_tokens: int, process_every: int, topk: int) -> int:
 
 
 def processor_forward_flops_per_sequence(
-    config: ModelConfig, seq_len: int
+    config: ModelConfig,
+    seq_len: int,
+    *,
+    selector_training: object | None = None,
+    training_progress: float | None = None,
 ) -> float:
     cp = config.cache_processor
     if config.variant == "tf" or cp is None:
@@ -268,12 +272,24 @@ def processor_forward_flops_per_sequence(
             )
         elif config.variant == "longshot":
             linear_heads = _longshot_linear_state_heads(config)
-            selected_heads = min(cp.topk_heads, cache_heads) + min(
-                _longshot_topk_linear_heads(cp),
-                linear_heads,
-            )
-            if cp.include_self_head_kv:
-                selected_heads += 1
+            routing_phase = "hard"
+            if selector_training is not None and training_progress is not None:
+                if training_progress < getattr(selector_training, "warmup_end"):
+                    routing_phase = "warmup"
+                elif training_progress < getattr(
+                    selector_training, "hard_start"
+                ):
+                    routing_phase = "soft"
+            if cp.head_selection_method == "learned_contextual":
+                head_budget = cp.topk_heads + (
+                    _longshot_topk_linear_heads(cp) if linear_heads > 0 else 0
+                )
+                selected_heads = min(head_budget, cache_heads + linear_heads)
+            else:
+                selected_heads = min(cp.topk_heads, cache_heads) + min(
+                    _longshot_topk_linear_heads(cp),
+                    linear_heads,
+                )
             total += _longshot_processor_block_flops_per_call(
                 2 * head_dim,
                 cp,
@@ -282,6 +298,7 @@ def processor_forward_flops_per_sequence(
                 selected_heads,
                 field_evaluations=field_evaluations,
                 model_config=config,
+                routing_phase=routing_phase,
             )
     return total
 
@@ -330,6 +347,7 @@ def _longshot_processor_block_flops_per_call(
     *,
     field_evaluations: int = 1,
     model_config: ModelConfig | None = None,
+    routing_phase: str = "hard",
 ) -> float:
     linear_heads = (
         0
@@ -398,20 +416,154 @@ def _longshot_processor_block_flops_per_call(
         * _processor_layer_matmul_params(config)
     )
     head_dim = config.hidden_size // config.num_heads
-    attention = (
-        config.num_layers
-        * 4
-        * config.num_heads
-        * head_dim
-        * total_heads
-        * selected_heads
+    hard_attention_heads = selected_heads + int(config.include_self_head_kv)
+
+    def field_flops(attention_heads: int, *, gated: bool) -> int:
+        attention = (
+            config.num_layers
+            * 4
+            * config.num_heads
+            * head_dim
+            * total_heads
+            * attention_heads
+        )
+        gate = (
+            total_heads
+            + config.num_layers
+            * config.num_heads
+            * total_heads
+            * attention_heads
+            if gated
+            else 0
+        )
+        return layer_matmul + attention + gate
+
+    initial_selection = _longshot_initial_head_selection_flops(
+        input_dim,
+        config,
+        selected,
+        cache_heads,
+        linear_heads,
+        model_config,
+        routing_phase=routing_phase,
     )
-    field = layer_matmul + attention
+    learned_initial = config.head_selection_method == "learned_contextual"
+    soft_initial = learned_initial and routing_phase == "soft"
+    dense_initial = learned_initial and routing_phase in {"warmup", "soft"}
+    initial_field = field_flops(
+        total_heads if dense_initial else hard_attention_heads,
+        gated=soft_initial,
+    )
     if config.iteration_mode == "external":
         return float(
-            config.iterations * (encode_decode + field_evaluations * field)
+            config.iterations
+            * (
+                encode_decode
+                + field_evaluations * initial_field
+                + initial_selection
+            )
         )
-    return float(encode_decode + config.iterations * field_evaluations * field)
+    reselection = 0
+    if model_config is None or model_config.flow_processor is None:
+        reselection = (config.iterations - 1) * (
+            _longshot_iteration_head_selection_flops(
+                config,
+                total_heads,
+                hard_attention_heads,
+                routing_phase=routing_phase,
+            )
+        )
+    learned_iterative = config.internal_iteration_score == "learned_contextual"
+    dense_iterative = learned_iterative and routing_phase in {"warmup", "soft"}
+    soft_iterative = learned_iterative and routing_phase == "soft"
+    later_field = field_flops(
+        total_heads if dense_iterative else hard_attention_heads,
+        gated=soft_iterative,
+    )
+    return float(
+        encode_decode
+        + initial_selection
+        + field_evaluations
+        * (initial_field + (config.iterations - 1) * later_field)
+        + reselection
+    )
+
+
+def _longshot_contextual_head_selection_flops(
+    config: CacheProcessorConfig, heads: int
+) -> int:
+    hidden = config.hidden_size
+    selector_hidden = config.head_selector_hidden_size
+    norm_and_context = 4 * heads * hidden
+    projections = 2 * (heads + 1) * hidden * selector_hidden
+    dot_products = 2 * heads * selector_hidden
+    identity_bias = heads if config.head_selector_use_identity_bias else 0
+    return norm_and_context + projections + dot_products + identity_bias
+
+
+def _longshot_initial_head_selection_flops(
+    input_dim: int,
+    config: CacheProcessorConfig,
+    selected_positions: int,
+    cache_heads: int,
+    linear_heads: int,
+    model_config: ModelConfig | None,
+    *,
+    routing_phase: str = "hard",
+) -> int:
+    if config.head_selection_method == "random":
+        return 0
+    if config.head_selection_method == "learned_contextual":
+        if routing_phase == "warmup":
+            return 0
+        return _longshot_contextual_head_selection_flops(
+            config, cache_heads + linear_heads
+        )
+    if config.score == "kv_norm":
+        kv_score = cache_heads * selected_positions
+    else:
+        kv_score = 2 * cache_heads * selected_positions * input_dim
+    linear_score = 0
+    if model_config is not None and linear_heads > 0:
+        linear_value_dim = int(
+            model_config.linear_value_head_dim
+            or model_config.linear_key_head_dim
+            or _head_dim(model_config)
+        )
+        linear_score = 2 * linear_heads * linear_value_dim
+    return kv_score + linear_score
+
+
+def _longshot_iteration_head_selection_flops(
+    config: CacheProcessorConfig,
+    heads: int,
+    selected_heads: int,
+    *,
+    routing_phase: str = "hard",
+) -> int:
+    method = config.internal_iteration_score
+    if method == "random":
+        return 0
+    if method == "learned_contextual":
+        if routing_phase == "warmup":
+            return 0
+        return _longshot_contextual_head_selection_flops(config, heads)
+    if method == "attn_l2":
+        return 2 * config.num_layers * heads * config.hidden_size
+    if method == "kv_norm":
+        kv_dim = config.num_kv_heads * config.hidden_size // config.num_heads
+        return 4 * config.num_layers * heads * kv_dim
+    if method == "cache_head_attention":
+        full_score_attention = (
+            2
+            * config.num_layers
+            * config.hidden_size
+            * heads
+            * max(heads - selected_heads, 0)
+        )
+        score_reduction = config.num_layers * config.num_heads * heads * heads
+        return full_score_attention + score_reduction
+    raise ValueError(f"unsupported internal_iteration_score: {method}")
 
 
 def _longshot_linear_state_heads(config: ModelConfig) -> int:
@@ -439,12 +591,39 @@ def flops_per_token(config: ModelConfig, seq_len: int) -> float:
 
 
 def training_flops_per_token(
-    config: ModelConfig, seq_len: int | None = None
+    config: ModelConfig,
+    seq_len: int | None = None,
+    *,
+    selector_training: object | None = None,
+    training_progress: float | None = None,
 ) -> float:
-    return 3.0 * flops_per_token(config, seq_len or config.sequence_len)
+    seq_len = seq_len or config.sequence_len
+    return 3.0 * (
+        backbone_flops_per_token(config, seq_len)
+        + processor_forward_flops_per_sequence(
+            config,
+            seq_len,
+            selector_training=selector_training,
+            training_progress=training_progress,
+        )
+        / seq_len
+    )
 
 
 def total_training_flops(
-    config: ModelConfig, tokens: int, seq_len: int | None = None
+    config: ModelConfig,
+    tokens: int,
+    seq_len: int | None = None,
+    *,
+    selector_training: object | None = None,
+    training_progress: float | None = None,
 ) -> float:
-    return training_flops_per_token(config, seq_len) * tokens
+    return (
+        training_flops_per_token(
+            config,
+            seq_len,
+            selector_training=selector_training,
+            training_progress=training_progress,
+        )
+        * tokens
+    )

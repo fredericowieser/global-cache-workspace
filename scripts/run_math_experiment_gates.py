@@ -46,7 +46,6 @@ def _bypass_gate(config_path: Path, output: Path) -> dict[str, Any]:
     base_config.cache_processor = None
     base_config.flow_processor = None
     base_config.diffusion_processor = None
-    base_config.workspace_flow_refinement = None
     base_config.lora = None
     reference = build_model(base_config).to(dtype=torch.bfloat16, device="cuda")
     reference.init_weights()

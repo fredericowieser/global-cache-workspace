@@ -25,6 +25,28 @@ def test_legacy_generation_flag_maps_to_explicit_policy():
     assert config.processor_generation_mode == "post_prefill_relative"
 
 
+def test_legacy_null_workspace_refinement_is_ignored():
+    config = _model_config_from_checkpoint(
+        {
+            "variant": "bgt",
+            "family": "qwen3",
+            "workspace_flow_refinement": None,
+        }
+    )
+
+    assert config.variant == "bgt"
+
+
+def test_legacy_enabled_workspace_refinement_is_rejected():
+    with pytest.raises(ValueError, match="workspace_flow_refinement"):
+        _model_config_from_checkpoint(
+            {
+                "variant": "longshot",
+                "workspace_flow_refinement": {"solver": "euler"},
+            }
+        )
+
+
 def test_checkpoint_roundtrip(tmp_path):
     cfg = ModelConfig(
         vocab_size=64,

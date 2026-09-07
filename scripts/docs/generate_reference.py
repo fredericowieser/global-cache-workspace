@@ -14,11 +14,11 @@ from gcw.config import (
     DataConfig,
     EvalConfig,
     FlowProcessorConfig,
+    LongshotSelectorTrainingConfig,
     ModelConfig,
     ResumeConfig,
     TrainConfig,
     WandbConfig,
-    WorkspaceFlowRefinementConfig,
 )
 from gcw.performance.config import (
     AdaptiveBatchingConfig,
@@ -34,7 +34,6 @@ CONFIG_TYPES = (
     ModelConfig,
     CacheProcessorConfig,
     FlowProcessorConfig,
-    WorkspaceFlowRefinementConfig,
     DataConfig,
     PhysicalBatchBandConfig,
     AdaptiveBatchingConfig,
@@ -42,6 +41,7 @@ CONFIG_TYPES = (
     NoisyDiffusionBackendConfig,
     PerformanceConfig,
     TrainConfig,
+    LongshotSelectorTrainingConfig,
     ResumeConfig,
     WandbConfig,
     EvalConfig,

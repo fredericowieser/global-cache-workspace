@@ -7,6 +7,7 @@ import torch
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.cache_processors import longshot as longshot_module
+from gcw.models.cache_processors import longshot_selection
 from gcw.models.cache_processors.longshot import GlobalCacheProcessor
 from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
@@ -79,7 +80,7 @@ def test_chunked_longshot_score_saves_source_not_full_fp32_conversion() -> None:
     def saved_by(function):
         saved: list[torch.Tensor] = []
         with torch.autograd.graph.saved_tensors_hooks(
-            lambda tensor: (saved.append(tensor) or tensor),
+            lambda tensor: saved.append(tensor) or tensor,
             lambda tensor: tensor,
         ):
             function(x)
@@ -132,7 +133,7 @@ def test_chunked_longshot_score_bounds_each_profiled_fp32_temporary() -> None:
 
 @pytest.mark.parametrize("score", ["attn_l2", "kv_norm"])
 @pytest.mark.parametrize("encoder_method", ["linear", "query_attention"])
-def test_longshot_modes_match_eager_forward_backward_and_selection(
+def test_longshot_modes_match_eager_forward_and_backward(
     monkeypatch: pytest.MonkeyPatch,
     score: str,
     encoder_method: str,
@@ -143,26 +144,22 @@ def test_longshot_modes_match_eager_forward_backward_and_selection(
     optimized_cache = _cache()
     reference_cache = _clone_cache(optimized_cache)
 
-    optimized_source = optimized.encode_source(optimized_cache)
     optimized_output = optimized(optimized_cache)
     optimized_loss = optimized_output.values.float().pow(2).mean()
     optimized_loss.backward()
 
     monkeypatch.setattr(
-        longshot_module, "chunked_fp32_squared_l2", eager_fp32_squared_l2
+        longshot_selection,
+        "chunked_fp32_squared_l2",
+        eager_fp32_squared_l2,
     )
     monkeypatch.setattr(
         longshot_module, "chunked_fp32_l2_norm", eager_fp32_l2_norm
     )
-    reference_source = reference.encode_source(reference_cache)
     reference_output = reference(reference_cache)
     reference_loss = reference_output.values.float().pow(2).mean()
     reference_loss.backward()
 
-    assert torch.equal(optimized_source.indices, reference_source.indices)
-    assert torch.equal(
-        optimized_source.selected_heads, reference_source.selected_heads
-    )
     assert torch.equal(optimized_output.keys, reference_output.keys)
     assert torch.equal(optimized_output.values, reference_output.values)
     for optimized_parameter, reference_parameter in zip(

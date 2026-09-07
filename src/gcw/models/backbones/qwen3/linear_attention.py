@@ -98,8 +98,8 @@ class Qwen35GatedDeltaNet(nn.Module):
         )
         beta = torch.sigmoid(self.in_proj_b(hidden_states))
         a = self.in_proj_a(hidden_states)
-        conv_state = past_state[0] if past_state is not None else None
-        recurrent_state = past_state[1] if past_state is not None else None
+        recurrent_state = past_state[0] if past_state is not None else None
+        conv_state = past_state[1] if past_state is not None else None
 
         conv_out, new_conv_state = self._causal_conv(mixed_qkv, conv_state)
         query, key, value = torch.split(
@@ -110,9 +110,7 @@ class Qwen35GatedDeltaNet(nn.Module):
         query = query.reshape(batch, seq_len, self.num_k_heads, self.head_k_dim)
         key = key.reshape(batch, seq_len, self.num_k_heads, self.head_k_dim)
         value = value.reshape(batch, seq_len, self.num_v_heads, self.head_v_dim)
-        g = -self.dynamics.A_log.float().exp() * F.softplus(
-            a.float() + self.dynamics.dt_bias
-        )
+        g = self.dynamics(a)
         if self.num_v_heads // self.num_k_heads > 1:
             repeats = self.num_v_heads // self.num_k_heads
             query = query.repeat_interleave(repeats, dim=2)
@@ -129,8 +127,8 @@ class Qwen35GatedDeltaNet(nn.Module):
         z = z.reshape(-1, self.head_v_dim)
         core_attn_out = self.norm(core_attn_out, z).reshape(batch, seq_len, -1)
         return self.out_proj(core_attn_out), (
-            new_conv_state,
             new_recurrent_state,
+            new_conv_state,
         )
 
     def _causal_conv(

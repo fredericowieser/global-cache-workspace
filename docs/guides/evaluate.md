@@ -21,12 +21,19 @@
 
 Evaluation constructs independent state. It does not mutate a training checkpoint. Experiment pages define stricter task sets, controls, and evidence gates.
 
+For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
+
 ## Legacy paper7 compatibility
 
 `gcw eval paper7-legacy` exists for direct compatibility with martin-branch paper7
 evaluation runs. Use it for old-checkpoint replication and for new checkpoints that
 must be compared against those legacy result files. The short suite name
 `gcw eval paper7` is an alias for the same path.
+
+For a Longshot random-routing ablation, add `--head-selection-method random`.
+This runtime-only override applies to both the initial head selection and every
+reachable internal reselection. Learned-selector parameters remain loaded from
+the checkpoint but are not used for routing.
 
 The compatibility path intentionally preserves the old protocol:
 

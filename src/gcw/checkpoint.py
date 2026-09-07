@@ -188,10 +188,24 @@ def load_checkpoint_bytes(
     return model, cfg, train_state
 
 
+def _without_legacy_workspace_refinement(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    model_payload = dict(payload)
+    legacy_workspace_refinement = model_payload.pop(
+        "workspace_flow_refinement", None
+    )
+    if legacy_workspace_refinement is not None:
+        raise ValueError(
+            "checkpoint uses legacy workspace_flow_refinement, which is no longer supported"
+        )
+    return model_payload
+
+
 def _model_config_from_checkpoint(payload: Any) -> ModelConfig:
     if not isinstance(payload, dict):
         raise ValueError("checkpoint model configuration must be an object")
-    model_payload = dict(payload)
+    model_payload = _without_legacy_workspace_refinement(payload)
     legacy_generate = model_payload.pop("legacy_bottleneck_generate", None)
     if legacy_generate is not None:
         if not isinstance(legacy_generate, bool):

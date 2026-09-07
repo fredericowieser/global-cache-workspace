@@ -6,8 +6,10 @@ from pathlib import Path
 
 import torch
 
+from gcw.config import ModelConfig
 from gcw.evaluation import legacy
 import gcw.evaluation.lm_eval_adapter as lm_eval_adapter
+from gcw.models.cache_processors.longshot_processor import CacheProcessor
 
 
 def test_paper7_legacy_task_order_and_skip(monkeypatch):
@@ -105,12 +107,130 @@ def test_legacy_chat_template_does_not_pass_thinking_kwarg(monkeypatch):
     assert calls[0][1] == {"tokenize": False, "add_generation_prompt": True}
 
 
+def test_eval_target_applies_generation_cadence_without_changing_checkpoint(
+    monkeypatch,
+):
+    config = ModelConfig(variant="bgt")
+    model = type("Model", (), {"config": config})()
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "load_checkpoint",
+        lambda *args, **kwargs: (model, config, {}),
+    )
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "tokenizer_for_checkpoint",
+        lambda config, state: "tokenizer",
+    )
+
+    loaded, tokenizer = lm_eval_adapter._load_eval_target(
+        checkpoint="checkpoint",
+        hf_model=None,
+        processor_enabled=True,
+        device=torch.device("cpu"),
+        generation_process_every=1,
+    )
+
+    assert loaded is model
+    assert tokenizer == "tokenizer"
+    assert config.cache_processor is not None
+    assert config.cache_processor.generation_process_every == 1
+
+
+def test_eval_target_applies_random_head_selection_after_checkpoint_load(
+    monkeypatch,
+):
+    config = ModelConfig(
+        variant="longshot",
+        cache_processor={
+            "head_selection_method": "learned_contextual",
+            "internal_iteration_score": "learned_contextual",
+            "iterations": 2,
+            "encoder_seq_len": 3,
+        },
+    )
+    assert config.cache_processor is not None
+    processor = CacheProcessor(16, 4, config.cache_processor)
+    assert processor.head_selector is not None
+    model = type("Model", (), {"config": config})()
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "load_checkpoint",
+        lambda *args, **kwargs: (model, config, {}),
+    )
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "tokenizer_for_checkpoint",
+        lambda config, state: "tokenizer",
+    )
+
+    loaded, tokenizer = lm_eval_adapter._load_eval_target(
+        checkpoint="checkpoint",
+        hf_model=None,
+        processor_enabled=True,
+        device=torch.device("cpu"),
+        head_selection_method="random",
+    )
+
+    assert loaded is model
+    assert tokenizer == "tokenizer"
+    assert config.cache_processor.head_selection_method == "random"
+    assert config.cache_processor.internal_iteration_score == "random"
+
+    def reject_learned_routing(*_args, **_kwargs):
+        raise AssertionError("runtime override invoked the learned selector")
+
+    monkeypatch.setattr(
+        processor.head_selector, "route", reject_learned_routing
+    )
+    with torch.no_grad():
+        processor(torch.randn(2, 4, 3, 16), topk_heads=2)
+
+
+def test_eval_target_rejects_head_selection_override_for_non_longshot():
+    config = ModelConfig(variant="bgt")
+    try:
+        lm_eval_adapter._apply_head_selection_method(config, "random")
+    except ValueError as exc:
+        assert "Longshot checkpoint" in str(exc)
+    else:
+        raise AssertionError("accepted random head routing for non-Longshot")
+
+
+def test_eval_target_rejects_generation_cadence_without_active_processor():
+    common = {
+        "processor_enabled": True,
+        "device": torch.device("cpu"),
+        "generation_process_every": 1,
+    }
+    try:
+        lm_eval_adapter._load_eval_target(
+            checkpoint=None, hf_model="hf-model", **common
+        )
+    except ValueError as exc:
+        assert "only to GCW checkpoints" in str(exc)
+    else:
+        raise AssertionError("accepted generation cadence for an HF target")
+
+    try:
+        lm_eval_adapter._load_eval_target(
+            checkpoint="checkpoint",
+            hf_model=None,
+            **{**common, "processor_enabled": False},
+        )
+    except ValueError as exc:
+        assert "processor_enabled=True" in str(exc)
+    else:
+        raise AssertionError("accepted generation cadence with processor off")
+
+
 def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     monkeypatch.setattr(legacy, "HAS_LM_EVAL", True)
     monkeypatch.setattr(lm_eval_adapter, "HAS_LM_EVAL", True)
     monkeypatch.setenv("GCW_EVAL_SKIP_TASKS", "theoremqa")
 
     calls = []
+    load_calls = []
     task_manager_paths = []
 
     class TaskManager:
@@ -168,7 +288,7 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     monkeypatch.setattr(
         legacy,
         "_load_eval_target",
-        lambda **kwargs: (Model(), Tokenizer()),
+        lambda **kwargs: (load_calls.append(kwargs) or Model(), Tokenizer()),
     )
     monkeypatch.setattr(legacy, "_distributed_eval_state", lambda: (None, 0, 1))
     monkeypatch.setattr(
@@ -179,7 +299,15 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     )
     monkeypatch.setattr(legacy, "_write_partial_results", lambda merged: None)
 
-    out = legacy.run_paper7_legacy("checkpoint", batch_size=16)
+    out = legacy.run_paper7_legacy(
+        "checkpoint",
+        batch_size=16,
+        generation_process_every=1,
+        head_selection_method="random",
+    )
+
+    assert load_calls[0]["generation_process_every"] == 1
+    assert load_calls[0]["head_selection_method"] == "random"
 
     assert [call["tasks"] for call in calls] == [
         ["gsm8k_openmath"],
