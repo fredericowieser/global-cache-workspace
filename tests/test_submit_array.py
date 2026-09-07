@@ -191,6 +191,7 @@ def test_eval_only_targets_one_step_with_generation_cadence(
             "EVAL_ONLY": "1",
             "EVAL_CHECKPOINT_STEP": "3000",
             "GENERATION_PROCESS_EVERY": "1",
+            "EVAL_HEAD_SELECTION_METHOD": "random",
             "OUT_SUFFIX": "generation-process-every1",
             "UV_CAPTURE": str(capture),
         }
@@ -210,6 +211,7 @@ def test_eval_only_targets_one_step_with_generation_cadence(
     )
     assert f"--checkpoint {tmp_path / 'output'}/checkpoint-3000" in invocation
     assert "--generation-process-every 1" in invocation
+    assert "--head-selection-method random" in invocation
     assert "--batch-size 16" in invocation
     assert "step3000_generation-process-every1_paper7-legacy.json" in invocation
 

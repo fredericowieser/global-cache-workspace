@@ -35,12 +35,15 @@ def test_legacy_paper7_eval_parser_restores_old_suite_alias():
                 "16",
                 "--generation-process-every",
                 "1",
+                "--head-selection-method",
+                "random",
             ]
         )
         assert args.suite == suite
         assert args.checkpoint == "checkpoint-3000"
         assert args.batch_size == 16
         assert args.generation_process_every == 1
+        assert args.head_selection_method == "random"
         assert args.dtype == "auto"
         assert not hasattr(args, "prompt_mode")
         assert not hasattr(args, "processor")

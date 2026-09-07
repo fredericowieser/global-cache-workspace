@@ -53,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
         legacy.add_argument(
             "--generation-process-every", type=_positive_int, default=None
         )
+        legacy.add_argument(
+            "--head-selection-method", choices=["random"], default=None
+        )
         legacy.add_argument("--out", default=None)
     for suite in ("all", "math", "general", "tasks"):
         command = eval_sub.add_parser(suite)
@@ -197,6 +200,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 batch_size=args.batch_size,
                 dtype=args.dtype,
                 generation_process_every=args.generation_process_every,
+                head_selection_method=args.head_selection_method,
             )
         else:
             from gcw.evaluation.core import run_tasks

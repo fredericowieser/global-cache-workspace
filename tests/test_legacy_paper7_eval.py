@@ -136,6 +136,46 @@ def test_eval_target_applies_generation_cadence_without_changing_checkpoint(
     assert config.cache_processor.generation_process_every == 1
 
 
+def test_eval_target_applies_random_head_selection_after_checkpoint_load(
+    monkeypatch,
+):
+    config = ModelConfig(variant="longshot")
+    assert config.cache_processor is not None
+    model = type("Model", (), {"config": config})()
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "load_checkpoint",
+        lambda *args, **kwargs: (model, config, {}),
+    )
+    monkeypatch.setattr(
+        lm_eval_adapter,
+        "tokenizer_for_checkpoint",
+        lambda config, state: "tokenizer",
+    )
+
+    loaded, tokenizer = lm_eval_adapter._load_eval_target(
+        checkpoint="checkpoint",
+        hf_model=None,
+        processor_enabled=True,
+        device=torch.device("cpu"),
+        head_selection_method="random",
+    )
+
+    assert loaded is model
+    assert tokenizer == "tokenizer"
+    assert config.cache_processor.head_selection_method == "random"
+
+
+def test_eval_target_rejects_head_selection_override_for_non_longshot():
+    config = ModelConfig(variant="bgt")
+    try:
+        lm_eval_adapter._apply_head_selection_method(config, "random")
+    except ValueError as exc:
+        assert "Longshot checkpoint" in str(exc)
+    else:
+        raise AssertionError("accepted random head routing for non-Longshot")
+
+
 def test_eval_target_rejects_generation_cadence_without_active_processor():
     common = {
         "processor_enabled": True,
@@ -239,10 +279,14 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(monkeypatch):
     monkeypatch.setattr(legacy, "_write_partial_results", lambda merged: None)
 
     out = legacy.run_paper7_legacy(
-        "checkpoint", batch_size=16, generation_process_every=1
+        "checkpoint",
+        batch_size=16,
+        generation_process_every=1,
+        head_selection_method="random",
     )
 
     assert load_calls[0]["generation_process_every"] == 1
+    assert load_calls[0]["head_selection_method"] == "random"
 
     assert [call["tasks"] for call in calls] == [
         ["gsm8k_openmath"],
