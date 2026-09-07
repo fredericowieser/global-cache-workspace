@@ -1,3 +1,3 @@
 [submodule "Global-Cache-Workspace-Theory-ICLR-2027-"]
-	path = Global-Cache-Workspace-Theory-ICLR-2027-
+	path = src/Global-Cache-Workspace-Theory-ICLR-2027-
 	url = git@github.com:fredericowieser/Global-Cache-Workspace-Theory-ICLR-2027-.git
