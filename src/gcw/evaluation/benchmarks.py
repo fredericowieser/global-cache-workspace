@@ -177,7 +177,11 @@ class GCWBenchmarkBackend:
             **_directory_identity(checkpoint, kind="gcw"),
             "architecture": config.architecture_name,
             "processor_enabled": processor_enabled,
-            "generation_process_every": generation_process_every,
+            "generation_process_every": (
+                config.cache_processor.generation_process_every
+                if config.cache_processor is not None
+                else None
+            ),
             "checkpoint_state": state,
         }
 
