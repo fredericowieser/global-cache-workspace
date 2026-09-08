@@ -4,13 +4,24 @@ import json
 import shutil
 import warnings
 
+import numpy as np
 import pytest
 import torch
+from safetensors.torch import load_file
 
 from gcw.checkpoint import save_checkpoint
-from gcw.config import CacheProcessorConfig, ModelConfig, to_dict
+from gcw.config import (
+    CacheProcessorConfig,
+    DataConfig,
+    ModelConfig,
+    ResumeConfig,
+    TrainConfig,
+    to_dict,
+)
 from gcw.data.training import FineWebCursor, RandomCursor
 from gcw.models import build_model
+from gcw.training.audit import _training_fingerprint
+from gcw.training.core import train
 from gcw.training.checkpoint import (
     CheckpointCompatibilityError,
     LegacyCheckpointError,
@@ -513,8 +524,167 @@ def test_legacy_upgrade_does_not_touch_a_manifest_that_already_records_precision
         )
 
 
-def _checkpoint_fixture():
-    config = tiny_model_config()
+def _truncated_train_config(tmp_path):
+    return TrainConfig(
+        model=replace(
+            tiny_model_config(),
+            variant="bgt",
+            family="qwen3",
+            sequence_len=16,
+            cache_processor=CacheProcessorConfig(
+                process_every=4,
+                topk=2,
+                hidden_size=8,
+                intermediate_size=16,
+                num_layers=1,
+                num_heads=1,
+                num_kv_heads=1,
+                attention_dropout=0.2,
+            ),
+        ),
+        data=DataConfig(kind="random"),
+        output_dir=str(tmp_path / "baseline"),
+        trainable="all",
+        batch_size=1,
+        sequence_len=14,
+        max_steps=3,
+        learning_rate=1e-3,
+        warmup_steps=1,
+        truncated_bptt_windows=2,
+        save_cache_processor_only=False,
+        save_final=True,
+        eval_every=0,
+        eval_on_start=False,
+    )
+
+
+def test_truncated_bptt_fingerprint_binds_horizon_and_rejects_changed_resume(
+    tmp_path,
+):
+    enabled = _truncated_train_config(tmp_path)
+    disabled = replace(enabled, truncated_bptt_windows=0)
+    changed = replace(enabled, truncated_bptt_windows=3)
+    fingerprints = [
+        _training_fingerprint(config, 1, 14, 14, 1)
+        for config in (disabled, enabled, changed)
+    ]
+    absent, bound, different = fingerprints
+    assert "truncated_bptt_windows" not in absent
+    assert bound == absent | {"truncated_bptt_windows": 2}
+    assert different == absent | {"truncated_bptt_windows": 3}
+    assert different != bound
+    config, model, optimizer, resume, _ = _checkpoint_fixture(enabled.model)
+    path = tmp_path / "checkpoint"
+    save_training_checkpoint(path, model, config, optimizer, resume, bound)
+    checkpoint = TrainingCheckpoint.open(
+        path, expected_fingerprint=bound, topology="same", current_world_size=1
+    )
+    assert checkpoint.resume_state.step == 1
+    for fingerprint in (different, absent):
+        with pytest.raises(
+            CheckpointCompatibilityError, match="truncated_bptt_windows"
+        ):
+            TrainingCheckpoint.open(
+                path,
+                expected_fingerprint=fingerprint,
+                topology="same",
+                current_world_size=1,
+            )
+
+
+@pytest.mark.parametrize(
+    "checkpoint_windows", [0, 3], ids=["eager", "misaligned-checkpoint"]
+)
+def test_truncated_bptt_complete_checkpoint_exact_resume_matches_uninterrupted(
+    monkeypatch, tmp_path, checkpoint_windows
+):
+    baseline = replace(
+        _truncated_train_config(tmp_path),
+        activation_checkpoint_windows=checkpoint_windows,
+    )
+    # Keep the standard trainer/data/optimizer/resume path, forcing only device
+    # selection so this remains a tiny CPU regression on GPU hosts as well.
+    monkeypatch.setattr(
+        "gcw.training.assembly.init_distributed",
+        lambda _mode: torch.device("cpu"),
+    )
+    train(baseline)
+    interrupted = replace(
+        baseline, output_dir=str(tmp_path / "resumed"), save_every=1
+    )
+    path = tmp_path / "resumed" / "checkpoint"
+
+    def save_then_interrupt(*args, **kwargs):
+        assert not kwargs.get("cache_processor_only", False)
+        save_training_checkpoint(*args, **kwargs)
+        if args[4].step == 1:
+            raise RuntimeError("simulated interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "gcw.training.state.save_training_checkpoint", save_then_interrupt
+        )
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            train(interrupted)
+
+    verified = verify_training_checkpoint_files(path)
+    assert verified["manifest"]["step"] == 1
+    assert (
+        verified["manifest"]["training_fingerprint"]["truncated_bptt_windows"]
+        == 2
+    )
+    saved_weights = load_file(str(path / "model.safetensors"))
+    assert (
+        saved_weights.keys()
+        == build_model(interrupted.model).state_dict().keys()
+    )
+    assert any(name.startswith("backbone.") for name in saved_weights)
+    assert any(name.startswith("cache_processor.") for name in saved_weights)
+    # A changed horizon must fail in the production trainer, not merely when
+    # manually opening a manifest. The original checkpoint remains resumable.
+    with pytest.raises(
+        CheckpointCompatibilityError, match="truncated_bptt_windows"
+    ):
+        train(
+            replace(
+                interrupted,
+                truncated_bptt_windows=3,
+                resume=ResumeConfig(checkpoint=str(path)),
+            )
+        )
+    train(replace(interrupted, resume=ResumeConfig(checkpoint=str(path))))
+
+    baseline_path = tmp_path / "baseline" / "checkpoint"
+    fingerprint = _training_fingerprint(baseline, 1, 14, 14, 1)
+    checkpoints = [
+        TrainingCheckpoint.open(
+            checkpoint_path,
+            expected_fingerprint=fingerprint,
+            topology="same",
+            current_world_size=1,
+        )
+        for checkpoint_path in (baseline_path, path)
+    ]
+    expected, actual = [checkpoint.resume_state for checkpoint in checkpoints]
+    assert expected.step == actual.step == 3
+    assert expected.smooth_loss == actual.smooth_loss
+    assert expected.loader_cursor == actual.loader_cursor
+    assert expected.exact_topology is actual.exact_topology is True
+    _assert_nested_equal(
+        load_file(str(baseline_path / "model.safetensors")),
+        load_file(str(path / "model.safetensors")),
+    )
+    for payload in ("optimizer.pt", "rng.pt"):
+        _assert_nested_equal(
+            torch.load(
+                baseline_path / payload, map_location="cpu", weights_only=False
+            ),
+            torch.load(path / payload, map_location="cpu", weights_only=False),
+        )
+
+
+def _checkpoint_fixture(config=None):
+    config = config or tiny_model_config()
     model = build_model(config)
     model.init_weights()
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -536,7 +706,10 @@ def _checkpoint_fixture():
 
 def _assert_nested_equal(expected, actual):
     if isinstance(expected, torch.Tensor):
+        assert expected.dtype == actual.dtype
         assert torch.equal(expected, actual)
+    elif isinstance(expected, np.ndarray):
+        np.testing.assert_array_equal(expected, actual, strict=True)
     elif isinstance(expected, dict):
         assert expected.keys() == actual.keys()
         for key in expected:
