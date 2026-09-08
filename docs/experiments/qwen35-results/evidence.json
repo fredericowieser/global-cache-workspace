@@ -1,0 +1,15 @@
+{
+  "archive": {
+    "path": "/mnt/jfs-00/team-agent/home/f50056118/gcw-archives/qwen35-consolidation-20260908/research-evidence.tar.gz",
+    "sha256": "733e3e1c0c86987abf556f5c9fef5e84e8ebe6c6ee3e29ca3597e0caa986896d"
+  },
+  "files": {
+    "comparison.csv": "863657aa06516530703e3b5a172a9c75a40518d1099a75d6c09f4e5b282e0e4f",
+    "comparison.json": "b2d6f93be219c6d4b46a09cc514add45a6f046ec9f8516de40e07989cb268f9b",
+    "comparison.md": "5cc05f0f9634e3fd3f4ecee8c18f6bcee19625f472b66f0038ab0d4a7226f37c"
+  },
+  "production_runs": 39,
+  "display_rows": 58,
+  "gate_training_steps": 2000,
+  "gate_model_sha256": "30e52485174a7c647bb9a6724dc71e2dd67d0209c5ceafcd6c4addaf787feaa6"
+}
