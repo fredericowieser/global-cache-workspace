@@ -61,7 +61,6 @@ model:
     conditioning_scale: 1.0
     inference_mode: deterministic
   processor_generation_mode: windowed
-  workspace_flow_refinement: null
   layer_types: null
   processor_layer_indices: null
   partial_rotary_factor: 1.0
