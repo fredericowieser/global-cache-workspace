@@ -74,7 +74,10 @@ class WindowedCache:
                     recurrent.detach(),
                     None if convolution is None else convolution.detach(),
                 )
-                for layer_idx, (recurrent, convolution) in self.linear_states.items()
+                for layer_idx, (
+                    recurrent,
+                    convolution,
+                ) in self.linear_states.items()
             }
         sidecar = None
         if self.kv_score_sidecar is not None:
@@ -82,12 +85,13 @@ class WindowedCache:
                 self.kv_score_sidecar,
                 scores=self.kv_score_sidecar.scores.detach(),
             )
-        return WindowedCache(
-            self.keys.detach(),
-            self.values.detach(),
-            self.scores.detach(),
-            linear_states,
-            sidecar,
+        return replace(
+            self,
+            keys=self.keys.detach(),
+            values=self.values.detach(),
+            scores=self.scores.detach(),
+            linear_states=linear_states,
+            kv_score_sidecar=sidecar,
         )
 
     def select_indices(
