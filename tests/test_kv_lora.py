@@ -206,25 +206,6 @@ def test_plain_lora_receipt_matches_adapter_only_ownership():
         ), name
 
 
-def test_runtime_count_includes_adapters_but_preserves_core_estimate():
-    from gcw.params import (
-        runtime_non_embedding_params,
-        total_non_embedding_params,
-        trainable_adapter_params,
-    )
-
-    for lora in (None, kv_config()):
-        cfg = replace(config(), lora=lora)
-        m = build_model(cfg)
-        base = total_non_embedding_params(cfg)
-        assert runtime_non_embedding_params(
-            cfg, m
-        ) == base + trainable_adapter_params(m)
-        assert (runtime_non_embedding_params(cfg, m) > base) == (
-            lora is not None
-        )
-
-
 def test_virtual_target_rejects_ambiguous_or_absent_geometry():
     with pytest.raises(ValueError, match="mutually exclusive"):
         apply_lora(
@@ -409,15 +390,17 @@ def test_joint_policy_rejects_incomplete_or_lossy_configuration(
         TrainConfig(**kwargs)
 
 
+@pytest.mark.parametrize(
+    "lora",
+    [None, kv_config(), LoRAConfig(rank=4, targets=("k_proj", "v_proj"))],
+    ids=["no-adapters", "kv-only", "ordinary-lora"],
+)
 def test_runtime_assembly_counts_adapters_and_discloses_missing_flops(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, lora
 ):
     from gcw.architecture import resolve_execution_plan
     from gcw.config import DataConfig
-    from gcw.params import (
-        runtime_non_embedding_params,
-        trainable_adapter_params,
-    )
+    from gcw.params import total_non_embedding_params, trainable_adapter_params
     from gcw.training import assembly
 
     monkeypatch.setattr(
@@ -427,9 +410,11 @@ def test_runtime_assembly_counts_adapters_and_discloses_missing_flops(
         assembly.RunTracker, "for_training", lambda *args, **kwargs: None
     )
     cfg = TrainConfig(
-        model=replace(config(), lora=kv_config()),
+        model=replace(config(), lora=lora),
         data=DataConfig(kind="random"),
-        trainable="lora_and_cache_processor",
+        trainable=(
+            "cache_processor" if lora is None else "lora_and_cache_processor"
+        ),
         distributed="none",
         output_dir=str(tmp_path / "run"),
         sequence_len=70,
@@ -440,11 +425,20 @@ def test_runtime_assembly_counts_adapters_and_discloses_missing_flops(
         cfg, resolve_execution_plan(cfg)
     )
     assert plan is not None
-    assert trainable_adapter_params(plan.model) > 0
-    assert plan.run_meta[
-        "non_embedding_params"
-    ] == runtime_non_embedding_params(cfg.model, plan.model)
-    assert plan.run_meta["adapter_flops_included"] is False
+    adapters = sum(
+        parameter.numel()
+        for name, parameter in plan.model.named_parameters()
+        if name.endswith((".lora_a", ".lora_b"))
+    )
+    assert trainable_adapter_params(plan.model) == adapters
+    assert (adapters > 0) == (lora is not None)
+    core = total_non_embedding_params(cfg.model)
+    assert core == total_non_embedding_params(replace(cfg.model, lora=None))
+    assert plan.run_meta["non_embedding_params"] == core + adapters
+    if lora is None:
+        assert "adapter_flops_included" not in plan.run_meta
+    else:
+        assert plan.run_meta["adapter_flops_included"] is False
     assert {
         id(p) for group in plan.opt.param_groups for p in group["params"]
     } == {id(p) for p in plan.model.parameters() if p.requires_grad}

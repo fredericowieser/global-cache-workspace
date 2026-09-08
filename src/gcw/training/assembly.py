@@ -94,7 +94,11 @@ from gcw.performance.whole_model import (
     maybe_compile_whole_model,
     whole_model_compile_requested,
 )
-from gcw.params import processor_params, runtime_non_embedding_params
+from gcw.params import (
+    processor_params,
+    total_non_embedding_params,
+    trainable_adapter_params,
+)
 from gcw.tracking import RunTracker
 from gcw.training.audit import (
     _checkpoint_metadata,
@@ -540,9 +544,8 @@ def assemble_training_execution(
             if config.longshot_selector_training is None
             else tokens_per_step * sum(flops_per_tok_by_step)
         ),
-        "non_embedding_params": runtime_non_embedding_params(
-            config.model, model
-        ),
+        "non_embedding_params": total_non_embedding_params(config.model)
+        + trainable_adapter_params(model),
         **(
             {"adapter_flops_included": False}
             if config.model.lora is not None
@@ -604,9 +607,7 @@ def assemble_training_execution(
         "activation_checkpoint_windows": config.activation_checkpoint_windows,
         "truncated_bptt_windows": config.truncated_bptt_windows,
         "training_method": (
-            "truncated_bptt"
-            if config.truncated_bptt_windows
-            else "full_bptt"
+            "truncated_bptt" if config.truncated_bptt_windows else "full_bptt"
         ),
         **(
             {

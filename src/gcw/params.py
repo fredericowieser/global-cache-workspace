@@ -26,11 +26,6 @@ def trainable_adapter_params(model: Module) -> int:
     )
 
 
-def runtime_non_embedding_params(config: ModelConfig, model: Module) -> int:
-    """Add attached adapters to the config-only core parameter estimate."""
-    return total_non_embedding_params(config) + trainable_adapter_params(model)
-
-
 def processor_params(config: ModelConfig) -> int:
     if config.variant in {"bt", "bgt", "icarus", "longshot"}:
         return estimate_processor_params(config)
