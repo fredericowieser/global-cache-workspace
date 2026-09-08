@@ -217,6 +217,39 @@ def test_longshot_value_only_writeback_flops_keep_kv_input_but_reduce_output():
     ) < processor_forward_flops_per_sequence(kv, 128)
 
 
+def test_longshot_contextual_gate_flops_follow_gate_width():
+    backbone = replace(
+        smollm360m_backbone(num_layers=2),
+        hidden_size=128,
+        num_heads=2,
+        num_kv_heads=1,
+    )
+    cp = CacheProcessorConfig(
+        process_every=32,
+        topk=8,
+        topk_heads=1,
+        hidden_size=64,
+        intermediate_size=256,
+        num_heads=1,
+        num_kv_heads=1,
+    )
+    static = replace(backbone, variant="longshot", cache_processor=cp)
+    scalar = replace(
+        static,
+        cache_processor=replace(cp, update_gate_type="contextual_scalar"),
+    )
+    vector = replace(
+        static,
+        cache_processor=replace(cp, update_gate_type="contextual_vector"),
+    )
+
+    static_flops = processor_forward_flops_per_sequence(static, 128)
+    scalar_flops = processor_forward_flops_per_sequence(scalar, 128)
+    vector_flops = processor_forward_flops_per_sequence(vector, 128)
+
+    assert static_flops < scalar_flops < vector_flops
+
+
 def test_longshot_processor_flops_scale_with_iterations():
     backbone = replace(
         smollm360m_backbone(num_layers=2),

@@ -88,6 +88,15 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
         )
 
     if processor is not None:
+        if (
+            processor.update_gate_type != "static_scalar"
+            and config.variant != "longshot"
+        ):
+            add(
+                "update_gate_variant",
+                "contextual cache update gates require variant='longshot'",
+                "model.cache_processor.update_gate_type",
+            )
         if config.variant == "bt":
             if processor.processor_mode != "standard":
                 add(

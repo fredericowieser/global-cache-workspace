@@ -364,9 +364,11 @@ def _longshot_processor_block_flops_per_call(
         else input_dim * encoder_len
     )
     output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
-    kv_in_out = (
-        encoder_in * config.hidden_size + config.hidden_size * output_dim
+    gate_dim = config.update_gate_dim(output_dim)
+    kv_in_out = encoder_in * config.hidden_size + config.hidden_size * (
+        output_dim + gate_dim
     )
+    update_gate_ops = cache_heads * (output_dim + gate_dim) if gate_dim else 0
     encode_extra = 0
     if config.encoder_method == "query_attention":
         encode_extra = 4 * cache_heads * selected * input_dim
@@ -402,13 +404,26 @@ def _longshot_processor_block_flops_per_call(
         linear_output_dim = feature_dim + (
             2 if config.linear_state_update_mode == "gated_delta" else 0
         )
+        linear_gate_dim = (
+            config.update_gate_dim(linear_output_dim)
+            if config.gate_linear_state_delta
+            else 0
+        )
         linear_in_out = linear_heads * (
             feature_dim * config.hidden_size
-            + config.hidden_size * linear_output_dim
+            + config.hidden_size * (linear_output_dim + linear_gate_dim)
         )
+        if linear_gate_dim:
+            update_gate_ops += linear_heads * (
+                linear_output_dim + linear_gate_dim
+            )
         encode_extra += 2 * query_count * context_dim * query_out
         encode_extra += 4 * linear_heads * linear_key_dim * linear_value_dim
-    encode_decode = 2 * (cache_heads * kv_in_out + linear_in_out) + encode_extra
+    encode_decode = (
+        2 * (cache_heads * kv_in_out + linear_in_out)
+        + encode_extra
+        + update_gate_ops
+    )
     layer_matmul = (
         2
         * total_heads

@@ -58,6 +58,59 @@ def _zero_projection(projection: nn.Module) -> None:
     zero_projection(projection, per_head_type=PerCacheHeadLinear)
 
 
+def _initialize_contextual_output_projection(
+    projection: nn.Module,
+    delta_dim: int,
+    config: CacheProcessorConfig,
+    std: float,
+) -> None:
+    if isinstance(projection, nn.Linear):
+        delta_weight = projection.weight[:delta_dim]
+        gate_weight = projection.weight[delta_dim:]
+        delta_bias = (
+            None if projection.bias is None else projection.bias[:delta_dim]
+        )
+        gate_bias = (
+            None if projection.bias is None else projection.bias[delta_dim:]
+        )
+    elif isinstance(projection, PerCacheHeadLinear):
+        delta_weight = projection.weight[..., :delta_dim]
+        gate_weight = projection.weight[..., delta_dim:]
+        delta_bias = (
+            None
+            if projection.bias is None
+            else projection.bias[..., :delta_dim]
+        )
+        gate_bias = (
+            None
+            if projection.bias is None
+            else projection.bias[..., delta_dim:]
+        )
+    else:
+        raise TypeError(
+            "contextual output projection must be nn.Linear or PerCacheHeadLinear"
+        )
+    if config.out_proj_init == "zero":
+        nn.init.zeros_(delta_weight)
+    else:
+        nn.init.normal_(delta_weight, mean=0.0, std=std)
+    if delta_bias is not None:
+        nn.init.zeros_(delta_bias)
+    nn.init.zeros_(gate_weight)
+    if gate_bias is not None:
+        nn.init.constant_(gate_bias, config.gate_init)
+
+
+def _activate_update_gate(
+    gate_logits: torch.Tensor, gate_mode: str, output_dtype: torch.dtype
+) -> torch.Tensor:
+    if gate_mode == "sigmoid":
+        return torch.sigmoid(gate_logits.float()).to(output_dtype)
+    if gate_mode == "direct":
+        return gate_logits.to(output_dtype)
+    raise ValueError(f"unsupported cache processor gate_mode: {gate_mode}")
+
+
 def _fit_time_length(x: torch.Tensor, target_len: int) -> torch.Tensor:
     seq_len = x.shape[2]
     if seq_len == target_len:

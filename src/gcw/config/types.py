@@ -11,6 +11,9 @@ MoeExpertsImplementation = Literal["grouped_mm"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheGateMode = Literal["sigmoid", "direct"]
+CacheUpdateGateType = Literal[
+    "static_scalar", "contextual_scalar", "contextual_vector"
+]
 CacheProcessorMode = Literal[
     "standard", "workspace_broadcast", "head_mask_broadcast"
 ]

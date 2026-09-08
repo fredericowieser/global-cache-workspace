@@ -46,6 +46,12 @@ def cache_processor_metrics(model: torch.nn.Module) -> dict[str, float]:
         metrics["cache_processor/gate"] = float(
             torch.stack(gates).float().mean().cpu()
         )
+    linear_adapter = getattr(block, "linear_state_adapter", None)
+    linear_gate = getattr(linear_adapter, "_gate_value", None)
+    if linear_gate is not None:
+        metrics["cache_processor/linear_state_gate"] = float(
+            linear_gate.float().mean().cpu()
+        )
     pop_metrics = getattr(block, "pop_iteration_metrics", None)
     if pop_metrics is not None:
         metrics.update(pop_metrics())

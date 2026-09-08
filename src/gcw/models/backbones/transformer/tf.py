@@ -48,7 +48,7 @@ import gcw.models.backbones.transformer as tf_pkg
 class TF(Backbone):
     def __init__(self, config: ModelConfig, pad_vocab_size_to: int = 128):
         super().__init__()
-        self.config = replace(config, variant="tf")
+        self.config = replace(config, variant="tf", cache_processor=None)
         vocab = (
             (config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to
         ) * pad_vocab_size_to

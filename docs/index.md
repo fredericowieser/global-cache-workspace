@@ -85,6 +85,7 @@ development/qualification-state
 development/testing
 development/documentation
 development/invariants
+development/longshot-update-gating
 development/longshot-selector-training
 development/refactor-plan
 development/future

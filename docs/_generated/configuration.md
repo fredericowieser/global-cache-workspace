@@ -82,6 +82,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `update_stream` | `Literal['kv', 'v']` | `'kv'` |
 | `out_proj_init` | `Literal['normal', 'zero']` | `'normal'` |
 | `gate_mode` | `Literal['sigmoid', 'direct']` | `'sigmoid'` |
+| `update_gate_type` | `Literal['static_scalar', 'contextual_scalar', 'contextual_vector']` | `'static_scalar'` |
 | `processor_mode` | `Literal['standard', 'workspace_broadcast', 'head_mask_broadcast']` | `'standard'` |
 | `writer_head_fraction` | `float` | `1.0` |
 | `salience_temperature` | `float` | `1.0` |

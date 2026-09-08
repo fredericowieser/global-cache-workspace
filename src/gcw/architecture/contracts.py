@@ -38,6 +38,8 @@ def _config_payload(value: object) -> object:
         }
         if value.generation_process_every is None:
             payload.pop("generation_process_every")
+        if value.update_gate_type == "static_scalar":
+            payload.pop("update_gate_type")
         if (
             value.head_selection_method != "learned_contextual"
             and value.internal_iteration_score != "learned_contextual"
@@ -91,6 +93,7 @@ _MODEL_CONFIG_VALIDATION_CODES = {
     "linear_state_query",
     "linear_state_variant",
     "linear_state_write",
+    "update_gate_variant",
 }
 _TRAIN_CONFIG_VALIDATION_CODES = {
     "backbone_with_init",

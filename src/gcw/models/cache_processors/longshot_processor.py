@@ -21,6 +21,8 @@ from gcw.models.cache_processors.longshot_layers import (
     QueryAttentionTimeEncoder,
     _fit_time_length,
     _gradient_checkpointing_enabled,
+    _activate_update_gate,
+    _initialize_contextual_output_projection,
     _zero_projection,
 )
 from gcw.models.cache_processors.longshot_linear_state import (
@@ -83,14 +85,20 @@ class CacheProcessor(nn.Module):
             ProcessorLayer(config) for _ in range(config.num_layers)
         )
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
+        self.gate_dim = config.update_gate_dim(self.output_dim)
         self.out_proj: nn.Module
         if config.per_cache_head_projections:
             self.out_proj = PerCacheHeadLinear(
-                self.kv_cache_heads, config.hidden_size, self.output_dim
+                self.kv_cache_heads,
+                config.hidden_size,
+                self.output_dim + self.gate_dim,
             )
         else:
-            self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
-        self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+            self.out_proj = nn.Linear(
+                config.hidden_size, self.output_dim + self.gate_dim
+            )
+        if self.gate_dim == 0:
+            self.gate = nn.Parameter(torch.full((1,), config.gate_init))
         self._gate_value: torch.Tensor | None = None
         self.flow = (
             LatentFlow(config.hidden_size, flow_config)
@@ -141,9 +149,14 @@ class CacheProcessor(nn.Module):
                 module, "query"
             ):
                 nn.init.normal_(module.query, mean=0.0, std=std)
-        nn.init.constant_(self.gate, self.config.gate_init)
-        if self.config.out_proj_init == "zero":
-            _zero_projection(self.out_proj)
+        if self.gate_dim:
+            _initialize_contextual_output_projection(
+                self.out_proj, self.output_dim, self.config, std
+            )
+        else:
+            nn.init.constant_(self.gate, self.config.gate_init)
+            if self.config.out_proj_init == "zero":
+                _zero_projection(self.out_proj)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         x = self.in_norm(x)
@@ -214,16 +227,21 @@ class CacheProcessor(nn.Module):
             routing_gates,
             select_all=select_all,
         )
-        gate = self._gate_scale(processed.dtype)
-        primary_delta = self.out_proj(processed[:, : x.shape[1]]) * gate
+        primary_delta, gate = self._project_primary_update(
+            processed[:, : x.shape[1]]
+        )
+        primary_delta = primary_delta * gate
         updated = x[:, :, -1, -self.output_dim :] + primary_delta
         linear_delta = None
         if linear_features is not None:
             assert linear_adapter is not None
-            linear_delta = linear_adapter.output_proj(
+            linear_delta = linear_adapter.project_update(
                 processed[:, x.shape[1] :]
             )
-            if self.config.gate_linear_state_delta:
+            if (
+                linear_adapter.gate_dim == 0
+                and self.config.gate_linear_state_delta
+            ):
                 linear_delta = linear_delta * gate
         return updated, linear_delta, selected_heads
 
@@ -446,14 +464,26 @@ class CacheProcessor(nn.Module):
             self._selected_head_overlap_totals[iteration] = overlap
             self._selected_head_overlap_counts[iteration] = 1
 
-    def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
-        if self.config.gate_mode == "sigmoid":
-            scale = torch.sigmoid(self.gate).to(dtype)
-        elif self.config.gate_mode == "direct":
-            scale = self.gate.to(dtype)
-        else:
-            raise ValueError(
-                f"unsupported cache processor gate_mode: {self.config.gate_mode}"
-            )
+    def _project_primary_update(
+        self, hidden: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        projected = self.out_proj(hidden)
+        if self.gate_dim == 0:
+            return projected, self._gate_scale(output_dtype=projected.dtype)
+        delta, gate_logits = projected.split(
+            [self.output_dim, self.gate_dim], dim=-1
+        )
+        return delta, self._gate_scale(gate_logits, output_dtype=delta.dtype)
+
+    def _gate_scale(
+        self,
+        gate_logits: torch.Tensor | None = None,
+        *,
+        output_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        logits = self.gate if gate_logits is None else gate_logits
+        scale = _activate_update_gate(
+            logits, self.config.gate_mode, output_dtype
+        )
         self._gate_value = scale.detach()
         return scale
