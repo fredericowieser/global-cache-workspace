@@ -54,7 +54,6 @@ model:
   flow_processor: null
   diffusion_processor: null
   processor_generation_mode: windowed
-  workspace_flow_refinement: null
   layer_types: null
   processor_layer_indices: null
   partial_rotary_factor: 1.0
