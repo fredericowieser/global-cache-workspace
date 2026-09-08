@@ -23,6 +23,28 @@ Evaluation constructs independent state. It does not mutate a training checkpoin
 
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
+## Processor provenance in matrix and chat results
+
+Matrix schema `gcw.benchmark_matrix.v3` and chat schema
+`gcw.chat_benchmark_matrix.v2` distinguish three booleans:
+
+- `processor_requested`: the requested `--processor on/off` policy.
+- `processor_present`: an actual GCW cache processor was loaded, before bypass.
+- `processor_enabled`: that loaded processor remains active (present and requested).
+
+These fields live in `target`; chat's top-level fields mirror that identity.
+Matrix `config` records the policy as `processor_requested`. The Python input
+argument remains `processor_enabled` for compatibility; it expresses a request,
+not evidence of a processor. Effective enabled state is not a processor call count.
+
+Plain TF (including full-SFT) and HF targets have present/enabled both false under
+either policy; TF retains its loaded model without a bypass wrapper. Use
+`--processor off` for full-SFT controls. Composed checkpoints retain their processor
+when on and bypass to their exact loaded backbone when off. Processor-only cadence
+and diffusion solver overrides require an applicable active processor. Native
+loading, generation cadence, and stopping are unchanged. Older schemas retain
+their historical meaning and must not be interpreted as effective processor state.
+
 ## Answer-only teacher-forced NLL
 
 Use the small native evaluator for token-weighted answer likelihood, not generation

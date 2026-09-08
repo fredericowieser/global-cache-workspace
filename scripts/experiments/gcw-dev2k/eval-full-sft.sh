@@ -19,7 +19,7 @@ env -u GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH -u GCW_ALLOW_UNQUALIFIED_TRITON_CACHE \
     "$REPO/.venv/bin/python" -m gcw.cli eval chat \
         --checkpoint "$CK" \
         --tokenizer-path /mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1 \
-        --processor on \
+        --processor off \
         --tasks gsm8k_openmath svamp gsm8k_hard \
         --mode thinking_off \
         --batch-size 16 \

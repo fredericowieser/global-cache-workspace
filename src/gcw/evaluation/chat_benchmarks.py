@@ -47,7 +47,7 @@ GENERAL_TASK_LIMITS = {
     "arc_challenge": 1_000,
     "mmlu": 20,  # Per subject: 57 subjects, at most 1,140 rows.
 }
-RESULT_SCHEMA = "gcw.chat_benchmark_matrix.v1"
+RESULT_SCHEMA = "gcw.chat_benchmark_matrix.v2"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
@@ -527,7 +527,9 @@ def run_chat_benchmarks(
     device = torch.device("cuda")
     if hf_model is not None:
         backend: BenchmarkBackend = HFBenchmarkBackend(
-            Path(hf_model).expanduser().resolve(), device
+            Path(hf_model).expanduser().resolve(),
+            device,
+            processor_enabled=processor_enabled,
         )
         tokenizer_source = (
             Path(tokenizer_path or hf_model).expanduser().resolve()
@@ -569,7 +571,9 @@ def run_chat_benchmarks(
         "target": backend.identity,
         "tokenizer": tokenizer_identity,
         "datasets": dataset_identity,
-        "processor_enabled": processor_enabled,
+        "processor_requested": backend.identity["processor_requested"],
+        "processor_present": backend.identity["processor_present"],
+        "processor_enabled": backend.identity["processor_enabled"],
         "generation_process_every": backend.identity.get(
             "generation_process_every"
         ),
