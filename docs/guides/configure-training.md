@@ -212,7 +212,7 @@ Cache-processor training can cut autograd history at recurrent cache boundaries 
 truncated_bptt_windows: 1  # zero is full BPTT; positive values are the gradient horizon
 ```
 
-The value counts `process_every` windows retained in one autograd horizon. A value of `1` prevents gradients from crossing a cache-processing boundary; larger values retain longer credit assignment. This policy is implemented at the shared windowed-cache boundary, so BT, BGT, Icarus, Longshot, and compatible backbone families use the same behavior. It is training-only in effect and does not alter evaluation losses. `train/training_method`, `train/truncated_bptt_windows`, and the corresponding W&B run metadata identify the method. The setting is part of the training fingerprint and must match for exact resume.
+The value counts `process_every` windows retained in one autograd horizon. A value of `1` prevents gradients from crossing a cache-processing boundary; larger values retain longer credit assignment. This policy is implemented at the shared windowed-cache boundary, so BT, BGT, Icarus, Longshot, and compatible backbone families use the same behavior. It is training-only in effect and does not alter evaluation losses. `train/training_method`, `train/truncated_bptt_windows`, and the corresponding W&B run metadata identify the method. The setting is part of the training fingerprint and must match for exact resume. It does not modify run names or user-supplied W&B tags.
 
 Longshot keeps its model-level switch as the fixed default. Set an adaptive training threshold only when `model.cache_processor.gradient_checkpointing` remains `true`:
 
