@@ -94,7 +94,7 @@ from gcw.performance.whole_model import (
     maybe_compile_whole_model,
     whole_model_compile_requested,
 )
-from gcw.params import processor_params, total_non_embedding_params
+from gcw.params import processor_params, runtime_non_embedding_params
 from gcw.tracking import RunTracker
 from gcw.training.audit import (
     _checkpoint_metadata,
@@ -325,7 +325,10 @@ def assemble_training_execution(
         model.init_weights()
         if checkpoint is not None:
             checkpoint.restore_model(model)
-            if config.trainable == "cache_processor":
+            if config.trainable in {
+                "cache_processor",
+                "lora_and_cache_processor",
+            }:
                 initial_processor_state = (
                     checkpoint.load_initial_processor_state(device="cpu")
                 )
@@ -537,7 +540,14 @@ def assemble_training_execution(
             if config.longshot_selector_training is None
             else tokens_per_step * sum(flops_per_tok_by_step)
         ),
-        "non_embedding_params": total_non_embedding_params(config.model),
+        "non_embedding_params": runtime_non_embedding_params(
+            config.model, model
+        ),
+        **(
+            {"adapter_flops_included": False}
+            if config.model.lora is not None
+            else {}
+        ),
         "processor_params": processor_params(config.model),
         "world_size": world_size,
         "resumed_from_step": start_step if checkpoint is not None else None,

@@ -4,6 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
+from torch.nn import Module
+
 from gcw.config import (
     CacheProcessorConfig,
     ModelConfig,
@@ -16,12 +18,17 @@ from gcw.models.backbones.transformer import estimate_non_embedding_params
 from gcw.models.lora import LoRALinear
 
 
-def trainable_adapter_params(model) -> int:
+def trainable_adapter_params(model: Module) -> int:
     return sum(
         module.lora_a.numel() + module.lora_b.numel()
         for module in model.modules()
         if isinstance(module, LoRALinear)
     )
+
+
+def runtime_non_embedding_params(config: ModelConfig, model: Module) -> int:
+    """Add attached adapters to the config-only core parameter estimate."""
+    return total_non_embedding_params(config) + trainable_adapter_params(model)
 
 
 def processor_params(config: ModelConfig) -> int:

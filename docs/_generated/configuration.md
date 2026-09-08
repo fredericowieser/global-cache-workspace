@@ -182,7 +182,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `data` | `gcw.config.data.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, validation_dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None, experiment_manifest=None)` |
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
-| `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor']` | `'all'` |
+| `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor', 'lora_and_cache_processor']` | `'all'` |
 | `activation_checkpointing` | `Literal['none', 'standard_processor_layers']` | `'none'` |
 | `backbone_chunk_backend` | `Literal['eager', 'compile', 'compile_full_windows', 'cuda_graph']` | `'eager'` |
 | `loss_backend` | `Literal['reference', 'target_only', 'liger']` | `'reference'` |

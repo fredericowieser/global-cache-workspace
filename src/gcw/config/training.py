@@ -271,7 +271,8 @@ class TrainConfig:
             )
         if self.trainable not in get_args(TrainableComponents):
             raise ValueError(
-                "trainable must be 'all', 'backbone', 'lora', or 'cache_processor'"
+                "trainable must be 'all', 'backbone', 'lora', "
+                "'cache_processor', or 'lora_and_cache_processor'"
             )
         if self.activation_checkpointing not in {
             "none",
@@ -319,8 +320,22 @@ class TrainConfig:
                     "longshot_gradient_checkpointing_seq_len_threshold requires "
                     "model.cache_processor.gradient_checkpointing=true"
                 )
-        if self.trainable == "lora" and self.model.lora is None:
-            raise ValueError("trainable='lora' requires model.lora")
+        if self.trainable in {"lora", "lora_and_cache_processor"}:
+            if self.model.lora is None:
+                raise ValueError(
+                    f"trainable={self.trainable!r} requires model.lora"
+                )
+        if self.trainable == "lora_and_cache_processor":
+            if self.model.cache_processor is None or self.model.variant == "tf":
+                raise ValueError(
+                    "trainable='lora_and_cache_processor' requires a cache processor"
+                )
+            if self.freeze_backbone or self.save_cache_processor_only:
+                raise ValueError(
+                    "trainable='lora_and_cache_processor' requires "
+                    "freeze_backbone=false and save_cache_processor_only=false "
+                    "so checkpoints retain both adapters and processor weights"
+                )
         if self.total_batch_size and self.global_batch_rows:
             raise ValueError(
                 "set only one of total_batch_size and global_batch_rows"

@@ -348,6 +348,10 @@ def _parameter_policy(
 ) -> tuple[str, tuple[str, ...]]:
     if config.trainable == "cache_processor":
         return "processor_only", ("cache_processor",)
+    if config.trainable == "lora":
+        return "lora_only", ("backbone_lora",)
+    if config.trainable == "lora_and_cache_processor":
+        return "lora_and_processor", ("backbone_lora", "cache_processor")
     if config.trainable == "backbone":
         return "backbone_only", ("backbone",)
     return "full_model", (
