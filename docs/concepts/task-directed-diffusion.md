@@ -81,6 +81,9 @@ For `gcw eval all|math|general|tasks|chat`,
 scheduled, explicitly decoupled checkpoint. It rejects HF targets, processor
 bypass, fixed/coupled diffusion, and invalid K, and never edits checkpoint
 config/weights. Results record the override and actual scheduled field calls.
+These counters are exact for inference without checkpoint replay; they do not
+measure checkpointed backward computation. Replay may repeat a field or stop
+inside it before the counter increments.
 Training FLOPs use configured K (or mean sampled depth for coupled schedules);
 telemetry reports sampled level/time/sigma and the fixed-one write scale.
 

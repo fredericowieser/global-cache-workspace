@@ -311,7 +311,12 @@ def set_diffusion_eval_solver_steps(model: nn.Module, steps: int | None) -> int:
 
 
 def pop_diffusion_field_evaluation_count(model: nn.Module) -> int:
-    """Return and reset exact scheduled field evaluations across modules."""
+    """Return and reset completed scheduled field calls across modules.
+
+    This is exact for inference without checkpoint replay, not a training
+    compute counter. Backward replay can repeat field calls or stop inside
+    a field before its counter increment.
+    """
     return sum(
         module.pop_field_evaluation_count()
         for module in model.modules()
