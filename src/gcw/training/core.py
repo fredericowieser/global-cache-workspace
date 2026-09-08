@@ -577,7 +577,6 @@ def _eval_loss(
                     activation_checkpoint_min_padded_sequence_length=(
                         config.activation_checkpoint_min_padded_sequence_length
                     ),
-                    truncated_bptt_windows=config.truncated_bptt_windows,
                     longshot_gradient_checkpointing=longshot_checkpointing,
                 )
                 pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
@@ -598,7 +597,6 @@ def _eval_loss(
                     activation_checkpoint_min_padded_sequence_length=(
                         config.activation_checkpoint_min_padded_sequence_length
                     ),
-                    truncated_bptt_windows=config.truncated_bptt_windows,
                     longshot_gradient_checkpointing=longshot_checkpointing,
                 )
                 weight = (y >= 0).sum()

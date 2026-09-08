@@ -1,3 +1,4 @@
+from dataclasses import replace
 import json
 import sys
 from typing import get_args
@@ -38,11 +39,65 @@ from gcw.training.model_setup import (
 )
 from gcw.training.optimizer import _build_optimizer, _wsd_lr
 from gcw.training.precision import _uses_bf16_autocast
-from gcw.training.core import train
+from gcw.training.core import _eval_loss, train
 from gcw.training.checkpoint import CheckpointCompatibilityError
 from gcw.training.checkpoint import (
     save_training_checkpoint as real_save_training_checkpoint,
 )
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+@pytest.mark.parametrize("was_training", [False, True])
+def test_validation_does_not_forward_training_truncation(
+    tmp_path, grouped: bool, was_training: bool
+) -> None:
+    base = tiny_train_config(tmp_path)
+    config = replace(
+        base,
+        model=replace(
+            base.model,
+            variant="bgt",
+            cache_processor=CacheProcessorConfig(
+                process_every=4,
+                topk=2,
+                topk_heads=2,
+                hidden_size=16,
+                intermediate_size=32,
+                num_heads=2,
+                num_kv_heads=1,
+            ),
+        ),
+        mode="sft",
+        data=DataConfig(kind="sft", dataset="unused.jsonl"),
+        sequence_len=12,
+        batch_size=2,
+        eval_batches=1,
+        logical_pair_grouping=grouped,
+        global_batch_rows=2 if grouped else 0,
+        truncated_bptt_windows=2,
+    )
+    model = build_model(config.model)
+    model.init_weights()
+    model.train(was_training)
+    calls = []
+
+    def check_forward(module, args, kwargs):
+        assert not torch.is_grad_enabled() and not module.training
+        assert kwargs.get("truncated_bptt_windows", 0) == 0
+        calls.append(kwargs)
+
+    with model.register_forward_pre_hook(check_forward, with_kwargs=True):
+        torch.manual_seed(41)
+        actual = _eval_loss(model, config, torch.device("cpu"))
+        assert model.training == was_training
+        torch.manual_seed(41)
+        expected = _eval_loss(
+            model,
+            replace(config, truncated_bptt_windows=0),
+            torch.device("cpu"),
+        )
+    assert len(calls) == 2
+    assert actual == expected and model.training == was_training
 
 
 class FakeRun:
