@@ -56,6 +56,19 @@ The fresh ordinary Longshot sigmoid-gate −2 run completed 2,000 steps. Its fin
 - Native processor-only training resume still lacks qualified omitted-backbone restoration. Upstream's configuration migration does not repair that path. Consolidation adds no resume qualification or new evaluation results.
 - Historical checkpoints require their matching source/configuration. Upstream changed cache-state ordering and removed legacy workspace support. Do not silently translate retired experimental settings into current defaults; use their frozen source for reproduction.
 
+## Current-runtime H50/K4 training
+
+`configs/train/qwen35_2b_diffusion_longshot_h50_k4.yaml` is the retained shared-weight, frozen-backbone recipe: no LoRA, zero initial writes with live key factors, H=50/K=4, cadence64, BF16, and 2,000 answer-only SFT steps. It uses the raw native Qwen3.5-2B backbone, not an SFT checkpoint.
+
+From the repository root, inside a GPU allocation with the GPU/Qwen3.5 dependencies already installed:
+
+```bash
+uv run --locked --no-sync --extra gpu --extra qwen35 gcw train \
+  --config configs/train/qwen35_2b_diffusion_longshot_h50_k4.yaml
+```
+
+Check the cluster-specific `backbone_checkpoint` and `data.dataset` paths, W&B authentication, and select a fresh `output_dir` before each run. This recipe passes current model/experiment admission; it is not a new GPU qualification or an exact frozen-source reproduction of historical scores. Keep `resume: null`: processor-only training resume remains unqualified.
+
 ## Evidence and reproduction
 
 The original report, configurations, campaign scripts, tests, pre-consolidation source, and gate completion receipts are retained in an authenticated archive:
