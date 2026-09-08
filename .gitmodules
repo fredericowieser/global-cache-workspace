@@ -6,7 +6,7 @@
 	url = https://github.com/pmediano/PhiID
 [submodule "src/bottleneck_llm"]
 	path = src/bottleneck_llm
-	url = git@github.com:adnanoomerjee/bottleneck_llm.git
+	url = https://github.com/adnanoomerjee/bottleneck_llm.git
 [submodule "src/integrated-info-decomp"]
 	path = src/integrated-info-decomp
 	url = git@github.com:Imperial-MIND-lab/integrated-info-decomp.git
