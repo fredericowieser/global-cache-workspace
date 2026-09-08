@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
 from typing import TYPE_CHECKING, cast
-from gcw.config.model import CacheProcessorConfig
+from gcw.config.model import CacheProcessorConfig, DiffusionProcessorConfig
 from gcw.performance.config import PerformanceConfig
 
 if TYPE_CHECKING:
@@ -31,11 +31,23 @@ _SUPPORTED_CHECKPOINT_FORMATS = ("native_safetensors",)
 
 
 def _config_payload(value: object) -> object:
+    from gcw.config.training import TrainConfig
+
+    if isinstance(value, TrainConfig):
+        payload = {
+            field.name: _config_payload(getattr(value, field.name))
+            for field in fields(value)
+        }
+        if not value.truncated_bptt_windows:
+            payload.pop("truncated_bptt_windows")
+        return payload
     if isinstance(value, CacheProcessorConfig):
         payload = {
             field.name: _config_payload(getattr(value, field.name))
             for field in fields(value)
         }
+        if value.output_scale_mode == "learned":
+            payload.pop("output_scale_mode")
         if value.generation_process_every is None:
             payload.pop("generation_process_every")
         if (
@@ -47,6 +59,10 @@ def _config_payload(value: object) -> object:
             if value.head_selection_method == "magnitude":
                 payload.pop("head_selection_method")
         return payload
+    if isinstance(value, DiffusionProcessorConfig):
+        from gcw.config.serialization import to_dict
+
+        return to_dict(value)
     if isinstance(value, PerformanceConfig):
         payload = {
             field.name: _config_payload(getattr(value, field.name))
@@ -84,6 +100,10 @@ def _has_fields(value: object, *names: str) -> bool:
 
 _MODEL_CONFIG_VALIDATION_CODES = {
     "diffusion_variant",
+    "diffusion_recurrence",
+    "fixed_output_scale_variant",
+    "fixed_output_scale_readout_init",
+    "scheduled_diffusion_readout_init",
     "flow_recurrence",
     "flow_variant",
     "linear_state_encoder",

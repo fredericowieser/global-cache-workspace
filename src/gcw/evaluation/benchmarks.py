@@ -151,6 +151,7 @@ class GCWBenchmarkBackend:
         *,
         processor_enabled: bool,
         generation_process_every: int | None = None,
+        diffusion_eval_solver_steps: int | None = None,
     ):
         from gcw.checkpoint import load_checkpoint
         from gcw.evaluation.core import ProcessorBypass
@@ -158,7 +159,25 @@ class GCWBenchmarkBackend:
             _apply_generation_process_every,
         )
 
+        if diffusion_eval_solver_steps is not None:
+            if (
+                type(diffusion_eval_solver_steps) is not int
+                or diffusion_eval_solver_steps <= 0
+            ):
+                raise ValueError(
+                    "diffusion evaluation solver steps must be positive"
+                )
+            if not processor_enabled:
+                raise ValueError(
+                    "diffusion evaluation solver steps require processor=on"
+                )
         model, config, state = load_checkpoint(checkpoint, device=device)
+        if diffusion_eval_solver_steps is not None:
+            from gcw.models.cache_processors.diffusion import (
+                set_diffusion_eval_solver_steps,
+            )
+
+            set_diffusion_eval_solver_steps(model, diffusion_eval_solver_steps)
         if generation_process_every is not None and not processor_enabled:
             raise ValueError(
                 "generation_process_every requires processor_enabled=True"
@@ -184,6 +203,10 @@ class GCWBenchmarkBackend:
             ),
             "checkpoint_state": state,
         }
+        if diffusion_eval_solver_steps is not None:
+            self.identity["diffusion_eval_solver_steps"] = (
+                diffusion_eval_solver_steps
+            )
 
     def generate(
         self,

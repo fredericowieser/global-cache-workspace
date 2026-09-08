@@ -125,11 +125,28 @@ def _load_eval_target(
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
     head_selection_method: str | None = None,
+    diffusion_eval_solver_steps: int | None = None,
 ):
     if (checkpoint is None) == (hf_model is None):
         raise ValueError(
             "choose exactly one evaluation target: checkpoint or hf_model"
         )
+    if diffusion_eval_solver_steps is not None:
+        if (
+            type(diffusion_eval_solver_steps) is not int
+            or diffusion_eval_solver_steps <= 0
+        ):
+            raise ValueError(
+                "diffusion evaluation solver steps must be positive"
+            )
+        if hf_model is not None:
+            raise ValueError(
+                "diffusion evaluation solver steps do not apply to HF targets"
+            )
+        if not processor_enabled:
+            raise ValueError(
+                "diffusion evaluation solver steps require processor=on"
+            )
     if hf_model is not None:
         if generation_process_every is not None:
             raise ValueError(
@@ -151,6 +168,12 @@ def _load_eval_target(
     model, cfg, state = load_checkpoint(
         cast(str | Path, checkpoint), device=device, dtype=dtype
     )
+    if diffusion_eval_solver_steps is not None:
+        from gcw.models.cache_processors.diffusion import (
+            set_diffusion_eval_solver_steps,
+        )
+
+        set_diffusion_eval_solver_steps(model, diffusion_eval_solver_steps)
     _apply_generation_process_every(cfg, generation_process_every)
     _apply_head_selection_method(cfg, head_selection_method)
     tokenizer = tokenizer_for_checkpoint(cfg, state)

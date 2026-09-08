@@ -49,10 +49,12 @@ def run_all(
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
+    diffusion_eval_solver_steps: int | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
         [*GENERAL_RUNS, *MATH_RUNS],
+        diffusion_eval_solver_steps=diffusion_eval_solver_steps,
         limit=limit,
         batch_size=batch_size,
         prompt_mode=prompt_mode,
@@ -73,10 +75,12 @@ def run_general(
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
+    diffusion_eval_solver_steps: int | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
         GENERAL_RUNS,
+        diffusion_eval_solver_steps=diffusion_eval_solver_steps,
         limit=limit,
         batch_size=batch_size,
         prompt_mode=prompt_mode,
@@ -97,10 +101,12 @@ def run_math(
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
+    diffusion_eval_solver_steps: int | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
         MATH_RUNS,
+        diffusion_eval_solver_steps=diffusion_eval_solver_steps,
         limit=limit,
         batch_size=batch_size,
         prompt_mode=prompt_mode,
@@ -122,11 +128,13 @@ def run_tasks(
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
+    diffusion_eval_solver_steps: int | None = None,
 ) -> dict:
     runs = [([task], TASK_FEWSHOT.get(task, 0)) for task in tasks]
     return run_task_groups(
         checkpoint,
         runs,
+        diffusion_eval_solver_steps=diffusion_eval_solver_steps,
         limit=limit,
         batch_size=batch_size,
         prompt_mode=prompt_mode,
@@ -148,6 +156,7 @@ def run_task_groups(
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
+    diffusion_eval_solver_steps: int | None = None,
 ) -> dict:
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -174,6 +183,7 @@ def run_task_groups(
         device=device,
         dtype=dtype,
         generation_process_every=generation_process_every,
+        diffusion_eval_solver_steps=diffusion_eval_solver_steps,
     )
     lm = GCWEvalLM(
         model,
@@ -243,7 +253,7 @@ def run_task_groups(
         elapsed = time.monotonic() - started
         pop_calls = getattr(processor, "pop_call_count", None)
         calls = int(pop_calls()) if callable(pop_calls) else 0
-        out.setdefault("gcw_runtime", {})[",".join(tasks)] = {
+        runtime = {
             "elapsed_seconds": elapsed,
             "processor_calls": calls,
             "processor_enabled": processor is not None,
@@ -253,6 +263,14 @@ def run_task_groups(
                 else 0.0
             ),
         }
+        from gcw.models.cache_processors.diffusion import (
+            pop_diffusion_field_evaluation_count,
+        )
+
+        field_evaluations = pop_diffusion_field_evaluation_count(model)
+        if field_evaluations:
+            runtime["diffusion_field_evaluations"] = field_evaluations
+        out.setdefault("gcw_runtime", {})[",".join(tasks)] = runtime
         for key in merged:
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
@@ -263,7 +281,7 @@ def run_task_groups(
             ),
             merged,
         )
-    merged["gcw_protocol"] = {
+    protocol: dict[str, object] = {
         "name": "lm_eval_loglikelihood_v1",
         "prompt_mode": prompt_mode,
         "apply_chat_template": apply_chat_template,
@@ -282,4 +300,7 @@ def run_task_groups(
             else None
         ),
     }
+    if diffusion_eval_solver_steps is not None:
+        protocol["diffusion_eval_solver_steps"] = diffusion_eval_solver_steps
+    merged["gcw_protocol"] = protocol
     return merged

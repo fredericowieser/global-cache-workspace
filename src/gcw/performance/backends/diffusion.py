@@ -85,6 +85,10 @@ def configure_noisy_diffusion_recurrence_backend(
         processor = getattr(model_config, "cache_processor", None)
         noise_scale = getattr(diffusion, "noise_scale", 0.0)
         attention_dropout = getattr(processor, "attention_dropout", 0.0)
+        if getattr(diffusion, "training_method", "fixed") != "fixed":
+            raise RuntimeError(
+                "compiled noisy-Diffusion recurrence does not support scheduled diffusion"
+            )
         if variant != "bgt" or diffusion is None or noise_scale <= 0.0:
             raise RuntimeError(
                 "compiled noisy-Diffusion recurrence requires BGT with diffusion noise_scale>0"
@@ -134,6 +138,28 @@ def noisy_diffusion_recurrence_backend_metadata(
         ),
         "torch_version": str(torch.__version__),
     }
+    if (
+        diffusion is not None
+        and getattr(diffusion, "training_method", "fixed") == "scheduled"
+    ):
+        execution.update(
+            architecture=f"scheduled_diffusion_{getattr(model_config, 'variant', 'bgt')}",
+            region=(
+                "gcw.models.cache_processors.diffusion."
+                "TaskDirectedDiffusion.scheduled_recurrence"
+            ),
+            schedule_horizon=diffusion.scheduled_horizon,
+            training_solver_steps=(
+                diffusion.scheduled_training_solver_steps
+                if diffusion.decoupled_schedule
+                else None
+            ),
+            inference_solver_steps=(
+                diffusion.scheduled_inference_solver_steps
+                if diffusion.decoupled_schedule
+                else diffusion.num_steps
+            ),
+        )
     return {
         **execution,
         "configured_via": "performance.noisy_diffusion.recurrence_backend",

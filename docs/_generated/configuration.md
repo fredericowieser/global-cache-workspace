@@ -100,6 +100,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `linear_state_update_mode` | `Literal['outer_product', 'gated_delta']` | `'outer_product'` |
 | `gate_linear_state_delta` | `bool` | `True` |
 | `generation_process_every` | `int \| None` | `None` |
+| `output_scale_mode` | `Literal['learned', 'fixed_one']` | `'learned'` |
 
 ## `FlowProcessorConfig`
 
@@ -215,6 +216,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `freeze_backbone` | `bool` | `False` |
 | `activation_checkpoint_windows` | `int` | `0` |
 | `activation_checkpoint_min_padded_sequence_length` | `int` | `0` |
+| `truncated_bptt_windows` | `int` | `0` |
 | `seed` | `int` | `24` |
 | `save_every` | `int` | `0` |
 | `save_final` | `bool` | `True` |

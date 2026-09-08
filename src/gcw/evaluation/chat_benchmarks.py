@@ -487,12 +487,29 @@ def run_chat_benchmarks(
     processor_enabled: bool = True,
     max_new_tokens: int = MAX_NEW_TOKENS,
     generation_process_every: int | None = None,
+    diffusion_eval_solver_steps: int | None = None,
 ) -> dict[str, Any]:
     unknown = sorted(set(tasks) - set(CHAT_TASKS))
     if unknown:
         raise ValueError(f"unknown chat benchmark tasks: {unknown}")
     if (checkpoint is None) == (hf_model is None):
         raise ValueError("choose exactly one evaluation target")
+    if diffusion_eval_solver_steps is not None:
+        if (
+            type(diffusion_eval_solver_steps) is not int
+            or diffusion_eval_solver_steps <= 0
+        ):
+            raise ValueError(
+                "diffusion evaluation solver steps must be positive"
+            )
+        if hf_model is not None:
+            raise ValueError(
+                "diffusion evaluation solver steps do not apply to HF targets"
+            )
+        if not processor_enabled:
+            raise ValueError(
+                "diffusion evaluation solver steps require processor=on"
+            )
     if generation_process_every is not None and hf_model is not None:
         raise ValueError(
             "generation_process_every applies only to GCW checkpoints"
@@ -521,6 +538,7 @@ def run_chat_benchmarks(
             device,
             processor_enabled=processor_enabled,
             generation_process_every=generation_process_every,
+            diffusion_eval_solver_steps=diffusion_eval_solver_steps,
         )
         if tokenizer_path is None:
             raise ValueError(
@@ -537,6 +555,15 @@ def run_chat_benchmarks(
         batch_size=batch_size,
         max_new_tokens=max_new_tokens,
     )
+    backend_model = getattr(backend, "model", None)
+    if isinstance(backend_model, torch.nn.Module):
+        from gcw.models.cache_processors.diffusion import (
+            pop_diffusion_field_evaluation_count,
+        )
+
+        field_evaluations = pop_diffusion_field_evaluation_count(backend_model)
+        if field_evaluations:
+            result["diffusion_field_evaluations"] = field_evaluations
     payload = {
         "schema": RESULT_SCHEMA,
         "target": backend.identity,
@@ -548,6 +575,8 @@ def run_chat_benchmarks(
         ),
         **result,
     }
+    if diffusion_eval_solver_steps is not None:
+        payload["diffusion_eval_solver_steps"] = diffusion_eval_solver_steps
     encoded = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), allow_nan=False
     ).encode()

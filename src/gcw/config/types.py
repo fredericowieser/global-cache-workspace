@@ -10,6 +10,7 @@ RotaryStyle = Literal["llama", "ppt"]
 MoeExpertsImplementation = Literal["grouped_mm"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
+CacheOutputScaleMode = Literal["learned", "fixed_one"]
 CacheGateMode = Literal["sigmoid", "direct"]
 CacheProcessorMode = Literal[
     "standard", "workspace_broadcast", "head_mask_broadcast"
@@ -33,6 +34,7 @@ TrainingPrecision = Literal["fp32", "bf16_mixed", "bf16"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
 DiffusionInferenceMode = Literal["deterministic", "stochastic"]
+DiffusionTrainingMethod = Literal["fixed", "scheduled"]
 
 _FLOAT32_MAX = 3.4028234663852886e38
 _FLOAT32_MIN_SUBNORMAL = 2.0**-149

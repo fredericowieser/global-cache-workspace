@@ -64,6 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
         target.add_argument("--hf-model")
         command.add_argument("--processor", choices=["on", "off"], default="on")
         command.add_argument(
+            "--diffusion-eval-solver-steps", type=_positive_int
+        )
+        command.add_argument(
             "--generation-process-every", type=_positive_int, default=None
         )
         command.add_argument("--limit", type=int, default=None)
@@ -87,6 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("--hf-model")
     chat.add_argument("--tokenizer-path")
     chat.add_argument("--processor", choices=["on", "off"], default="on")
+    chat.add_argument("--diffusion-eval-solver-steps", type=_positive_int)
     chat.add_argument(
         "--generation-process-every", type=_positive_int, default=None
     )
@@ -190,6 +194,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 tokenizer_path=args.tokenizer_path,
                 processor_enabled=args.processor == "on",
                 generation_process_every=args.generation_process_every,
+                diffusion_eval_solver_steps=args.diffusion_eval_solver_steps,
             )
         elif args.suite in {"paper7", "paper7-legacy"}:
             from gcw.evaluation.legacy import run_paper7_legacy
@@ -215,6 +220,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 "processor_enabled": args.processor == "on",
                 "dtype": args.dtype,
                 "generation_process_every": args.generation_process_every,
+                "diffusion_eval_solver_steps": args.diffusion_eval_solver_steps,
             }
             results = (
                 run_tasks(args.tasks, **common)

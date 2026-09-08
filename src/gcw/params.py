@@ -50,10 +50,20 @@ def estimate_processor_params(config: ModelConfig) -> int:
         return cache_layers * _processor_block_params(
             per_layer_dim, config.cache_processor
         )
+    scheduled_diffusion = (
+        config.diffusion_processor is not None
+        and config.diffusion_processor.training_method == "scheduled"
+    )
     flow_params = (
         1
         if config.flow_processor is not None
-        or config.diffusion_processor is not None
+        or (config.diffusion_processor is not None and not scheduled_diffusion)
+        else 0
+    )
+    write_gate_adjustment = (
+        -1
+        if scheduled_diffusion
+        or config.cache_processor.output_scale_mode == "fixed_one"
         else 0
     )
     if config.variant == "bgt":
@@ -63,6 +73,7 @@ def estimate_processor_params(config: ModelConfig) -> int:
             )
             + _salience_params(config)
             + flow_params
+            + write_gate_adjustment
         )
     if config.variant == "icarus":
         projection_count = (
@@ -87,7 +98,11 @@ def estimate_processor_params(config: ModelConfig) -> int:
             + flow_params
         )
     if config.variant == "longshot":
-        return _longshot_processor_params(config) + flow_params
+        return (
+            _longshot_processor_params(config)
+            + flow_params
+            + write_gate_adjustment
+        )
     return 0
 
 

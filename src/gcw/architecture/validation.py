@@ -88,6 +88,40 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
         )
 
     if processor is not None:
+        if processor.output_scale_mode == "fixed_one":
+            if config.variant in {"bt", "icarus"}:
+                add(
+                    "fixed_output_scale_variant",
+                    "fixed-one cache output scaling requires variant 'bgt' or 'longshot'",
+                    "model.cache_processor.output_scale_mode",
+                )
+            if processor.out_proj_init != "zero":
+                add(
+                    "fixed_output_scale_readout_init",
+                    "fixed-one cache output scaling requires cache_processor.out_proj_init='zero' to preserve the initial no-op",
+                    "model.cache_processor.out_proj_init",
+                )
+        if (
+            diffusion is not None
+            and diffusion.training_method == "scheduled"
+            and processor.out_proj_init != "zero"
+        ):
+            add(
+                "scheduled_diffusion_readout_init",
+                "scheduled diffusion requires cache_processor.out_proj_init='zero' because it writes without learned scalar gates",
+                "model.cache_processor.out_proj_init",
+            )
+        if (
+            config.variant == "longshot"
+            and diffusion is not None
+            and processor.iteration_mode == "internal"
+            and processor.iterations > 1
+        ):
+            add(
+                "diffusion_recurrence",
+                "Diffusion-Longshot does not support internal cache_processor iterations greater than one; use diffusion solver steps",
+                "model.cache_processor.iterations",
+            )
         if config.variant == "bt":
             if processor.processor_mode != "standard":
                 add(

@@ -150,7 +150,16 @@ def resolve_experiment(
         else f"{processor.iteration_mode}:{processor.iterations}"
     )
     if config.model.diffusion_processor is not None:
-        flow_plan = f"task_directed_diffusion:{config.model.diffusion_processor.num_steps}"
+        diffusion = config.model.diffusion_processor
+        if diffusion.decoupled_schedule:
+            flow_plan = (
+                "task_directed_diffusion:scheduled:"
+                f"horizon={diffusion.scheduled_horizon}:"
+                f"train_solver={diffusion.scheduled_training_solver_steps}:"
+                f"eval_solver={diffusion.scheduled_inference_solver_steps}"
+            )
+        else:
+            flow_plan = f"task_directed_diffusion:{diffusion.num_steps}"
     elif config.model.flow_processor is not None:
         flow_plan = f"latent_flow:{config.model.flow_processor.num_steps}"
     else:
@@ -209,7 +218,11 @@ def _processor_assembly(config: ModelConfig) -> ProcessorAssembly | None:
         writable_domains=tuple(writes),
         recurrence_mode=f"{processor.iteration_mode}:{processor.iterations}",
         flow_solver_steps=(
-            config.diffusion_processor.num_steps
+            (
+                config.diffusion_processor.scheduled_training_solver_steps
+                if config.diffusion_processor.decoupled_schedule
+                else config.diffusion_processor.num_steps
+            )
             if config.diffusion_processor is not None
             else (
                 0
@@ -361,9 +374,18 @@ def _intervention_schedule(
             f"latent_flow_steps:{config.model.flow_processor.num_steps}"
         )
     if config.model.diffusion_processor is not None:
-        schedule.append(
-            f"task_directed_diffusion_steps:{config.model.diffusion_processor.num_steps}"
-        )
+        diffusion = config.model.diffusion_processor
+        schedule.append(f"task_directed_diffusion_steps:{diffusion.num_steps}")
+        if diffusion.decoupled_schedule:
+            schedule.extend(
+                (
+                    f"diffusion_schedule_horizon:{diffusion.scheduled_horizon}",
+                    "diffusion_training_solver_steps:"
+                    f"{diffusion.scheduled_training_solver_steps}",
+                    "diffusion_inference_solver_steps:"
+                    f"{diffusion.scheduled_inference_solver_steps}",
+                )
+            )
     return tuple(schedule)
 
 
