@@ -98,6 +98,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `linear_state_cache` | `bool` | `False` |
 | `linear_state_query_mode` | `Literal['per_linear_state', 'shared', 'global']` | `'global'` |
 | `linear_state_update_mode` | `Literal['outer_product', 'gated_delta']` | `'outer_product'` |
+| `live_rank1_linear_writer` | `bool` | `False` |
 | `gate_linear_state_delta` | `bool` | `True` |
 | `generation_process_every` | `int \| None` | `None` |
 | `output_scale_mode` | `Literal['learned', 'fixed_one']` | `'learned'` |

@@ -85,6 +85,7 @@ class CacheProcessorConfig:
     linear_state_cache: bool = False
     linear_state_query_mode: CacheLinearStateQueryMode = "global"
     linear_state_update_mode: CacheLinearStateUpdateMode = "outer_product"
+    live_rank1_linear_writer: bool = False
     gate_linear_state_delta: bool = True
     generation_process_every: int | None = None
     output_scale_mode: CacheOutputScaleMode = "learned"
@@ -206,6 +207,17 @@ class CacheProcessorConfig:
         }:
             raise ValueError(
                 "cache_processor.linear_state_update_mode must be 'outer_product' or 'gated_delta'"
+            )
+        if not isinstance(self.live_rank1_linear_writer, bool):
+            raise ValueError("live_rank1_linear_writer must be a boolean")
+        if self.live_rank1_linear_writer and (
+            not self.linear_state_cache
+            or self.linear_state_update_mode != "outer_product"
+            or self.out_proj_init != "zero"
+        ):
+            raise ValueError(
+                "live_rank1_linear_writer requires linear_state_cache=true, "
+                "linear_state_update_mode='outer_product', and out_proj_init='zero'"
             )
         if self.linear_state_update_mode == "gated_delta":
             self.gate_linear_state_delta = False

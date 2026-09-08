@@ -56,6 +56,8 @@ def to_dict(value: Any) -> Any:
             field.name: to_dict(getattr(value, field.name))
             for field in fields(value)
         }
+        if not value.live_rank1_linear_writer:
+            payload.pop("live_rank1_linear_writer")
         if value.output_scale_mode == "learned":
             payload.pop("output_scale_mode")
         return payload

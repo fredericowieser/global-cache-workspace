@@ -46,6 +46,8 @@ def _config_payload(value: object) -> object:
             field.name: _config_payload(getattr(value, field.name))
             for field in fields(value)
         }
+        if not value.live_rank1_linear_writer:
+            payload.pop("live_rank1_linear_writer")
         if value.output_scale_mode == "learned":
             payload.pop("output_scale_mode")
         if value.generation_process_every is None:
