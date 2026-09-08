@@ -31,7 +31,7 @@ exclude = ["src/gcw/spikes"]
 
 [tool.hatch.build.targets.sdist]
 only-include = [
-    "/src",
+    "/src/gcw",
     "/scripts",
     "/examples",
     "/configs",
