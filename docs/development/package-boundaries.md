@@ -2,6 +2,33 @@
 
 **Status:** Maintained
 
+## Distribution and research references
+
+`src/gcw/` is the installed library. The wheel contains only this package,
+excluding `src/gcw/spikes`. The source distribution uses the same source
+boundary while retaining the deliberately selected `scripts/`, `examples/`,
+`configs/`, `docs/`, `README.md`, `LICENSE`, `pyproject.toml`, and `uv.lock`.
+Other siblings under `src/` are excluded even when populated locally.
+
+The following submodules are retained as reference-only research repositories:
+
+- `src/PhiID`: an information-decomposition reference.
+- `src/integrated-info-decomp`: an information-decomposition reference.
+- `src/bottleneck_llm`: a comparison/reference implementation.
+
+These repositories are not GCW runtime dependencies or integrated GCW features.
+They need not be initialized to install, build, or run GCW. The upstream paper
+submodule, `src/Global-Cache-Workspace-Theory-ICLR-2027-`, is also retained and
+excluded from distributions; packaging does not require access to it.
+
+`tests/test_package_quality.py` checks actual sdist and normal wheel contents
+using a temporary source tree populated with dummy submodule files and an
+unlisted future sibling. These offline artifact tests require the existing
+Hatchling build backend to be importable in the test environment and explicitly
+skip otherwise; runtime environments need not include build tooling.
+
+## Runtime domains
+
 The package uses these domain directories:
 
 - `models/backbones`: native causal language models;

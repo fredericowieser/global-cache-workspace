@@ -164,6 +164,11 @@ def _training_fingerprint(
             if config.longshot_selector_training is not None
             else {}
         ),
+        **(
+            {"truncated_bptt_windows": config.truncated_bptt_windows}
+            if config.truncated_bptt_windows
+            else {}
+        ),
         "loss_backend": config.loss_backend,
         **(
             {

@@ -6,7 +6,12 @@ import pytest
 import torch
 
 from gcw.checkpoint import load_checkpoint, save_checkpoint
-from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    FlowProcessorConfig,
+    ModelConfig,
+    TrainConfig,
+)
 from gcw.flops import processor_forward_flops_per_sequence
 from gcw.models import LatentFlow, build_model, set_flow_solver_steps
 from gcw.params import processor_params
@@ -48,6 +53,67 @@ def tiny_config(
         cache_processor=processor,
         flow_processor=flow,
     )
+
+
+@pytest.mark.parametrize(
+    "method", ["magnitude", "random", "learned_contextual"]
+)
+@pytest.mark.parametrize("training", [False, True])
+def test_longshot_flow_keeps_hard_head_identities_across_field_calls(
+    monkeypatch: pytest.MonkeyPatch, method: str, training: bool
+) -> None:
+    config = tiny_config("longshot", flow=FlowProcessorConfig(num_steps=3))
+    assert config.cache_processor is not None
+    config = replace(
+        config,
+        cache_processor=replace(
+            config.cache_processor,
+            head_selection_method=method,
+            encoder_method="query_attention",
+        ),
+    )
+    admitted = TrainConfig(model=config)
+    model = build_model(admitted.model)
+    model.init_weights()
+    model.train(training)
+    block = model.cache_processor.block
+    original = block._run_flow_field
+    iterate = block._iterate_layers
+    heads = []
+    initial_heads = []
+
+    def record_iteration(
+        hidden,
+        selected_heads,
+        topk_heads,
+        routing_gates=None,
+        *,
+        select_all=False,
+    ):
+        assert routing_gates is None
+        initial_heads.append(selected_heads.detach().clone())
+        return iterate(
+            hidden,
+            selected_heads,
+            topk_heads,
+            routing_gates,
+            select_all=select_all,
+        )
+
+    def record_field(state, selected_heads, routing_gates=None):
+        assert routing_gates is None
+        heads.append(selected_heads.detach().clone())
+        return original(state, selected_heads, routing_gates)
+
+    monkeypatch.setattr(block, "_iterate_layers", record_iteration)
+    monkeypatch.setattr(block, "_run_flow_field", record_field)
+    ids = torch.arange(8).unsqueeze(0)
+    assert torch.isfinite(model(ids, ids))
+    assert len(initial_heads) == 1 and len(heads) == 3
+    assert all(torch.equal(initial_heads[0], selection) for selection in heads)
+    if method == "learned_contextual":
+        with pytest.raises(ValueError, match="cannot be combined with flow"):
+            replace(admitted, longshot_selector_training={})
 
 
 @pytest.mark.parametrize("variant", FLOW_VARIANTS)

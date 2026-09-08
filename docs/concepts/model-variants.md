@@ -58,6 +58,8 @@ A cross-head processor then mixes those summaries. The residual anchors at the l
 
 Longshot computes cache-selection magnitudes with the same eager FP32 expressions in bounded outer-row chunks. Each FP32 cast or square allocation is capped at 32 MiB, replacing a full-cache temporary; BF16 forward autograd saves the existing BF16 source rather than a full FP32 conversion. Chunking never splits a reduction row, so the feature-axis accumulation order and top-k decisions match the eager oracle. A single reduction row larger than 32 MiB exceeds the cap by design: feature chunking would change reduction order and can flip adversarial near ties.
 
+For Qwen3.5 linear-attention states, `live_rank1_linear_writer: true` initializes the outer-product writer with random key rows and zero value rows. This preserves an exact zero initial correction while allowing the value factor to receive gradients immediately; zeroing both factors blocks that gradient. The option requires `linear_state_cache: true`, `linear_state_update_mode: outer_product`, and `out_proj_init: zero`. It preserves parameter shapes and subsequent RNG state. The disabled default preserves historical initialization and configuration identities.
+
 ## Variant comparison
 
 | Variant | Reads across time | Mixes layers directly | Mixes cache heads directly | Write target | Principal control |

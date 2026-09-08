@@ -120,7 +120,7 @@ def _start_wandb(
             "project": config.wandb.project,
             "name": config.wandb.name or Path(config.output_dir).name,
             "group": config.wandb.group,
-            "tags": config.wandb.tags,
+            "tags": list(config.wandb.tags),
             "config": {**to_dict(config), "run_budget": dict(metadata)},
         }
         if config.wandb.entity:
@@ -137,6 +137,10 @@ def _start_wandb(
         run.define_metric("train/step")
         run.define_metric("*", step_metric="train/step")
         run.summary["architecture"] = config.model.architecture_name
+        run.summary["training_method"] = (
+            "truncated_bptt" if config.truncated_bptt_windows else "full_bptt"
+        )
+        run.summary["truncated_bptt_windows"] = config.truncated_bptt_windows
         for key in (
             "non_embedding_params",
             "processor_params",

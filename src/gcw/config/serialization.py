@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from gcw.config.model import CacheProcessorConfig, DiffusionProcessorConfig
 from gcw.config.training import TrainConfig
 from gcw.performance.config import PerformanceConfig
 
@@ -39,6 +40,44 @@ def to_dict(value: Any) -> Any:
             payload.pop("triton_cache_movement")
         if not value.optimized_step.enabled:
             payload.pop("optimized_step")
+        return payload
+    if isinstance(value, TrainConfig):
+        payload = {
+            field.name: to_dict(getattr(value, field.name))
+            for field in fields(value)
+        }
+        # Preserve pre-feature config identities for the disabled default while
+        # retaining the field in serialized provenance when the policy is used.
+        if not value.truncated_bptt_windows:
+            payload.pop("truncated_bptt_windows")
+        return payload
+    if isinstance(value, CacheProcessorConfig):
+        payload = {
+            field.name: to_dict(getattr(value, field.name))
+            for field in fields(value)
+        }
+        if not value.live_rank1_linear_writer:
+            payload.pop("live_rank1_linear_writer")
+        if value.output_scale_mode == "learned":
+            payload.pop("output_scale_mode")
+        return payload
+    if isinstance(value, DiffusionProcessorConfig):
+        payload = {
+            field.name: to_dict(getattr(value, field.name))
+            for field in fields(value)
+        }
+        # Unset controls retain pre-feature checkpoint/run identities.
+        if value.training_method == "fixed":
+            payload.pop("training_method")
+        if value.perturbation_enabled:
+            payload.pop("perturbation_enabled")
+        for name in (
+            "schedule_horizon",
+            "training_solver_steps",
+            "inference_solver_steps",
+        ):
+            if getattr(value, name) is None:
+                payload.pop(name)
         return payload
     if is_dataclass(value):
         return {f.name: to_dict(getattr(value, f.name)) for f in fields(value)}

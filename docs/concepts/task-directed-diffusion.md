@@ -7,7 +7,7 @@ Diffusion-BGT and Flow-BGT are separate mechanisms.
 - **Flow-BGT** deterministically integrates a time-conditioned latent vector field.
 - **Diffusion-BGT** injects independent noise into a bottleneck state during training, repeatedly refines that state with shared weights, and learns the endpoint through future-token cross-entropy.
 
-Inference is explicit: `deterministic` omits fresh noise for a stable endpoint; `stochastic` samples fresh noise and requires recorded seeds for scientific comparison. Training remains noisy whenever `noise_scale > 0`.
+Inference is explicit: `deterministic` omits fresh noise for a stable endpoint; `stochastic` samples fresh noise and requires recorded seeds for scientific comparison. Training remains noisy whenever `noise_scale > 0` and `perturbation_enabled` is true.
 
 ## Mechanism
 
@@ -30,6 +30,62 @@ text{primary}}=
 $$
 
 The processor may construct any cache representation that supports future prediction.
+
+## Scheduled training and independent solver depth
+
+`training_method: fixed` is the default and retains the original learned-gate
+recurrence, state-dict keys, initialization/RNG order, and serialized identity
+when the new controls are unset. `training_method: scheduled` removes both the
+refinement and write scalar gates; it requires `cache_processor.out_proj_init:
+zero` for an initial no-op. Scheduled writes remain fixed-one even when
+`output_scale_mode` is left at its `learned` default. Explicit `output_scale_mode:
+fixed_one` is also available without scheduled diffusion for BGT and Longshot,
+with the same zero-readout requirement.
+
+```yaml
+diffusion_processor:
+  training_method: scheduled
+  schedule_horizon: 50
+  training_solver_steps: 4
+  inference_solver_steps: 8  # defaults to training_solver_steps
+  noise_scale: 0.15
+  time_conditioning: true
+  perturbation_enabled: true
+cache_processor:
+  out_proj_init: zero
+```
+
+Training samples one level `s` uniformly from `1..H`, sets `t=s/H` and
+`sigma=noise_scale*t`, and perturbs the initial latent once. Exactly `K`
+shared-field Euler calls integrate `t -> 0`, with update scale
+`eta_max*t/K` and log-sigma conditioning at the positive right endpoints.
+The decoded displacement excludes the initial perturbation. Deterministic
+inference draws no level or noise, starts at `t=1`, and uses the inference K.
+`num_steps` is not solver depth when explicit horizon/depth controls are set.
+For older scheduled configs with all three controls unset, a sampled level `s`
+still performs `s` calls, and evaluation performs `num_steps` calls.
+
+`perturbation_enabled: false` suppresses the perturbation but preserves training
+RNG consumption and the sampled schedule. Disabling `time_conditioning` requires
+perturbation to be disabled in scheduled mode; positive `noise_scale` remains
+required to define log-sigma. These are controls, not diffusion treatments.
+
+Longshot retains the upstream initial head identities and routing gates across
+all field calls, including soft contextual routing. It does not reselect heads
+or multiply solver depth by ordinary internal iterations; internal iterations
+above one are rejected for Diffusion-Longshot. External recurrence and generation
+cadence remain separate. Scheduled recurrence requires the eager backend.
+
+For `gcw eval all|math|general|tasks|chat`,
+`--diffusion-eval-solver-steps K` overrides only runtime evaluation depth on a
+scheduled, explicitly decoupled checkpoint. It rejects HF targets, processor
+bypass, fixed/coupled diffusion, and invalid K, and never edits checkpoint
+config/weights. Results record the override and actual scheduled field calls.
+These counters are exact for inference without checkpoint replay; they do not
+measure checkpointed backward computation. Replay may repeat a field or stop
+inside it before the counter increments.
+Training FLOPs use configured K (or mean sampled depth for coupled schedules);
+telemetry reports sampled level/time/sigma and the fixed-one write scale.
 
 ## Information and computation
 

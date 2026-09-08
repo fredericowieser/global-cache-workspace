@@ -11,6 +11,7 @@ from gcw.models.backbones.transformer.cache import (
     _flatten_windowed_cache,
     _unflatten_windowed_cache,
     _window_checkpoint_contexts,
+    detach_cache,
 )
 from gcw.models.backbones.transformer.generation import (
     estimate_non_embedding_params,
@@ -70,4 +71,5 @@ __all__ = [
     "_should_process_decoding_cache",
     "_unflatten_windowed_cache",
     "_window_checkpoint_contexts",
+    "detach_cache",
 ]

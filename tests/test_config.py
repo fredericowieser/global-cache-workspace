@@ -12,6 +12,58 @@ from gcw.config import (
 )
 
 
+def test_qwen35_h50_k4_recipe_preserves_frozen_training_protocol() -> None:
+    config = load_train_config(
+        "configs/train/qwen35_2b_diffusion_longshot_h50_k4.yaml"
+    )
+    assert config.model.family == "qwen3_5"
+    assert config.model.variant == "longshot"
+    assert config.freeze_backbone and config.trainable == "cache_processor"
+    assert config.model.lora is None
+    assert config.init_checkpoint is None and config.resume is None
+    assert config.backbone_checkpoint is not None
+    assert config.backbone_checkpoint.endswith("qwen35-2b-tf-base-native")
+
+    processor = config.model.cache_processor
+    assert processor is not None
+    assert processor.linear_state_cache and processor.live_rank1_linear_writer
+    assert processor.linear_state_update_mode == "outer_product"
+    assert processor.out_proj_init == "zero"
+    assert processor.output_scale_mode == "fixed_one"
+    assert processor.process_every == 64 and processor.iterations == 1
+    diffusion = config.model.diffusion_processor
+    assert diffusion is not None and diffusion.training_method == "scheduled"
+    assert diffusion.schedule_horizon == 50
+    assert (
+        diffusion.training_solver_steps == diffusion.inference_solver_steps == 4
+    )
+    assert diffusion.time_conditioning and diffusion.perturbation_enabled
+    assert diffusion.noise_scale == 0.1
+    assert diffusion.inference_mode == "deterministic"
+
+    assert config.mode == "sft" and config.seed == 24
+    assert config.data.sft_loss_scope == "answer_only"
+    assert config.data.sft_chat_template and not config.data.sft_enable_thinking
+    assert config.data.prompt_suffix == config.data.response_prefix == ""
+    assert config.data.sft_skip_rows == config.data.sft_take_rows == 128000
+    assert config.precision == "bf16" and config.loss_backend == "liger"
+    assert config.distributed == "none" and config.batch_size == 16
+    assert config.sequence_len == 512 and config.total_batch_size == 65536
+    assert config.max_steps == 2000 and config.learning_rate == 1e-4
+    assert (config.adam_beta1, config.adam_beta2, config.adam_eps) == (
+        0.9,
+        0.999,
+        1e-8,
+    )
+    assert (
+        config.weight_decay == config.warmup_steps == config.warmdown_ratio == 0
+    )
+    assert config.truncated_bptt_windows == 0
+    assert config.longshot_gradient_checkpointing_seq_len_threshold == 513
+    assert config.performance.noisy_diffusion.recurrence_backend == "eager"
+    assert not config.performance.adaptive_batching.enabled
+
+
 def test_train_config_builds_explicit_resume_and_wandb_state():
     config = TrainConfig(
         resume={

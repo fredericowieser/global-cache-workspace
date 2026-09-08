@@ -1,0 +1,162 @@
+# Current-runtime recipe; historical scores used frozen older sources.
+# Check the cluster input paths and choose a fresh output_dir before each run.
+model:
+  variant: longshot
+  family: qwen3_5
+  sequence_len: 262144
+  vocab_size: 248320
+  hidden_size: 2048
+  intermediate_size: 6144
+  num_layers: 24
+  num_heads: 8
+  num_kv_heads: 2
+  head_dim: 256
+  hidden_act: silu
+  rope_theta: 10000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  partial_rotary_factor: 0.25
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: 128
+  linear_value_head_dim: 128
+  linear_num_key_heads: 16
+  linear_num_value_heads: 16
+  layer_types:
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  processor_layer_indices: [3, 7, 11, 15, 19, 23]
+  processor_generation_mode: windowed
+  legacy_bottleneck_generate: false
+  lora: null
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 3
+    topk_linear_heads: 72
+    score: kv_norm
+    head_selection_method: magnitude
+    hidden_size: 384
+    intermediate_size: 1536
+    num_layers: 3
+    num_heads: 3
+    num_kv_heads: 3
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    attention_dropout: 0.0
+    per_cache_head_projections: false
+    gradient_checkpointing: true
+    encoder_method: query_attention
+    encoder_query_source: final_token
+    unrope_keys: true
+    update_stream: kv
+    iterations: 1
+    iteration_mode: internal
+    linear_state_cache: true
+    linear_state_query_mode: per_linear_state
+    linear_state_update_mode: outer_product
+    gate_linear_state_delta: true
+    out_proj_init: zero
+    live_rank1_linear_writer: true
+    output_scale_mode: fixed_one
+  diffusion_processor:
+    training_method: scheduled
+    num_steps: 4
+    schedule_horizon: 50
+    training_solver_steps: 4
+    inference_solver_steps: 4
+    time_conditioning: true
+    noise_scale: 0.1
+    perturbation_enabled: true
+    eta_max: 1.0
+    conditioning_scale: 1.0
+    inference_mode: deterministic
+
+data:
+  kind: sft
+  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl
+  tokenizer: hf
+  tokenizer_source: Qwen/Qwen3.5-2B
+  sft_skip_rows: 128000
+  sft_take_rows: 128000
+  prompt_suffix: ''
+  response_prefix: ''
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  validation_dataset: null
+
+mode: sft
+seed: 24
+distributed: none
+freeze_backbone: true
+trainable: cache_processor
+backbone_checkpoint: /mnt/jfs-00/team-agent/home/f50056118/gcw-experiments/qwen35-2b-tf-base-native
+init_checkpoint: null
+resume: null
+output_dir: data/training-runs/qwen35-2b-diffusion-longshot-h50-k4-seed24
+batch_size: 16
+sequence_len: 512
+total_batch_size: 65536
+max_steps: 2000
+learning_rate: 0.0001
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-08
+weight_decay: 0.0
+warmup_steps: 0
+warmdown_ratio: 0.0
+final_lr_frac: 0.0
+grad_clip: 1.0
+precision: bf16
+loss_backend: liger
+activation_checkpointing: none
+activation_checkpoint_windows: 0
+backbone_chunk_backend: eager
+longshot_gradient_checkpointing_seq_len_threshold: 513
+truncated_bptt_windows: 0
+checkpoint_format: native_safetensors
+save_cache_processor_only: true
+save_every: 250
+save_final: true
+eval_every: 0
+eval_on_start: false
+
+performance:
+  adaptive_batching:
+    enabled: false
+  noisy_diffusion:
+    recurrence_backend: eager
+
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: qwen35-2b-diffusion-longshot-h50-k4-seed24
+  group: qwen35-h50-k4-current
+  tags: [frozen-backbone, h50-k4, current-runtime]
+
+metadata:
+  historical_recipe: qwen35-longshot-horizon-solver-v1-20260905/decoupled-h50-k4-seed24

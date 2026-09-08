@@ -22,7 +22,7 @@ DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
 MAX_NEW_TOKENS = 2_048
 DEFAULT_BATCH_SIZE = 64
-RESULT_SCHEMA = "gcw.benchmark_matrix.v2"
+RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
 PromptMode = Literal["thinking_off", "thinking_on"]
 ScoringProtocol = Literal["numeric_last_answer", "lm_eval_flexible_exact"]
 TargetKind = Literal["hf", "gcw"]
@@ -45,8 +45,6 @@ class BenchmarkConfig:
     def __post_init__(self) -> None:
         if self.target_kind not in {"hf", "gcw"}:
             raise ValueError("target_kind must be 'hf' or 'gcw'")
-        if self.target_kind == "hf" and not self.processor_enabled:
-            raise ValueError("HF targets have no GCW processor to bypass")
         if self.scoring_protocol not in {
             "numeric_last_answer",
             "lm_eval_flexible_exact",
@@ -97,7 +95,13 @@ class BenchmarkBackend(Protocol):
 
 
 class HFBenchmarkBackend:
-    def __init__(self, source: Path, device: torch.device):
+    def __init__(
+        self,
+        source: Path,
+        device: torch.device,
+        *,
+        processor_enabled: bool = True,
+    ):
         from transformers import AutoModelForCausalLM
 
         self.model = (
@@ -120,7 +124,12 @@ class HFBenchmarkBackend:
             getattr(self.model.generation_config, "pad_token_id", None)
             or self.eos_ids[0]
         )
-        self.identity = _directory_identity(source, kind="hf")
+        self.identity = {
+            **_directory_identity(source, kind="hf"),
+            "processor_requested": processor_enabled,
+            "processor_present": False,
+            "processor_enabled": False,
+        }
 
     def generate(
         self,
@@ -151,20 +160,48 @@ class GCWBenchmarkBackend:
         *,
         processor_enabled: bool,
         generation_process_every: int | None = None,
+        diffusion_eval_solver_steps: int | None = None,
     ):
         from gcw.checkpoint import load_checkpoint
         from gcw.evaluation.core import ProcessorBypass
         from gcw.evaluation.lm_eval_adapter import (
             _apply_generation_process_every,
         )
+        from gcw.models.cache_processors.base import CacheProcessorBase
 
+        if diffusion_eval_solver_steps is not None:
+            if (
+                type(diffusion_eval_solver_steps) is not int
+                or diffusion_eval_solver_steps <= 0
+            ):
+                raise ValueError(
+                    "diffusion evaluation solver steps must be positive"
+                )
+            if not processor_enabled:
+                raise ValueError(
+                    "diffusion evaluation solver steps require processor=on"
+                )
         model, config, state = load_checkpoint(checkpoint, device=device)
+        processor_present = isinstance(
+            getattr(model, "cache_processor", None), CacheProcessorBase
+        )
+        effective_processor_enabled = processor_enabled and processor_present
+        if diffusion_eval_solver_steps is not None:
+            from gcw.models.cache_processors.diffusion import (
+                set_diffusion_eval_solver_steps,
+            )
+
+            set_diffusion_eval_solver_steps(model, diffusion_eval_solver_steps)
         if generation_process_every is not None and not processor_enabled:
             raise ValueError(
                 "generation_process_every requires processor_enabled=True"
             )
+        if generation_process_every is not None and not processor_present:
+            raise ValueError(
+                "generation_process_every requires a loaded cache processor"
+            )
         _apply_generation_process_every(config, generation_process_every)
-        if not processor_enabled:
+        if processor_present and not processor_enabled:
             model = ProcessorBypass(model)
         self.model = model.eval()
         self.device = device
@@ -176,7 +213,9 @@ class GCWBenchmarkBackend:
         self.identity = {
             **_directory_identity(checkpoint, kind="gcw"),
             "architecture": config.architecture_name,
-            "processor_enabled": processor_enabled,
+            "processor_requested": processor_enabled,
+            "processor_present": processor_present,
+            "processor_enabled": effective_processor_enabled,
             "generation_process_every": (
                 config.cache_processor.generation_process_every
                 if config.cache_processor is not None
@@ -184,6 +223,10 @@ class GCWBenchmarkBackend:
             ),
             "checkpoint_state": state,
         }
+        if diffusion_eval_solver_steps is not None:
+            self.identity["diffusion_eval_solver_steps"] = (
+                diffusion_eval_solver_steps
+            )
 
     def generate(
         self,
@@ -552,7 +595,9 @@ def run_benchmark_matrix(
     target = Path(config.model_path).expanduser().resolve()
     backend: BenchmarkBackend
     if config.target_kind == "hf":
-        backend = HFBenchmarkBackend(target, device)
+        backend = HFBenchmarkBackend(
+            target, device, processor_enabled=config.processor_enabled
+        )
     else:
         backend = GCWBenchmarkBackend(
             target, device, processor_enabled=config.processor_enabled
@@ -574,10 +619,14 @@ def run_benchmark_matrix(
         )
         for mode in config.modes
     }
+    config_identity = asdict(config)
+    config_identity["processor_requested"] = config_identity.pop(
+        "processor_enabled"
+    )
     result = {
         "schema": RESULT_SCHEMA,
         "source_commit": _source_commit(repository_path),
-        "config": asdict(config),
+        "config": config_identity,
         "target": backend.identity,
         "tokenizer": tokenizer_identity,
         "dataset": dataset_identity,

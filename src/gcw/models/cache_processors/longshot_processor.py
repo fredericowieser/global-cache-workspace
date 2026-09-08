@@ -8,11 +8,13 @@ from torch.utils.checkpoint import checkpoint
 
 from gcw.config import (
     CacheProcessorConfig,
+    DiffusionProcessorConfig,
     FlowProcessorConfig,
     ModelConfig,
 )
 from gcw.models.backbones.transformer import RMSNorm
 from gcw.models.cache_processors.base import cache_processor_recomputation_id
+from gcw.models.cache_processors.diffusion import TaskDirectedDiffusion
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.cache_processors.longshot_layers import (
     EncoderMethod,
@@ -46,6 +48,7 @@ class CacheProcessor(nn.Module):
         encoder_seq_len: int | None = None,
         output_dim: int | None = None,
         flow_config: FlowProcessorConfig | None = None,
+        diffusion_config: DiffusionProcessorConfig | None = None,
         kv_cache_heads: int | None = None,
         model_config: ModelConfig | None = None,
         linear_state_specs: list[LinearStateSpec] | None = None,
@@ -90,11 +93,29 @@ class CacheProcessor(nn.Module):
             )
         else:
             self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
-        self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        fixed_output_scale = config.output_scale_mode == "fixed_one" or (
+            diffusion_config is not None
+            and diffusion_config.training_method == "scheduled"
+        )
+        if fixed_output_scale:
+            if config.out_proj_init != "zero":
+                raise ValueError(
+                    "fixed-one cache output scaling requires cache_processor.out_proj_init='zero'"
+                )
+            self.register_parameter("gate", None)
+        else:
+            self.gate: nn.Parameter | None = nn.Parameter(
+                torch.full((1,), config.gate_init)
+            )
         self._gate_value: torch.Tensor | None = None
         self.flow = (
             LatentFlow(config.hidden_size, flow_config)
             if flow_config is not None
+            else None
+        )
+        self.diffusion = (
+            TaskDirectedDiffusion(config.hidden_size, diffusion_config)
+            if diffusion_config is not None
             else None
         )
         self._selected_head_overlap_totals: dict[int, torch.Tensor] = {}
@@ -141,7 +162,8 @@ class CacheProcessor(nn.Module):
                 module, "query"
             ):
                 nn.init.normal_(module.query, mean=0.0, std=std)
-        nn.init.constant_(self.gate, self.config.gate_init)
+        if self.gate is not None:
+            nn.init.constant_(self.gate, self.config.gate_init)
         if self.config.out_proj_init == "zero":
             _zero_projection(self.out_proj)
 
@@ -241,6 +263,13 @@ class CacheProcessor(nn.Module):
                 h,
                 lambda state, _time: self.out_norm(
                     self._run_flow_field(state, selected_heads)
+                ),
+            )
+        if self.diffusion is not None:
+            return self.diffusion(
+                h,
+                lambda state, _time: self.out_norm(
+                    self._run_flow_field(state, selected_heads, routing_gates)
                 ),
             )
         iterations = (
@@ -357,12 +386,19 @@ class CacheProcessor(nn.Module):
         )
 
     def _run_flow_field(
-        self, state: torch.Tensor, selected_heads: torch.Tensor
+        self,
+        state: torch.Tensor,
+        selected_heads: torch.Tensor,
+        routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor:
         for module in self.layers:
             layer = cast(ProcessorLayer, module)
             result = self._run_layer(
-                layer, state, selected_heads, return_attn_scores=False
+                layer,
+                state,
+                selected_heads,
+                return_attn_scores=False,
+                routing_gates=routing_gates,
             )
             if not isinstance(result, torch.Tensor):
                 raise TypeError(
@@ -413,6 +449,8 @@ class CacheProcessor(nn.Module):
             for total in (self._selected_head_overlap_totals[iteration],)
             if self._selected_head_overlap_counts[iteration] > 0
         }
+        if self.diffusion is not None:
+            metrics.update(self.diffusion.pop_scheduled_metrics())
         if self.head_selector is not None:
             metrics.update(self.head_selector.pop_metrics())
         self._selected_head_overlap_totals.clear()
@@ -447,7 +485,11 @@ class CacheProcessor(nn.Module):
             self._selected_head_overlap_counts[iteration] = 1
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
-        if self.config.gate_mode == "sigmoid":
+        if self.gate is None:
+            scale = torch.ones(
+                (), dtype=dtype, device=next(self.out_proj.parameters()).device
+            )
+        elif self.config.gate_mode == "sigmoid":
             scale = torch.sigmoid(self.gate).to(dtype)
         elif self.config.gate_mode == "direct":
             scale = self.gate.to(dtype)

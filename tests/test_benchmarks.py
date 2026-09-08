@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import hashlib
+import json
+
+from gcw.checkpoint import load_checkpoint, save_checkpoint
+from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.models import build_model
+from gcw.evaluation.lm_eval_adapter import ProcessorBypass
 
 import pytest
 import torch
@@ -9,6 +16,9 @@ from gcw.evaluation.benchmarks import (
     DEFAULT_BATCH_SIZE,
     MAX_NEW_TOKENS,
     BenchmarkConfig,
+    GCWBenchmarkBackend,
+    HFBenchmarkBackend,
+    run_benchmark_matrix,
     apply_qwen_chat_template,
     extract_gsm8k_target,
     extract_lm_eval_flexible,
@@ -145,10 +155,224 @@ def test_config_rejects_protocol_drift():
             output_dir="out",
             modes=("thinking_off", "thinking_off"),
         )
-    with pytest.raises(ValueError, match="no GCW processor"):
-        BenchmarkConfig(
-            model_path="model",
-            output_dir="out",
-            target_kind="hf",
-            processor_enabled=False,
+
+
+@pytest.fixture
+def small_checkpoint(tmp_path, request):
+    variant = request.param
+    config = ModelConfig(
+        variant=variant,
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+        cache_processor=(
+            None
+            if variant == "tf"
+            else CacheProcessorConfig(
+                process_every=2,
+                generation_process_every=2,
+                topk=2,
+                topk_heads=1,
+                hidden_size=8,
+                intermediate_size=16,
+                num_layers=1,
+                num_heads=1,
+                num_kv_heads=1,
+            )
+        ),
+    )
+    model = build_model(config)
+    model.init_weights()
+    save_checkpoint(
+        tmp_path, model, config, {"eos_token_id": 63, "pad_token_id": 0}
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "small_checkpoint", ["tf", "bt", "bgt", "icarus", "longshot"], indirect=True
+)
+@pytest.mark.parametrize("requested", [False, True])
+def test_native_processor_policy_and_tf_off_regression(
+    small_checkpoint, requested, monkeypatch
+):
+    loaded, config, state = load_checkpoint(small_checkpoint)
+    monkeypatch.setattr(
+        "gcw.checkpoint.load_checkpoint",
+        lambda *args, **kwargs: (loaded, config, state),
+    )
+    present = config.variant != "tf"
+    if not present:
+        # This unconditional wrapper was the former TF-off failure.
+        with pytest.raises(ValueError, match="composed GCW checkpoint"):
+            ProcessorBypass(loaded)
+    backend = GCWBenchmarkBackend(
+        small_checkpoint, torch.device("cpu"), processor_enabled=requested
+    )
+    assert backend.identity["processor_requested"] is requested
+    assert backend.identity["processor_present"] is present
+    assert backend.identity["processor_enabled"] is (present and requested)
+    assert backend.eos_ids == (63,)
+    assert backend.pad_id == 0
+    assert not backend.supports_left_padding
+    if present and not requested:
+        assert isinstance(backend.model, ProcessorBypass)
+        assert backend.model.backbone is loaded.backbone
+    else:
+        assert backend.model is loaded
+    assert backend.identity["generation_process_every"] == (
+        2 if present else None
+    )
+    inputs = torch.tensor([[1, 2, 3, 4]])
+    generated = backend.generate(inputs, torch.ones_like(inputs), 2)
+    assert 4 < generated.shape[1] <= 6
+    if present:
+        assert (loaded.cache_processor.pop_call_count() > 0) is requested
+    if not present or not requested:
+        backbone = loaded.backbone if present else loaded
+        expected = backbone.eval().generate_fast(
+            inputs, max_new_tokens=2, eos_token_id=63, pad_token_id=0
         )
+        torch.testing.assert_close(generated, expected)
+
+
+@pytest.mark.parametrize("small_checkpoint", ["tf"], indirect=True)
+@pytest.mark.parametrize("requested", [False, True])
+def test_processor_presence_is_not_config_or_backbone_attribute(
+    small_checkpoint, requested, monkeypatch
+):
+    loaded, config, state = load_checkpoint(small_checkpoint)
+    config.cache_processor = CacheProcessorConfig()
+    loaded.cache_processor = config.cache_processor
+    loaded.backbone = torch.nn.Linear(2, 2)
+    monkeypatch.setattr(
+        "gcw.checkpoint.load_checkpoint",
+        lambda *args, **kwargs: (loaded, config, state),
+    )
+    backend = GCWBenchmarkBackend(
+        small_checkpoint, torch.device("cpu"), processor_enabled=requested
+    )
+    assert backend.model is loaded
+    assert backend.identity["processor_requested"] is requested
+    assert backend.identity["processor_present"] is False
+    assert backend.identity["processor_enabled"] is False
+    if requested:
+        with pytest.raises(ValueError, match="loaded cache processor"):
+            GCWBenchmarkBackend(
+                small_checkpoint,
+                torch.device("cpu"),
+                processor_enabled=True,
+                generation_process_every=1,
+            )
+
+
+@pytest.mark.parametrize("small_checkpoint", ["tf", "bgt"], indirect=True)
+@pytest.mark.parametrize("requested", [False, True])
+@pytest.mark.parametrize(
+    "override", ["generation_process_every", "diffusion_eval_solver_steps"]
+)
+def test_processor_overrides_require_applicable_active_processor(
+    small_checkpoint, requested, override
+):
+    _, config, _ = load_checkpoint(small_checkpoint)
+    kwargs = {override: 1}
+    if (
+        requested
+        and config.variant == "bgt"
+        and override == "generation_process_every"
+    ):
+        backend = GCWBenchmarkBackend(
+            small_checkpoint,
+            torch.device("cpu"),
+            processor_enabled=True,
+            **kwargs,
+        )
+        assert backend.identity["generation_process_every"] == 1
+        assert backend.model.config.cache_processor.process_every == 2
+        _, saved_config, _ = load_checkpoint(small_checkpoint)
+        assert saved_config.cache_processor.generation_process_every == 2
+    else:
+        with pytest.raises(ValueError, match="requires|require"):
+            GCWBenchmarkBackend(
+                small_checkpoint,
+                torch.device("cpu"),
+                processor_enabled=requested,
+                **kwargs,
+            )
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_hf_has_no_gcw_processor_and_matrix_records_request(
+    tmp_path, monkeypatch, requested
+):
+    from transformers import GPT2Config, GPT2LMHeadModel
+    import gcw.evaluation.benchmarks as benchmarks
+
+    source = tmp_path / "hf"
+    model = GPT2LMHeadModel(
+        GPT2Config(
+            vocab_size=64,
+            n_positions=16,
+            n_embd=16,
+            n_layer=1,
+            n_head=2,
+            eos_token_id=63,
+            pad_token_id=0,
+        )
+    )
+    model.save_pretrained(source)
+    backend = HFBenchmarkBackend(
+        source, torch.device("cpu"), processor_enabled=requested
+    )
+    assert isinstance(backend.model, GPT2LMHeadModel)
+    assert backend.identity["processor_requested"] is requested
+    assert backend.identity["processor_present"] is False
+    assert backend.identity["processor_enabled"] is False
+
+    def cpu_backend(path, device, *, processor_enabled):
+        assert path == source
+        assert processor_enabled is requested
+        return backend
+
+    monkeypatch.setattr(benchmarks, "HFBenchmarkBackend", cpu_backend)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda device: "test")
+    monkeypatch.setattr(
+        benchmarks.subprocess, "check_output", lambda *a, **k: ""
+    )
+    monkeypatch.setattr(
+        benchmarks, "_source_commit", lambda path: "test-commit"
+    )
+    monkeypatch.setattr(
+        benchmarks, "_load_tokenizer", lambda path: (EvaluationTokenizer(), {})
+    )
+    monkeypatch.setattr(benchmarks, "_load_test_rows", lambda limit: ([], {}))
+    monkeypatch.setattr(benchmarks, "evaluate_mode", lambda *a, **k: {})
+    result = run_benchmark_matrix(
+        BenchmarkConfig(
+            model_path=str(source),
+            output_dir=str(tmp_path / "result"),
+            processor_enabled=requested,
+        )
+    )
+    assert result["schema"] == "gcw.benchmark_matrix.v3"
+    assert result["config"]["processor_requested"] is requested
+    assert "processor_enabled" not in result["config"]
+    assert result["target"] == backend.identity
+    assert json.loads(
+        (tmp_path / "result" / "result.json").read_text()
+    ) == json.loads(json.dumps(result))
+    digest = result.pop("payload_sha256")
+    assert (
+        digest
+        == hashlib.sha256(
+            json.dumps(
+                result, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+    )

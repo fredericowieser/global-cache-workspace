@@ -1,0 +1,86 @@
+:orphan:
+
+# All Qwen3.5 models from the controlled Longshot/Diffusion comparison onward
+
+39 production training runs, including partial/cancelled runs (28 since the triple-seed campaign + 11 earlier references), plus pretrained baseline and distinct valid evaluation settings. Four mean rows summarize, not add, training runs.
+
+**Correction:** stdout `loss=` is bias-corrected EMA-smoothed training CE (beta0.9), not raw per-batch CE. `EMA50` averages the last50 printed values; partial runs end at their actual completed step. Dev/test NLL is separately computed token-weighted held-out answer CE.
+
+K is the evaluated solver depth (or configured default when no evaluation completed); it does not count additional training runs. All downstream scores are percentages. HS=HellaSwag; WG=WinoGrande; AGI=AGIEval gaokao_mathqa. L8 uses acc_norm where available, otherwise acc, equally over all8 tasks. Numeric G/S/H=OpenMath GSM8K / SVAMP / GSM8K Hard; arrow=equal-task mean. Truncation pools2938 examples. W4k=windowed4096-token generation,batch32; P4k=historical post-prefill-relative4096,batch32. Overrides are explicit. ‡ historical final results exist but lack completion-hash receipts. † historical target metadata lacks EOS/PAD and these generation runs report100% truncation: archived scores, NOT matched stopping-protocol comparisons. Seed-mean macro ± values are sample SD across three training seeds. CSV keeps numeric accuracies as fractions; Markdown shows percentages.
+
+— means no completed result located; it is not zero. Dev/test splits are1024/4096 examples with322414/1293940 answer targets. Do not compare training EMA with held-out NLL or substitute missing SFT/LoRA NLL. Benchmark accuracy and NLL are different metrics.
+
+| Model / ablation | Seed | Trainable M | Steps / K setting | Train EMA50 / final ↓ | Dev / test NLL ↓ | HS | PIQA | WG | ARC-E | ARC-C | MMLU | LogiQA | AGI | L8 ↑ | Off: G/S/H → mean ↑ | On: G/S/H → mean ↑ | Trunc. off/on % | Protocol / status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Pretrained backbone | — | 0.00 | — / 0 | — / — | 0.67474 / 0.67186 | 62.10 | 72.69 | 64.48 | 80.93 | 52.90 | 57.11 | 30.88 | 34.19 | 56.91 | 70.96/82.33/38.74 → 64.01 | 37.83/53.67/11.60 → 34.37 | 4.70/80.94 | old: off2k/b8; on4k/b32 ‡ |
+| Pretrained backbone; on8k override | — | 0.00 | — / 0 | — / — | — / — | — | — | — | — | — | — | — | — | — | — | 38.44/51.33/12.13 → 33.97 | —/81.01 | on8k/b64 |
+| Pretrained backbone; corrected on32k | — | 0.00 | — / 0 | — / — | — / — | — | — | — | — | — | — | — | — | — | — | 38.59/49.33/12.21 → 33.38 | —/81.01 | corrected on32k/b64 |
+| All-linear LoRA21 only | 24 | 22.08 | 2000 / 0 | 0.26949 / 0.2649 | — / — | 63.65 | 74.21 | 65.90 | 81.10 | 53.58 | 61.12 | 31.18 | 33.62 | 58.05 | 77.86/85.67/43.90 → 69.14 | 74.98/81.67/44.20 → 66.95 | 100.00/100.00 | old W4k; EOS/PAD absent † |
+| Full SFT, old LR1e-4 | 24 | 1881.83 | 2000 / 0 | 0.24856 / 0.2441 | — / — | 38.55 | 60.12 | 53.91 | 51.26 | 30.97 | 30.24 | 28.26 | 27.92 | 40.15 | 53.22/63.00/18.20 → 44.81 | 51.93/65.00/17.82 → 44.92 | 100.00/100.00 | old W4k; EOS/PAD absent † |
+| Original diffusion: pre-live-writer | 24 | 22.13 | 2000 / 4 | 0.38874 / 0.3827 | — / — | 62.06 | 72.74 | 64.09 | 79.67 | 51.88 | 60.15 | 29.80 | 29.34 | 56.22 | 63.68/82.00/36.62 → 60.77 | 71.72/80.33/37.98 → 63.35 | 4.29/45.68 | old: off2k/b8; on4k/b32 ‡ |
+| Original diffusion: pre-live-writer; on8k override | 24 | 22.13 | 2000 / 4 | 0.38874 / 0.3827 | — / — | — | — | — | — | — | — | — | — | — | — | 71.57/80.33/37.60 → 63.17 | —/45.58 | on8k/b64 |
+| Old diffusion: live rank-one writer | 24 | 22.13 | 2000 / 4 | 0.33860 / 0.3339 | — / — | 62.44 | 72.74 | 65.82 | 77.15 | 44.62 | 53.87 | 31.18 | 27.92 | 54.47 | 69.90/82.67/37.98 → 63.52 | 73.77/86.00/41.62 → 67.13 | 1.09/9.77 | P4k |
+| Old diffusion: live rank-one writer; eval K8 only | 24 | 22.13 | 2000 / 8 | 0.33860 / 0.3339 | — / — | 62.35 | 72.74 | 65.90 | 77.44 | 45.73 | 54.22 | 31.18 | 29.06 | 54.83 | 69.14/82.33/37.53 → 63.00 | 73.62/85.33/39.58 → 66.18 | 1.40/9.36 | P4k |
+| Old diffusion: live rank-one writer; stochastic inference | 24 | 22.13 | 2000 / 4 | 0.33860 / 0.3339 | — / — | — | — | — | — | — | — | — | — | — | 68.54/83.33/37.91 → 63.26 | 72.63/87.67/40.86 → 67.05 | 1.09/10.18 | P4k; noise seed 24 |
+| Old diffusion: live rank-one writer; stochastic inference | 24 | 22.13 | 2000 / 4 | 0.33860 / 0.3339 | — / — | — | — | — | — | — | — | — | — | — | 70.36/82.67/39.42 → 64.15 | 74.30/86.67/39.12 → 66.70 | 1.12/9.80 | P4k; noise seed 25 |
+| Old diffusion: live rank-one writer; stochastic inference | 24 | 22.13 | 2000 / 4 | 0.33860 / 0.3339 | — / — | — | — | — | — | — | — | — | — | — | 69.83/83.67/38.36 → 63.95 | 74.00/85.67/41.70 → 67.12 | 1.23/10.76 | P4k; noise seed 26 |
+| Old live-rank1 diffusion: speed-optimized retrain | 24 | 22.13 | 2000 / 4 | 0.33862 / 0.3339 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | No completed downstream/NLL found |
+| Old diffusion: separately trained T8 | 24 | 22.13 | 2000 / 8 | 0.33878 / 0.3339 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | No completed downstream/NLL found |
+| Old ordinary Longshot | 24 | 22.13 | 2000 / 1 | 0.33834 / 0.3339 | — / — | 62.46 | 72.69 | 64.64 | 81.36 | 53.24 | 61.12 | 29.80 | 29.91 | 56.90 | 50.04/69.67/27.75 → 49.15 | 46.70/42.00/29.19 → 39.30 | 100.00/100.00 | old P4k/b256; EOS/PAD absent † |
+| Old ordinary Longshot; windowed capped7 | 24 | 22.13 | 2000 / 1 | 0.33834 / 0.3339 | — / — | — | — | — | — | — | — | — | — | — | 59.21/70.00/31.08 → 53.43 | 49.58/57.33/32.30 → 46.40 | 100.00/100.00 | old W4k/b256; max7 processor events; EOS/PAD absent † |
+| Old ordinary Longshot; windowed override | 24 | 22.13 | 2000 / 1 | 0.33834 / 0.3339 | — / — | — | — | — | — | — | — | — | — | — | 58.76/70.00/30.25 → 53.00 | 50.11/57.33/31.31 → 46.25 | 100.00/100.00 | old W4k/b256; EOS/PAD absent † |
+| Old diffusion + all-linear LoRA21 | 24 | 44.21 | 2000 / 4 | 0.26800 / 0.2636 | — / — | 63.66 | 74.10 | 64.64 | 79.84 | 51.62 | 60.27 | 31.49 | 32.76 | 57.30 | 78.39/86.33/42.91 → 69.21 | 63.76/58.33/38.06 → 53.38 | 100.00/100.00 | old P4k/b256; EOS/PAD absent † |
+| Old diffusion: cache coordinates [partial] | 24 | — | 377 / — | 0.41802 / 0.4175 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | Partial; last50 steps 328–377; no retained checkpoint |
+| Old read4 / write4: first attempt [partial] | 24 | — | 829 / — | 0.35321 / 0.3491 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | Partial; last50 steps 780–829; no retained checkpoint |
+| Old read4 / write4: retry [cancelled] | 24 | 22.77 | 1775 / 4 | 0.34215 / 0.3450 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | Partial; last50 steps 1726–1775; checkpoint 1750 |
+| A: ordinary one-pass Longshot | 24 | 22.13 | 2000 / 1 | 0.33875 / 0.3339 | — / — | 61.89 | 72.74 | 62.98 | 78.45 | 47.35 | 56.22 | 30.26 | 29.06 | 54.87 | 70.28/83.67/40.18 → 64.71 | 73.62/82.33/40.33 → 65.43 | 0.78/11.91 | W4k |
+| A: ordinary one-pass Longshot | 25 | 22.13 | 2000 / 1 | 0.33898 / 0.3344 | — / — | 62.08 | 72.80 | 64.88 | 79.21 | 50.17 | 56.47 | 29.95 | 29.06 | 55.58 | 69.22/81.67/37.91 → 62.93 | 73.39/79.33/41.55 → 64.76 | 1.87/9.29 | W4k |
+| A: ordinary one-pass Longshot | 26 | 22.13 | 2000 / 1 | 0.33941 / 0.3343 | — / — | 61.90 | 72.80 | 63.61 | 77.69 | 48.55 | 56.62 | 30.11 | 30.77 | 55.26 | 70.43/85.33/39.42 → 65.06 | 73.16/82.67/39.20 → 65.01 | 0.61/8.24 | W4k |
+| **A: ordinary one-pass Longshot [3-seed mean]** | 24–26 | 22.13 | 2000 / 1 | 0.33905 / 0.3342 | — / — | 61.96 | 72.78 | 63.83 | 78.45 | 48.69 | 56.44 | 30.11 | 29.63 | 55.24±0.35 | 69.98/83.56/39.17 → 64.23±1.14 | 73.39/81.44/40.36 → 65.06±0.34 | 1.09/9.81 | mean of 3 independently trained seeds |
+| B: recurrent, no time/no noise | 24 | 22.13 | 2000 / 4 | 0.34104 / 0.3361 | — / — | 61.24 | 72.80 | 64.72 | 74.62 | 41.13 | 49.03 | 30.41 | 28.49 | 52.81 | 69.07/84.00/37.68 → 63.58 | 71.19/78.67/38.21 → 62.69 | 0.88/4.66 | W4k |
+| B: recurrent, no time/no noise | 25 | 22.13 | 2000 / 4 | 0.34129 / 0.3365 | — / — | 61.77 | 72.63 | 64.48 | 71.63 | 40.70 | 48.86 | 30.11 | 30.77 | 52.62 | 68.39/81.67/36.69 → 62.25 | 70.28/83.00/37.07 → 63.45 | 1.43/3.20 | W4k |
+| B: recurrent, no time/no noise | 26 | 22.13 | 2000 / 4 | 0.34172 / 0.3369 | — / — | 61.59 | 72.69 | 63.69 | 74.28 | 40.96 | 48.79 | 31.03 | 29.34 | 52.80 | 69.37/80.67/39.27 → 63.10 | 70.05/85.33/40.41 → 65.27 | 0.51/1.40 | W4k |
+| **B: recurrent, no time/no noise [3-seed mean]** | 24–26 | 22.13 | 2000 / 4 | 0.34135 / 0.3365 | — / — | 61.53 | 72.71 | 64.30 | 73.51 | 40.93 | 48.89 | 30.52 | 29.53 | 52.74±0.10 | 68.94/82.11/37.88 → 62.98±0.68 | 70.51/82.33/38.56 → 63.80±1.32 | 0.94/3.09 | mean of 3 independently trained seeds |
+| C: time conditioning, no noise | 24 | 22.13 | 2000 / 4 | 0.33840 / 0.3336 | — / — | 62.19 | 72.80 | 64.96 | 77.57 | 46.33 | 55.48 | 30.41 | 29.91 | 54.96 | 70.43/80.67/38.44 → 63.18 | 74.83/84.33/39.80 → 66.32 | 2.89/15.21 | W4k |
+| C: time conditioning, no noise | 25 | 22.13 | 2000 / 4 | 0.33813 / 0.3338 | — / — | 62.50 | 72.74 | 65.27 | 72.77 | 41.13 | 53.48 | 30.41 | 31.34 | 53.70 | 70.74/83.00/38.06 → 63.93 | 70.66/80.33/37.00 → 62.66 | 3.71/18.04 | W4k |
+| C: time conditioning, no noise | 26 | 22.13 | 2000 / 4 | 0.33836 / 0.3335 | — / — | 61.87 | 72.80 | 64.80 | 76.22 | 46.59 | 53.27 | 30.72 | 31.62 | 54.74 | 70.89/83.67/40.33 → 64.96 | 73.77/83.33/40.86 → 65.99 | 2.18/12.25 | W4k |
+| **C: time conditioning, no noise [3-seed mean]** | 24–26 | 22.13 | 2000 / 4 | 0.33830 / 0.3336 | — / — | 62.19 | 72.78 | 65.01 | 75.52 | 44.68 | 54.07 | 30.52 | 30.96 | 54.47±0.67 | 70.68/82.44/38.94 → 64.02±0.90 | 73.09/82.67/39.22 → 64.99±2.02 | 2.93/15.17 | mean of 3 independently trained seeds |
+| D: diffusion, time + noise | 24 | 22.13 | 2000 / 4 | 0.33857 / 0.3341 | — / — | 62.30 | 72.80 | 65.35 | 78.58 | 47.53 | 54.17 | 31.34 | 28.77 | 55.10 | 71.27/85.33/38.13 → 64.91 | 72.78/84.00/39.73 → 65.50 | 2.31/11.20 | W4k |
+| D: diffusion, time + noise | 25 | 22.13 | 2000 / 4 | 0.33848 / 0.3340 | — / — | 62.39 | 72.85 | 64.09 | 75.17 | 43.43 | 52.00 | 27.96 | 32.19 | 53.76 | 71.27/84.00/37.23 → 64.16 | 72.93/84.67/36.16 → 64.59 | 3.85/11.74 | W4k |
+| D: diffusion, time + noise | 26 | 22.13 | 2000 / 4 | 0.33887 / 0.3337 | — / — | 62.27 | 72.80 | 64.25 | 76.85 | 46.84 | 53.68 | 29.19 | 29.34 | 54.40 | 70.66/87.33/40.64 → 66.21 | 72.02/84.00/40.79 → 65.60 | 0.31/3.00 | W4k |
+| **D: diffusion, time + noise [3-seed mean]** | 24–26 | 22.13 | 2000 / 4 | 0.33864 / 0.3339 | — / — | 62.32 | 72.81 | 64.56 | 76.87 | 45.93 | 53.29 | 29.49 | 30.10 | 54.42±0.67 | 71.06/85.56/38.67 → 65.10±1.04 | 72.58/84.22/38.89 → 65.23±0.56 | 2.16/8.65 | mean of 3 independently trained seeds |
+| Original H50 K4 checkpoint; eval K1 | 24 | 22.13 | 2000 / 1 | 0.33943 / 0.3345 | — / — | 62.33 | 72.85 | 65.19 | 77.36 | 45.65 | 53.55 | 28.42 | 27.64 | 54.12 | 71.19/84.67/39.35 → 65.07 | 73.01/86.67/41.85 → 67.18 | 1.46/5.48 | W4k |
+| Original H50 K4 checkpoint; eval K2 | 24 | 22.13 | 2000 / 2 | 0.33943 / 0.3345 | — / — | 62.28 | 72.80 | 65.43 | 77.06 | 45.39 | 54.17 | 28.88 | 26.50 | 54.06 | 71.65/85.00/39.35 → 65.33 | 73.84/84.67/42.00 → 66.84 | 1.50/4.97 | W4k |
+| Original H50 K4 checkpoint | 24 | 22.13 | 2000 / 4 | 0.33943 / 0.3345 | — / — | 62.05 | 72.74 | 64.80 | 76.56 | 44.62 | 54.44 | 29.03 | 26.21 | 53.81 | 69.60/86.00/39.27 → 64.96 | 71.65/87.00/39.20 → 65.95 | 1.63/5.55 | W4k |
+| Original H50 K4 checkpoint; eval K8 | 24 | 22.13 | 2000 / 8 | 0.33943 / 0.3345 | — / — | 61.97 | 72.85 | 64.48 | 75.97 | 44.03 | 54.54 | 29.03 | 27.35 | 53.78 | 69.14/86.00/38.59 → 64.58 | 70.58/81.33/38.59 → 63.50 | 1.60/6.98 | W4k |
+| Original H50 K4 checkpoint; eval K16 | 24 | 22.13 | 2000 / 16 | 0.33943 / 0.3345 | — / — | 61.84 | 72.85 | 64.40 | 75.93 | 43.94 | 54.49 | 28.73 | 27.35 | 53.69 | 68.99/84.00/38.67 → 63.89 | 69.45/83.00/37.83 → 63.43 | 1.57/7.39 | W4k |
+| Original H50 K4 checkpoint; eval K32 | 24 | 22.13 | 2000 / 32 | 0.33943 / 0.3345 | — / — | 61.88 | 72.85 | 64.72 | 76.01 | 43.17 | 54.19 | 28.73 | 27.07 | 53.58 | 69.22/84.00/38.59 → 63.94 | 69.29/81.67/37.91 → 62.96 | 1.63/7.11 | W4k |
+| H50 K4, 256k unique rows | 24 | 22.13 | 2000 / 4 | 0.33673 / 0.3349 | — / — | 62.31 | 72.63 | 64.88 | 74.92 | 44.20 | 53.72 | 28.57 | 29.91 | 53.89 | 69.90/85.33/38.74 → 64.66 | 71.87/83.33/40.86 → 65.36 | 2.21/8.71 | W4k |
+| Full SFT, LR1e-5 | 24 | 1881.83 | 2000 / 0 | 0.25845 / 0.2537 | — / — | 63.99 | 74.43 | 65.43 | 81.06 | 53.50 | 59.60 | 32.10 | 33.33 | 57.93 | 82.79/90.67/47.84 → 73.77 | 81.50/89.33/48.14 → 72.99 | 2.62/22.02 | W4k |
+| Full SFT, LR1e-6 | 24 | 1881.83 | 2000 / 0 | 0.32176 / 0.3169 | — / — | 62.56 | 72.80 | 65.11 | 81.06 | 53.24 | 57.09 | 31.03 | 31.62 | 56.81 | 71.95/88.33/41.02 → 67.10 | 45.19/65.00/15.47 → 41.88 | 4.32/74.40 | W4k |
+| H50 learned fixed routing | 24 | 22.18 | 2000 / 4 | 0.33924 / 0.3345 | — / — | 62.13 | 72.80 | 64.40 | 76.52 | 46.67 | 54.46 | 29.03 | 29.34 | 54.42 | 70.05/85.67/37.45 → 64.39 | 70.89/82.00/37.98 → 63.62 | 1.53/8.78 | W4k |
+| H50 learned refreshed routing | 24 | 22.18 | 2000 / 4 | 0.33899 / 0.3343 | — / — | 62.23 | 72.80 | 64.96 | 76.14 | 45.48 | 51.78 | 30.11 | 31.05 | 54.32 | 71.11/82.67/39.35 → 64.38 | — | 1.70/— | W4k; thinking-on cancelled |
+| H50 fixed-K4 fresh control | 24 | 22.13 | 2000 / 4 | 0.33922 / 0.3344 | 0.34658 / 0.34470 | — | — | — | — | — | — | — | — | — | — | — | —/— | Original eval failed; later NLL complete |
+| H50 sampled training K={2,4,6} | 24 | 22.13 | 2000 / 4 | 0.33942 / 0.3347 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | Original evaluation failed |
+| H50 read1 / write4 | 24 | 22.43 | 2000 / 4 | 0.33695 / 0.3323 | 0.34867 / 0.34557 | — | — | — | — | — | — | — | — | — | — | — | —/— | NLL only |
+| H50 read4 / write1 | 24 | 22.48 | 2000 / 4 | 0.34024 / 0.3355 | 0.35085 / 0.34860 | — | — | — | — | — | — | — | — | — | — | — | —/— | NLL only |
+| H50 untied four stages | 24 | 43.38 | 2000 / 4 | 0.33635 / 0.3315 | 0.34124 / 0.33915 | — | — | — | — | — | — | — | — | — | — | — | —/— | NLL only |
+| H50 adaptive full-cache rereading | 24 | 22.58 | 2000 / 4 | 0.33957 / 0.3345 | 0.34656 / 0.34424 | — | — | — | — | — | — | — | — | — | — | — | —/— | NLL only |
+| H50 persistent workspace | 24 | 22.13 | 2000 / 4 | 0.33999 / 0.3351 | 0.34736 / 0.34511 | — | — | — | — | — | — | — | — | — | — | — | —/— | NLL only |
+| H50 direct readout [cancelled] | 24 | 25.77 | 574 / 4 | 0.44442 / 0.4421 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | Partial; last50 steps 525–574; checkpoint 500 |
+| H50 + KV-only LoRA16 | 24 | 24.98 | 2000 / 4 | 0.29919 / 0.2948 | 0.30860 / 0.30806 | — | — | — | — | — | — | — | — | — | — | — | —/— | NLL only |
+| Ordinary Longshot; sigmoid gate −2 | 24 | 22.13 | 2000 / 1 | 0.33515 / 0.3305 | — / — | — | — | — | — | — | — | — | — | — | — | — | —/— | Training only; final BF16 gate −2.0 |
+
+## Reading the comparison
+
+- Every one of the 39 inventoried production training runs appears. Different K, stochastic-noise seed, cap, or generation-policy rows are evaluation settings, NOT new training seeds/models. Unevaluated planned sweeps/intermediate snapshots remain in the evidence files, not repeated as models.
+- Historical rows differ in writer/generation policy, batch or cap. Do not use them as interchangeable with the controlled W4k protocol. Old plain Longshot and controlled A are distinct training/configuration runs.
+- Final checkpoint2000 losses and final50 ranges are1951–2000. Partial readout:574 steps, checkpoint500; old read4/write4 first attempt:829 steps,no retained checkpoint; retry:1775 steps, checkpoint1750; cache-coordinates:377 steps,no retained checkpoint. See JSON for precise last50 windows.
+- Learned fixed K4 finished; later K1/K2/K8 sweeps were cancelled. Refreshed K4 has completed likelihood/off, cancelled on. Fixed/variable-depth original evaluations failed; the fixed control subsequently received the common NLL evaluation.
+- Parameters/compute are not all matched. Full SFT uses microbatch8; main processor runs16.256k-unique changes actual training rows. KV-only LoRA16 trains2.85M adapters plus22.13M processor; old all-linear LoRA21 trains22.08M adapters, joint44.21M.
+- Historical old SFT1e-4, LoRA21, joint LoRA21 and ordinary-Longshot generation results lack EOS/PAD target metadata and report100% truncation; those numeric scores must not be treated as clean corrected-stop baselines. Their plain-prompt likelihood scores are a separate metric. The old Base32k run with explicitly invalid EOS metadata is excluded; corrected Sep2 Base32k is shown. All other archived raw metrics, task-specific receipts and protocol notes remain in the evidence JSON.
+- No new model evaluations were launched to fill gaps. Consolidation changes repository organization, not historical experimental results.
+
+## Evidence
+
+[Decision summary](../qwen35-ablations.md), [machine-readable table](comparison.json), and [CSV](comparison.csv). The authenticated archive linked in the decision summary contains the original inventories, task metrics, receipts, configurations, and pre-consolidation source. Historical source-path strings remain unchanged.

@@ -1,0 +1,151 @@
+model:
+  variant: longshot
+  family: qwen3
+  sequence_len: 4096
+  vocab_size: 151936
+  hidden_size: 1024
+  intermediate_size: 3072
+  num_layers: 28
+  num_heads: 16
+  num_kv_heads: 8
+  head_dim: 128
+  rope_theta: 1000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 32
+    topk_linear_heads: null
+    score: kv_norm
+    hidden_size: 1152
+    intermediate_size: 4608
+    num_layers: 1
+    num_heads: 9
+    num_kv_heads: 9
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -5.0
+    attention_dropout: 0.0
+    per_cache_head_projections: false
+    gradient_checkpointing: true
+    update_stream: kv
+    out_proj_init: normal
+    gate_mode: sigmoid
+    processor_mode: standard
+    writer_head_fraction: 1.0
+    salience_temperature: 1.0
+    kv_score_init_k: 0.25
+    kv_score_init_v: 0.75
+    encoder_method: query_attention
+    encoder_seq_len: null
+    encoder_query_source: final_token
+    unrope_keys: true
+    include_self_head_kv: false
+    iterations: 1
+    iteration_mode: internal
+    internal_iteration_score: attn_l2
+    linear_state_cache: false
+    linear_state_query_mode: global
+    gate_linear_state_delta: true
+  lora: null
+  flow_processor: null
+  diffusion_processor:
+    num_steps: 4
+    time_conditioning: true
+    eta_max: 1.0
+    refinement_gate_init: -4.0
+    noise_scale: 0.0
+    conditioning_scale: 1.0
+    inference_mode: deterministic
+  processor_generation_mode: windowed
+  layer_types: null
+  processor_layer_indices: null
+  partial_rotary_factor: 1.0
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: null
+  linear_value_head_dim: null
+  linear_num_key_heads: null
+  linear_num_value_heads: null
+  moe_intermediate_size: null
+  num_experts: 0
+  num_experts_per_tok: 0
+  shared_expert_intermediate_size: null
+  hidden_act: silu
+  moe_experts_implementation: grouped_mm
+  router_aux_loss_coef: 0.0
+  output_router_logits: false
+  sliding_window: null
+  num_global_key_value_heads: null
+  global_head_dim: null
+  attention_k_eq_v: false
+  num_kv_shared_layers: 0
+  hidden_size_per_layer_input: 0
+  vocab_size_per_layer_input: null
+  final_logit_softcapping: null
+  rope_parameters: null
+  use_double_wide_mlp: false
+data:
+  kind: sft
+  dataset: /mnt/jfs-00/team-agent/home/f50056118/gcw-data/qwen3-06b-instruct-math-v1/train.jsonl
+  validation_dataset: /mnt/jfs-00/team-agent/home/f50056118/gcw-data/qwen3-06b-instruct-math-v1/validation.jsonl
+  tokenizer: hf
+  tokenizer_source: /mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: full_sequence
+  canonical_execution: true
+  expected_artifact_sha256: 6f316b45fc5606e164e8480ad260d672674b58faa6abd294239be2d53e950383
+  expected_source_ids_sha256: 9bf05e5bdfff35a351fe7d13640ac4ee0616d34bc41640a5b63bd6dd676ba8f9
+  experiment_manifest: /mnt/jfs-00/team-agent/home/f50056118/gcw-experiments/qwen3-06b-instruct-math-full-single-seed-v2-matrix11-dev2k/configs/experiment.json
+  sft_take_rows: 697728
+mode: sft
+distributed: none
+trainable: cache_processor
+backbone_checkpoint: /mnt/jfs-00/team-agent/home/f50056118/gcw-checkpoints/qwen3-06b-instruct-c1899de-native
+output_dir: /mnt/jfs-00/team-agent/home/f50056118/gcw-experiments/qwen3-06b-instruct-math-full-single-seed-v2-matrix11-dev2k/training-state/diffusion-longshot-t4-sigma0
+batch_size: 2
+sequence_len: 4096
+max_steps: 2000
+global_batch_rows: 64
+learning_rate: 0.001
+adam_beta2: 0.999
+warmup_steps: 60
+warmdown_ratio: 0.1
+weight_decay: 0.0
+grad_clip: 1.0
+bf16: true
+seed: 24
+save_every: 256
+save_final: true
+eval_every: 545
+eval_batches: 512
+eval_on_start: true
+wandb:
+  enabled: true
+  entity: huawei-noahs-ark
+  project: global-cache-workspace
+  name: qwen3-06b-instruct-math-full-single-seed-v2-matrix11-dev2k-diffusion-longshot-t4-sigma0
+  group: qwen3-06b-instruct-math-full-single-seed-v2-matrix11-dev2k
+  tags:
+  - qwen3-0.6b
+  - math
+  - single-seed
+  - full-epoch
+  - diffusion-longshot-t4-sigma0
+  id: qwen3-06b-instruct-math-full-single-seed-v2-matr-300c7b93db1f
+  resume: allow
+metadata:
+  experiment: qwen3-06b-instruct-math-full-single-seed-v2-matrix11
+  arm: diffusion-longshot-t4-sigma0
+  data_manifest: /mnt/jfs-00/team-agent/home/f50056118/gcw-experiments/qwen3-06b-instruct-math-full-single-seed-v2-matrix11/data-manifest.json
+  series: qwen3-06b-instruct-math-full-single-seed-v2-matrix11
+  execution_order: 8
+  effective_epoch_rows: 697728
+  drop_last_rows: 16
+  scheduler: warmup_stable_decay
+final_lr_frac: 0.0
+activation_checkpoint_windows: 4
+activation_checkpoint_min_padded_sequence_length: 0

@@ -123,6 +123,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             encoder_seq_len=encoder_seq_len or self.config.encoder_seq_len,
             output_dim=output_dim,
             flow_config=model_config.flow_processor,
+            diffusion_config=model_config.diffusion_processor,
             kv_cache_heads=self.num_kv_cache_heads,
             model_config=model_config,
             linear_state_specs=self.linear_state_specs,

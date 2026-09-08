@@ -1,0 +1,13 @@
+{
+  "backbone_checkpoint": "/mnt/jfs-00/team-agent/home/f50056118/gcw-checkpoints/qwen3-06b-instruct-c1899de-native",
+  "backbone_sha256": "8644cd99633051ad70e5b64d7010d3182f312e8730c7aa7c5e44252f89a44e54",
+  "dataset_path": "/mnt/jfs-00/team-agent/home/f50056118/gcw-data/qwen3-06b-instruct-math-v1/train.jsonl",
+  "dataset_sha256": "6f316b45fc5606e164e8480ad260d672674b58faa6abd294239be2d53e950383",
+  "global_batch_rows": 64,
+  "max_steps": 2000,
+  "schema": "gcw.math_experiment.v1",
+  "sequence_length": 4096,
+  "sequence_length_decision": "approved_4k_compute_tradeoff",
+  "tokenizer_identity_sha256": "de77afec391ee0c5267fe9a764289506ecbd663a95f6b46e4568a9c80647bda2",
+  "tokenizer_source": "/mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1"
+}

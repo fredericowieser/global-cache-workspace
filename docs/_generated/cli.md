@@ -38,6 +38,7 @@ usage: gcw eval [-h]
 ```text
 usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                     [--processor {on,off}]
+                    [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                     [--generation-process-every GENERATION_PROCESS_EVERY]
                     [--limit LIMIT] [--batch-size BATCH_SIZE]
                     [--prompt-mode {auto,plain,thinking_off,thinking_on}]
@@ -49,6 +50,7 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--diffusion-eval-solver-steps` | type: `_positive_int` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
@@ -61,6 +63,7 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 ```text
 usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                      [--tokenizer-path TOKENIZER_PATH] [--processor {on,off}]
+                     [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                      [--generation-process-every GENERATION_PROCESS_EVERY]
                      --tasks TASKS [TASKS ...] --mode
                      {thinking_off,thinking_on} [--batch-size BATCH_SIZE]
@@ -73,6 +76,7 @@ usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--hf-model` | flag |
 | `--tokenizer-path` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--diffusion-eval-solver-steps` | type: `_positive_int` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--tasks` | required |
 | `--mode` | required; choices: `thinking_off`, `thinking_on` |
@@ -102,6 +106,7 @@ usage: gcw eval fineweb [-h] --checkpoint CHECKPOINT [--data-dir DATA_DIR]
 ```text
 usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                         [--processor {on,off}]
+                        [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                         [--generation-process-every GENERATION_PROCESS_EVERY]
                         [--limit LIMIT] [--batch-size BATCH_SIZE]
                         [--prompt-mode {auto,plain,thinking_off,thinking_on}]
@@ -113,6 +118,7 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--diffusion-eval-solver-steps` | type: `_positive_int` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
@@ -125,6 +131,7 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 ```text
 usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                      [--processor {on,off}]
+                     [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                      [--generation-process-every GENERATION_PROCESS_EVERY]
                      [--limit LIMIT] [--batch-size BATCH_SIZE]
                      [--prompt-mode {auto,plain,thinking_off,thinking_on}]
@@ -136,6 +143,7 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--diffusion-eval-solver-steps` | type: `_positive_int` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
@@ -188,6 +196,7 @@ usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 ```text
 usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                       [--processor {on,off}]
+                      [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                       [--generation-process-every GENERATION_PROCESS_EVERY]
                       [--limit LIMIT] [--batch-size BATCH_SIZE]
                       [--prompt-mode {auto,plain,thinking_off,thinking_on}]
@@ -200,6 +209,7 @@ usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--checkpoint` | flag |
 | `--hf-model` | flag |
 | `--processor` | choices: `on`, `off`; default: `on` |
+| `--diffusion-eval-solver-steps` | type: `_positive_int` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |

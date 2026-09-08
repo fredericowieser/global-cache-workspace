@@ -180,6 +180,10 @@ class TrainConfig:
     freeze_backbone: bool = False
     activation_checkpoint_windows: int = 0
     activation_checkpoint_min_padded_sequence_length: int = 0
+    # Number of cache-processing windows kept in one autograd horizon. Zero
+    # preserves full BPTT; positive values detach recurrent cache state at each
+    # horizon boundary without changing the forward recurrence.
+    truncated_bptt_windows: int = 0
     seed: int = 24
     save_every: int = 0
     save_final: bool = True
@@ -267,7 +271,8 @@ class TrainConfig:
             )
         if self.trainable not in get_args(TrainableComponents):
             raise ValueError(
-                "trainable must be 'all', 'backbone', 'lora', or 'cache_processor'"
+                "trainable must be 'all', 'backbone', 'lora', "
+                "'cache_processor', or 'lora_and_cache_processor'"
             )
         if self.activation_checkpointing not in {
             "none",
@@ -315,8 +320,22 @@ class TrainConfig:
                     "longshot_gradient_checkpointing_seq_len_threshold requires "
                     "model.cache_processor.gradient_checkpointing=true"
                 )
-        if self.trainable == "lora" and self.model.lora is None:
-            raise ValueError("trainable='lora' requires model.lora")
+        if self.trainable in {"lora", "lora_and_cache_processor"}:
+            if self.model.lora is None:
+                raise ValueError(
+                    f"trainable={self.trainable!r} requires model.lora"
+                )
+        if self.trainable == "lora_and_cache_processor":
+            if self.model.cache_processor is None or self.model.variant == "tf":
+                raise ValueError(
+                    "trainable='lora_and_cache_processor' requires a cache processor"
+                )
+            if self.freeze_backbone or self.save_cache_processor_only:
+                raise ValueError(
+                    "trainable='lora_and_cache_processor' requires "
+                    "freeze_backbone=false and save_cache_processor_only=false "
+                    "so checkpoints retain both adapters and processor weights"
+                )
         if self.total_batch_size and self.global_batch_rows:
             raise ValueError(
                 "set only one of total_batch_size and global_batch_rows"
@@ -342,6 +361,18 @@ class TrainConfig:
         if self.activation_checkpoint_min_padded_sequence_length < 0:
             raise ValueError(
                 "activation_checkpoint_min_padded_sequence_length must be non-negative"
+            )
+        if isinstance(self.truncated_bptt_windows, bool) or not isinstance(
+            self.truncated_bptt_windows, int
+        ):
+            raise ValueError("truncated_bptt_windows must be an integer")
+        if self.truncated_bptt_windows < 0:
+            raise ValueError(
+                "truncated_bptt_windows must be non-negative"
+            )
+        if self.truncated_bptt_windows and self.model.variant == "tf":
+            raise ValueError(
+                "truncated_bptt_windows requires a cache-processor variant"
             )
         if self.activation_checkpoint_windows and self.model.variant == "tf":
             raise ValueError(
