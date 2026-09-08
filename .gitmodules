@@ -1,3 +1,12 @@
 [submodule "Global-Cache-Workspace-Theory-ICLR-2027-"]
 	path = src/Global-Cache-Workspace-Theory-ICLR-2027-
 	url = https://github.com/fredericowieser/Global-Cache-Workspace-Theory-ICLR-2027-.git
+[submodule "src/PhiID"]
+	path = src/PhiID
+	url = https://github.com/pmediano/PhiID
+[submodule "src/bottleneck_llm"]
+	path = src/bottleneck_llm
+	url = git@github.com:adnanoomerjee/bottleneck_llm.git
+[submodule "src/integrated-info-decomp"]
+	path = src/integrated-info-decomp
+	url = git@github.com:Imperial-MIND-lab/integrated-info-decomp.git
