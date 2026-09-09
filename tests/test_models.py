@@ -792,8 +792,13 @@ def test_qwen35_longshot_linear_state_head_selection_is_split_from_kv_heads():
         replace(cfg, cache_processor=replace(cfg.cache_processor, topk_heads=1))
     )
     processor = model.cache_processor
+    key_dim, value_dim = processor.block.linear_state_update_dims()
+    linear_values = torch.zeros(1, 4, value_dim)
+    linear_values[:, :, 0] = torch.tensor([0.0, 2.0, 5.0, 3.0])
     linear_inputs = longshot_module.LinearStateInputs(
-        features=torch.tensor([[[0.0], [2.0], [5.0], [3.0]]]),
+        features=torch.cat(
+            [torch.zeros(1, 4, key_dim), linear_values], dim=-1
+        ),
         specs=[],
     )
 

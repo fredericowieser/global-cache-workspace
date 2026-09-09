@@ -140,6 +140,7 @@ def _processor_block_params_with_dims(
     out_proj_dim: int,
     config: CacheProcessorConfig,
     projection_count: int = 1,
+    gate_params: int = 1,
 ) -> int:
     head_dim = config.hidden_size // config.num_heads
     q_dim = config.num_heads * head_dim
@@ -167,7 +168,7 @@ def _processor_block_params_with_dims(
         + config.num_layers * layer
         + config.hidden_size
         + out_proj
-        + 1
+        + gate_params
     )
 
 
@@ -184,6 +185,7 @@ def _longshot_processor_params(config: ModelConfig) -> int:
         else input_dim * _longshot_encoder_seq_len(cp)
     )
     out_proj_dim = _head_dim(config) if cp.update_stream == "v" else input_dim
+    gate_dim = cp.update_gate_dim(out_proj_dim)
     query = _longshot_query_params(input_dim, cache_heads, cp)
     linear_heads = _longshot_linear_state_heads(config)
     return (
@@ -193,9 +195,10 @@ def _longshot_processor_params(config: ModelConfig) -> int:
         + _processor_block_params_with_dims(
             input_norm_dim=input_dim,
             in_proj_dim=in_proj_dim,
-            out_proj_dim=out_proj_dim,
+            out_proj_dim=out_proj_dim + gate_dim,
             config=cp,
             projection_count=projection_count,
+            gate_params=int(gate_dim == 0),
         )
     )
 
@@ -277,6 +280,8 @@ def _longshot_linear_state_params(config: ModelConfig) -> int:
     output_dim = feature_dim + (
         2 if cp.linear_state_update_mode == "gated_delta" else 0
     )
+    if cp.gate_linear_state_delta:
+        output_dim += cp.update_gate_dim(output_dim)
     query_context_norm = context_dim
     input_adapter = feature_dim + feature_dim * cp.hidden_size + cp.hidden_size
     output_adapter = cp.hidden_size * output_dim + output_dim

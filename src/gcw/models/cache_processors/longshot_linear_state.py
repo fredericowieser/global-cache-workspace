@@ -7,7 +7,11 @@ import torch.nn.functional as F
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.backbones.transformer import RMSNorm
-from gcw.models.cache_processors.longshot_layers import _zero_projection
+from gcw.models.cache_processors.longshot_layers import (
+    _activate_update_gate,
+    _initialize_contextual_output_projection,
+    _zero_projection,
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,13 @@ class LinearStateAdapter(nn.Module):
             if processor_config.linear_state_update_mode == "gated_delta"
             else 0
         )
+        self.gate_dim = (
+            processor_config.update_gate_dim(self.output_dim)
+            if processor_config.gate_linear_state_delta
+            else 0
+        )
+        self.gate_mode = processor_config.gate_mode
+        self._gate_value: torch.Tensor | None = None
         self.query_projs = nn.ModuleDict()
         for key in self._query_projection_keys(specs):
             out_dim = (
@@ -78,7 +89,7 @@ class LinearStateAdapter(nn.Module):
             self.feature_dim, processor_config.hidden_size
         )
         self.output_proj = nn.Linear(
-            processor_config.hidden_size, self.output_dim
+            processor_config.hidden_size, self.output_dim + self.gate_dim
         )
         self.init_weights(processor_config)
 
@@ -92,15 +103,19 @@ class LinearStateAdapter(nn.Module):
                     nn.init.zeros_(module.bias)
             elif isinstance(module, RMSNorm):
                 nn.init.ones_(module.weight)
-        if config.out_proj_init == "zero":
+        if self.gate_dim:
+            _initialize_contextual_output_projection(
+                self.output_proj, self.output_dim, config, std
+            )
+        elif config.out_proj_init == "zero":
             _zero_projection(self.output_proj)
-            if config.live_rank1_linear_writer:
-                # Live keys give zero-valued factors a first gradient without
-                # changing the initial update or subsequent random draws.
-                weight = self.output_proj.weight
-                devices = [weight.device] if weight.is_cuda else []
-                with torch.random.fork_rng(devices=devices):
-                    nn.init.normal_(weight[: self.linear_key_dim], std=std)
+        if config.live_rank1_linear_writer:
+            # Live keys give zero-valued factors a first gradient without
+            # changing the initial update or subsequent random draws.
+            weight = self.output_proj.weight
+            devices = [weight.device] if weight.is_cuda else []
+            with torch.random.fork_rng(devices=devices):
+                nn.init.normal_(weight[: self.linear_key_dim], std=std)
 
     def query(
         self, layer_idx: int, following_cache_idx: int, context: torch.Tensor
@@ -141,3 +156,14 @@ class LinearStateAdapter(nn.Module):
         return self.input_proj(
             self.input_norm(features.to(self.input_proj.weight.dtype))
         )
+
+    def project_update(self, hidden: torch.Tensor) -> torch.Tensor:
+        projected = self.output_proj(hidden)
+        if self.gate_dim == 0:
+            return projected
+        delta, gate_logits = projected.split(
+            [self.output_dim, self.gate_dim], dim=-1
+        )
+        gate = _activate_update_gate(gate_logits, self.gate_mode, delta.dtype)
+        self._gate_value = gate.detach()
+        return delta * gate

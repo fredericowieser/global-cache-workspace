@@ -53,6 +53,14 @@ def test_longshot_processor_params_match_model_for_encoder_methods():
             per_cache_head_projections=True,
         ),
         replace(base_cp, head_selection_method="learned_contextual"),
+        replace(base_cp, update_gate_type="contextual_scalar"),
+        replace(base_cp, update_gate_type="contextual_vector"),
+        replace(
+            base_cp,
+            update_gate_type="contextual_vector",
+            update_stream="v",
+            per_cache_head_projections=True,
+        ),
         replace(
             base_cp,
             head_selection_method="random",
@@ -146,8 +154,13 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
         cfg,
         cache_processor=replace(cp, head_selection_method="learned_contextual"),
     )
+    contextual_cfgs = [
+        replace(cfg, cache_processor=replace(cp, update_gate_type=gate_type))
+        for gate_type in ("contextual_scalar", "contextual_vector")
+    ]
     gated_model = build_model(gated_cfg)
     learned_model = build_model(learned_cfg)
+    contextual_models = [build_model(c) for c in contextual_cfgs]
 
     assert processor_params(cfg) == sum(
         p.numel() for p in model.cache_processor.parameters()
@@ -158,6 +171,12 @@ def test_qwen35_longshot_linear_state_processor_params_match_model():
     assert processor_params(learned_cfg) == sum(
         p.numel() for p in learned_model.cache_processor.parameters()
     )
+    for contextual_cfg, contextual_model in zip(
+        contextual_cfgs, contextual_models
+    ):
+        assert processor_params(contextual_cfg) == sum(
+            p.numel() for p in contextual_model.cache_processor.parameters()
+        )
     assert processor_params(gated_cfg) > processor_params(cfg)
     assert processor_params(cfg) > processor_params(default_cfg)
     assert processor_params(cfg) < processor_params(shared_cfg)

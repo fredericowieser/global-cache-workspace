@@ -12,6 +12,9 @@ CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
 CacheOutputScaleMode = Literal["learned", "fixed_one"]
 CacheGateMode = Literal["sigmoid", "direct"]
+CacheUpdateGateType = Literal[
+    "static_scalar", "contextual_scalar", "contextual_vector"
+]
 CacheProcessorMode = Literal[
     "standard", "workspace_broadcast", "head_mask_broadcast"
 ]

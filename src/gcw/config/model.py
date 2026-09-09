@@ -23,6 +23,7 @@ from gcw.config.types import (
     CacheProcessorIterationMode,
     CacheProcessorInternalIterationScore,
     CacheProcessorMode,
+    CacheUpdateGateType,
     CacheUpdateStream,
     DiffusionInferenceMode,
     DiffusionTrainingMethod,
@@ -69,6 +70,7 @@ class CacheProcessorConfig:
     update_stream: CacheUpdateStream = "kv"
     out_proj_init: CacheOutProjInit = "normal"
     gate_mode: CacheGateMode = "sigmoid"
+    update_gate_type: CacheUpdateGateType = "static_scalar"
     processor_mode: CacheProcessorMode = "standard"
     writer_head_fraction: float = 1.0
     salience_temperature: float = 1.0
@@ -144,6 +146,15 @@ class CacheProcessorConfig:
         if self.gate_mode not in {"sigmoid", "direct"}:
             raise ValueError(
                 "cache_processor.gate_mode must be 'sigmoid' or 'direct'"
+            )
+        if self.update_gate_type not in {
+            "static_scalar",
+            "contextual_scalar",
+            "contextual_vector",
+        }:
+            raise ValueError(
+                "cache_processor.update_gate_type must be 'static_scalar', "
+                "'contextual_scalar', or 'contextual_vector'"
             )
         if self.processor_mode not in {
             "standard",
@@ -221,6 +232,17 @@ class CacheProcessorConfig:
             )
         if self.linear_state_update_mode == "gated_delta":
             self.gate_linear_state_delta = False
+
+    def update_gate_dim(self, output_dim: int) -> int:
+        if self.update_gate_type == "static_scalar":
+            return 0
+        if self.update_gate_type == "contextual_scalar":
+            return 1
+        if self.update_gate_type == "contextual_vector":
+            return output_dim
+        raise ValueError(
+            f"unsupported cache_processor.update_gate_type: {self.update_gate_type}"
+        )
 
     @property
     def stream_factor(self) -> int:

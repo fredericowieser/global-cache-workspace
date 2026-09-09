@@ -88,6 +88,27 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
         )
 
     if processor is not None:
+        if (
+            processor.update_gate_type != "static_scalar"
+            and config.variant != "longshot"
+        ):
+            add(
+                "update_gate_variant",
+                "contextual cache update gates require variant='longshot'",
+                "model.cache_processor.update_gate_type",
+            )
+        if processor.update_gate_type != "static_scalar" and (
+            processor.output_scale_mode == "fixed_one"
+            or (
+                diffusion is not None
+                and diffusion.training_method == "scheduled"
+            )
+        ):
+            add(
+                "update_gate_output_scale",
+                "contextual cache update gates require learned output scaling",
+                "model.cache_processor.update_gate_type",
+            )
         if processor.output_scale_mode == "fixed_one":
             if config.variant in {"bt", "icarus"}:
                 add(
