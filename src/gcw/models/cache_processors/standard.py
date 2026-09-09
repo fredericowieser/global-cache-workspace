@@ -152,7 +152,20 @@ class CacheProcessor(nn.Module):
         )
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
         self.out_proj = nn.Linear(config.hidden_size, input_dim)
-        self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        fixed_output_scale = config.output_scale_mode == "fixed_one" or (
+            diffusion_config is not None
+            and diffusion_config.training_method == "scheduled"
+        )
+        if fixed_output_scale:
+            if config.out_proj_init != "zero":
+                raise ValueError(
+                    "fixed-one cache output scaling requires cache_processor.out_proj_init='zero'"
+                )
+            self.register_parameter("gate", None)
+        else:
+            self.gate: nn.Parameter | None = nn.Parameter(
+                torch.full((1,), config.gate_init)
+            )
         self._gate_value: torch.Tensor | None = None
         if flow_config is not None and diffusion_config is not None:
             raise ValueError(
@@ -178,7 +191,8 @@ class CacheProcessor(nn.Module):
                     nn.init.zeros_(module.bias)
             elif isinstance(module, RMSNorm):
                 nn.init.ones_(module.weight)
-        nn.init.constant_(self.gate, self.config.gate_init)
+        if self.gate is not None:
+            nn.init.constant_(self.gate, self.config.gate_init)
         if self.config.out_proj_init == "zero":
             nn.init.zeros_(self.out_proj.weight)
             if self.out_proj.bias is not None:
@@ -239,8 +253,17 @@ class CacheProcessor(nn.Module):
     def forward(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         return x + self.scaled_update(x, positions)
 
+    def pop_iteration_metrics(self) -> dict[str, float]:
+        if self.diffusion is None:
+            return {}
+        return self.diffusion.pop_scheduled_metrics()
+
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
-        if self.config.gate_mode == "sigmoid":
+        if self.gate is None:
+            scale = torch.ones(
+                (), dtype=dtype, device=self.out_proj.weight.device
+            )
+        elif self.config.gate_mode == "sigmoid":
             scale = torch.sigmoid(self.gate).to(dtype)
         elif self.config.gate_mode == "direct":
             scale = self.gate.to(dtype)

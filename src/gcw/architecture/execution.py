@@ -350,6 +350,10 @@ def _validate_noisy_diffusion(config: "TrainConfig") -> None:
         raise ValueError(
             "compiled noisy-Diffusion recurrence requires BGT with diffusion_processor.noise_scale>0"
         )
+    if diffusion.training_method != "fixed":
+        raise ValueError(
+            "compiled noisy-Diffusion recurrence does not support scheduled diffusion"
+        )
     processor = config.model.cache_processor
     if processor is not None and processor.attention_dropout != 0.0:
         raise ValueError(

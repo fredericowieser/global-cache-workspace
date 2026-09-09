@@ -46,6 +46,8 @@ guides/add-a-cache-processor
 :caption: Experiments
 
 experiments/qwen3-math-adaptation
+experiments/gcw-dev2k
+experiments/qwen35-ablations
 experiments/smollm-matched-total
 experiments/future
 ```

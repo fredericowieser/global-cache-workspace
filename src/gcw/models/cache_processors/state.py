@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import torch
@@ -37,6 +37,35 @@ class CacheState:
 
     def layer(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.keys[idx], self.values[idx]
+
+    def detach(self) -> "CacheState":
+        """Return a cache boundary with no autograd history before it."""
+        linear_states = None
+        if self.linear_states is not None:
+            linear_states = {
+                layer_idx: (
+                    recurrent.detach(),
+                    None if convolution is None else convolution.detach(),
+                )
+                for layer_idx, (
+                    recurrent,
+                    convolution,
+                ) in self.linear_states.items()
+            }
+        sidecar = None
+        if self.kv_score_sidecar is not None:
+            sidecar = replace(
+                self.kv_score_sidecar,
+                scores=self.kv_score_sidecar.scores.detach(),
+            )
+        return replace(
+            self,
+            keys=[key.detach() for key in self.keys],
+            values=[value.detach() for value in self.values],
+            scores=self.scores.detach(),
+            linear_states=linear_states,
+            kv_score_sidecar=sidecar,
+        )
 
     def select_indices(
         self, process_every: int = 64, topk: int = 32

@@ -23,6 +23,109 @@ Evaluation constructs independent state. It does not mutate a training checkpoin
 
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
+## Processor provenance in matrix and chat results
+
+Matrix schema `gcw.benchmark_matrix.v3` and chat schema
+`gcw.chat_benchmark_matrix.v2` distinguish three booleans:
+
+- `processor_requested`: the requested `--processor on/off` policy.
+- `processor_present`: an actual GCW cache processor was loaded, before bypass.
+- `processor_enabled`: that loaded processor remains active (present and requested).
+
+These fields live in `target`; chat's top-level fields mirror that identity.
+Matrix `config` records the policy as `processor_requested`. The Python input
+argument remains `processor_enabled` for compatibility; it expresses a request,
+not evidence of a processor. Effective enabled state is not a processor call count.
+
+Plain TF (including full-SFT) and HF targets have present/enabled both false under
+either policy; TF retains its loaded model without a bypass wrapper. Use
+`--processor off` for full-SFT controls. Composed checkpoints retain their processor
+when on and bypass to their exact loaded backbone when off. Processor-only cadence
+and diffusion solver overrides require an applicable active processor. Native
+loading, generation cadence, and stopping are unchanged. Older schemas retain
+their historical meaning and must not be interpreted as effective processor state.
+
+## Answer-only teacher-forced NLL
+
+Use the small native evaluator for token-weighted answer likelihood, not generation
+accuracy or benchmark scores. It has no campaign-specific rank, cadence, step,
+precision, or solver policy:
+
+```bash
+uv run --extra cpu python scripts/evaluate_answer_nll.py \
+  --checkpoint /path/to/version-2-checkpoint \
+  --expected-manifest-sha256 <trusted-manifest-sha256> \
+  --data /path/to/answers.jsonl \
+  --expected-data-sha256 <trusted-whole-file-sha256> \
+  --expected-count 100 \
+  --out data/eval-runs/answer-nll.json
+```
+
+The input is canonical JSONL: exactly string `prompt` and `answer` fields. Blank
+lines do not count as rows but remain part of the whole-file byte hash. Empty
+answers retain the native EOT target. Duplicate Unicode-whitespace-normalized
+prompts are rejected (case is preserved). Repeat `--disjoint-from JSONL SHA256
+COUNT` to reject overlap with additional anchored datasets. This establishes only
+exact normalized-prompt disjointness, not paraphrase or pretraining independence.
+
+By default, sequence length, tokenizer, prefix, suffix, chat-template, and thinking
+options come from the checkpoint's training fingerprint. To specify a complete
+alternative evaluation policy, supply both `--sequence-len N` and `--tokenizer
+int|cosmo2|hf:SOURCE`, plus any `--response-prefix`, `--prompt-suffix`,
+`--chat-template`, or `--enable-thinking` options. Non-answer-only input policies
+are rejected. Tokenization is exactly `gcw.data.sft.sft_batch`; the labels are
+already causally shifted. The evaluator does **not** shift again. It scores all
+non-`-100` targets using the existing bounded native reference loss. Vocabulary
+projection covers at most 32 positions at once, including ignored positions;
+FP32 per-token losses are then summed over answer targets. Total NLL divides by
+total targets, not examples. This avoids allocating full-sequence vocabulary
+logits. Each row runs unpadded at batch size one; zero-target rows and nonfinite
+scored losses fail rather than being silently dropped. `at_length_cap` indicates that
+the input reached the limit, not proof of truncation.
+
+The native inference checkpoint loader handles TF/SFT, ordinary LoRA, processor,
+and joint checkpoints without bypassing processors. A complete version-2 training
+manifest and every declared payload hash must verify; optimizer/RNG files are
+hashed but never deserialized. Model-only directories without that manifest are
+not admitted by this stricter protocol. Processor-only payloads additionally need
+`--expected-loaded-state-sha256` to bind the exact restored external backbone and
+processor state; use `gcw.provenance.tensor_state_sha256(model.state_dict())` from
+a trusted reference load. This is inference, not processor-only training resume.
+Only explicit native legacy generation/tensor-name migrations are admitted;
+arbitrary loaded-config differences and partial backbone/adapter payloads fail.
+
+`--device` defaults to CPU and `--dtype` to native `auto`; FP32, FP16, and BF16
+overrides are available. The trained solver configuration is retained unless
+`--solver-steps N` explicitly requests the native diffusion evaluation override.
+The receipt records actual scheduled field calls per row and in total; zero
+means no scheduled fields ran, not necessarily no processor calls. Stochastic
+diffusion and random head selection are rejected by this deterministic protocol.
+No processor-disabled control is silently substituted. Optional
+`--expected-step` and `--expected-tokenizer-sha256` add external identity checks.
+Tokenizer identity includes the actual serialized tokenization pipeline and
+special-token/template settings (HF tokenizers must have a serializable fast
+backend).
+
+One complete JSON receipt contains the loaded state hash, original/effective
+configuration, manifest and payload hashes, dataset identities, tokenizer and
+package-source hashes, data policy, per-row input/target/mask identities, counts,
+and token-weighted totals. Source files, checkpoint files, data, tokenizer, and
+loaded model state are rechecked before atomic publication. Existing output is
+never overwritten; failures publish no success receipt. SHA256 hashes require
+trusted external anchors; they are integrity bindings, not signatures.
+
+Library entry points live in `gcw.evaluation.answer_nll`: `answer_nll`,
+`evaluate_answer_nll`, and `paired_answer_nll`. For paired comparisons, first use
+`load_answer_nll_rows(path, expected_sha256=trusted_receipt_hash)` on each receipt,
+then call `paired_answer_nll(reference, candidate, expected_count=N)` with the
+independently known dataset size. Missing, duplicate, reordered, or
+identity-mismatched rows fail in linear time, including identical omissions from
+both sides.
+`delta_nll` is candidate minus reference, weighted by the shared target counts;
+negative is better. All comparisons must use the same data and tokenization
+policy. Receipts and parsed rows are retained in memory; this is a bounded,
+auditable batch-one evaluator, not a high-throughput streaming service.
+
 ## Legacy paper7 compatibility
 
 `gcw eval paper7-legacy` exists for direct compatibility with martin-branch paper7

@@ -187,7 +187,7 @@ def _processor_block_flops_per_call(
     config: CacheProcessorConfig,
     selected: int,
     *,
-    field_evaluations: int = 1,
+    field_evaluations: float = 1,
 ) -> float:
     in_out = (
         2
@@ -234,7 +234,13 @@ def processor_forward_flops_per_sequence(
     per_layer_dim = cp.stream_factor * config.num_kv_heads * head_dim
     total = 0.0
     if config.diffusion_processor is not None:
-        field_evaluations = config.diffusion_processor.num_steps
+        diffusion = config.diffusion_processor
+        if diffusion.decoupled_schedule:
+            field_evaluations = float(diffusion.scheduled_training_solver_steps)
+        elif diffusion.training_method == "scheduled":
+            field_evaluations = (diffusion.num_steps + 1) / 2.0
+        else:
+            field_evaluations = float(diffusion.num_steps)
     else:
         field_evaluations = (
             config.flow_processor.num_steps
@@ -310,7 +316,7 @@ def _icarus_processor_block_flops_per_call(
     cache_heads: int,
     selected_heads: int,
     *,
-    field_evaluations: int = 1,
+    field_evaluations: float = 1,
 ) -> float:
     output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
     in_out = (
@@ -345,7 +351,7 @@ def _longshot_processor_block_flops_per_call(
     cache_heads: int,
     selected_heads: int,
     *,
-    field_evaluations: int = 1,
+    field_evaluations: float = 1,
     model_config: ModelConfig | None = None,
     routing_phase: str = "hard",
 ) -> float:
@@ -477,6 +483,16 @@ def _longshot_processor_block_flops_per_call(
                 + field_evaluations * initial_field
                 + initial_selection
             )
+        )
+    if (
+        model_config is not None
+        and model_config.diffusion_processor is not None
+    ):
+        # Diffusion holds the initial identities/gates fixed for every field.
+        return float(
+            encode_decode
+            + initial_selection
+            + field_evaluations * initial_field
         )
     reselection = 0
     if model_config is None or model_config.flow_processor is None:

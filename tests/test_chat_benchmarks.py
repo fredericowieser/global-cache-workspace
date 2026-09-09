@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import hashlib
+import json
 
+import pytest
 import torch
 
 from gcw.evaluation.chat_benchmarks import (
@@ -117,3 +120,86 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
     assert result["tasks"]["piqa"]["parse_rate"] == 1.0
     assert result["tasks"]["svamp"]["truncation_rate"] == 0.0
     assert backend.calls[0][2] == 2048
+
+
+@pytest.mark.parametrize("target", ["hf", "tf", "bgt"])
+@pytest.mark.parametrize("requested", [False, True])
+def test_chat_processor_metadata_comes_from_backend(
+    tmp_path, monkeypatch, target, requested
+):
+    import gcw.evaluation.chat_benchmarks as chat
+
+    backend = FakeBackend()
+    present = target == "bgt"
+    backend.identity = {
+        "kind": "hf" if target == "hf" else "gcw",
+        "processor_requested": requested,
+        "processor_present": present,
+        "processor_enabled": requested and present,
+    }
+
+    def load_backend(path, device, *, processor_enabled, **kwargs):
+        assert path == tmp_path
+        assert processor_enabled is requested
+        return backend
+
+    monkeypatch.setattr(chat, "HFBenchmarkBackend", load_backend)
+    monkeypatch.setattr(chat, "GCWBenchmarkBackend", load_backend)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        chat, "_load_tokenizer", lambda path: (FakeTokenizer(), {})
+    )
+    monkeypatch.setattr(
+        chat,
+        "_load_task_examples",
+        lambda tasks: (
+            [
+                ChatExample(
+                    0, "piqa", "piqa", 0, "prompt", "choice", "B", ("x", "y")
+                )
+            ],
+            {},
+        ),
+    )
+    result = run_chat_benchmarks(
+        tasks=["piqa"],
+        mode="thinking_off",
+        batch_size=1,
+        tokenizer_path=tmp_path,
+        processor_enabled=requested,
+        **{"hf_model" if target == "hf" else "checkpoint": tmp_path},
+    )
+    assert result["schema"] == "gcw.chat_benchmark_matrix.v2"
+    for field in (
+        "processor_requested",
+        "processor_present",
+        "processor_enabled",
+    ):
+        assert result[field] is backend.identity[field]
+        assert result[field] is result["target"][field]
+    assert result["tasks"]["piqa"]["accuracy"] == 1.0
+    digest = result.pop("payload_sha256")
+    assert (
+        digest
+        == hashlib.sha256(
+            json.dumps(
+                result, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+    )
+
+
+@pytest.mark.parametrize("requested", [False, True])
+@pytest.mark.parametrize(
+    "override", ["generation_process_every", "diffusion_eval_solver_steps"]
+)
+def test_chat_rejects_processor_only_overrides_for_hf(requested, override):
+    with pytest.raises(ValueError, match="HF targets|only to GCW"):
+        run_chat_benchmarks(
+            tasks=["piqa"],
+            mode="thinking_off",
+            batch_size=1,
+            hf_model="unused-local-path",
+            processor_enabled=requested,
+            **{override: 1},
+        )

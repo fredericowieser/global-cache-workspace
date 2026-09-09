@@ -446,6 +446,7 @@ def benchmark_optimizer_step(
                     y,
                     loss_backend=config.loss_backend,
                     attention_mask=attention_mask,
+                    truncated_bptt_windows=config.truncated_bptt_windows,
                 )
             (loss / accumulation).backward()
         _clip_grad_norm(model, params, config.grad_clip)
@@ -501,6 +502,12 @@ def benchmark_optimizer_step(
         "name": "optimizer_step",
         "kind": "complete_training_optimizer_step",
         "processor_variant": config.model.variant,
+        "training_method": (
+            "truncated_bptt"
+            if config.truncated_bptt_windows
+            else "full_bptt"
+        ),
+        "truncated_bptt_windows": config.truncated_bptt_windows,
         "warmup": warmup,
         "measured_steps": steps,
         "gradient_accumulation_steps": accumulation,

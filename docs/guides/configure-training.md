@@ -82,7 +82,29 @@ performance:
 
 This source build does not admit `combined_v1`. When disabled, receipt/key fields must remain absent. Future enablement requires all of `receipt_path`, `key_path`, `key_id`, and `qualification_id`, then a source-, config-, kernel-, runtime-, and GPU-bound authenticated receipt. There is no eager fallback. Do not add these fields to campaign configs until the H100 and H200 qualification receipts are published and the source admission bit changes.
 
-Set `trainable: lora` with `model.lora` for low-rank backbone adaptation. GCW freezes base weights and trains only `lora_a` and `lora_b` on explicitly named projections. Zero-initialized output factors preserve the starting backbone exactly.
+### LoRA targets and joint training
+
+Set `trainable: lora` with `model.lora` for low-rank backbone adaptation. GCW freezes base weights and trains only `lora_a` and `lora_b` on explicitly named backbone projections. Targets are module names, not a request to train all parameters: the ordinary defaults remain `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, and `down_proj`. `trainable: all` instead unfreezes the complete model, including base weights.
+
+The Qwen3.5 all-linear baseline additionally targets `in_proj_qkv`, `in_proj_z`, `in_proj_b`, `in_proj_a`, and `out_proj`. Those names cover its linear-attention projections; they do not adapt embeddings, normalization parameters, or convolutions.
+
+For KV-only adaptation on a Qwen3.5 hybrid backbone:
+
+```yaml
+trainable: lora
+model:
+  lora:
+    rank: 32
+    alpha: 32
+    dropout: 0
+    targets: [k_proj, v_proj, in_proj_kv]
+```
+
+`k_proj` and `v_proj` adapt separate attention projections. The virtual target `in_proj_kv` adds independent rank-r K and V factors to native fused `[Q, K, V]` projections, leaving the native Q rows unchanged. It requires matching fused geometry and cannot be combined with `in_proj_qkv` (which adapts the entire fused projection). On backbones with only separate projections, use `[k_proj, v_proj]` instead. Zero-initialized output factors preserve starting outputs; the virtual target also isolates construction RNG so shared backbone and processor initialization stays matched to an adapter-free control. Ordinary target initialization is unchanged.
+
+Use `trainable: lora_and_cache_processor` with any ordinary or KV-only LoRA target list and a cache-processor variant to jointly train adapters and processor while freezing base backbone parameters. Leave `freeze_backbone: false` and `save_cache_processor_only: false`; full checkpoints must retain both components. This policy does not imply better results than standalone LoRA or processor training.
+
+Runtime non-embedding parameter counts include attached adapters. Analytical training FLOPs still exclude adapter operations (`adapter_flops_included: false` in LoRA run metadata); they are not exact joint-training compute counts.
 
 ## Loss backend
 
@@ -181,6 +203,16 @@ Segment checkpointing runs only in training with gradients enabled. Evaluation a
 Icarus has a rejected benchmark-only post-selection region. It is not a training configuration: ordinary `GCW_ICARUS_PROCESSOR_BACKEND=compile` fails before allocation because fixed batch-2 H200 Adam parameter parity did not meet the formal tolerance. Isolated diagnostic reproduction additionally requires `GCW_ALLOW_REJECTED_ICARUS_COMPILE=1`; provenance records that override and `campaign_admitted: false`. Campaign Icarus remains eager.
 
 Both checkpointing policies increase backward compute. The policies, segment size, minimum padded sequence length, and selected regional backend are runtime provenance and exact-resume fingerprint fields; changing any across resume is rejected.
+
+### Optional truncated BPTT
+
+Cache-processor training can cut autograd history at recurrent cache boundaries without changing the forward recurrence:
+
+```yaml
+truncated_bptt_windows: 1  # zero is full BPTT; positive values are the gradient horizon
+```
+
+The value counts `process_every` windows retained in one autograd horizon. A value of `1` prevents gradients from crossing a cache-processing boundary; larger values retain longer credit assignment. This policy is implemented at the shared windowed-cache boundary, so BT, BGT, Icarus, Longshot, and compatible backbone families use the same behavior. It is training-only in effect and does not alter evaluation losses. `train/training_method`, `train/truncated_bptt_windows`, and the corresponding W&B run metadata identify the method. The setting is part of the training fingerprint and must match for exact resume. It does not modify run names or user-supplied W&B tags.
 
 Longshot keeps its model-level switch as the fixed default. Set an adaptive training threshold only when `model.cache_processor.gradient_checkpointing` remains `true`:
 

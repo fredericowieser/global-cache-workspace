@@ -74,10 +74,10 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
             "diffusion_processor must be a DiffusionProcessorConfig",
             "model.diffusion_processor",
         )
-    if diffusion is not None and config.variant != "bgt":
+    if diffusion is not None and config.variant not in {"bgt", "longshot"}:
         add(
             "diffusion_variant",
-            "diffusion_processor requires variant 'bgt'",
+            "diffusion_processor requires variant 'bgt' or 'longshot'",
             "model.diffusion_processor",
         )
     if diffusion is not None and flow is not None:
@@ -96,6 +96,52 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                 "update_gate_variant",
                 "contextual cache update gates require variant='longshot'",
                 "model.cache_processor.update_gate_type",
+            )
+        if processor.update_gate_type != "static_scalar" and (
+            processor.output_scale_mode == "fixed_one"
+            or (
+                diffusion is not None
+                and diffusion.training_method == "scheduled"
+            )
+        ):
+            add(
+                "update_gate_output_scale",
+                "contextual cache update gates require learned output scaling",
+                "model.cache_processor.update_gate_type",
+            )
+        if processor.output_scale_mode == "fixed_one":
+            if config.variant in {"bt", "icarus"}:
+                add(
+                    "fixed_output_scale_variant",
+                    "fixed-one cache output scaling requires variant 'bgt' or 'longshot'",
+                    "model.cache_processor.output_scale_mode",
+                )
+            if processor.out_proj_init != "zero":
+                add(
+                    "fixed_output_scale_readout_init",
+                    "fixed-one cache output scaling requires cache_processor.out_proj_init='zero' to preserve the initial no-op",
+                    "model.cache_processor.out_proj_init",
+                )
+        if (
+            diffusion is not None
+            and diffusion.training_method == "scheduled"
+            and processor.out_proj_init != "zero"
+        ):
+            add(
+                "scheduled_diffusion_readout_init",
+                "scheduled diffusion requires cache_processor.out_proj_init='zero' because it writes without learned scalar gates",
+                "model.cache_processor.out_proj_init",
+            )
+        if (
+            config.variant == "longshot"
+            and diffusion is not None
+            and processor.iteration_mode == "internal"
+            and processor.iterations > 1
+        ):
+            add(
+                "diffusion_recurrence",
+                "Diffusion-Longshot does not support internal cache_processor iterations greater than one; use diffusion solver steps",
+                "model.cache_processor.iterations",
             )
         if config.variant == "bt":
             if processor.processor_mode != "standard":

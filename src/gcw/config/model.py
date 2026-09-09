@@ -19,12 +19,14 @@ from gcw.config.types import (
     CacheLinearStateQueryMode,
     CacheLinearStateUpdateMode,
     CacheOutProjInit,
+    CacheOutputScaleMode,
     CacheProcessorIterationMode,
     CacheProcessorInternalIterationScore,
     CacheProcessorMode,
     CacheUpdateGateType,
     CacheUpdateStream,
     DiffusionInferenceMode,
+    DiffusionTrainingMethod,
     Family,
     MoeExpertsImplementation,
     ProcessorGenerationMode,
@@ -85,8 +87,10 @@ class CacheProcessorConfig:
     linear_state_cache: bool = False
     linear_state_query_mode: CacheLinearStateQueryMode = "global"
     linear_state_update_mode: CacheLinearStateUpdateMode = "outer_product"
+    live_rank1_linear_writer: bool = False
     gate_linear_state_delta: bool = True
     generation_process_every: int | None = None
+    output_scale_mode: CacheOutputScaleMode = "learned"
 
     def __post_init__(self) -> None:
         if self.generation_process_every is not None and (
@@ -134,6 +138,10 @@ class CacheProcessorConfig:
         if self.out_proj_init not in {"normal", "zero"}:
             raise ValueError(
                 "cache_processor.out_proj_init must be 'normal' or 'zero'"
+            )
+        if self.output_scale_mode not in {"learned", "fixed_one"}:
+            raise ValueError(
+                "cache_processor.output_scale_mode must be 'learned' or 'fixed_one'"
             )
         if self.gate_mode not in {"sigmoid", "direct"}:
             raise ValueError(
@@ -211,6 +219,17 @@ class CacheProcessorConfig:
             raise ValueError(
                 "cache_processor.linear_state_update_mode must be 'outer_product' or 'gated_delta'"
             )
+        if not isinstance(self.live_rank1_linear_writer, bool):
+            raise ValueError("live_rank1_linear_writer must be a boolean")
+        if self.live_rank1_linear_writer and (
+            not self.linear_state_cache
+            or self.linear_state_update_mode != "outer_product"
+            or self.out_proj_init != "zero"
+        ):
+            raise ValueError(
+                "live_rank1_linear_writer requires linear_state_cache=true, "
+                "linear_state_update_mode='outer_product', and out_proj_init='zero'"
+            )
         if self.linear_state_update_mode == "gated_delta":
             self.gate_linear_state_delta = False
 
@@ -273,8 +292,17 @@ class DiffusionProcessorConfig:
     noise_scale: float = 0.15
     conditioning_scale: float = 1.0
     inference_mode: DiffusionInferenceMode = "deterministic"
+    training_method: DiffusionTrainingMethod = "fixed"
+    schedule_horizon: int | None = None
+    training_solver_steps: int | None = None
+    inference_solver_steps: int | None = None
+    perturbation_enabled: bool = True
 
     def __post_init__(self) -> None:
+        if self.training_method not in {"fixed", "scheduled"}:
+            raise ValueError(
+                "diffusion_processor.training_method must be 'fixed' or 'scheduled'"
+            )
         if (
             isinstance(self.num_steps, bool)
             or not isinstance(self.num_steps, int)
@@ -282,6 +310,37 @@ class DiffusionProcessorConfig:
         ):
             raise ValueError(
                 "diffusion_processor.num_steps must be a positive integer"
+            )
+        solver_fields = {
+            "schedule_horizon": self.schedule_horizon,
+            "training_solver_steps": self.training_solver_steps,
+            "inference_solver_steps": self.inference_solver_steps,
+        }
+        for name, value in solver_fields.items():
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value <= 0
+            ):
+                raise ValueError(
+                    f"diffusion_processor.{name} must be a positive integer when set"
+                )
+        if any(value is not None for value in solver_fields.values()):
+            if self.training_method == "fixed":
+                raise ValueError(
+                    "scheduled horizon and solver-step controls require training_method='scheduled'"
+                )
+            if self.schedule_horizon is None:
+                raise ValueError(
+                    "scheduled solver controls require diffusion_processor.schedule_horizon"
+                )
+            if self.training_solver_steps is None:
+                raise ValueError(
+                    "scheduled solver controls require diffusion_processor.training_solver_steps"
+                )
+        if not isinstance(self.perturbation_enabled, bool):
+            raise ValueError(
+                "diffusion_processor.perturbation_enabled must be a boolean"
             )
         if not isinstance(self.time_conditioning, bool):
             raise ValueError(
@@ -308,10 +367,37 @@ class DiffusionProcessorConfig:
             raise ValueError(
                 "diffusion_processor.noise_scale must be non-negative"
             )
+        if self.training_method == "scheduled":
+            if self.noise_scale == 0.0:
+                raise ValueError(
+                    "scheduled diffusion requires diffusion_processor.noise_scale>0"
+                )
+            if self.perturbation_enabled and not self.time_conditioning:
+                raise ValueError(
+                    "scheduled diffusion with perturbation requires diffusion_processor.time_conditioning=true"
+                )
         if self.conditioning_scale < 0.0:
             raise ValueError(
                 "diffusion_processor.conditioning_scale must be non-negative"
             )
+
+    @property
+    def decoupled_schedule(self) -> bool:
+        return self.schedule_horizon is not None
+
+    @property
+    def scheduled_horizon(self) -> int:
+        return self.schedule_horizon or self.num_steps
+
+    @property
+    def scheduled_training_solver_steps(self) -> int:
+        return self.training_solver_steps or self.num_steps
+
+    @property
+    def scheduled_inference_solver_steps(self) -> int:
+        if self.inference_solver_steps is not None:
+            return self.inference_solver_steps
+        return self.scheduled_training_solver_steps
 
 
 @dataclass

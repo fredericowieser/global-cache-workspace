@@ -16,6 +16,7 @@ from gcw.models.backbones.transformer import (
     RotaryCache,
     TF,
     _autocast_dtype,
+    detach_cache,
 )
 from gcw.models.backbones.qwen3.blocks import Qwen35Block
 from gcw.models.backbones.qwen3.linear_attention import (
@@ -253,6 +254,7 @@ class Qwen35MoeTF(Qwen35TF):
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
         processor_execution_factory: ProcessorExecutionFactory | None = None,
+        truncated_bptt_windows: int = 0,
         loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         del processor_execution_factory
@@ -260,6 +262,8 @@ class Qwen35MoeTF(Qwen35TF):
             raise ValueError(
                 "segmented window activation checkpointing does not yet support qwen3_5_moe router logits"
             )
+        if truncated_bptt_windows < 0:
+            raise ValueError("truncated_bptt_windows must be non-negative")
         cache: CacheLike = CacheState(
             [],
             [],
@@ -267,8 +271,15 @@ class Qwen35MoeTF(Qwen35TF):
         )
         hidden_chunks: list[torch.Tensor] = []
         router_chunks: list[list[torch.Tensor]] = [[] for _ in self.layers]
-        for start in range(0, input_ids.shape[1], process_every):
+        for window_index, start in enumerate(
+            range(0, input_ids.shape[1], process_every)
+        ):
             if start > 0:
+                if (
+                    truncated_bptt_windows
+                    and window_index % truncated_bptt_windows == 0
+                ):
+                    cache = detach_cache(cache)
                 cache = cast(CacheLike, processor(cache))
             end = min(start + process_every, input_ids.shape[1])
             hidden, cache, chunk_router_logits = (

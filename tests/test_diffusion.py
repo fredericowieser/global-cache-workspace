@@ -100,6 +100,61 @@ def test_diffusion_bgt_forward_backward_and_accounting():
     )
 
 
+def tiny_longshot_diffusion_config() -> ModelConfig:
+    return ModelConfig(
+        variant="longshot",
+        family="llama",
+        sequence_len=8,
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        rotary_style="llama",
+        cache_processor=CacheProcessorConfig(
+            process_every=4,
+            topk=2,
+            topk_heads=2,
+            score="kv_norm",
+            hidden_size=8,
+            intermediate_size=16,
+            num_layers=1,
+            num_heads=1,
+            num_kv_heads=1,
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+        ),
+        diffusion_processor=DiffusionProcessorConfig(
+            num_steps=2,
+            noise_scale=0.0,
+        ),
+    )
+
+
+def test_diffusion_longshot_forward_backward_and_accounting():
+    config = tiny_longshot_diffusion_config()
+    model = build_model(config)
+    model.init_weights()
+    tokens = torch.randint(0, config.vocab_size, (2, config.sequence_len))
+
+    loss = model(tokens, tokens)
+    loss.backward()
+
+    diffusion = next(
+        module
+        for module in model.modules()
+        if isinstance(module, TaskDirectedDiffusion)
+    )
+    assert diffusion.refinement_gate.grad is not None
+    assert torch.isfinite(loss)
+    assert config.architecture_name == "diffusion_longshot"
+    assert processor_params(config) == sum(
+        parameter.numel() for parameter in model.cache_processor.parameters()
+    )
+
+
 def test_flow_and_diffusion_are_mutually_exclusive():
     from gcw.config import FlowProcessorConfig
 

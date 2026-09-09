@@ -10,6 +10,7 @@ RotaryStyle = Literal["llama", "ppt"]
 MoeExpertsImplementation = Literal["grouped_mm"]
 CacheUpdateStream = Literal["kv", "v"]
 CacheOutProjInit = Literal["normal", "zero"]
+CacheOutputScaleMode = Literal["learned", "fixed_one"]
 CacheGateMode = Literal["sigmoid", "direct"]
 CacheUpdateGateType = Literal[
     "static_scalar", "contextual_scalar", "contextual_vector"
@@ -26,7 +27,9 @@ CacheProcessorInternalIterationScore = Literal[
 ]
 CacheLinearStateQueryMode = Literal["per_linear_state", "shared", "global"]
 CacheLinearStateUpdateMode = Literal["outer_product", "gated_delta"]
-TrainableComponents = Literal["all", "backbone", "lora", "cache_processor"]
+TrainableComponents = Literal[
+    "all", "backbone", "lora", "cache_processor", "lora_and_cache_processor"
+]
 ActivationCheckpointingPolicy = Literal["none", "standard_processor_layers"]
 BackboneChunkBackend = Literal[
     "eager", "compile", "compile_full_windows", "cuda_graph"
@@ -36,6 +39,7 @@ TrainingPrecision = Literal["fp32", "bf16_mixed", "bf16"]
 SFTLossScope = Literal["answer_only", "full_sequence"]
 ProcessorGenerationMode = Literal["windowed", "post_prefill_relative"]
 DiffusionInferenceMode = Literal["deterministic", "stochastic"]
+DiffusionTrainingMethod = Literal["fixed", "scheduled"]
 
 _FLOAT32_MAX = 3.4028234663852886e38
 _FLOAT32_MIN_SUBNORMAL = 2.0**-149

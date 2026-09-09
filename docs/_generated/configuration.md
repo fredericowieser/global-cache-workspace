@@ -99,8 +99,10 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `linear_state_cache` | `bool` | `False` |
 | `linear_state_query_mode` | `Literal['per_linear_state', 'shared', 'global']` | `'global'` |
 | `linear_state_update_mode` | `Literal['outer_product', 'gated_delta']` | `'outer_product'` |
+| `live_rank1_linear_writer` | `bool` | `False` |
 | `gate_linear_state_delta` | `bool` | `True` |
 | `generation_process_every` | `int \| None` | `None` |
+| `output_scale_mode` | `Literal['learned', 'fixed_one']` | `'learned'` |
 
 ## `FlowProcessorConfig`
 
@@ -182,7 +184,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `data` | `gcw.config.data.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, validation_dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None, experiment_manifest=None)` |
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
-| `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor']` | `'all'` |
+| `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor', 'lora_and_cache_processor']` | `'all'` |
 | `activation_checkpointing` | `Literal['none', 'standard_processor_layers']` | `'none'` |
 | `backbone_chunk_backend` | `Literal['eager', 'compile', 'compile_full_windows', 'cuda_graph']` | `'eager'` |
 | `loss_backend` | `Literal['reference', 'target_only', 'liger']` | `'reference'` |
@@ -216,6 +218,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `freeze_backbone` | `bool` | `False` |
 | `activation_checkpoint_windows` | `int` | `0` |
 | `activation_checkpoint_min_padded_sequence_length` | `int` | `0` |
+| `truncated_bptt_windows` | `int` | `0` |
 | `seed` | `int` | `24` |
 | `save_every` | `int` | `0` |
 | `save_final` | `bool` | `True` |

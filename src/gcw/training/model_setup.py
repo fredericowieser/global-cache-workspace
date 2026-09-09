@@ -36,7 +36,7 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
         if isinstance(processor, torch.nn.Module):
             processor.requires_grad_(False)
         return
-    if policy == "lora":
+    if policy in {"lora", "lora_and_cache_processor"}:
         model.requires_grad_(False)
         adapters = [
             module
@@ -45,11 +45,17 @@ def _apply_trainable_policy(model: torch.nn.Module, policy: str) -> None:
         ]
         if not adapters:
             raise ValueError(
-                "trainable='lora' requires attached LoRA projections"
+                f"trainable={policy!r} requires attached LoRA projections"
             )
         for adapter in adapters:
             adapter.lora_a.requires_grad_(True)
             adapter.lora_b.requires_grad_(True)
+        if policy == "lora_and_cache_processor":
+            if not isinstance(processor, torch.nn.Module):
+                raise ValueError(
+                    "trainable='lora_and_cache_processor' requires a cache processor"
+                )
+            processor.requires_grad_(True)
         return
     if policy == "cache_processor":
         if not isinstance(processor, torch.nn.Module):

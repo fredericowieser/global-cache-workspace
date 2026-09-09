@@ -21,6 +21,7 @@ from gcw.models.backbones.transformer.cache import (
     _flatten_windowed_cache,
     _unflatten_windowed_cache,
     _window_checkpoint_contexts,
+    detach_cache,
 )
 from gcw.models.backbones.transformer.generation import (
     generate_fast_tf,
@@ -95,8 +96,11 @@ class TF(Backbone):
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
         processor_execution_factory: ProcessorExecutionFactory | None = None,
+        truncated_bptt_windows: int = 0,
         loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
+        if truncated_bptt_windows < 0:
+            raise ValueError("truncated_bptt_windows must be non-negative")
         if processor is None:
             return self.forward_full(
                 input_ids,
@@ -120,6 +124,8 @@ class TF(Backbone):
                 kwargs["processor_execution_factory"] = (
                     processor_execution_factory
                 )
+            if truncated_bptt_windows:
+                kwargs["truncated_bptt_windows"] = truncated_bptt_windows
             return self.forward_windowed_loss(input_ids, targets, **kwargs)
         logits, _ = self.forward_windowed(
             input_ids, processor=processor, process_every=process_every
@@ -239,6 +245,7 @@ class TF(Backbone):
         attention_mask: torch.Tensor | None = None,
         activation_checkpoint_windows: int = 0,
         processor_execution_factory: ProcessorExecutionFactory | None = None,
+        truncated_bptt_windows: int = 0,
         loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
         del attention_mask
@@ -246,6 +253,8 @@ class TF(Backbone):
             raise ValueError(
                 "activation_checkpoint_windows must be non-negative"
             )
+        if truncated_bptt_windows < 0:
+            raise ValueError("truncated_bptt_windows must be non-negative")
         cache: CacheLike = CacheState(
             [],
             [],
@@ -263,22 +272,39 @@ class TF(Backbone):
         segment_span = windows_per_segment * process_every
         for segment_start in range(0, input_ids.shape[1], segment_span):
             segment_end = min(segment_start + segment_span, input_ids.shape[1])
+            segment_window_start = segment_start // process_every
             if checkpoint_active:
                 if processor_execution_factory is None:
                     raise RuntimeError(
                         "checkpointed window segments require a processor execution factory"
                     )
+                if (
+                    truncated_bptt_windows
+                    and segment_window_start > 0
+                    and segment_window_start % truncated_bptt_windows == 0
+                ):
+                    cache = detach_cache(cache)
                 hidden, cache = self._checkpointed_window_segment(
                     input_ids[:, segment_start:segment_end],
                     segment_start,
+                    segment_window_start,
                     cache,
                     processor_execution_factory=processor_execution_factory,
                     process_every=process_every,
+                    truncated_bptt_windows=truncated_bptt_windows,
                 )
                 hidden_chunks.append(hidden)
                 continue
-            for start in range(segment_start, segment_end, process_every):
+            for window_index, start in enumerate(
+                range(segment_start, segment_end, process_every),
+                segment_window_start,
+            ):
                 if start > 0:
+                    if (
+                        truncated_bptt_windows
+                        and window_index % truncated_bptt_windows == 0
+                    ):
+                        cache = detach_cache(cache)
                     cache = cast(CacheLike, processor(cache))
                 end = min(start + process_every, input_ids.shape[1])
                 hidden, cache = self.forward_chunk(
@@ -300,10 +326,12 @@ class TF(Backbone):
         self,
         segment_input_ids: torch.Tensor,
         segment_start: int,
+        segment_window_start: int,
         cache: CacheLike,
         *,
         processor_execution_factory: ProcessorExecutionFactory,
         process_every: int,
+        truncated_bptt_windows: int,
     ) -> tuple[torch.Tensor, WindowedCache]:
         boundary_cache = cache if isinstance(cache, WindowedCache) else None
         input_tensors, input_layout = _flatten_windowed_cache(boundary_cache)
@@ -322,8 +350,18 @@ class TF(Backbone):
             with processor_execution_factory() as segment_processor:
                 for relative_start in range(0, ids.shape[1], process_every):
                     start = segment_start + relative_start
+                    window_index = segment_window_start + (
+                        relative_start // process_every
+                    )
                     if start > 0:
-                        current = cast(CacheLike, segment_processor(current))
+                        if (
+                            truncated_bptt_windows
+                            and window_index % truncated_bptt_windows == 0
+                        ):
+                            current = detach_cache(current)
+                        current = cast(
+                            CacheLike, segment_processor(current)
+                        )
                     hidden, current = self.forward_chunk(
                         ids[:, relative_start : relative_start + process_every],
                         start,

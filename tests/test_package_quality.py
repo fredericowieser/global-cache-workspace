@@ -1,11 +1,93 @@
 from __future__ import annotations
 
+from configparser import ConfigParser
 from importlib import import_module
 from importlib.metadata import version
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import shutil
 import subprocess
 import sys
+import tarfile
+import zipfile
+
+import pytest
+
+
+@pytest.mark.parametrize("target", ["sdist", "wheel"])
+def test_distribution_excludes_initialized_research_trees(
+    tmp_path: Path, target: str
+) -> None:
+    pytest.importorskip(
+        "hatchling", reason="requires the Hatchling build backend"
+    )
+    backend = import_module(f"hatchling.builders.{target}")
+    builder_class = getattr(backend, f"{target.title()}Builder")
+    root = Path(__file__).resolve().parents[1]
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copyfile(root / "pyproject.toml", project / "pyproject.toml")
+
+    retained = {
+        "src/gcw/__init__.py",
+        "scripts/command.py",
+        "examples/example.py",
+        "configs/example.yaml",
+        "docs/index.md",
+        "README.md",
+        "LICENSE",
+        "uv.lock",
+    }
+    excluded = {
+        "src/gcw/spikes/prototype.py",
+        "src/future_research/nested/reference.py",
+        "src/future_research/__init__.py",
+        "src/unlisted.txt",
+        "experiments/result.txt",
+        "analysis/result.txt",
+        "artifacts/result.txt",
+        "data/result.txt",
+        "tests/test_dummy.py",
+    }
+    submodules = ConfigParser()
+    submodules.read(root / ".gitmodules")
+    for section in submodules.sections():
+        path = submodules[section]["path"]
+        excluded.update({f"{path}/__init__.py", f"{path}/nested/reference.md"})
+    for relative_path in retained | excluded:
+        path = project / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Dummy packaging fixture\n")
+
+    artifact = next(
+        builder_class(str(project)).build(
+            directory=str(tmp_path / "dist"), versions=["standard"]
+        )
+    )
+    if target == "sdist":
+        with tarfile.open(artifact) as archive:
+            files = {
+                PurePosixPath(*PurePosixPath(member.name).parts[1:]).as_posix()
+                for member in archive.getmembers()
+                if member.isfile()
+            }
+        assert retained | {"pyproject.toml", "PKG-INFO"} <= files
+        assert not files & excluded
+        assert all(
+            name.startswith("src/gcw/")
+            for name in files
+            if name.startswith("src/")
+        )
+    else:
+        with zipfile.ZipFile(artifact) as archive:
+            files = set(archive.namelist())
+        assert "gcw/__init__.py" in files
+        assert "gcw/spikes/prototype.py" not in files
+        assert all(
+            name.startswith("gcw/")
+            or PurePosixPath(name).parts[0].endswith(".dist-info")
+            for name in files
+        )
 
 
 def test_package_version_and_curated_subpackage_exports() -> None:
