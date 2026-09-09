@@ -109,13 +109,13 @@ class LinearStateAdapter(nn.Module):
             )
         elif config.out_proj_init == "zero":
             _zero_projection(self.output_proj)
-            if config.live_rank1_linear_writer:
-                # Live keys give zero-valued factors a first gradient without
-                # changing the initial update or subsequent random draws.
-                weight = self.output_proj.weight
-                devices = [weight.device] if weight.is_cuda else []
-                with torch.random.fork_rng(devices=devices):
-                    nn.init.normal_(weight[: self.linear_key_dim], std=std)
+        if config.live_rank1_linear_writer:
+            # Live keys give zero-valued factors a first gradient without
+            # changing the initial update or subsequent random draws.
+            weight = self.output_proj.weight
+            devices = [weight.device] if weight.is_cuda else []
+            with torch.random.fork_rng(devices=devices):
+                nn.init.normal_(weight[: self.linear_key_dim], std=std)
 
     def query(
         self, layer_idx: int, following_cache_idx: int, context: torch.Tensor

@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from gcw.architecture.contracts import _config_payload
 from gcw.config import (
     CacheProcessorConfig,
+    CacheUpdateGateType,
     DiffusionProcessorConfig,
     ModelConfig,
     to_dict,
@@ -14,7 +15,11 @@ from gcw.config import (
 from gcw.models import build_model
 
 
-def config(*, live: bool = True) -> ModelConfig:
+def config(
+    *,
+    live: bool = True,
+    update_gate_type: CacheUpdateGateType = "static_scalar",
+) -> ModelConfig:
     return ModelConfig(
         variant="longshot",
         family="qwen3_5",
@@ -50,6 +55,7 @@ def config(*, live: bool = True) -> ModelConfig:
             linear_state_cache=True,
             out_proj_init="zero",
             live_rank1_linear_writer=live,
+            update_gate_type=update_gate_type,
         ),
     )
 
@@ -132,6 +138,37 @@ def test_zero_update_has_live_value_then_key_gradients() -> None:
         ) == bool(step)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
+
+
+@pytest.mark.parametrize(
+    "update_gate_type", ["contextual_scalar", "contextual_vector"]
+)
+def test_contextual_gate_keeps_rank_one_writer_live(
+    update_gate_type: CacheUpdateGateType,
+) -> None:
+    model_config = config(update_gate_type=update_gate_type)
+    model = build_model(model_config)
+    model.init_weights()
+    adapter = model.cache_processor.block.linear_state_adapter
+    weight = adapter.output_proj.weight
+
+    assert torch.count_nonzero(weight[: adapter.linear_key_dim]) > 0
+    assert (
+        torch.count_nonzero(weight[adapter.linear_key_dim : adapter.output_dim])
+        == 0
+    )
+    assert torch.count_nonzero(weight[adapter.output_dim :]) == 0
+
+    tokens = torch.randint(0, model_config.vocab_size, (2, 9))
+    model(tokens, tokens).backward()
+    gradient = adapter.output_proj.weight.grad
+    assert gradient is not None and torch.isfinite(gradient).all()
+    assert (
+        torch.count_nonzero(
+            gradient[adapter.linear_key_dim : adapter.output_dim]
+        )
+        > 0
+    )
 
 
 @pytest.mark.parametrize("scheduled", [False, True])

@@ -246,8 +246,29 @@ def test_longshot_contextual_gate_flops_follow_gate_width():
     static_flops = processor_forward_flops_per_sequence(static, 128)
     scalar_flops = processor_forward_flops_per_sequence(scalar, 128)
     vector_flops = processor_forward_flops_per_sequence(vector, 128)
+    static_direct = replace(
+        static, cache_processor=replace(cp, gate_mode="direct")
+    )
+    scalar_direct = replace(
+        scalar,
+        cache_processor=replace(scalar.cache_processor, gate_mode="direct"),
+    )
+    calls = len(range(cp.process_every, 128, cp.process_every))
 
     assert static_flops < scalar_flops < vector_flops
+    assert (
+        static_flops - processor_forward_flops_per_sequence(static_direct, 128)
+        == calls
+    )
+    assert (
+        scalar_flops - processor_forward_flops_per_sequence(scalar_direct, 128)
+        == calls * scalar.cache_num_heads
+    )
+    assert (
+        processor_forward_flops_per_sequence(scalar_direct, 128)
+        - processor_forward_flops_per_sequence(static_direct, 128)
+        == 2 * calls * scalar.cache_num_heads * cp.hidden_size
+    )
 
 
 def test_longshot_processor_flops_scale_with_iterations():
@@ -428,6 +449,26 @@ def test_qwen35_longshot_linear_state_flops_are_counted():
         random,
         cache_processor=replace(random.cache_processor, topk_linear_heads=0),
     )
+    static_direct = replace(
+        enabled,
+        cache_processor=replace(enabled.cache_processor, gate_mode="direct"),
+    )
+    static_direct_without_linear_gate = replace(
+        static_direct,
+        cache_processor=replace(
+            static_direct.cache_processor, gate_linear_state_delta=False
+        ),
+    )
+    contextual = replace(
+        enabled,
+        cache_processor=replace(
+            enabled.cache_processor, update_gate_type="contextual_scalar"
+        ),
+    )
+    contextual_direct = replace(
+        contextual,
+        cache_processor=replace(contextual.cache_processor, gate_mode="direct"),
+    )
 
     assert processor_forward_flops_per_sequence(
         enabled, 16
@@ -456,6 +497,26 @@ def test_qwen35_longshot_linear_state_flops_are_counted():
     assert processor_forward_flops_per_sequence(
         random, 16
     ) > processor_forward_flops_per_sequence(random_without_linear_heads, 16)
+    calls = len(range(cp.process_every, 16, cp.process_every))
+    assert cfg.layer_types is not None
+    linear_heads = cfg.layer_types.count("linear_attention") * int(
+        cfg.linear_num_value_heads or cfg.num_heads
+    )
+    linear_output_dim = int(cfg.linear_key_head_dim or cfg.head_dim) + int(
+        cfg.linear_value_head_dim or cfg.linear_key_head_dim or cfg.head_dim
+    )
+    assert (
+        processor_forward_flops_per_sequence(static_direct, 16)
+        - processor_forward_flops_per_sequence(
+            static_direct_without_linear_gate, 16
+        )
+        == calls * linear_heads * linear_output_dim
+    )
+    assert processor_forward_flops_per_sequence(
+        contextual, 16
+    ) - processor_forward_flops_per_sequence(contextual_direct, 16) == calls * (
+        contextual.cache_num_heads + linear_heads
+    )
 
 
 def test_icarus_value_only_writeback_flops_keep_kv_input_but_reduce_output():
