@@ -4,7 +4,11 @@ import pytest
 import torch
 
 from gcw.architecture import CompatibilityError, _config_payload, resolve_model
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import (
+    CacheProcessorConfig,
+    DiffusionProcessorConfig,
+    ModelConfig,
+)
 from gcw.models.cache_processors.longshot_layers import PerCacheHeadLinear
 from gcw.models.cache_processors.longshot_linear_state import (
     LinearStateAdapter,
@@ -309,6 +313,58 @@ def test_update_gate_configuration_and_admission_contract():
             ModelConfig(variant=variant, cache_processor=contextual)
     assert resolve_model(
         ModelConfig(variant="longshot", cache_processor=contextual)
+    ).report.compatible
+
+
+@pytest.mark.parametrize(
+    "gate_type", ["contextual_scalar", "contextual_vector"]
+)
+def test_contextual_update_gates_require_learned_output_scaling(gate_type):
+    fixed_scale = CacheProcessorConfig(
+        update_gate_type=gate_type,
+        output_scale_mode="fixed_one",
+        out_proj_init="zero",
+    )
+    with pytest.raises(CompatibilityError) as fixed_error:
+        ModelConfig(variant="longshot", cache_processor=fixed_scale)
+    assert {issue.code for issue in fixed_error.value.report.issues} == {
+        "update_gate_output_scale"
+    }
+
+    scheduled = CacheProcessorConfig(
+        update_gate_type=gate_type, out_proj_init="zero"
+    )
+    with pytest.raises(CompatibilityError) as scheduled_error:
+        ModelConfig(
+            variant="longshot",
+            cache_processor=scheduled,
+            diffusion_processor=DiffusionProcessorConfig(
+                training_method="scheduled"
+            ),
+        )
+    assert {issue.code for issue in scheduled_error.value.report.issues} == {
+        "update_gate_output_scale"
+    }
+
+
+def test_fixed_output_scaling_admits_the_static_scalar_gate():
+    static_fixed = CacheProcessorConfig(out_proj_init="zero")
+    assert resolve_model(
+        ModelConfig(
+            variant="longshot",
+            cache_processor=replace(
+                static_fixed, output_scale_mode="fixed_one"
+            ),
+        )
+    ).report.compatible
+    assert resolve_model(
+        ModelConfig(
+            variant="longshot",
+            cache_processor=static_fixed,
+            diffusion_processor=DiffusionProcessorConfig(
+                training_method="scheduled"
+            ),
+        )
     ).report.compatible
 
 

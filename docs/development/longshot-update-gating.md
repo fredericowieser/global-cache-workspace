@@ -116,6 +116,16 @@ between zero and one. Direct contextual gating can remain available for
 controlled experiments and equivalence tests, but it permits negative and
 amplifying updates and should not be the default.
 
+Contextual gates are mutually exclusive with fixed output scaling. Both
+`output_scale_mode="fixed_one"` and scheduled diffusion training pin the write
+scale to one and allocate no learned scalar gate, which directly contradicts a
+learned, data-dependent scale. Admission rejects the combination as
+`update_gate_output_scale` instead of letting either setting silently override
+the other, and `CacheProcessor` repeats the check for processors constructed
+without a `ModelConfig`. Fixed output scaling therefore remains available only
+with `static_scalar`, and contextual gates require
+`output_scale_mode="learned"`.
+
 ## Relation to gated attention
 
 [Gated Attention for Large Language Models](https://arxiv.org/abs/2505.06708)
@@ -191,6 +201,10 @@ gate networks or regularization.
 - In `gcw.architecture.validation._model_issues`, reject contextual gate types
   unless `ModelConfig.variant == "longshot"`. Add the corresponding validation
   code to `_MODEL_CONFIG_VALIDATION_CODES`.
+- In the same function, reject contextual gate types when
+  `output_scale_mode == "fixed_one"` or the diffusion processor uses
+  `training_method == "scheduled"`, because both pin the write scale to one.
+  Add that validation code to `_MODEL_CONFIG_VALIDATION_CODES` as well.
 - In `gcw.architecture.contracts._config_payload`, omit `update_gate_type` when
   it is `static_scalar`, preserving the canonical architecture payload for
   existing configurations.
@@ -312,6 +326,8 @@ Extend the configuration and architecture tests to cover:
 
 - The `static_scalar` default, all accepted values, invalid-value rejection,
   and rejection of contextual types for BT, BGT, and Icarus.
+- Rejection of contextual types combined with `output_scale_mode="fixed_one"`
+  or scheduled diffusion, and continued admission of `static_scalar` with both.
 - Omission of the default from canonical architecture payloads and inclusion of
   non-default contextual types.
 
