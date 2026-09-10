@@ -378,6 +378,7 @@ def _longshot_processor_block_flops_per_call(
         model_config is not None
         and model_config.diffusion_processor is not None
         and model_config.diffusion_processor.training_method == "scheduled"
+        and config.update_gate_type == "static_scalar"
     )
     update_gate_ops = cache_heads * output_dim
     if config.gate_mode == "sigmoid" and not fixed_output_scale:

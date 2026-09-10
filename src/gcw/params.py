@@ -64,8 +64,11 @@ def estimate_processor_params(config: ModelConfig) -> int:
     )
     write_gate_adjustment = (
         -1
-        if scheduled_diffusion
-        or config.cache_processor.output_scale_mode == "fixed_one"
+        if config.cache_processor.update_gate_type == "static_scalar"
+        and (
+            scheduled_diffusion
+            or config.cache_processor.output_scale_mode == "fixed_one"
+        )
         else 0
     )
     if config.variant == "bgt":
