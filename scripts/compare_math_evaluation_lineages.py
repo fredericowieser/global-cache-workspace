@@ -19,6 +19,19 @@ def _canonical_metric(payload: dict[str, Any], task: str) -> tuple[str, float]:
     return key, float(metrics[key])
 
 
+def _numeric_result_path(
+    root: Path,
+    arm: str,
+    label: str,
+    historical_label: str,
+    task: str,
+) -> Path:
+    parent = root / arm / "processor-on" / "numeric-generation"
+    current = parent / label / "tasks" / task / "result.json"
+    historical = parent / historical_label / "tasks" / task / "result.json"
+    return current if current.is_file() else historical
+
+
 def compare_lineages(
     reference: Path,
     candidate: Path,
@@ -76,29 +89,27 @@ def compare_lineages(
             )
             if not passed:
                 violations.append(f"canonical parity failed for {task}")
-    for thinking in ("thinking_off", "thinking_on"):
-        accuracy_tolerance = 0.01 if thinking == "thinking_off" else 0.015
-        agreement_tolerance = 0.97 if thinking == "thinking_off" else 0.90
+    for enable_thinking in (False, True):
+        label = "thinking-enabled" if enable_thinking else "thinking-disabled"
+        historical_label = "thinking_on" if enable_thinking else "thinking_off"
+        accuracy_tolerance = 0.015 if enable_thinking else 0.01
+        agreement_tolerance = 0.90 if enable_thinking else 0.97
         for task in NUMERIC_MATH_TASKS:
-            relative = (
-                Path("processor-on")
-                / "numeric-generation"
-                / thinking
-                / "tasks"
-                / task
-                / "result.json"
+            reference_path = _numeric_result_path(
+                reference, arm, label, historical_label, task
             )
-            reference_path = reference / arm / relative
-            candidate_path = candidate / arm / relative
+            candidate_path = _numeric_result_path(
+                candidate, arm, label, historical_label, task
+            )
             if not reference_path.is_file():
                 if require_complete_reference:
                     violations.append(
-                        f"missing reference numeric result for {thinking}/{task}"
+                        f"missing reference numeric result for {label}/{task}"
                     )
                 continue
             if not candidate_path.is_file():
                 violations.append(
-                    f"missing candidate numeric result for {thinking}/{task}"
+                    f"missing candidate numeric result for {label}/{task}"
                 )
                 continue
             reference_payload = json.loads(reference_path.read_text())
@@ -153,7 +164,7 @@ def compare_lineages(
                 {
                     "protocol": "numeric_generation",
                     "task": task,
-                    "thinking": thinking,
+                    "enable_thinking": enable_thinking,
                     "identity_match": identity_match,
                     "prediction_agreement": agreement,
                     "minimum_prediction_agreement": agreement_tolerance,
@@ -164,9 +175,7 @@ def compare_lineages(
                 }
             )
             if not passed:
-                violations.append(
-                    f"numeric parity failed for {thinking}/{task}"
-                )
+                violations.append(f"numeric parity failed for {label}/{task}")
     return {
         "schema": "gcw.math_evaluation_lineage_parity.v1",
         "arm": arm,

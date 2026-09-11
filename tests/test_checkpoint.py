@@ -8,7 +8,7 @@ from gcw.checkpoint import (
     publish_final_checkpoint_manifest,
     save_checkpoint,
 )
-from gcw.config import LoRAConfig, ModelConfig
+from gcw.config import EvalConfig, LoRAConfig, ModelConfig
 from gcw.evaluation.core import GCWEvalLM
 from gcw.evaluation.scoring import HFTokenizerAdapter, tokenizer_for_checkpoint
 from gcw.models import build_model
@@ -193,13 +193,19 @@ def test_gcw_eval_lm_exposes_tokenizer_name_and_chat_template():
         eot_id = 0
 
         def apply_chat_template(
-            self, chat_history, tokenize=False, add_generation_prompt=True
+            self,
+            chat_history,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=None,
         ):
             assert tokenize is False
+            assert enable_thinking is False
             return f"{chat_history[0]['role']}:{chat_history[0]['content']}:{add_generation_prompt}"
 
     lm = GCWEvalLM.__new__(GCWEvalLM)
     lm.tokenizer = FakeTokenizer()
+    lm.eval_config = EvalConfig()
 
     assert lm.tokenizer_name == "qwen-tokenizer"
     assert (

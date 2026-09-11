@@ -28,14 +28,15 @@ def _write_lineage(root: Path, arm: str) -> None:
         path.write_text(
             json.dumps({"results": {task: {"acc,none": 0.5} for task in tasks}})
         )
-    for thinking in ("thinking_off", "thinking_on"):
+    for enable_thinking in (False, True):
+        label = "thinking-enabled" if enable_thinking else "thinking-disabled"
         for task in NUMERIC_MATH_TASKS:
             path = (
                 root
                 / arm
                 / "processor-on"
                 / "numeric-generation"
-                / thinking
+                / label
                 / "tasks"
                 / task
                 / "result.json"

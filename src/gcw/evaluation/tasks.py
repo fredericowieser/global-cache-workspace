@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Any
 
 GENERAL_TASKS = [
     "hellaswag",
@@ -30,15 +29,6 @@ TASK_FEWSHOT = {
     for tasks, fewshot in [*GENERAL_RUNS, *MATH_RUNS]
     for task in tasks
 }
-
-
-def _should_apply_chat_template(tokenizer: Any, prompt_mode: str) -> bool:
-    if prompt_mode == "plain":
-        return False
-    return bool(
-        getattr(tokenizer, "chat_template", None)
-        or getattr(tokenizer, "default_chat_template", None)
-    )
 
 
 def _filter_skipped_tasks(

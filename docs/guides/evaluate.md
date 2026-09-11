@@ -21,19 +21,30 @@
 
 Evaluation constructs independent state. It does not mutate a training checkpoint. Experiment pages define stricter task sets, controls, and evidence gates.
 
+Standard `all`, `math`, `general`, and `tasks` evaluation uses plain prompts by
+default. Add `--apply-chat-template` for chat formatting. When chat formatting
+is active and `--enable-thinking` is omitted, native checkpoints inherit
+`data.sft_enable_thinking` from a recorded training fingerprint or a
+published `run_config.json`; checkpoints without that setting and Hugging Face
+targets default to false. Explicit `--enable-thinking true|false` always wins.
+Chat and GSM8K reproduction always apply chat formatting, so they expose only
+`--enable-thinking`. Paper7 exposes both settings and defaults
+`--apply-chat-template` to true for legacy compatibility. FineWeb exposes
+neither option.
+
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
-## Processor provenance in matrix and chat results
+## Processor provenance in GSM8K and chat results
 
-Matrix schema `gcw.benchmark_matrix.v3` and chat schema
-`gcw.chat_benchmark_matrix.v2` distinguish three booleans:
+GSM8K schema `gcw.gsm8k_reproduction.v4` and chat schema
+`gcw.chat_benchmark.v3` distinguish three booleans:
 
 - `processor_requested`: the requested `--processor on/off` policy.
 - `processor_present`: an actual GCW cache processor was loaded, before bypass.
 - `processor_enabled`: that loaded processor remains active (present and requested).
 
 These fields live in `target`; chat's top-level fields mirror that identity.
-Matrix `config` records the policy as `processor_requested`. The Python input
+GSM8K `config` records the policy as `processor_requested`. The Python input
 argument remains `processor_enabled` for compatibility; it expresses a request,
 not evidence of a processor. Effective enabled state is not a processor call count.
 
@@ -52,7 +63,7 @@ accuracy or benchmark scores. It has no campaign-specific rank, cadence, step,
 precision, or solver policy:
 
 ```bash
-uv run --extra cpu python scripts/evaluate_answer_nll.py \
+uv run --extra cpu gcw eval answer-nll \
   --checkpoint /path/to/version-2-checkpoint \
   --expected-manifest-sha256 <trusted-manifest-sha256> \
   --data /path/to/answers.jsonl \
@@ -68,12 +79,15 @@ prompts are rejected (case is preserved). Repeat `--disjoint-from JSONL SHA256
 COUNT` to reject overlap with additional anchored datasets. This establishes only
 exact normalized-prompt disjointness, not paraphrase or pretraining independence.
 
-By default, sequence length, tokenizer, prefix, suffix, chat-template, and thinking
-options come from the checkpoint's training fingerprint. To specify a complete
-alternative evaluation policy, supply both `--sequence-len N` and `--tokenizer
-int|cosmo2|hf:SOURCE`, plus any `--response-prefix`, `--prompt-suffix`,
-`--chat-template`, or `--enable-thinking` options. Non-answer-only input policies
-are rejected. Tokenization is exactly `gcw.data.sft.sft_batch`; the labels are
+By default, sequence length, tokenizer, prefix, suffix, chat formatting, and
+thinking come from the checkpoint's training fingerprint. Explicit chat or
+thinking settings that disagree with the fingerprint are rejected. To specify
+a complete alternative data policy, supply both
+`--sequence-len N` and `--tokenizer int|cosmo2|hf:SOURCE`, plus any
+`--response-prefix` or `--prompt-suffix`. Use `--apply-chat-template` and
+`--enable-thinking` to state the matching fingerprint settings explicitly.
+Non-answer-only input policies are rejected. Tokenization is exactly
+`gcw.data.sft.sft_batch`; the labels are
 already causally shifted. The evaluator does **not** shift again. It scores all
 non-`-100` targets using the existing bounded native reference loss. Vocabulary
 projection covers at most 32 positions at once, including ignored positions;
@@ -125,25 +139,49 @@ both sides.
 negative is better. All comparisons must use the same data and tokenization
 policy. Receipts and parsed rows are retained in memory; this is a bounded,
 auditable batch-one evaluator, not a high-throughput streaming service.
+`scripts/evaluate_answer_nll.py` remains a thin entrypoint accepting the same
+arguments as `gcw eval answer-nll`.
 
-## Legacy paper7 compatibility
+## Paper7 protocols
 
-`gcw eval paper7-legacy` exists for direct compatibility with martin-branch paper7
-evaluation runs. Use it for old-checkpoint replication and for new checkpoints that
-must be compared against those legacy result files. The short suite name
-`gcw eval paper7` is an alias for the same path.
+`gcw eval paper7` is the corrected protocol for new evaluations. It applies the
+selected chat-template and thinking settings to GSM8K OpenMath, SVAMP,
+TheoremQA, and GSM8K Hard. LogiQA and Gaokao MathQA always use plain prompts,
+thinking disabled, and benchmark-native option likelihood. One model load is
+shared across all six tasks. Its result includes a `paper7_mixed_prompt_v1`
+protocol block recording the effective booleans and request type for every
+evaluated task.
+
+```bash
+uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7 \
+  --checkpoint /path/to/checkpoint \
+  --batch-size 16 \
+  --out results/<run>_paper7.json
+```
+
+For corrected Paper7, `--apply-chat-template false` disables chat formatting
+for the four generation tasks as well. It has no effect on LogiQA or Gaokao,
+which remain plain by definition.
+
+`gcw eval paper7-legacy` exists for direct compatibility with martin-branch
+Paper7 evaluation runs. Use it for old-checkpoint replication and for new
+checkpoints that must be compared against those legacy result files. It applies
+one suite-wide chat-template setting to all six tasks and retains the legacy
+lm-eval-compatible top-level result shape.
 
 For a Longshot random-routing ablation, add `--head-selection-method random`.
 This runtime-only override applies to both the initial head selection and every
 reachable internal reselection. Learned-selector parameters remain loaded from
 the checkpoint but are not used for routing.
 
-The compatibility path intentionally preserves the old protocol:
+The legacy compatibility path preserves the old task and scoring protocol while
+making its thinking behavior explicit:
 
 - task YAMLs are loaded from `configs/tasks_legacy/paper7`;
-- GSM8K OpenMath and GSM8K Hard generation use 512 new tokens;
-- SVAMP generation uses 256 new tokens;
-- Qwen chat templates are invoked without a thinking-mode keyword;
+- every generative task receives up to 2,048 new tokens;
+- chat templates are applied by default when the tokenizer provides one;
+- thinking inherits the checkpoint's training setting when present and
+  otherwise defaults to false; `--enable-thinking true|false` overrides it;
 - legacy Qwen3.5 and Gemma4 checkpoints keep the old generate-time special-token behavior;
 - result JSON keeps the old lm-eval-compatible top-level shape.
 
@@ -187,14 +225,13 @@ uv run --extra eval python scripts/extract_paper_table.py \
 Keep two protocols separate:
 
 - Multiple-choice scores use full LM Evaluation Harness datasets, no chat template, and benchmark-native option likelihood. They are comparable to the corresponding harness protocol and have no thinking dimension.
-- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, numeric-last-answer scoring, and the same 2,048-token cap in both modes.
+- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, numeric-last-answer scoring, and the same 2,048-token cap in both conditions.
 
 Generated multiple-choice answers are useful only as supplementary instruction-following diagnostics. Do not substitute them for canonical likelihood scores or schedule them across every experiment arm.
 
 ```bash
 uv run --extra gpu --extra eval gcw eval general \
   --checkpoint /path/to/checkpoint \
-  --prompt-mode plain \
   --processor on \
   --out data/eval-runs/standard-general.json
 
@@ -202,19 +239,19 @@ uv run --extra gpu --extra eval gcw eval chat \
   --checkpoint /path/to/checkpoint \
   --tokenizer-path /path/to/qwen-tokenizer \
   --tasks gsm8k_openmath svamp gsm8k_hard \
-  --mode thinking_on \
+  --enable-thinking \
   --max-new-tokens 2048 \
   --out data/eval-runs/chat-thinking-on.json
 ```
 
 The maintained Qwen3 experiment evaluates HellaSwag, PIQA, WinoGrande, ARC, MMLU, LogiQA, and Gaokao MathQA in their full no-chat likelihood protocols. Chat generation is reserved for the full GSM8K OpenMath, SVAMP, and GSM8K Hard datasets. Generated results record parse failures, truncations, response tokens, processor state, selected-row hashes, and per-task accuracy. LAMBADA is excluded because next-word completion has no meaningful thinking-on/chat analogue.
 
-## Qwen3 GSM8K reproduction matrix
+## Qwen3 GSM8K reproduction
 
-Use `scripts/analysis/run_benchmarks.py` when exact generated rows and protocol identity matter. It supports HF directories and native GCW checkpoints, processor bypass, separate tokenizer ownership, and both maintained scorers.
+Use `gcw eval gsm8k-reproduction` when exact generated rows and protocol identity matter. One invocation evaluates one thinking condition. It supports HF directories and native GCW checkpoints, processor bypass, separate tokenizer ownership, and both maintained scorers.
 
 ```bash
-uv run python -m scripts.analysis.run_benchmarks \
+uv run gcw eval gsm8k-reproduction \
   --target-kind gcw \
   --model-path /path/to/checkpoint \
   --tokenizer-path /path/to/qwen-tokenizer \
@@ -223,9 +260,12 @@ uv run python -m scripts.analysis.run_benchmarks \
   --output-dir data/eval-runs/gsm8k-cell
 ```
 
-`numeric_last_answer` and `lm_eval_flexible_exact` are different scientific protocols. The historical Qwen3 BGT cells used flexible exact match. Results must retain scorer, batch size, generation cap, tokenizer hash, checkpoint hash, prompt mode, and processor state.
+`scripts/analysis/run_benchmarks.py` remains a thin entrypoint accepting the
+same arguments as `gcw eval gsm8k-reproduction`.
 
-The maintained fast path uses length-sorted, left-padded Hugging Face generation for HF targets and preallocated static-cache generation for native GCW targets. The default batch size is 64. An authenticated Qwen3-0.6B GSM8K validation completed both 1,319-row modes in 35 minutes and scored 781 thinking-off / 899 thinking-on. The earlier exact-length run scored 782 / 888. Batch 128 was slower and drifted further on thinking-on, so 64 is the calibrated default. Treat these as close downstream-score parity, not token-level parity: batch shape changes floating-point execution and therefore greedy trajectories.
+`numeric_last_answer` and `lm_eval_flexible_exact` are different scientific protocols. The historical Qwen3 BGT cells used flexible exact match. Results retain scorer, batch size, generation cap, tokenizer hash, checkpoint hash, `apply_chat_template`, `enable_thinking`, and processor state. Pass an explicit `--enable-thinking true|false` for controlled comparison cells and write each condition to a separate output directory.
+
+The maintained fast path uses length-sorted, left-padded Hugging Face generation for HF targets and preallocated static-cache generation for native GCW targets. The default batch size is 64. An authenticated Qwen3-0.6B GSM8K validation completed both 1,319-row conditions in 35 minutes and scored 781 with thinking disabled and 899 with thinking enabled. The earlier exact-length run scored 782 / 888. Batch 128 was slower and drifted further with thinking enabled, so 64 is the calibrated default. Treat these as close downstream-score parity, not token-level parity: batch shape changes floating-point execution and therefore greedy trajectories.
 
 ## Deferred extension: high-throughput generation
 

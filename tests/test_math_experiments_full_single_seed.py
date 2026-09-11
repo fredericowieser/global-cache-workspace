@@ -90,14 +90,14 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(
         "final_learning_rate_fraction": 0.0,
     }
     assert series._evaluation_cells("bgt") == (
-        ("off", "thinking_off"),
-        ("off", "thinking_on"),
-        ("on", "thinking_off"),
-        ("on", "thinking_on"),
+        ("off", False),
+        ("off", True),
+        ("on", False),
+        ("on", True),
     )
     assert series._evaluation_cells("full-sft") == (
-        ("on", "thinking_off"),
-        ("on", "thinking_on"),
+        ("on", False),
+        ("on", True),
     )
     assert series._processor_states("bgt") == ("off", "on")
     assert series._processor_states("icarus") == ("off", "on")
@@ -110,9 +110,7 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(
     )
     assert plan["tasks"]["numeric_math"] == list(series.NUMERIC_MATH_TASKS)
     assert (
-        plan["evaluation_protocols"]["canonical_likelihood"][
-            "thinking_dimension"
-        ]
+        plan["evaluation_protocols"]["canonical_likelihood"]["enable_thinking"]
         is False
     )
     assert (
@@ -156,9 +154,7 @@ def test_numeric_result_validation_rejects_choice_rows(tmp_path):
         )
     )
     try:
-        series._validate_numeric_result(
-            result, "gsm8k_openmath", "thinking_off"
-        )
+        series._validate_numeric_result(result, "gsm8k_openmath", False)
     except ValueError as error:
         assert "non-numeric" in str(error)
     else:

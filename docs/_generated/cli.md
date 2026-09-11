@@ -30,7 +30,8 @@ usage: gcw convert hf [-h] --family {llama,qwen3,qwen3_5,qwen3_5_moe,gemma4}
 
 ```text
 usage: gcw eval [-h]
-                {paper7,paper7-legacy,all,math,general,tasks,chat,fineweb} ...
+                {paper7,paper7-legacy,all,math,general,tasks,chat,fineweb,gsm8k-reproduction,answer-nll}
+                ...
 ```
 
 ## `gcw eval all`
@@ -41,7 +42,8 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                     [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                     [--generation-process-every GENERATION_PROCESS_EVERY]
                     [--limit LIMIT] [--batch-size BATCH_SIZE]
-                    [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                    [--apply-chat-template [APPLY_CHAT_TEMPLATE]]
+                    [--enable-thinking [ENABLE_THINKING]]
                     [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
 
@@ -54,9 +56,54 @@ usage: gcw eval all [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
-| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--apply-chat-template` | default: `False`; type: `_boolean` |
+| `--enable-thinking` | type: `_boolean` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
+
+## `gcw eval answer-nll`
+
+```text
+usage: gcw eval answer-nll [-h] --checkpoint CHECKPOINT
+                           --expected-manifest-sha256 EXPECTED_MANIFEST_SHA256
+                           --data DATA --expected-data-sha256
+                           EXPECTED_DATA_SHA256 --expected-count
+                           EXPECTED_COUNT --out OUT [--device DEVICE]
+                           [--dtype {auto,float32,float16,bfloat16}]
+                           [--expected-step EXPECTED_STEP]
+                           [--expected-tokenizer-sha256 EXPECTED_TOKENIZER_SHA256]
+                           [--expected-loaded-state-sha256 EXPECTED_LOADED_STATE_SHA256]
+                           [--solver-steps SOLVER_STEPS]
+                           [--sequence-len SEQUENCE_LEN]
+                           [--tokenizer TOKENIZER]
+                           [--response-prefix RESPONSE_PREFIX]
+                           [--prompt-suffix PROMPT_SUFFIX]
+                           [--apply-chat-template [APPLY_CHAT_TEMPLATE]]
+                           [--enable-thinking [ENABLE_THINKING]]
+                           [--disjoint-from JSONL SHA256 COUNT]
+```
+
+| Argument | Contract |
+|---|---|
+| `--checkpoint` | required; type: `Path` |
+| `--expected-manifest-sha256` | required |
+| `--data` | required; type: `Path` |
+| `--expected-data-sha256` | required |
+| `--expected-count` | required; type: `int` |
+| `--out` | required; type: `Path` |
+| `--device` | default: `cpu` |
+| `--dtype` | choices: `auto`, `float32`, `float16`, `bfloat16`; default: `auto` |
+| `--expected-step` | type: `int` |
+| `--expected-tokenizer-sha256` | flag |
+| `--expected-loaded-state-sha256` | flag |
+| `--solver-steps` | type: `int` |
+| `--sequence-len` | type: `int` |
+| `--tokenizer` | flag |
+| `--response-prefix` | default: `` |
+| `--prompt-suffix` | default: `` |
+| `--apply-chat-template` | type: `_boolean` |
+| `--enable-thinking` | type: `_boolean` |
+| `--disjoint-from` | default: `[]` |
 
 ## `gcw eval chat`
 
@@ -65,8 +112,9 @@ usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                      [--tokenizer-path TOKENIZER_PATH] [--processor {on,off}]
                      [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                      [--generation-process-every GENERATION_PROCESS_EVERY]
-                     --tasks TASKS [TASKS ...] --mode
-                     {thinking_off,thinking_on} [--batch-size BATCH_SIZE]
+                     --tasks TASKS [TASKS ...]
+                     [--enable-thinking [ENABLE_THINKING]]
+                     [--batch-size BATCH_SIZE]
                      [--max-new-tokens MAX_NEW_TOKENS] [--out OUT]
 ```
 
@@ -79,7 +127,7 @@ usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--diffusion-eval-solver-steps` | type: `_positive_int` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--tasks` | required |
-| `--mode` | required; choices: `thinking_off`, `thinking_on` |
+| `--enable-thinking` | type: `_boolean` |
 | `--batch-size` | default: `8`; type: `int` |
 | `--max-new-tokens` | default: `2048`; type: `int` |
 | `--out` | flag |
@@ -109,7 +157,8 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                         [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                         [--generation-process-every GENERATION_PROCESS_EVERY]
                         [--limit LIMIT] [--batch-size BATCH_SIZE]
-                        [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                        [--apply-chat-template [APPLY_CHAT_TEMPLATE]]
+                        [--enable-thinking [ENABLE_THINKING]]
                         [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
 
@@ -122,9 +171,35 @@ usage: gcw eval general [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
-| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--apply-chat-template` | default: `False`; type: `_boolean` |
+| `--enable-thinking` | type: `_boolean` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
+
+## `gcw eval gsm8k-reproduction`
+
+```text
+usage: gcw eval gsm8k-reproduction [-h] --model-path MODEL_PATH
+                                   [--target-kind {hf,gcw}]
+                                   [--tokenizer-path TOKENIZER_PATH]
+                                   [--processor {on,off}]
+                                   [--scoring-protocol {numeric_last_answer,lm_eval_flexible_exact}]
+                                   --output-dir OUTPUT_DIR
+                                   [--batch-size BATCH_SIZE] [--limit LIMIT]
+                                   [--enable-thinking [ENABLE_THINKING]]
+```
+
+| Argument | Contract |
+|---|---|
+| `--model-path` | required |
+| `--target-kind` | choices: `hf`, `gcw`; default: `hf` |
+| `--tokenizer-path` | flag |
+| `--processor` | choices: `on`, `off`; default: `on` |
+| `--scoring-protocol` | choices: `numeric_last_answer`, `lm_eval_flexible_exact`; default: `lm_eval_flexible_exact` |
+| `--output-dir` | required |
+| `--batch-size` | default: `64`; type: `int` |
+| `--limit` | type: `int` |
+| `--enable-thinking` | type: `_boolean` |
 
 ## `gcw eval math`
 
@@ -134,7 +209,8 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                      [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                      [--generation-process-every GENERATION_PROCESS_EVERY]
                      [--limit LIMIT] [--batch-size BATCH_SIZE]
-                     [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                     [--apply-chat-template [APPLY_CHAT_TEMPLATE]]
+                     [--enable-thinking [ENABLE_THINKING]]
                      [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
 ```
 
@@ -147,7 +223,8 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
-| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--apply-chat-template` | default: `False`; type: `_boolean` |
+| `--enable-thinking` | type: `_boolean` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
 
@@ -156,6 +233,8 @@ usage: gcw eval math [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 ```text
 usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
                        [--batch-size BATCH_SIZE]
+                       [--apply-chat-template [APPLY_CHAT_TEMPLATE]]
+                       [--enable-thinking [ENABLE_THINKING]]
                        [--dtype {auto,bfloat16,float16,float32}]
                        [--generation-process-every GENERATION_PROCESS_EVERY]
                        [--head-selection-method {random}] [--out OUT]
@@ -166,6 +245,8 @@ usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 | `--checkpoint` | required |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
+| `--apply-chat-template` | default: `True`; type: `_boolean` |
+| `--enable-thinking` | type: `_boolean` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--head-selection-method` | choices: `random` |
@@ -176,6 +257,8 @@ usage: gcw eval paper7 [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 ```text
 usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
                               [--batch-size BATCH_SIZE]
+                              [--apply-chat-template [APPLY_CHAT_TEMPLATE]]
+                              [--enable-thinking [ENABLE_THINKING]]
                               [--dtype {auto,bfloat16,float16,float32}]
                               [--generation-process-every GENERATION_PROCESS_EVERY]
                               [--head-selection-method {random}] [--out OUT]
@@ -186,6 +269,8 @@ usage: gcw eval paper7-legacy [-h] --checkpoint CHECKPOINT [--limit LIMIT]
 | `--checkpoint` | required |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
+| `--apply-chat-template` | default: `True`; type: `_boolean` |
+| `--enable-thinking` | type: `_boolean` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--generation-process-every` | type: `_positive_int` |
 | `--head-selection-method` | choices: `random` |
@@ -199,7 +284,8 @@ usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
                       [--diffusion-eval-solver-steps DIFFUSION_EVAL_SOLVER_STEPS]
                       [--generation-process-every GENERATION_PROCESS_EVERY]
                       [--limit LIMIT] [--batch-size BATCH_SIZE]
-                      [--prompt-mode {auto,plain,thinking_off,thinking_on}]
+                      [--apply-chat-template [APPLY_CHAT_TEMPLATE]]
+                      [--enable-thinking [ENABLE_THINKING]]
                       [--dtype {auto,bfloat16,float16,float32}] --tasks TASKS
                       [TASKS ...] [--out OUT]
 ```
@@ -213,7 +299,8 @@ usage: gcw eval tasks [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--generation-process-every` | type: `_positive_int` |
 | `--limit` | type: `int` |
 | `--batch-size` | default: `8`; type: `int` |
-| `--prompt-mode` | choices: `auto`, `plain`, `thinking_off`, `thinking_on`; default: `auto` |
+| `--apply-chat-template` | default: `False`; type: `_boolean` |
+| `--enable-thinking` | type: `_boolean` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--tasks` | required |
 | `--out` | flag |

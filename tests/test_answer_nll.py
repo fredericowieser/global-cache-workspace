@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import os
 import subprocess
 import sys
 import weakref
@@ -14,6 +15,7 @@ from gcw.config import (
     CacheProcessorConfig,
     DataConfig,
     DiffusionProcessorConfig,
+    EvalConfig,
     LoRAConfig,
     ModelConfig,
     to_dict,
@@ -71,6 +73,7 @@ def native_checkpoint(
     dtype=torch.float32,
     diffusion=None,
     sequence_len=32,
+    data_config=None,
 ):
     config = ModelConfig(
         sequence_len=sequence_len,
@@ -121,7 +124,7 @@ def native_checkpoint(
     fingerprint = {
         "model": to_dict(config),
         "mode": "sft",
-        "data": to_dict(DataConfig(kind="sft", tokenizer="int")),
+        "data": to_dict(data_config or DataConfig(kind="sft", tokenizer="int")),
         "batch": {"sequence_len": sequence_len},
         "precision": "fp32",
     }
@@ -655,14 +658,29 @@ def test_native_chat_template_options_and_tokenizer_pipeline(tmp_path):
     options = AnswerNLLDataOptions(
         16,
         "hf:" + str(tmp_path / "tokenizer"),
-        chat_template=True,
-        enable_thinking=True,
         prompt_suffix="suffix",
     )
     path = tmp_path / "checkpoint"
-    model = native_checkpoint(path)
+    model = native_checkpoint(
+        path,
+        sequence_len=16,
+        data_config=DataConfig(
+            kind="sft",
+            tokenizer="hf",
+            tokenizer_source=str(tmp_path / "tokenizer"),
+            prompt_suffix="suffix",
+            sft_chat_template=True,
+            sft_enable_thinking=True,
+        ),
+    )
     data = dataset(tmp_path / "data.jsonl")
-    receipt = run(path, data, tmp_path / "chat.json", options=options)
+    receipt = run(
+        path,
+        data,
+        tmp_path / "chat.json",
+    )
+    assert receipt["data_options"]["apply_chat_template"] is True
+    assert receipt["data_options"]["enable_thinking"] is True
     tokenizer = get_tokenizer(options.tokenizer)
     x, y, mask = sft_batch(
         [data.read()[0]],
@@ -685,6 +703,19 @@ def test_native_chat_template_options_and_tokenizer_pipeline(tmp_path):
     before = tokenizer_identity_sha256(tokenizer)
     tokenizer.enc.backend_tokenizer.pre_tokenizer = None
     assert tokenizer_identity_sha256(tokenizer) != before
+
+
+def test_answer_nll_rejects_chat_settings_that_differ_from_training(tmp_path):
+    path = tmp_path / "checkpoint"
+    native_checkpoint(path)
+    data = dataset(tmp_path / "data.jsonl")
+    with pytest.raises(ValueError, match="training fingerprint"):
+        run(
+            path,
+            data,
+            tmp_path / "out.json",
+            config=EvalConfig(batch_size=1, apply_chat_template=True),
+        )
 
 
 @pytest.mark.parametrize(
@@ -739,5 +770,7 @@ def test_thin_cli_real_cpu_checkpoint(tmp_path):
         capture_output=True,
         text=True,
         check=True,
+        env={**os.environ, "GCW_DATA_ROOT": str(tmp_path / "run-data")},
     )
     assert json.loads(result.stdout)["targets"] == 9
+    assert result.stdout.count("\n") == 1

@@ -17,7 +17,7 @@ from gcw.checkpoint import (
     load_checkpoint_bytes,
     _upgrade_qwen35_gated_delta_keys,
 )
-from gcw.config import to_dict
+from gcw.config import EvalConfig, to_dict
 from gcw.data.sft import sft_batch
 from gcw.data.tokenizers import (
     IntTokenizer,
@@ -100,8 +100,6 @@ class AnswerNLLDataOptions:
     tokenizer: str
     response_prefix: str = ""
     prompt_suffix: str = ""
-    chat_template: bool = False
-    enable_thinking: bool = False
     loss_scope: Literal["answer_only"] = "answer_only"
 
     def __post_init__(self) -> None:
@@ -111,17 +109,10 @@ class AnswerNLLDataOptions:
             raise ValueError("an explicit tokenizer is required")
         if self.loss_scope != "answer_only":
             raise ValueError("evaluation requires answer_only input policy")
-        if (
-            type(self.chat_template) is not bool
-            or type(self.enable_thinking) is not bool
-        ):
-            raise ValueError("chat-template controls must be boolean")
         if not isinstance(self.response_prefix, str) or not isinstance(
             self.prompt_suffix, str
         ):
             raise ValueError("prefix and suffix must be strings")
-        if self.chat_template and self.response_prefix:
-            raise ValueError("response_prefix must be empty with chat_template")
 
     @classmethod
     def from_fingerprint(
@@ -138,8 +129,6 @@ class AnswerNLLDataOptions:
             tokenizer=tokenizer,
             response_prefix=data["response_prefix"],
             prompt_suffix=data["prompt_suffix"],
-            chat_template=data["sft_chat_template"],
-            enable_thinking=data["sft_enable_thinking"],
             loss_scope=data["sft_loss_scope"],
         )
 
@@ -369,6 +358,7 @@ def evaluate_answer_nll(
     data: AnswerNLLData,
     out: Path,
     options: AnswerNLLDataOptions | None = None,
+    config: EvalConfig | None = None,
     device: torch.device | str = "cpu",
     dtype: torch.dtype | str | None = "auto",
     expected_step: int | None = None,
@@ -384,6 +374,8 @@ def evaluate_answer_nll(
     because their manifest does not bind the external backbone's tensor bytes.
     """
     checkpoint, out = Path(checkpoint), Path(out)
+    if config is not None and config.batch_size != 1:
+        raise ValueError("answer NLL evaluation requires batch_size=1")
     if checkpoint.resolve() in out.resolve().parents:
         raise ValueError("evaluation output must be outside the checkpoint")
     if out.exists() or out.is_symlink():
@@ -435,8 +427,31 @@ def evaluate_answer_nll(
         != "answer_only"
     ):
         raise ValueError("checkpoint has non-answer_only input policy")
+    fingerprint_data = fingerprint["data"]
+    fingerprint_eval_config = EvalConfig(
+        batch_size=1,
+        apply_chat_template=fingerprint_data.get("sft_chat_template", False),
+        enable_thinking=fingerprint_data.get("sft_enable_thinking", False),
+    )
+    if config is None:
+        eval_config = fingerprint_eval_config
+    else:
+        eval_config = config
+        if (
+            eval_config.apply_chat_template
+            != fingerprint_eval_config.apply_chat_template
+            or eval_config.enable_thinking
+            != fingerprint_eval_config.enable_thinking
+        ):
+            raise ValueError(
+                "evaluation chat settings differ from the training fingerprint"
+            )
     if options is None:
         options = AnswerNLLDataOptions.from_fingerprint(fingerprint)
+    if eval_config.apply_chat_template and options.response_prefix:
+        raise ValueError(
+            "response_prefix must be empty with apply_chat_template"
+        )
     tokenizer = get_tokenizer(options.tokenizer)
     tokenizer_hash = tokenizer_identity_sha256(tokenizer)
     if (
@@ -524,7 +539,12 @@ def evaluate_answer_nll(
     )
     configure_reference_loss_execution(model, loss_execution)
     effective_config = to_dict(model.config)
-    options_hash = canonical_json_sha256(asdict(options))
+    resolved_data_options = {
+        **asdict(options),
+        "apply_chat_template": eval_config.apply_chat_template,
+        "enable_thinking": eval_config.enable_thinking,
+    }
+    options_hash = canonical_json_sha256(resolved_data_options)
     records: list[AnswerNLLRow] = []
     with torch.inference_mode():
         for index, row in enumerate(rows):
@@ -535,8 +555,8 @@ def evaluate_answer_nll(
                 device=device,
                 response_prefix=options.response_prefix,
                 prompt_suffix=options.prompt_suffix,
-                chat_template=options.chat_template,
-                enable_thinking=options.enable_thinking,
+                chat_template=eval_config.apply_chat_template,
+                enable_thinking=eval_config.enable_thinking,
                 loss_scope=options.loss_scope,
                 return_attention_mask=True,
             )
@@ -645,7 +665,8 @@ def evaluate_answer_nll(
             }
             for item in disjoint_from
         ],
-        "data_options": asdict(options),
+        "data_options": resolved_data_options,
+        "eval_config": asdict(eval_config),
         "tokenizer_sha256": tokenizer_hash,
         "solver_steps_override": solver_steps,
         "scheduled_field_evaluations": sum(
