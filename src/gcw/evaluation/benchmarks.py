@@ -18,6 +18,7 @@ import torch
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
     extract_numeric_answer,
+    generation_config_for_source,
     generation_token_ids,
     tokenizer_for_checkpoint,
 )
@@ -117,9 +118,9 @@ class HFBenchmarkBackend:
         )
         self.device = device
         self.supports_left_padding = True
-        generation_config = self.model.generation_config.to_dict()
+        generation_config = generation_config_for_source(source)
         tokenizer = None
-        if any(
+        if generation_config.get("_from_model_config") or any(
             generation_config.get(key) is None
             for key in ("eos_token_id", "pad_token_id")
         ):

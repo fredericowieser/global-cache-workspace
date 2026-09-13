@@ -40,12 +40,13 @@ Generation stops at any configured EOS/end-of-turn token and pads finished rows
 independently. Native checkpoint EOS/pad overrides source `generation_config.json`,
 then `config.json` (including `text_config`), with tokenizer IDs as fallback.
 Tokenizer selection is explicit `tokenizer_path`, then checkpoint `tokenizer_source`,
-then `source`; these origins must remain accessible. HF targets use their loaded
-generation configuration; native tokenizers retain EOT. Padding defaults to the
+then `source`; these origins must remain accessible. HF targets use source/tokenizer
+metadata without checkpoint overrides; native tokenizers retain EOT. Padding defaults to the
 first EOS when absent. ID zero is valid; an empty EOS list disables EOS stopping
 and requires padding metadata. Likelihood's scalar EOT is unchanged. Results record
 resolved IDs; historical evaluations with incorrect stopping are not comparable.
-Task stop sequences match only generated tokens, including in reference and HF
+Model-config fallback also retains tokenizer EOS/end-of-turn; an explicit
+generation file is authoritative. Task stop sequences match only generated tokens, including in reference and HF
 generation; scoring trims at the earliest EOS or task stop.
 
 ## Processor provenance in GSM8K and chat results

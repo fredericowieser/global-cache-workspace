@@ -64,6 +64,20 @@ def test_invalid_padding_fails(pad):
         generation_token_ids(None, {"eos_token_id": 9, "pad_token_id": pad})
 
 
+def test_model_defaults_preserve_tokenizer_end_of_turn(tmp_path):
+    tokenizer = SimpleNamespace(eos_token_id=7, pad_token_id=0)
+    (tmp_path / "config.json").write_text(
+        json.dumps({"text_config": {"eos_token_id": 9}})
+    )
+    defaults = generation_config_for_source(tmp_path)
+    assert generation_token_ids(tokenizer, defaults) == ((9, 7), 0)
+    (tmp_path / "generation_config.json").write_text(
+        json.dumps({"eos_token_id": [9], "_from_model_config": True})
+    )
+    explicit = generation_config_for_source(tmp_path)
+    assert generation_token_ids(tokenizer, explicit) == ((9,), 0)
+
+
 def test_generation_file_then_text_config_fallback(tmp_path):
     (tmp_path / "config.json").write_text(
         json.dumps({"text_config": {"eos_token_id": 7, "pad_token_id": 0}})
@@ -78,8 +92,9 @@ def test_generation_file_then_text_config_fallback(tmp_path):
 @pytest.mark.parametrize(
     "family", ["llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"]
 )
+@pytest.mark.parametrize("filename", ["generation_config.json", "config.json"])
 def test_old_checkpoint_uses_source_generation_metadata(
-    tmp_path, monkeypatch, family
+    tmp_path, monkeypatch, family, filename
 ):
     from transformers import AutoTokenizer
 
@@ -90,7 +105,7 @@ def test_old_checkpoint_uses_source_generation_metadata(
         return Tokenizer(eos_token_id=7, pad_token_id=0, vocab_size=10)
 
     monkeypatch.setattr(AutoTokenizer, "from_pretrained", load)
-    (tmp_path / "generation_config.json").write_text(
+    (tmp_path / filename).write_text(
         json.dumps({"eos_token_id": [7, 9], "pad_token_id": 0})
     )
     config = SimpleNamespace(family=family)
@@ -192,8 +207,9 @@ def tiny_gpt2(*, n_positions, pad_token_id):
     )
 
 
+@pytest.mark.parametrize("generation_file", [False, True])
 def test_hf_backend_uses_explicit_tokenizer_for_missing_ids(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, generation_file
 ):
     from transformers import AutoTokenizer
     from gcw.evaluation.benchmarks import HFBenchmarkBackend
@@ -202,6 +218,8 @@ def test_hf_backend_uses_explicit_tokenizer_for_missing_ids(
     tokenizer_source = tmp_path / "tokenizer"
     model = tiny_gpt2(n_positions=16, pad_token_id=None)
     model.save_pretrained(source)
+    if not generation_file:
+        (source / "generation_config.json").unlink()
     calls = []
 
     def load(path, **kwargs):
@@ -213,7 +231,7 @@ def test_hf_backend_uses_explicit_tokenizer_for_missing_ids(
         source, torch.device("cpu"), tokenizer_path=tokenizer_source
     )
     assert calls == [tokenizer_source]
-    assert backend.eos_ids == (9,)
+    assert backend.eos_ids == ((9,) if generation_file else (9, 7))
     assert backend.pad_id == 0
 
 

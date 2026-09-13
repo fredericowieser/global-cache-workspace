@@ -10,6 +10,7 @@ from gcw.checkpoint import load_checkpoint
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
     encode_generate_prompt,
+    generation_config_for_source,
     generation_token_ids,
     stop_token_sequences,
     tokenizer_for_checkpoint,
@@ -201,7 +202,7 @@ def _load_hf_eval_target(source: str | Path, device: torch.device):
     ).to(device)
     adapter = HFCausalLMAdapter(hf_model)
     return adapter, HFTokenizerAdapter(
-        tokenizer, str(source), hf_model.generation_config.to_dict()
+        tokenizer, str(source), generation_config_for_source(source)
     )
 
 

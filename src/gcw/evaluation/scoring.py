@@ -49,7 +49,8 @@ def generation_config_for_source(source: str | Path) -> dict[str, Any]:
             with open(path) as handle:
                 config = json.load(handle)
             if filename == "config.json":
-                config = {**config, **config.get("text_config", {})}
+                config = {**config, **(config.get("text_config") or {})}
+            config["_from_model_config"] = filename == "config.json"
             return config
     return {}
 
@@ -68,6 +69,13 @@ def generation_token_ids(
             "generation requires EOS metadata from the model or tokenizer"
         )
     values = (eos,) if isinstance(eos, int) else eos
+    tokenizer_eos = getattr(tokenizer, "eos_token_id", None)
+    if (
+        config.get("_from_model_config")
+        and tokenizer_eos is not None
+        and isinstance(values, (list, tuple))
+    ):
+        values = (*values, tokenizer_eos)
     if not isinstance(values, (list, tuple)) or any(
         type(value) is not int or value < 0 for value in values
     ):
@@ -111,6 +119,8 @@ def tokenizer_for_checkpoint(config, state, *, source=None):
             for key in ("eos_token_id", "pad_token_id")
             if state.get(key) is not None
         )
+        if state.get("eos_token_id") is not None:
+            generation_config["_from_model_config"] = False
         return HFTokenizerAdapter(tokenizer, str(source), generation_config)
     if config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}:
         raise ValueError(
