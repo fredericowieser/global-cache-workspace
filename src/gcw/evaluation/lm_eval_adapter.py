@@ -10,6 +10,7 @@ from gcw.checkpoint import load_checkpoint
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
     encode_generate_prompt,
+    generation_token_ids,
     stop_token_sequences,
     tokenizer_for_checkpoint,
     trim_generated_token_ids,
@@ -199,7 +200,9 @@ def _load_hf_eval_target(source: str | Path, device: torch.device):
         ),
     ).to(device)
     adapter = HFCausalLMAdapter(hf_model)
-    return adapter, HFTokenizerAdapter(tokenizer, str(source))
+    return adapter, HFTokenizerAdapter(
+        tokenizer, str(source), hf_model.generation_config.to_dict()
+    )
 
 
 class HFCausalLMAdapter(nn.Module):
@@ -223,15 +226,21 @@ class HFCausalLMAdapter(nn.Module):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
+        *,
+        pad_token_id: int | None = None,
     ):
         return cast(Any, self.model).generate(
             input_ids=input_ids,
             attention_mask=torch.ones_like(input_ids),
             do_sample=False,
             max_new_tokens=max_new_tokens,
-            eos_token_id=eos_token_id,
-            pad_token_id=eos_token_id,
+            eos_token_id=(
+                list(eos_token_id)
+                if isinstance(eos_token_id, tuple)
+                else eos_token_id
+            ),
+            pad_token_id=pad_token_id,
             use_cache=True,
         )
 
@@ -354,6 +363,9 @@ class GCWEvalLM(TemplateLM):
             )
             groups.setdefault((len(ids), max_new, until), []).append((i, ids))
 
+        eos_ids, pad_id = generation_token_ids(
+            self.tokenizer, getattr(self.tokenizer, "generation_config", None)
+        )
         use_fast = hasattr(self.model, "generate_fast")
         for (_, max_new, until), rows in groups.items():
             stop_seqs = stop_token_sequences(self.tokenizer, until)
@@ -369,20 +381,21 @@ class GCWEvalLM(TemplateLM):
                     gen = self.model.generate_fast(
                         batch_ids,
                         max_new_tokens=max_new,
-                        eos_token_id=self.eot_token_id,
+                        eos_token_id=eos_ids,
                         stop_sequences=stop_seqs,
-                        pad_token_id=self.eot_token_id,
+                        pad_token_id=pad_id,
                     )
                 else:
                     gen = self.model.generate(
                         batch_ids,
                         max_new_tokens=max_new,
-                        eos_token_id=self.eot_token_id,
+                        eos_token_id=eos_ids,
+                        pad_token_id=pad_id,
                     )
                 for row, (out_idx, _) in enumerate(chunk):
                     tokens = gen[row, prompt_len:].tolist()
                     tokens = trim_generated_token_ids(
-                        tokens, stop_seqs, self.eot_token_id
+                        tokens, stop_seqs, eos_ids
                     )
                     text = _trim_until(self.tok_decode(tokens), until)
                     outs[out_idx] = text
@@ -392,6 +405,9 @@ class GCWEvalLM(TemplateLM):
     def _generate_until_reference(self, requests):
         outs = []
         device = self.model.get_device()
+        eos_ids, pad_id = generation_token_ids(
+            self.tokenizer, getattr(self.tokenizer, "generation_config", None)
+        )
         for req in requests:
             prompt, kwargs = req.args
             max_new = int(kwargs.get("max_gen_toks", 256))
@@ -407,8 +423,12 @@ class GCWEvalLM(TemplateLM):
                 device=device,
             ).unsqueeze(0)
             gen = self.model.generate(
-                ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id
+                ids,
+                max_new_tokens=max_new,
+                eos_token_id=eos_ids,
+                pad_token_id=pad_id,
             )[0].tolist()
-            text = self.tok_decode(gen[len(ids[0]) :])
+            tokens = trim_generated_token_ids(gen[len(ids[0]) :], [], eos_ids)
+            text = self.tok_decode(tokens)
             outs.append(_trim_until(text, until))
         return outs

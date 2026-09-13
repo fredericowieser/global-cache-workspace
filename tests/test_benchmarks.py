@@ -357,7 +357,8 @@ def test_hf_has_no_gcw_processor_and_matrix_records_request(
     assert backend.identity["processor_present"] is False
     assert backend.identity["processor_enabled"] is False
 
-    def cpu_backend(path, device, *, processor_enabled):
+    def cpu_backend(path, device, *, processor_enabled, tokenizer_path=None):
+        assert tokenizer_path is None
         assert path == source
         assert processor_enabled is requested
         return backend

@@ -134,7 +134,9 @@ class LanguageModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
+        *,
+        pad_token_id: int | None = None,
     ) -> torch.Tensor:
         processor = self._processor_config()
         relative = (
@@ -150,6 +152,7 @@ class LanguageModel(nn.Module):
             process_prefill_windows=not relative,
             process_after_prefill=relative,
             relative_generation_cadence=relative,
+            pad_token_id=pad_token_id,
         )
 
     @torch.no_grad()
@@ -157,7 +160,7 @@ class LanguageModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
     ) -> torch.Tensor:

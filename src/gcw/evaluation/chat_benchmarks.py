@@ -535,6 +535,7 @@ def run_chat_benchmarks(
             Path(hf_model).expanduser().resolve(),
             device,
             processor_enabled=processor_enabled,
+            tokenizer_path=tokenizer_path,
         )
         tokenizer_source = (
             Path(tokenizer_path or hf_model).expanduser().resolve()
@@ -546,6 +547,7 @@ def run_chat_benchmarks(
             processor_enabled=processor_enabled,
             generation_process_every=generation_process_every,
             diffusion_eval_solver_steps=diffusion_eval_solver_steps,
+            tokenizer_path=tokenizer_path,
         )
         if tokenizer_path is None:
             raise ValueError(

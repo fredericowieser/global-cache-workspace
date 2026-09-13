@@ -16,7 +16,11 @@ from typing import Any, Literal, Mapping, Protocol, Sequence, cast
 import torch
 
 from gcw.config import EvalConfig
-from gcw.evaluation.scoring import extract_numeric_answer
+from gcw.evaluation.scoring import (
+    extract_numeric_answer,
+    generation_token_ids,
+    tokenizer_for_checkpoint,
+)
 
 DATASET_REPO_ID = "openai/gsm8k"
 DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
@@ -94,6 +98,7 @@ class HFBenchmarkBackend:
         device: torch.device,
         *,
         processor_enabled: bool = True,
+        tokenizer_path: str | Path | None = None,
     ):
         from transformers import AutoModelForCausalLM
 
@@ -112,10 +117,21 @@ class HFBenchmarkBackend:
         )
         self.device = device
         self.supports_left_padding = True
-        self.eos_ids = _eos_ids(self.model, None)
-        self.pad_id = int(
-            getattr(self.model.generation_config, "pad_token_id", None)
-            or self.eos_ids[0]
+        generation_config = self.model.generation_config.to_dict()
+        tokenizer = None
+        if any(
+            generation_config.get(key) is None
+            for key in ("eos_token_id", "pad_token_id")
+        ):
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_path or source,
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+        self.eos_ids, self.pad_id = generation_token_ids(
+            tokenizer, generation_config
         )
         self.identity = {
             **_directory_identity(source, kind="hf"),
@@ -154,6 +170,7 @@ class GCWBenchmarkBackend:
         processor_enabled: bool,
         generation_process_every: int | None = None,
         diffusion_eval_solver_steps: int | None = None,
+        tokenizer_path: str | Path | None = None,
     ):
         from gcw.checkpoint import load_checkpoint
         from gcw.evaluation.core import ProcessorBypass
@@ -199,10 +216,15 @@ class GCWBenchmarkBackend:
         self.model = model.eval()
         self.device = device
         self.supports_left_padding = False
-        self.eos_ids: tuple[int, ...] = (
-            int(state.get("eos_token_id", 151645)),
+        tokenizer = tokenizer_for_checkpoint(
+            config, state, source=tokenizer_path
         )
-        self.pad_id = int(state.get("pad_token_id", self.eos_ids[0]))
+        generation_config = (
+            getattr(tokenizer, "generation_config", None) or state
+        )
+        self.eos_ids, self.pad_id = generation_token_ids(
+            tokenizer, generation_config
+        )
         self.identity = {
             **_directory_identity(checkpoint, kind="gcw"),
             "architecture": config.architecture_name,
@@ -215,6 +237,8 @@ class GCWBenchmarkBackend:
                 else None
             ),
             "checkpoint_state": state,
+            "eos_token_ids": list(self.eos_ids),
+            "pad_token_id": self.pad_id,
         }
         if diffusion_eval_solver_steps is not None:
             self.identity["diffusion_eval_solver_steps"] = (
@@ -234,7 +258,7 @@ class GCWBenchmarkBackend:
         return cast(Any, self.model).generate_fast(
             input_ids,
             max_new_tokens=max_new_tokens,
-            eos_token_id=self.eos_ids[0],
+            eos_token_id=self.eos_ids,
             pad_token_id=self.pad_id,
         )
 
@@ -404,19 +428,6 @@ def _prepare(
         )
         for index, row in enumerate(rows)
     ]
-
-
-def _eos_ids(model: Any, tokenizer: Any | None) -> tuple[int, ...]:
-    value = getattr(model.generation_config, "eos_token_id", None)
-    if value is None and tokenizer is not None:
-        value = tokenizer.eos_token_id
-    values = value if isinstance(value, (list, tuple)) else [value]
-    result = tuple(
-        dict.fromkeys(int(token) for token in values if token is not None)
-    )
-    if not result:
-        raise ValueError("model has no EOS token")
-    return result
 
 
 def _trim_at_eos(
@@ -590,11 +601,17 @@ def run_gsm8k_reproduction(
     backend: BenchmarkBackend
     if config.target_kind == "hf":
         backend = HFBenchmarkBackend(
-            target, device, processor_enabled=config.processor_enabled
+            target,
+            device,
+            processor_enabled=config.processor_enabled,
+            tokenizer_path=config.tokenizer_path,
         )
     else:
         backend = GCWBenchmarkBackend(
-            target, device, processor_enabled=config.processor_enabled
+            target,
+            device,
+            processor_enabled=config.processor_enabled,
+            tokenizer_path=config.tokenizer_path,
         )
     tokenizer_source = (
         Path(config.tokenizer_path or config.model_path).expanduser().resolve()

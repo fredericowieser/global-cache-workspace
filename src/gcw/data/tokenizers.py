@@ -86,7 +86,9 @@ class TransformersTokenizer:
             source, trust_remote_code=False
         )
         self.source = source
-        self.eot_id = self.enc.eos_token_id or self.enc.pad_token_id or 0
+        self.eot_id = self.enc.eos_token_id
+        if self.eot_id is None:
+            self.eot_id = self.enc.pad_token_id or 0
         self.vocab_size = len(self.enc)
 
     def encode(self, text: str) -> list[int]:
