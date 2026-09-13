@@ -46,7 +46,9 @@ first EOS when absent. ID zero is valid; an empty EOS list disables EOS stopping
 and requires padding metadata. Likelihood's scalar EOT is unchanged. Results record
 resolved IDs; historical evaluations with incorrect stopping are not comparable.
 Model-config fallback also retains tokenizer EOS/end-of-turn; an explicit
-generation file is authoritative. Task stop sequences match only generated tokens, including in reference and HF
+generation file is authoritative. Tokenizer-only overrides without EOS metadata
+recover generation settings from the recorded model source.
+Task stop sequences match only generated tokens, including in reference and HF
 generation; scoring trims at the earliest EOS or task stop.
 
 ## Processor provenance in GSM8K and chat results

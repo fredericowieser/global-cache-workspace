@@ -125,6 +125,46 @@ def test_old_checkpoint_uses_source_generation_metadata(
     assert calls == [str(tmp_path), tmp_path]
 
 
+@pytest.mark.parametrize("explicit_path", [False, True])
+@pytest.mark.parametrize("saved_eos", [None, 8])
+def test_separate_tokenizer_keeps_model_generation_metadata(
+    tmp_path, monkeypatch, explicit_path, saved_eos
+):
+    from transformers import AutoTokenizer
+
+    class SeparateTokenizer:
+        eos_token_id = 7
+        pad_token_id = 0
+
+        def __len__(self):
+            return 10
+
+    model_source = tmp_path / "model"
+    tokenizer_source = tmp_path / "tokenizer-only"
+    model_source.mkdir()
+    tokenizer_source.mkdir()
+    (model_source / "generation_config.json").write_text(
+        json.dumps({"eos_token_id": [9, 7], "pad_token_id": 0})
+    )
+    monkeypatch.setattr(
+        AutoTokenizer, "from_pretrained", lambda *a, **kw: SeparateTokenizer()
+    )
+    state = {"source": str(model_source), "eos_token_id": saved_eos}
+    if saved_eos is not None:
+        state["source"] = str(tmp_path / "unavailable-model")
+    kwargs = {"source": tokenizer_source} if explicit_path else {}
+    if not explicit_path:
+        state["tokenizer_source"] = str(tokenizer_source)
+    tokenizer = tokenizer_for_checkpoint(
+        SimpleNamespace(family="qwen3_5"), state, **kwargs
+    )
+    expected = (9, 7) if saved_eos is None else (8,)
+    assert generation_token_ids(tokenizer, tokenizer.generation_config) == (
+        expected,
+        0,
+    )
+
+
 class Tokenizer:
     def __init__(self, eos_token_id=9, pad_token_id=0, vocab_size=12):
         self.eos_token_id = eos_token_id

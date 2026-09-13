@@ -114,6 +114,14 @@ def tokenizer_for_checkpoint(config, state, *, source=None):
             source, trust_remote_code=False
         )
         generation_config = generation_config_for_source(source)
+        model_source = state.get("source")
+        if (
+            state.get("eos_token_id") is None
+            and generation_config.get("eos_token_id") is None
+            and model_source
+            and str(model_source) != str(source)
+        ):
+            generation_config = generation_config_for_source(model_source)
         generation_config.update(
             (key, state[key])
             for key in ("eos_token_id", "pad_token_id")
