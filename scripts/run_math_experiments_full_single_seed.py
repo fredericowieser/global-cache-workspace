@@ -345,7 +345,8 @@ def _plan(
             "canonical_likelihood": {
                 "tasks": list(CANONICAL_TASKS),
                 "prompt": "plain_no_chat_template",
-                "thinking_dimension": False,
+                "apply_chat_template": False,
+                "enable_thinking": False,
                 "coverage": "full",
                 "scoring": "official_lm_evaluation_harness_task_definition",
                 "gaokao_multi_answer_rule": "argmax_option_in_gold_set",
@@ -353,7 +354,8 @@ def _plan(
             "numeric_generation": {
                 "tasks": list(NUMERIC_MATH_TASKS),
                 "prompt": "official_chat_template",
-                "thinking_modes": ["thinking_off", "thinking_on"],
+                "apply_chat_template": True,
+                "enable_thinking": [False, True],
                 "max_new_tokens": 2048,
                 "coverage": "full",
                 "scoring": "numeric_last_answer",
@@ -623,11 +625,11 @@ def _processor_states(arm: str) -> tuple[str, ...]:
     return ("off", "on") if arm in PROCESSOR_ARMS else ("on",)
 
 
-def _evaluation_cells(arm: str) -> tuple[tuple[str, str], ...]:
+def _evaluation_cells(arm: str) -> tuple[tuple[str, bool], ...]:
     return tuple(
-        (processor, thinking)
+        (processor, enable_thinking)
         for processor in _processor_states(arm)
-        for thinking in ("thinking_off", "thinking_on")
+        for enable_thinking in (False, True)
     )
 
 
@@ -659,13 +661,18 @@ def _mirror_evaluation(
     processor: str,
     protocol: str,
     *,
-    thinking: str | None,
+    enable_thinking: bool | None,
     tasks: tuple[str, ...],
     artifact_files: tuple[Path, ...] = (),
 ) -> None:
     import wandb
 
-    cell_name = f"{protocol}-{thinking}" if thinking is not None else protocol
+    label = (
+        ("thinking-enabled" if enable_thinking else "thinking-disabled")
+        if enable_thinking is not None
+        else None
+    )
+    cell_name = f"{protocol}-{label}" if label is not None else protocol
     lineage = _evaluation_lineage(args)
     run_name = f"{args.experiment}-eval-{lineage}-{arm}-{processor}-{cell_name}"
     tags = [
@@ -677,8 +684,8 @@ def _mirror_evaluation(
         processor,
         protocol,
     ]
-    if thinking is not None:
-        tags.append(thinking)
+    if label is not None:
+        tags.append(label)
     run = wandb.init(
         entity=WANDB_ENTITY,
         project=WANDB_PROJECT,
@@ -695,7 +702,7 @@ def _mirror_evaluation(
             "arm": arm,
             "processor": processor,
             "protocol": protocol,
-            "thinking": thinking or "not_applicable",
+            "enable_thinking": enable_thinking,
             "tasks": list(tasks),
             "batch_size": args.eval_batch_size,
             "evaluation_lineage": lineage,
@@ -760,10 +767,15 @@ def _reuse_result(source: Path, target: Path, *, protocol: str) -> bool:
 def _validate_canonical_result(result: Path, tasks: tuple[str, ...]) -> None:
     payload = json.loads(result.read_text())
     protocol = payload.get("gcw_protocol", {})
-    if (
-        protocol.get("prompt_mode") != "plain"
-        or protocol.get("apply_chat_template") is not False
-    ):
+    current = (
+        protocol.get("apply_chat_template") is False
+        and protocol.get("enable_thinking") is False
+    )
+    historical = (
+        protocol.get("prompt_mode") == "plain"
+        and protocol.get("apply_chat_template") is False
+    )
+    if not current and not historical:
         raise ValueError(
             f"canonical result does not use the plain no-chat protocol: {result}"
         )
@@ -829,8 +841,10 @@ def _evaluate_canonical_group(
             [
                 "--batch-size",
                 str(args.eval_batch_size),
-                "--prompt-mode",
-                "plain",
+                "--apply-chat-template",
+                "false",
+                "--enable-thinking",
+                "false",
                 "--processor",
                 processor,
                 "--out",
@@ -847,7 +861,7 @@ def _evaluate_canonical_group(
             arm,
             processor,
             f"canonical-likelihood-{group}-v1",
-            thinking=None,
+            enable_thinking=None,
             tasks=tasks,
         )
         published.write_text(
@@ -859,7 +873,11 @@ def _evaluate_canonical_group(
 
 
 def _numeric_summary(
-    task_results: list[Path], *, arm: str, processor: str, thinking: str
+    task_results: list[Path],
+    *,
+    arm: str,
+    processor: str,
+    enable_thinking: bool,
 ) -> dict[str, Any]:
     tasks: dict[str, Any] = {}
     for path in task_results:
@@ -877,16 +895,25 @@ def _numeric_summary(
         "schema": "gcw.numeric_math_benchmark_composite.v1",
         "arm": arm,
         "processor": processor,
-        "thinking": thinking,
+        "enable_thinking": enable_thinking,
         "protocol": "official_chat_template_numeric_last_v1",
         "max_new_tokens": 2048,
         "tasks": tasks,
     }
 
 
-def _validate_numeric_result(result: Path, task: str, thinking: str) -> None:
+def _validate_numeric_result(
+    result: Path, task: str, enable_thinking: bool
+) -> None:
     payload = json.loads(result.read_text())
-    if payload.get("mode") != thinking or payload.get("max_new_tokens") != 2048:
+    historical = "thinking_on" if enable_thinking else "thinking_off"
+    if (
+        payload.get("enable_thinking", payload.get("mode") == "thinking_on")
+        is not enable_thinking
+        or payload.get("mode", historical) != historical
+        or payload.get("apply_chat_template", True) is not True
+        or payload.get("max_new_tokens") != 2048
+    ):
         raise ValueError(
             f"numeric result has the wrong generation contract: {result}"
         )
@@ -901,12 +928,12 @@ def _validate_numeric_result(result: Path, task: str, thinking: str) -> None:
         )
 
 
-def _evaluate_numeric_mode(
+def _evaluate_numeric_condition(
     args: argparse.Namespace,
     root: Path,
     arm: str,
     processor: str,
-    thinking: str,
+    enable_thinking: bool,
     target: Path,
     *,
     hf_target: bool,
@@ -918,7 +945,7 @@ def _evaluate_numeric_mode(
         / arm
         / f"processor-{processor}"
         / "numeric-generation"
-        / thinking
+        / ("thinking-enabled" if enable_thinking else "thinking-disabled")
     )
     task_results: list[Path] = []
     for task in NUMERIC_MATH_TASKS:
@@ -938,7 +965,7 @@ def _evaluate_numeric_mode(
                 / arm
                 / "processor-on"
                 / "chat-generation"
-                / thinking
+                / ("thinking_on" if enable_thinking else "thinking_off")
                 / "tasks"
                 / task
                 / "result.json"
@@ -958,8 +985,6 @@ def _evaluate_numeric_mode(
                 "chat",
                 "--tasks",
                 task,
-                "--mode",
-                thinking,
                 "--batch-size",
                 str(args.eval_batch_size),
                 "--max-new-tokens",
@@ -972,8 +997,9 @@ def _evaluate_numeric_mode(
                 str(task_result),
                 *_target_args(target, hf_target=hf_target),
             ]
+            command.extend(["--enable-thinking", str(enable_thinking).lower()])
             _run(command, task_cell / "eval.log", env)
-        _validate_numeric_result(task_result, task, thinking)
+        _validate_numeric_result(task_result, task, enable_thinking)
     result = cell / "result.json"
     published = cell / "wandb-published.json"
     if not result.is_file():
@@ -984,7 +1010,7 @@ def _evaluate_numeric_mode(
                     task_results,
                     arm=arm,
                     processor=processor,
-                    thinking=thinking,
+                    enable_thinking=enable_thinking,
                 ),
                 indent=2,
                 sort_keys=True,
@@ -998,7 +1024,7 @@ def _evaluate_numeric_mode(
             arm,
             processor,
             "numeric-generation-v1",
-            thinking=thinking,
+            enable_thinking=enable_thinking,
             tasks=NUMERIC_MATH_TASKS,
             artifact_files=tuple(task_results),
         )
@@ -1046,13 +1072,13 @@ def _evaluate(
             hf_target=hf_target,
             env=env,
         )
-        for thinking in ("thinking_off", "thinking_on"):
-            if not _evaluate_numeric_mode(
+        for enable_thinking in (False, True):
+            if not _evaluate_numeric_condition(
                 args,
                 root,
                 arm,
                 processor,
-                thinking,
+                enable_thinking,
                 target,
                 hf_target=hf_target,
                 env=env,

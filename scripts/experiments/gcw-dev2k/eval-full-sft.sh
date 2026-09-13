@@ -21,7 +21,7 @@ env -u GCW_ALLOW_UNQUALIFIED_CUDA_GRAPH -u GCW_ALLOW_UNQUALIFIED_TRITON_CACHE \
         --tokenizer-path /mnt/jfs-01/shared/gcw/hf/Qwen3-0.6B-base-v1 \
         --processor off \
         --tasks gsm8k_openmath svamp gsm8k_hard \
-        --mode thinking_off \
+        --enable-thinking false \
         --batch-size 16 \
         --out "$OUT" \
     >> "$ROOT/logs/eval-full-sft.log" 2>&1

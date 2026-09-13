@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import time
+from typing import Any
 
 import torch
 
+from gcw.config import EvalConfig
 from gcw.runtime import base_dir
 from gcw.evaluation.bpb import (
     run_fineweb,  # noqa: F401  (re-exported for the CLI)
@@ -34,130 +36,121 @@ from gcw.evaluation.tasks import (
     _filter_skipped_tasks,
     _normalize_until,  # noqa: F401  (re-exported for tests)
     _run_is_complete,
-    _should_apply_chat_template,
     _trim_until,  # noqa: F401  (re-exported for tests)
 )
 
 
 def run_all(
     checkpoint: str | Path | None = None,
-    limit: int | None = None,
-    batch_size: int = 8,
-    prompt_mode: str = "auto",
+    config: EvalConfig | None = None,
     *,
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
+    loaded_target: tuple[Any, Any] | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
         [*GENERAL_RUNS, *MATH_RUNS],
         diffusion_eval_solver_steps=diffusion_eval_solver_steps,
-        limit=limit,
-        batch_size=batch_size,
-        prompt_mode=prompt_mode,
+        config=config,
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
         generation_process_every=generation_process_every,
+        loaded_target=loaded_target,
     )
 
 
 def run_general(
     checkpoint: str | Path | None = None,
-    limit: int | None = None,
-    batch_size: int = 8,
-    prompt_mode: str = "auto",
+    config: EvalConfig | None = None,
     *,
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
+    loaded_target: tuple[Any, Any] | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
         GENERAL_RUNS,
         diffusion_eval_solver_steps=diffusion_eval_solver_steps,
-        limit=limit,
-        batch_size=batch_size,
-        prompt_mode=prompt_mode,
+        config=config,
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
         generation_process_every=generation_process_every,
+        loaded_target=loaded_target,
     )
 
 
 def run_math(
     checkpoint: str | Path | None = None,
-    limit: int | None = None,
-    batch_size: int = 8,
-    prompt_mode: str = "auto",
+    config: EvalConfig | None = None,
     *,
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
+    loaded_target: tuple[Any, Any] | None = None,
 ) -> dict:
     return run_task_groups(
         checkpoint,
         MATH_RUNS,
         diffusion_eval_solver_steps=diffusion_eval_solver_steps,
-        limit=limit,
-        batch_size=batch_size,
-        prompt_mode=prompt_mode,
+        config=config,
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
         generation_process_every=generation_process_every,
+        loaded_target=loaded_target,
     )
 
 
 def run_tasks(
     tasks: list[str],
     checkpoint: str | Path | None = None,
-    limit: int | None = None,
-    batch_size: int = 8,
-    prompt_mode: str = "auto",
+    config: EvalConfig | None = None,
     *,
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
+    loaded_target: tuple[Any, Any] | None = None,
 ) -> dict:
     runs = [([task], TASK_FEWSHOT.get(task, 0)) for task in tasks]
     return run_task_groups(
         checkpoint,
         runs,
         diffusion_eval_solver_steps=diffusion_eval_solver_steps,
-        limit=limit,
-        batch_size=batch_size,
-        prompt_mode=prompt_mode,
+        config=config,
         hf_model=hf_model,
         processor_enabled=processor_enabled,
         dtype=dtype,
         generation_process_every=generation_process_every,
+        loaded_target=loaded_target,
     )
 
 
 def run_task_groups(
     checkpoint: str | Path | None,
     runs: list[tuple[list[str], int]],
-    limit: int | None = None,
-    batch_size: int = 8,
-    prompt_mode: str = "auto",
+    config: EvalConfig | None = None,
     *,
     hf_model: str | Path | None = None,
     processor_enabled: bool = True,
     dtype: torch.dtype | str | None = "auto",
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
+    loaded_target: tuple[Any, Any] | None = None,
 ) -> dict:
+    config = config or EvalConfig()
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
     runs = _filter_skipped_tasks(runs)
@@ -176,25 +169,20 @@ def run_task_groups(
 
     dist_state, local_rank, world_size = _distributed_eval_state()
     device = _eval_device(local_rank)
-    model, tokenizer = _load_eval_target(
-        checkpoint=checkpoint,
-        hf_model=hf_model,
-        processor_enabled=processor_enabled,
-        device=device,
-        dtype=dtype,
-        generation_process_every=generation_process_every,
-        diffusion_eval_solver_steps=diffusion_eval_solver_steps,
-    )
-    lm = GCWEvalLM(
-        model,
-        tokenizer,
-        batch_size=batch_size,
-    )
+    if loaded_target is None:
+        model, tokenizer = _load_eval_target(
+            checkpoint=checkpoint,
+            hf_model=hf_model,
+            processor_enabled=processor_enabled,
+            device=device,
+            dtype=dtype,
+            generation_process_every=generation_process_every,
+            diffusion_eval_solver_steps=diffusion_eval_solver_steps,
+        )
+    else:
+        model, tokenizer = loaded_target
+    lm = GCWEvalLM(model, tokenizer, config)
     processor = getattr(model, "cache_processor", None)
-    if prompt_mode not in {"auto", "plain", "thinking_off", "thinking_on"}:
-        raise ValueError(f"unknown prompt mode: {prompt_mode}")
-    lm.prompt_mode = prompt_mode
-    apply_chat_template = _should_apply_chat_template(tokenizer, prompt_mode)
     task_manager = TaskManager(
         include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR"
     )
@@ -227,13 +215,13 @@ def run_task_groups(
                 model=lm,
                 tasks=tasks,
                 num_fewshot=fewshot,
-                limit=limit,
+                limit=config.limit,
                 bootstrap_iters=0,
                 log_samples=False,
                 verbosity="ERROR",
                 task_manager=task_manager,
                 confirm_run_unsafe_code=True,
-                apply_chat_template=apply_chat_template,
+                apply_chat_template=config.apply_chat_template,
             )
         except BaseException as exc:
             _write_progress(
@@ -283,13 +271,8 @@ def run_task_groups(
         )
     protocol: dict[str, object] = {
         "name": "lm_eval_loglikelihood_v1",
-        "prompt_mode": prompt_mode,
-        "apply_chat_template": apply_chat_template,
-        "thinking_dimension": (
-            False
-            if prompt_mode == "plain"
-            else prompt_mode.startswith("thinking_")
-        ),
+        "apply_chat_template": config.apply_chat_template,
+        "enable_thinking": config.enable_thinking,
         "generation_process_every": (
             getattr(
                 getattr(model.config, "cache_processor", None),

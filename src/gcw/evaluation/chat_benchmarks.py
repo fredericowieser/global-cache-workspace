@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, Sequence, cast
 
 import torch
 
+from gcw.config import EvalConfig
 from gcw.evaluation.benchmarks import (
     BenchmarkBackend,
     GCWBenchmarkBackend,
@@ -47,7 +48,7 @@ GENERAL_TASK_LIMITS = {
     "arc_challenge": 1_000,
     "mmlu": 20,  # Per subject: 57 subjects, at most 1,140 rows.
 }
-RESULT_SCHEMA = "gcw.chat_benchmark_matrix.v2"
+RESULT_SCHEMA = "gcw.chat_benchmark.v3"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
@@ -333,17 +334,17 @@ def _load_task_examples(
 
 
 def _prepare_examples(
-    examples: Sequence[ChatExample], tokenizer: Any, mode: str
+    examples: Sequence[ChatExample],
+    tokenizer: Any,
+    enable_thinking: bool,
 ) -> list[PreparedChatExample]:
-    if mode not in {"thinking_off", "thinking_on"}:
-        raise ValueError(f"unsupported chat benchmark mode: {mode}")
     return [
         PreparedChatExample(
             example=example,
             prompt_ids=apply_qwen_chat_template(
                 tokenizer,
                 example.prompt,
-                enable_thinking=mode == "thinking_on",
+                enable_thinking=enable_thinking,
             ),
         )
         for example in examples
@@ -355,16 +356,17 @@ def evaluate_chat_examples(
     tokenizer: Any,
     examples: Sequence[ChatExample],
     *,
-    mode: str,
-    batch_size: int,
+    config: EvalConfig,
     max_new_tokens: int = MAX_NEW_TOKENS,
 ) -> dict[str, Any]:
-    prepared = _prepare_examples(examples, tokenizer, mode)
+    if not config.apply_chat_template:
+        raise ValueError("chat benchmark evaluation requires chat formatting")
+    prepared = _prepare_examples(examples, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
         ordered = sorted(prepared, key=lambda item: len(item.prompt_ids))
         batches = [
-            ordered[offset : offset + batch_size]
-            for offset in range(0, len(ordered), batch_size)
+            ordered[offset : offset + config.batch_size]
+            for offset in range(0, len(ordered), config.batch_size)
         ]
         grouping = "length_sorted_left_padding"
     else:
@@ -372,9 +374,9 @@ def evaluate_chat_examples(
         for example in prepared:
             by_length[len(example.prompt_ids)].append(example)
         batches = [
-            group[offset : offset + batch_size]
+            group[offset : offset + config.batch_size]
             for _length, group in sorted(by_length.items())
-            for offset in range(0, len(group), batch_size)
+            for offset in range(0, len(group), config.batch_size)
         ]
         grouping = "exact_prompt_token_length"
 
@@ -464,10 +466,11 @@ def evaluate_chat_examples(
             ),
         }
     return {
-        "mode": mode,
+        "apply_chat_template": config.apply_chat_template,
+        "enable_thinking": config.enable_thinking,
         "protocol": "official_chat_template_answer_generation_v1",
         "max_new_tokens": max_new_tokens,
-        "batch_size": batch_size,
+        "batch_size": config.batch_size,
         "grouping": grouping,
         "elapsed_seconds": time.monotonic() - started,
         "peak_memory_bytes": peak_memory,
@@ -479,8 +482,7 @@ def evaluate_chat_examples(
 def run_chat_benchmarks(
     *,
     tasks: Sequence[str],
-    mode: str,
-    batch_size: int,
+    config: EvalConfig | None = None,
     checkpoint: str | Path | None = None,
     hf_model: str | Path | None = None,
     tokenizer_path: str | Path | None = None,
@@ -489,6 +491,9 @@ def run_chat_benchmarks(
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
 ) -> dict[str, Any]:
+    config = config or EvalConfig(apply_chat_template=True)
+    if not config.apply_chat_template:
+        raise ValueError("chat benchmark evaluation requires chat formatting")
     unknown = sorted(set(tasks) - set(CHAT_TASKS))
     if unknown:
         raise ValueError(f"unknown chat benchmark tasks: {unknown}")
@@ -553,8 +558,7 @@ def run_chat_benchmarks(
         backend,
         tokenizer,
         examples,
-        mode=mode,
-        batch_size=batch_size,
+        config=config,
         max_new_tokens=max_new_tokens,
     )
     backend_model = getattr(backend, "model", None)

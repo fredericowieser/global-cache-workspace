@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 from gcw.checkpoint import load_checkpoint
+from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
     encode_generate_prompt,
     stop_token_sequences,
@@ -240,18 +241,19 @@ class GCWEvalLM(TemplateLM):
         self,
         model,
         tokenizer,
-        batch_size: int = 8,
+        eval_config: EvalConfig | None = None,
     ):
         if not HAS_LM_EVAL:
             raise ImportError("Install the eval extra: uv sync --extra eval")
+        eval_config = eval_config or EvalConfig()
         super().__init__()
         self.accelerator = _accelerator()
         self.model = model.eval()
         self.tokenizer = tokenizer
-        self.batch_size = batch_size
+        self.batch_size = eval_config.batch_size
         self.max_length = model.config.sequence_len
         self.add_special_tokens_for_generate = False
-        self.prompt_mode = "auto"
+        self.eval_config = eval_config
 
     @property
     def tokenizer_name(self) -> str:
@@ -266,14 +268,12 @@ class GCWEvalLM(TemplateLM):
     def apply_chat_template(
         self, chat_history: list[dict[str, str]], add_generation_prompt=True
     ) -> str:
-        kwargs = {
-            "tokenize": False,
-            "add_generation_prompt": add_generation_prompt,
-        }
-        prompt_mode = getattr(self, "prompt_mode", "auto")
-        if prompt_mode in {"thinking_off", "thinking_on"}:
-            kwargs["enable_thinking"] = prompt_mode == "thinking_on"
-        return self.tokenizer.apply_chat_template(chat_history, **kwargs)
+        return self.tokenizer.apply_chat_template(
+            chat_history,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+            enable_thinking=self.eval_config.enable_thinking,
+        )
 
     def tok_encode(self, string: str, **kwargs) -> list[int]:
         return self.tokenizer.encode(string)

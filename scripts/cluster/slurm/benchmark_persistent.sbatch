@@ -44,24 +44,31 @@ print("device", torch.cuda.get_device_name(0), torch.cuda.get_device_capability(
 print("cuda_tensor", torch.ones(1, device="cuda").item())
 PY
 
-"$PYTHON" -m scripts.analysis.run_benchmarks \
+"$PYTHON" -m gcw.cli eval gsm8k-reproduction \
   --model-path "$MODEL_PATH" \
-  --output-dir "$RUN_ROOT/smoke-off" \
+  --output-dir "$RUN_ROOT/smoke-thinking-disabled" \
   --limit 8 \
   --batch-size 1 \
-  --modes thinking_off
+  --enable-thinking false
 
-"$PYTHON" -m scripts.analysis.run_benchmarks \
+"$PYTHON" -m gcw.cli eval gsm8k-reproduction \
   --model-path "$MODEL_PATH" \
-  --output-dir "$RUN_ROOT/smoke-on" \
+  --output-dir "$RUN_ROOT/smoke-thinking-enabled" \
   --limit 8 \
   --batch-size 1 \
-  --modes thinking_on
+  --enable-thinking true
 
-"$PYTHON" -m scripts.analysis.run_benchmarks \
+"$PYTHON" -m gcw.cli eval gsm8k-reproduction \
   --model-path "$MODEL_PATH" \
-  --output-dir "$RUN_ROOT/full" \
-  --batch-size 16
+  --output-dir "$RUN_ROOT/full-thinking-disabled" \
+  --batch-size 16 \
+  --enable-thinking false
+
+"$PYTHON" -m gcw.cli eval gsm8k-reproduction \
+  --model-path "$MODEL_PATH" \
+  --output-dir "$RUN_ROOT/full-thinking-enabled" \
+  --batch-size 16 \
+  --enable-thinking true
 
 printf 'evaluation_complete=%s\n' "$(date -u +%FT%TZ)"
 printf 'Persistent allocation remains available; use srun --jobid=%s --overlap for reviewed follow-up work.\n' "$SLURM_JOB_ID"

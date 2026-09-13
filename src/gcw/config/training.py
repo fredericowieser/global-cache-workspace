@@ -367,9 +367,7 @@ class TrainConfig:
         ):
             raise ValueError("truncated_bptt_windows must be an integer")
         if self.truncated_bptt_windows < 0:
-            raise ValueError(
-                "truncated_bptt_windows must be non-negative"
-            )
+            raise ValueError("truncated_bptt_windows must be non-negative")
         if self.truncated_bptt_windows and self.model.variant == "tf":
             raise ValueError(
                 "truncated_bptt_windows requires a cache-processor variant"
@@ -400,6 +398,23 @@ class TrainConfig:
 
 @dataclass
 class EvalConfig:
-    tasks: list[str] = field(default_factory=list)
     batch_size: int = 8
     limit: int | None = None
+    apply_chat_template: bool = False
+    enable_thinking: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.batch_size) is not int or self.batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        if self.limit is not None and (
+            type(self.limit) is not int or self.limit <= 0
+        ):
+            raise ValueError("limit must be a positive integer")
+        if type(self.apply_chat_template) is not bool:
+            raise ValueError("apply_chat_template must be boolean")
+        if type(self.enable_thinking) is not bool:
+            raise ValueError("enable_thinking must be boolean")
+        if self.enable_thinking and not self.apply_chat_template:
+            raise ValueError(
+                "enable_thinking requires apply_chat_template=True"
+            )

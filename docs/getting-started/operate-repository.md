@@ -30,8 +30,8 @@ uv run --extra gpu --extra eval gcw eval math --checkpoint /path/to/checkpoint
 uv run --extra cpu --extra convert gcw convert hf \
   --family llama --model meta-llama/Llama-3.2-1B --variant tf --out /path/to/native
 
-# Run analysis launchers.
-uv run python scripts/analysis/run_benchmarks.py --help
+# Run the authenticated GSM8K reproduction command and analysis launchers.
+uv run gcw eval gsm8k-reproduction --help
 uv run python scripts/analysis/bench_cache_processor.py --help
 ```
 

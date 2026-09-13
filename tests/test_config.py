@@ -2,6 +2,7 @@ import pytest
 
 from gcw.config import (
     DataConfig,
+    EvalConfig,
     LoRAConfig,
     LongshotSelectorTrainingConfig,
     ModelConfig,
@@ -10,6 +11,27 @@ from gcw.config import (
     WandbConfig,
     load_train_config,
 )
+
+
+def test_eval_config_defaults_to_plain_thinking_disabled() -> None:
+    config = EvalConfig()
+    assert config.batch_size == 8
+    assert config.limit is None
+    assert config.apply_chat_template is False
+    assert config.enable_thinking is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"apply_chat_template": 1},
+        {"enable_thinking": 1},
+        {"enable_thinking": True},
+    ],
+)
+def test_eval_config_rejects_invalid_thinking_configuration(kwargs) -> None:
+    with pytest.raises(ValueError):
+        EvalConfig(**kwargs)
 
 
 def test_qwen35_h50_k4_recipe_preserves_frozen_training_protocol() -> None:

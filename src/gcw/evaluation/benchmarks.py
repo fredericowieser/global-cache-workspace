@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 import hashlib
 import json
@@ -15,6 +15,7 @@ from typing import Any, Literal, Mapping, Protocol, Sequence, cast
 
 import torch
 
+from gcw.config import EvalConfig
 from gcw.evaluation.scoring import extract_numeric_answer
 
 DATASET_REPO_ID = "openai/gsm8k"
@@ -22,8 +23,8 @@ DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
 MAX_NEW_TOKENS = 2_048
 DEFAULT_BATCH_SIZE = 64
-RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
-PromptMode = Literal["thinking_off", "thinking_on"]
+RESULT_SCHEMA = "gcw.gsm8k_reproduction.v4"
+HISTORICAL_RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
 ScoringProtocol = Literal["numeric_last_answer", "lm_eval_flexible_exact"]
 TargetKind = Literal["hf", "gcw"]
 _FLEXIBLE_RE = re.compile(r"(-?[$0-9.,]{2,})|(-?[0-9]+)")
@@ -37,10 +38,12 @@ class BenchmarkConfig:
     tokenizer_path: str | None = None
     processor_enabled: bool = True
     scoring_protocol: ScoringProtocol = "lm_eval_flexible_exact"
-    batch_size: int = DEFAULT_BATCH_SIZE
+    eval_config: EvalConfig = field(
+        default_factory=lambda: EvalConfig(
+            batch_size=DEFAULT_BATCH_SIZE, apply_chat_template=True
+        )
+    )
     max_new_tokens: int = MAX_NEW_TOKENS
-    limit: int | None = None
-    modes: tuple[PromptMode, ...] = ("thinking_off", "thinking_on")
 
     def __post_init__(self) -> None:
         if self.target_kind not in {"hf", "gcw"}:
@@ -50,24 +53,14 @@ class BenchmarkConfig:
             "lm_eval_flexible_exact",
         }:
             raise ValueError("unknown scoring_protocol")
-        if isinstance(self.batch_size, bool) or self.batch_size <= 0:
-            raise ValueError("batch_size must be a positive integer")
+        if not isinstance(self.eval_config, EvalConfig):
+            raise ValueError("eval_config must be an EvalConfig")
+        if not self.eval_config.apply_chat_template:
+            raise ValueError("GSM8K reproduction requires chat formatting")
         if self.max_new_tokens != MAX_NEW_TOKENS:
             raise ValueError(
                 f"Qwen3 GSM8K reproduction requires max_new_tokens={MAX_NEW_TOKENS}"
             )
-        if self.limit is not None and (
-            isinstance(self.limit, bool) or self.limit <= 0
-        ):
-            raise ValueError("limit must be a positive integer")
-        if not self.modes or any(
-            mode not in {"thinking_off", "thinking_on"} for mode in self.modes
-        ):
-            raise ValueError(
-                "modes must contain thinking_off and/or thinking_on"
-            )
-        if len(set(self.modes)) != len(self.modes):
-            raise ValueError("modes must not contain duplicates")
 
 
 @dataclass(frozen=True)
@@ -436,23 +429,24 @@ def _trim_at_eos(
     return list(tokens), "max_new_tokens"
 
 
-def evaluate_mode(
+def evaluate_benchmark(
     backend: BenchmarkBackend,
     tokenizer: Any,
     rows: list[dict[str, str]],
     *,
-    mode: PromptMode,
-    batch_size: int,
+    config: EvalConfig,
     max_new_tokens: int,
     scoring_protocol: ScoringProtocol,
 ) -> dict[str, Any]:
-    examples = _prepare(rows, tokenizer, mode == "thinking_on")
+    if not config.apply_chat_template:
+        raise ValueError("GSM8K reproduction requires chat formatting")
+    examples = _prepare(rows, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
         batches = [
             sorted(examples, key=lambda example: len(example.prompt_ids))[
-                offset : offset + batch_size
+                offset : offset + config.batch_size
             ]
-            for offset in range(0, len(examples), batch_size)
+            for offset in range(0, len(examples), config.batch_size)
         ]
         grouping = "length_sorted_left_padding"
     else:
@@ -460,9 +454,9 @@ def evaluate_mode(
         for example in examples:
             groups[len(example.prompt_ids)].append(example)
         batches = [
-            group[offset : offset + batch_size]
+            group[offset : offset + config.batch_size]
             for _, group in sorted(groups.items())
-            for offset in range(0, len(group), batch_size)
+            for offset in range(0, len(group), config.batch_size)
         ]
         grouping = "exact_prompt_token_length"
     generated_rows: list[dict[str, Any] | None] = [None] * len(examples)
@@ -527,8 +521,8 @@ def evaluate_mode(
     final_rows = [row for row in generated_rows if row is not None]
     correct = sum(bool(row["correct"]) for row in final_rows)
     return {
-        "mode": mode,
-        "enable_thinking": mode == "thinking_on",
+        "apply_chat_template": config.apply_chat_template,
+        "enable_thinking": config.enable_thinking,
         "scoring_protocol": scoring_protocol,
         "correct": correct,
         "total": len(final_rows),
@@ -543,7 +537,7 @@ def evaluate_mode(
         "generation": {
             "do_sample": False,
             "max_new_tokens": max_new_tokens,
-            "batch_size": batch_size,
+            "batch_size": config.batch_size,
             "grouping": grouping,
             "eos_token_ids": list(backend.eos_ids),
             "pad_token_id": backend.pad_id,
@@ -576,7 +570,7 @@ def _publish_json(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def run_benchmark_matrix(
+def run_gsm8k_reproduction(
     config: BenchmarkConfig, repository: str | Path = "."
 ) -> dict[str, Any]:
     repository_path = Path(repository).resolve()
@@ -606,20 +600,17 @@ def run_benchmark_matrix(
         Path(config.tokenizer_path or config.model_path).expanduser().resolve()
     )
     tokenizer, tokenizer_identity = _load_tokenizer(tokenizer_source)
-    rows, dataset_identity = _load_test_rows(config.limit)
-    cells = {
-        mode: evaluate_mode(
-            backend,
-            tokenizer,
-            rows,
-            mode=mode,
-            batch_size=config.batch_size,
-            max_new_tokens=config.max_new_tokens,
-            scoring_protocol=config.scoring_protocol,
-        )
-        for mode in config.modes
-    }
+    rows, dataset_identity = _load_test_rows(config.eval_config.limit)
+    evaluation = evaluate_benchmark(
+        backend,
+        tokenizer,
+        rows,
+        config=config.eval_config,
+        max_new_tokens=config.max_new_tokens,
+        scoring_protocol=config.scoring_protocol,
+    )
     config_identity = asdict(config)
+    config_identity.update(config_identity.pop("eval_config"))
     config_identity["processor_requested"] = config_identity.pop(
         "processor_enabled"
     )
@@ -636,7 +627,7 @@ def run_benchmark_matrix(
             "device": torch.cuda.get_device_name(device),
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         },
-        "cells": cells,
+        **evaluation,
     }
     payload = json.dumps(
         result, sort_keys=True, separators=(",", ":"), allow_nan=False
@@ -644,3 +635,46 @@ def run_benchmark_matrix(
     document = {**result, "payload_sha256": hashlib.sha256(payload).hexdigest()}
     _publish_json(output_dir / "result.json", document)
     return document
+
+
+def load_benchmark_result(
+    path: str | Path, *, enable_thinking: bool | None = None
+) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    schema = payload.get("schema")
+    if schema == RESULT_SCHEMA:
+        if enable_thinking is not None and (
+            payload.get("enable_thinking") is not enable_thinking
+        ):
+            raise ValueError("benchmark result has the wrong thinking setting")
+        return payload
+    if schema == HISTORICAL_RESULT_SCHEMA:
+        if type(enable_thinking) is not bool:
+            raise ValueError(
+                "historical benchmark matrices require enable_thinking"
+            )
+        key = "thinking_on" if enable_thinking else "thinking_off"
+        cell = payload.get("cells", {}).get(key)
+        if not isinstance(cell, dict):
+            raise ValueError(f"historical benchmark matrix has no {key} cell")
+        historical_config = dict(payload.get("config", {}))
+        historical_config.pop("modes", None)
+        historical_config.update(
+            {
+                "apply_chat_template": True,
+                "enable_thinking": enable_thinking,
+            }
+        )
+        return {
+            **{
+                name: value
+                for name, value in payload.items()
+                if name not in {"cells", "config"}
+            },
+            "schema": RESULT_SCHEMA,
+            "config": historical_config,
+            **{name: value for name, value in cell.items() if name != "mode"},
+            "apply_chat_template": True,
+            "enable_thinking": enable_thinking,
+        }
+    raise ValueError(f"unsupported benchmark result schema: {schema!r}")
