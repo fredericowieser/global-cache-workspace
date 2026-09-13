@@ -45,6 +45,8 @@ generation configuration; native tokenizers retain EOT. Padding defaults to the
 first EOS when absent. ID zero is valid; an empty EOS list disables EOS stopping
 and requires padding metadata. Likelihood's scalar EOT is unchanged. Results record
 resolved IDs; historical evaluations with incorrect stopping are not comparable.
+Task stop sequences match only generated tokens, including in reference and HF
+generation; scoring trims at the earliest EOS or task stop.
 
 ## Processor provenance in GSM8K and chat results
 

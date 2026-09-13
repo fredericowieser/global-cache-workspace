@@ -228,8 +228,26 @@ class HFCausalLMAdapter(nn.Module):
         max_new_tokens: int,
         eos_token_id: int | list[int] | tuple[int, ...] | None = None,
         *,
+        stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
     ):
+        from transformers import StoppingCriteriaList
+        from gcw.models.backbones.transformer.generation import (
+            _matches_stop_sequence,
+        )
+
+        prompt_len = input_ids.shape[1]
+        stopping_criteria = (
+            StoppingCriteriaList(
+                [
+                    lambda ids, scores, **kwargs: _matches_stop_sequence(
+                        ids[:, prompt_len:], stop_sequences
+                    )
+                ]
+            )
+            if stop_sequences
+            else None
+        )
         return cast(Any, self.model).generate(
             input_ids=input_ids,
             attention_mask=torch.ones_like(input_ids),
@@ -241,6 +259,7 @@ class HFCausalLMAdapter(nn.Module):
                 else eos_token_id
             ),
             pad_token_id=pad_token_id,
+            stopping_criteria=stopping_criteria,
             use_cache=True,
         )
 
@@ -390,6 +409,7 @@ class GCWEvalLM(TemplateLM):
                         batch_ids,
                         max_new_tokens=max_new,
                         eos_token_id=eos_ids,
+                        stop_sequences=stop_seqs,
                         pad_token_id=pad_id,
                     )
                 for row, (out_idx, _) in enumerate(chunk):
@@ -422,13 +442,17 @@ class GCWEvalLM(TemplateLM):
                 dtype=torch.long,
                 device=device,
             ).unsqueeze(0)
+            stop_seqs = stop_token_sequences(self.tokenizer, until)
             gen = self.model.generate(
                 ids,
                 max_new_tokens=max_new,
                 eos_token_id=eos_ids,
+                stop_sequences=stop_seqs,
                 pad_token_id=pad_id,
             )[0].tolist()
-            tokens = trim_generated_token_ids(gen[len(ids[0]) :], [], eos_ids)
+            tokens = trim_generated_token_ids(
+                gen[len(ids[0]) :], stop_seqs, eos_ids
+            )
             text = self.tok_decode(tokens)
             outs.append(_trim_until(text, until))
         return outs

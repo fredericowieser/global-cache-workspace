@@ -354,6 +354,7 @@ class Gemma4TF(TF):
         if logits is None:
             raise ValueError("generate requires at least one input token")
 
+        prompt_len = out.shape[1]
         eos_ids = torch.tensor(
             eos_token_id if eos_token_id is not None else [],
             dtype=input_ids.dtype,
@@ -377,7 +378,9 @@ class Gemma4TF(TF):
                 next_id = torch.where(finished[:, None], fill, next_id)
             out = torch.cat([out, next_id], dim=1)
             finished = finished | torch.isin(next_id.squeeze(1), eos_ids)
-            finished = finished | _matches_stop_sequence(out, stop_sequences)
+            finished = finished | _matches_stop_sequence(
+                out[:, prompt_len:], stop_sequences
+            )
             if bool(finished.all()):
                 break
             pos = out.shape[1] - 1

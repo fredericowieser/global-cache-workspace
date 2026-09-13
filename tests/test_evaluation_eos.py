@@ -143,11 +143,11 @@ def test_lm_eval_routes_stop_and_trim_all_eos(monkeypatch, legacy, reference):
             ids,
             max_new_tokens,
             eos_token_id,
+            stop_sequences,
             pad_token_id,
-            stop_sequences=None,
         ):
             assert eos_token_id == (9, 7)
-            assert stop_sequences == (None if reference else [[4]])
+            assert stop_sequences == [[4]]
             assert pad_token_id == 0
             return torch.cat(
                 (ids, torch.tensor([[3, 7, 8, 9]]).expand(len(ids), -1)), dim=1
@@ -221,7 +221,7 @@ def test_hf_real_generation_pads_rows_after_alternate_eos():
     from gcw.evaluation.lm_eval_adapter import HFCausalLMAdapter
 
     model = tiny_gpt2(n_positions=32, pad_token_id=0).eval()
-    script = iter(([7, 3], [8, 4], [8, 9]))
+    script = iter(([7, 3], [8, 4], [8, 5]))
 
     def predict(module, args, output):
         output.logits.fill_(-100)
@@ -235,5 +235,29 @@ def test_hf_real_generation_pads_rows_after_alternate_eos():
         max_new_tokens=8,
         eos_token_id=(9, 7),
         pad_token_id=0,
+        stop_sequences=[[4, 5]],
     )
-    assert result.tolist() == [[1, 2, 7, 0, 0], [1, 2, 3, 4, 9]]
+    assert result.tolist() == [[1, 2, 7, 0, 0], [1, 2, 3, 4, 5]]
+
+
+def test_hf_adapter_passes_multiple_eos_and_stops_on_generated_suffix():
+    from gcw.evaluation.lm_eval_adapter import HFCausalLMAdapter
+
+    class HFModel(torch.nn.Module):
+        config = SimpleNamespace(max_position_embeddings=32)
+
+        def generate(self, **kwargs):
+            assert kwargs["eos_token_id"] == [9, 7]
+            assert kwargs["pad_token_id"] == 0
+            criteria = kwargs["stopping_criteria"]
+            assert not criteria(torch.tensor([[1, 4, 5]]), None).item()
+            assert criteria(torch.tensor([[1, 4, 5, 4, 5]]), None).item()
+            return kwargs["input_ids"]
+
+    HFCausalLMAdapter(HFModel()).generate(
+        torch.tensor([[1, 4]]),
+        max_new_tokens=8,
+        eos_token_id=(9, 7),
+        pad_token_id=0,
+        stop_sequences=[[4, 5]],
+    )

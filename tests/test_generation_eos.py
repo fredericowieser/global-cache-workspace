@@ -108,3 +108,36 @@ def test_scalar_eos_staggered_finish(scripted_generation):
     out = generate([[8], [8]], 5, eos_token_id=2)
     assert out.tolist() == [[8, 2, 2], [8, 6, 2]]
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("eos", [None, [], ()])
+def test_stop_sequences_without_eos_fill_zero(scripted_generation, eos):
+    generate, calls = scripted_generation([[4, 5, 9], [6, 4, 5]])
+    out = generate(
+        [[8], [8]], 6, eos_token_id=eos, stop_sequences=[[], [4, 5]]
+    )
+    assert out.tolist() == [[8, 4, 5, 0], [8, 6, 4, 5]]
+    assert len(calls) == 3
+
+
+def test_eos_and_task_stop_finish_different_rows(scripted_generation):
+    generate, calls = scripted_generation([[3, 9, 9], [6, 4, 5]])
+    out = generate(
+        [[8], [8]],
+        6,
+        eos_token_id=[2, 3],
+        stop_sequences=[[4, 5]],
+        pad_token_id=0,
+    )
+    assert out.tolist() == [[8, 3, 0, 0], [8, 6, 4, 5]]
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("sequence_len", [2, 4])
+def test_stop_cannot_start_in_prompt(scripted_generation, sequence_len):
+    generate, calls = scripted_generation([[5, 4, 5, 9]], sequence_len)
+    out = generate(
+        [[7, 8, 4]], 6, stop_sequences=[[4, 5]], eos_token_id=[2, 3]
+    )
+    assert out.tolist() == [[7, 8, 4][-sequence_len:] + [5, 4, 5]]
+    assert len(calls) == 3

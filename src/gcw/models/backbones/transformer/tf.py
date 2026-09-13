@@ -674,6 +674,7 @@ class TF(Backbone):
         relative_generation_cadence: bool = False,
         generation_process_every: int | None = None,
         *,
+        stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
     ) -> torch.Tensor:
         return generate_tf(
@@ -687,6 +688,7 @@ class TF(Backbone):
             process_prefill_windows=process_prefill_windows,
             process_after_prefill=process_after_prefill,
             relative_generation_cadence=relative_generation_cadence,
+            stop_sequences=stop_sequences,
             pad_token_id=pad_token_id,
         )
 

@@ -60,6 +60,7 @@ def generate_tf(
     relative_generation_cadence: bool = False,
     generation_process_every: int | None = None,
     *,
+    stop_sequences: list[list[int]] | None = None,
     pad_token_id: int | None = None,
 ) -> torch.Tensor:
     out = input_ids[:, -model.config.sequence_len :]
@@ -78,6 +79,7 @@ def generate_tf(
         logits, cache = model.forward_chunk(out, 0, cache)
     if logits is None:
         raise ValueError("generate requires at least one input token")
+    prompt_len = out.shape[1]
     eos_ids = torch.tensor(
         eos_token_id if eos_token_id is not None else [],
         dtype=input_ids.dtype,
@@ -99,6 +101,9 @@ def generate_tf(
             next_id = torch.where(finished[:, None], fill, next_id)
         out = torch.cat([out, next_id], dim=1)
         finished = finished | torch.isin(next_id.squeeze(1), eos_ids)
+        finished = finished | _matches_stop_sequence(
+            out[:, prompt_len:], stop_sequences
+        )
         if bool(finished.all()):
             break
         pos = out.shape[1] - 1
@@ -163,6 +168,7 @@ def generate_fast_tf(
     if logits is None:
         raise ValueError("generate requires at least one input token")
 
+    prompt_len = out.shape[1]
     eos_ids = torch.tensor(
         eos_token_id if eos_token_id is not None else [],
         dtype=input_ids.dtype,
@@ -184,7 +190,9 @@ def generate_fast_tf(
             next_id = torch.where(finished[:, None], fill, next_id)
         out = torch.cat([out, next_id], dim=1)
         finished = finished | torch.isin(next_id.squeeze(1), eos_ids)
-        finished = finished | _matches_stop_sequence(out, stop_sequences)
+        finished = finished | _matches_stop_sequence(
+            out[:, prompt_len:], stop_sequences
+        )
         if bool(finished.all()):
             break
         pos = out.shape[1] - 1
