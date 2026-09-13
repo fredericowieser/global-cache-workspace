@@ -19,6 +19,48 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _boolean(value: str) -> bool:
+    normalized = value.lower()
+    if normalized not in {"true", "false"}:
+        raise argparse.ArgumentTypeError("value must be true or false")
+    return normalized == "true"
+
+
+def _resolve_enable_thinking(
+    value: bool | None,
+    *,
+    checkpoint: str | Path | None,
+    apply_chat_template: bool,
+) -> bool:
+    if value is not None:
+        return value
+    if not apply_chat_template or checkpoint is None:
+        return False
+    root = Path(checkpoint)
+    candidates = (
+        (root / "manifest.json", "training_fingerprint"),
+        (root / "run_config.json", None),
+    )
+    for path, nested_key in candidates:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"invalid evaluation provenance file {path}"
+            ) from exc
+        source = payload.get(nested_key) if nested_key is not None else payload
+        data = source.get("data") if isinstance(source, dict) else None
+        if not isinstance(data, dict) or "sft_enable_thinking" not in data:
+            continue
+        enable_thinking = data["sft_enable_thinking"]
+        if type(enable_thinking) is not bool:
+            raise ValueError(f"{path} data.sft_enable_thinking must be boolean")
+        return enable_thinking
+    return False
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the GCW command-line parser without importing execution systems."""
     parser = argparse.ArgumentParser(prog="gcw")
@@ -46,6 +88,20 @@ def build_parser() -> argparse.ArgumentParser:
         legacy.add_argument("--limit", type=int, default=None)
         legacy.add_argument("--batch-size", type=int, default=8)
         legacy.add_argument(
+            "--apply-chat-template",
+            nargs="?",
+            const=True,
+            default=True,
+            type=_boolean,
+        )
+        legacy.add_argument(
+            "--enable-thinking",
+            nargs="?",
+            const=True,
+            default=None,
+            type=_boolean,
+        )
+        legacy.add_argument(
             "--dtype",
             choices=["auto", "bfloat16", "float16", "float32"],
             default="auto",
@@ -72,9 +128,18 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--limit", type=int, default=None)
         command.add_argument("--batch-size", type=int, default=8)
         command.add_argument(
-            "--prompt-mode",
-            choices=["auto", "plain", "thinking_off", "thinking_on"],
-            default="auto",
+            "--apply-chat-template",
+            nargs="?",
+            const=True,
+            default=False,
+            type=_boolean,
+        )
+        command.add_argument(
+            "--enable-thinking",
+            nargs="?",
+            const=True,
+            default=None,
+            type=_boolean,
         )
         command.add_argument(
             "--dtype",
@@ -96,7 +161,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     chat.add_argument("--tasks", nargs="+", required=True)
     chat.add_argument(
-        "--mode", choices=["thinking_off", "thinking_on"], required=True
+        "--enable-thinking",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_boolean,
     )
     chat.add_argument("--batch-size", type=int, default=8)
     chat.add_argument("--max-new-tokens", type=int, default=2048)
@@ -112,6 +181,71 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
     )
     fineweb.add_argument("--out", default=None)
+    gsm8k = eval_sub.add_parser("gsm8k-reproduction")
+    gsm8k.add_argument("--model-path", required=True)
+    gsm8k.add_argument("--target-kind", choices=("hf", "gcw"), default="hf")
+    gsm8k.add_argument("--tokenizer-path")
+    gsm8k.add_argument("--processor", choices=("on", "off"), default="on")
+    gsm8k.add_argument(
+        "--scoring-protocol",
+        choices=("numeric_last_answer", "lm_eval_flexible_exact"),
+        default="lm_eval_flexible_exact",
+    )
+    gsm8k.add_argument("--output-dir", required=True)
+    gsm8k.add_argument("--batch-size", type=int, default=64)
+    gsm8k.add_argument("--limit", type=int)
+    gsm8k.add_argument(
+        "--enable-thinking",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_boolean,
+    )
+    gsm8k.set_defaults(out=None)
+    answer_nll = eval_sub.add_parser("answer-nll")
+    answer_nll.add_argument("--checkpoint", type=Path, required=True)
+    answer_nll.add_argument("--expected-manifest-sha256", required=True)
+    answer_nll.add_argument("--data", type=Path, required=True)
+    answer_nll.add_argument("--expected-data-sha256", required=True)
+    answer_nll.add_argument("--expected-count", type=int, required=True)
+    answer_nll.add_argument("--out", type=Path, required=True)
+    answer_nll.add_argument("--device", default="cpu")
+    answer_nll.add_argument(
+        "--dtype",
+        choices=("auto", "float32", "float16", "bfloat16"),
+        default="auto",
+    )
+    answer_nll.add_argument("--expected-step", type=int)
+    answer_nll.add_argument("--expected-tokenizer-sha256")
+    answer_nll.add_argument("--expected-loaded-state-sha256")
+    answer_nll.add_argument("--solver-steps", type=int)
+    answer_nll.add_argument("--sequence-len", type=int)
+    answer_nll.add_argument(
+        "--tokenizer", help="Native name: int, cosmo2, or hf:SOURCE"
+    )
+    answer_nll.add_argument("--response-prefix", default="")
+    answer_nll.add_argument("--prompt-suffix", default="")
+    answer_nll.add_argument(
+        "--apply-chat-template",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_boolean,
+    )
+    answer_nll.add_argument(
+        "--enable-thinking",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_boolean,
+    )
+    answer_nll.add_argument(
+        "--disjoint-from",
+        nargs=3,
+        action="append",
+        default=[],
+        metavar=("JSONL", "SHA256", "COUNT"),
+    )
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
     hf = convert_sub.add_parser("hf")
@@ -152,6 +286,7 @@ def dispatch(args: argparse.Namespace) -> None:
     """Execute a parsed GCW command."""
     from gcw.data.fineweb import prepare_fineweb
     from gcw.data.sft import prepare_openmath
+    from gcw.config import EvalConfig
     from gcw.evaluation.core import (
         is_main_process,
         run_all,
@@ -178,16 +313,24 @@ def dispatch(args: argparse.Namespace) -> None:
                 args.checkpoint,
                 data_dir=args.data_dir,
                 eval_tokens=args.eval_tokens,
-                batch_size=args.batch_size,
+                config=EvalConfig(batch_size=args.batch_size),
                 dtype=args.dtype,
             )
         elif args.suite == "chat":
             from gcw.evaluation.chat_benchmarks import run_chat_benchmarks
 
+            args.enable_thinking = _resolve_enable_thinking(
+                args.enable_thinking,
+                checkpoint=args.checkpoint,
+                apply_chat_template=True,
+            )
             results = run_chat_benchmarks(
                 tasks=args.tasks,
-                mode=args.mode,
-                batch_size=args.batch_size,
+                config=EvalConfig(
+                    batch_size=args.batch_size,
+                    apply_chat_template=True,
+                    enable_thinking=args.enable_thinking,
+                ),
                 max_new_tokens=args.max_new_tokens,
                 checkpoint=args.checkpoint,
                 hf_model=args.hf_model,
@@ -198,24 +341,136 @@ def dispatch(args: argparse.Namespace) -> None:
             )
         elif args.suite in {"paper7", "paper7-legacy"}:
             from gcw.evaluation.legacy import run_paper7_legacy
+            from gcw.evaluation.paper7 import run_paper7
 
-            results = run_paper7_legacy(
-                args.checkpoint,
-                limit=args.limit,
+            args.enable_thinking = _resolve_enable_thinking(
+                args.enable_thinking,
+                checkpoint=args.checkpoint,
+                apply_chat_template=args.apply_chat_template,
+            )
+            eval_config = EvalConfig(
                 batch_size=args.batch_size,
+                limit=args.limit,
+                apply_chat_template=args.apply_chat_template,
+                enable_thinking=args.enable_thinking,
+            )
+            runner = (
+                run_paper7_legacy
+                if args.suite == "paper7-legacy"
+                else run_paper7
+            )
+            results = runner(
+                args.checkpoint,
+                config=eval_config,
                 dtype=args.dtype,
                 generation_process_every=args.generation_process_every,
                 head_selection_method=args.head_selection_method,
             )
+            args.apply_chat_template = eval_config.apply_chat_template
+            args.enable_thinking = eval_config.enable_thinking
+        elif args.suite == "gsm8k-reproduction":
+            from gcw.evaluation.benchmarks import (
+                BenchmarkConfig,
+                run_gsm8k_reproduction,
+            )
+
+            args.enable_thinking = _resolve_enable_thinking(
+                args.enable_thinking,
+                checkpoint=(
+                    args.model_path if args.target_kind == "gcw" else None
+                ),
+                apply_chat_template=True,
+            )
+            results = run_gsm8k_reproduction(
+                BenchmarkConfig(
+                    model_path=args.model_path,
+                    output_dir=args.output_dir,
+                    target_kind=args.target_kind,
+                    tokenizer_path=args.tokenizer_path,
+                    processor_enabled=args.processor == "on",
+                    scoring_protocol=args.scoring_protocol,
+                    eval_config=EvalConfig(
+                        batch_size=args.batch_size,
+                        limit=args.limit,
+                        apply_chat_template=True,
+                        enable_thinking=args.enable_thinking,
+                    ),
+                )
+            )
+        elif args.suite == "answer-nll":
+            from gcw.evaluation.answer_nll import (
+                AnswerNLLData,
+                AnswerNLLDataOptions,
+                evaluate_answer_nll,
+            )
+
+            options = None
+            if args.sequence_len is not None or args.tokenizer is not None:
+                if args.sequence_len is None or args.tokenizer is None:
+                    raise ValueError(
+                        "explicit data policy requires both sequence_len and tokenizer"
+                    )
+                options = AnswerNLLDataOptions(
+                    sequence_len=args.sequence_len,
+                    tokenizer=args.tokenizer,
+                    response_prefix=args.response_prefix,
+                    prompt_suffix=args.prompt_suffix,
+                )
+            elif args.response_prefix or args.prompt_suffix:
+                raise ValueError(
+                    "data option overrides require sequence_len and tokenizer"
+                )
+            eval_config = None
+            if (
+                args.apply_chat_template is not None
+                or args.enable_thinking is not None
+            ):
+                eval_config = EvalConfig(
+                    batch_size=1,
+                    apply_chat_template=bool(args.apply_chat_template),
+                    enable_thinking=bool(args.enable_thinking),
+                )
+            results = evaluate_answer_nll(
+                checkpoint=args.checkpoint,
+                expected_manifest_sha256=args.expected_manifest_sha256,
+                data=AnswerNLLData(
+                    args.data, args.expected_data_sha256, args.expected_count
+                ),
+                out=args.out,
+                options=options,
+                config=eval_config,
+                device=args.device,
+                dtype=args.dtype,
+                expected_step=args.expected_step,
+                expected_tokenizer_sha256=args.expected_tokenizer_sha256,
+                expected_loaded_state_sha256=args.expected_loaded_state_sha256,
+                solver_steps=args.solver_steps,
+                disjoint_from=[
+                    AnswerNLLData(Path(path), digest, int(count))
+                    for path, digest, count in args.disjoint_from
+                ],
+            )
+            args.apply_chat_template = results["data_options"][
+                "apply_chat_template"
+            ]
+            args.enable_thinking = results["data_options"]["enable_thinking"]
         else:
             from gcw.evaluation.core import run_tasks
 
+            args.enable_thinking = _resolve_enable_thinking(
+                args.enable_thinking,
+                checkpoint=args.checkpoint,
+                apply_chat_template=args.apply_chat_template,
+            )
             runners = {"all": run_all, "math": run_math, "general": run_general}
             common = {
                 "checkpoint": args.checkpoint,
-                "limit": args.limit,
-                "batch_size": args.batch_size,
-                "prompt_mode": args.prompt_mode,
+                "config": EvalConfig(
+                    batch_size=args.batch_size,
+                    limit=args.limit,
+                    apply_chat_template=args.apply_chat_template,
+                    enable_thinking=args.enable_thinking,
+                ),
                 "hf_model": args.hf_model,
                 "processor_enabled": args.processor == "on",
                 "dtype": args.dtype,
@@ -230,7 +485,9 @@ def dispatch(args: argparse.Namespace) -> None:
         if not is_main_process():
             return
         text = json.dumps(results, indent=2, default=str)
-        if args.out:
+        if args.suite == "answer-nll":
+            print(json.dumps(results["result"], allow_nan=False))
+        elif args.out:
             output = Path(args.out)
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(text, encoding="utf-8")
@@ -241,12 +498,12 @@ def dispatch(args: argparse.Namespace) -> None:
         record = RunRecord.create(
             kind="evaluation",
             experiment_name=f"eval-{args.suite}",
-            config=vars(args),
+            config=json.loads(json.dumps(vars(args), default=str)),
             state_path=None,
         )
         record.append_log(f"completed evaluation suite {args.suite}")
         summary = json.loads(text)
-        if args.suite == "chat":
+        if args.suite in {"chat", "gsm8k-reproduction", "answer-nll"}:
             summary = {
                 key: value for key, value in summary.items() if key != "rows"
             }

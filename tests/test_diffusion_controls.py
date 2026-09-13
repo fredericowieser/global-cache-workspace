@@ -13,6 +13,7 @@ from gcw.cli import build_parser
 from gcw.config import (
     CacheProcessorConfig,
     DiffusionProcessorConfig,
+    EvalConfig,
     LongshotSelectorTrainingConfig,
     ModelConfig,
     TrainConfig,
@@ -486,8 +487,6 @@ def test_flops_and_receipts_use_solver_depth_not_horizon_or_num_steps():
 @pytest.mark.parametrize("suite", ["all", "math", "general", "tasks", "chat"])
 def test_eval_cli_accepts_independent_solver_depth(suite):
     extra = ["--tasks", "gsm8k"] if suite in {"tasks", "chat"} else []
-    if suite == "chat":
-        extra += ["--mode", "thinking_off"]
     args = build_parser().parse_args(
         [
             "eval",
@@ -577,8 +576,7 @@ def test_chat_override_validation_precedes_cuda_and_loading(
     with pytest.raises(ValueError, match=match):
         run_chat_benchmarks(
             tasks=["gsm8k_openmath"],
-            mode="thinking_off",
-            batch_size=1,
+            config=EvalConfig(batch_size=1, apply_chat_template=True),
             checkpoint=None if hf_model else "/unused",
             hf_model=hf_model,
             processor_enabled=enabled,

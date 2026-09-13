@@ -5,7 +5,7 @@ import hashlib
 import json
 
 from gcw.checkpoint import load_checkpoint, save_checkpoint
-from gcw.config import CacheProcessorConfig, ModelConfig
+from gcw.config import CacheProcessorConfig, EvalConfig, ModelConfig
 from gcw.models import build_model
 from gcw.evaluation.lm_eval_adapter import ProcessorBypass
 
@@ -18,11 +18,12 @@ from gcw.evaluation.benchmarks import (
     BenchmarkConfig,
     GCWBenchmarkBackend,
     HFBenchmarkBackend,
-    run_benchmark_matrix,
+    run_gsm8k_reproduction,
+    load_benchmark_result,
     apply_qwen_chat_template,
     extract_gsm8k_target,
     extract_lm_eval_flexible,
-    evaluate_mode,
+    evaluate_benchmark,
     score_lm_eval_flexible,
     score_numeric_response,
 )
@@ -96,15 +97,14 @@ class EvaluationTokenizer(FakeTokenizer):
 
 def test_hf_evaluation_left_pads_variable_length_prompts():
     backend = RecordingBackend(supports_left_padding=True)
-    result = evaluate_mode(
+    result = evaluate_benchmark(
         backend,
         EvaluationTokenizer(),
         [
             {"question": "abc", "answer": "#### 7"},
             {"question": "x", "answer": "#### 7"},
         ],
-        mode="thinking_off",
-        batch_size=2,
+        config=EvalConfig(batch_size=2, apply_chat_template=True),
         max_new_tokens=MAX_NEW_TOKENS,
         scoring_protocol="lm_eval_flexible_exact",
     )
@@ -118,15 +118,14 @@ def test_hf_evaluation_left_pads_variable_length_prompts():
 
 def test_native_evaluation_keeps_exact_length_batches():
     backend = RecordingBackend(supports_left_padding=False)
-    result = evaluate_mode(
+    result = evaluate_benchmark(
         backend,
         EvaluationTokenizer(),
         [
             {"question": "abc", "answer": "#### 7"},
             {"question": "x", "answer": "#### 7"},
         ],
-        mode="thinking_off",
-        batch_size=2,
+        config=EvalConfig(batch_size=2, apply_chat_template=True),
         max_new_tokens=MAX_NEW_TOKENS,
         scoring_protocol="lm_eval_flexible_exact",
     )
@@ -138,7 +137,9 @@ def test_native_evaluation_keeps_exact_length_batches():
 
 def test_fast_benchmark_batch_is_the_default():
     assert (
-        BenchmarkConfig(model_path="model", output_dir="out").batch_size
+        BenchmarkConfig(
+            model_path="model", output_dir="out"
+        ).eval_config.batch_size
         == DEFAULT_BATCH_SIZE
         == 64
     )
@@ -149,12 +150,34 @@ def test_config_rejects_protocol_drift():
         BenchmarkConfig(
             model_path="model", output_dir="out", max_new_tokens=512
         )
-    with pytest.raises(ValueError, match="duplicates"):
+    with pytest.raises(ValueError, match="chat formatting"):
         BenchmarkConfig(
             model_path="model",
             output_dir="out",
-            modes=("thinking_off", "thinking_off"),
+            eval_config=EvalConfig(),
         )
+
+
+def test_historical_matrix_reader_selects_one_boolean_condition(tmp_path):
+    path = tmp_path / "historical.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "gcw.benchmark_matrix.v3",
+                "config": {"modes": ["thinking_off", "thinking_on"]},
+                "cells": {
+                    "thinking_off": {"mode": "thinking_off", "accuracy": 0.5},
+                    "thinking_on": {"mode": "thinking_on", "accuracy": 0.75},
+                },
+            }
+        )
+    )
+    result = load_benchmark_result(path, enable_thinking=True)
+    assert result["schema"] == "gcw.gsm8k_reproduction.v4"
+    assert result["enable_thinking"] is True
+    assert result["apply_chat_template"] is True
+    assert result["accuracy"] == 0.75
+    assert "mode" not in result and "modes" not in result["config"]
 
 
 @pytest.fixture
@@ -352,15 +375,17 @@ def test_hf_has_no_gcw_processor_and_matrix_records_request(
         benchmarks, "_load_tokenizer", lambda path: (EvaluationTokenizer(), {})
     )
     monkeypatch.setattr(benchmarks, "_load_test_rows", lambda limit: ([], {}))
-    monkeypatch.setattr(benchmarks, "evaluate_mode", lambda *a, **k: {})
-    result = run_benchmark_matrix(
+    monkeypatch.setattr(benchmarks, "evaluate_benchmark", lambda *a, **k: {})
+    result = run_gsm8k_reproduction(
         BenchmarkConfig(
             model_path=str(source),
             output_dir=str(tmp_path / "result"),
             processor_enabled=requested,
         )
     )
-    assert result["schema"] == "gcw.benchmark_matrix.v3"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v4"
+    assert result["config"]["apply_chat_template"] is True
+    assert result["config"]["enable_thinking"] is False
     assert result["config"]["processor_requested"] is requested
     assert "processor_enabled" not in result["config"]
     assert result["target"] == backend.identity

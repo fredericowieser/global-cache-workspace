@@ -270,6 +270,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 
 | Field | Type | Default |
 |---|---|---|
-| `tasks` | `list[str]` | `[]` |
 | `batch_size` | `int` | `8` |
 | `limit` | `int \| None` | `None` |
+| `apply_chat_template` | `bool` | `False` |
+| `enable_thinking` | `bool` | `False` |

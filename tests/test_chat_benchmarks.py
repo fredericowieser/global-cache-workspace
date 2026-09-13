@@ -7,6 +7,7 @@ import json
 import pytest
 import torch
 
+from gcw.config import EvalConfig
 from gcw.evaluation.chat_benchmarks import (
     ChatExample,
     evaluate_chat_examples,
@@ -84,8 +85,7 @@ def test_chat_generation_cadence_requires_active_gcw_processor():
     try:
         run_chat_benchmarks(
             tasks=["gsm8k_openmath"],
-            mode="thinking_off",
-            batch_size=1,
+            config=EvalConfig(batch_size=1, apply_chat_template=True),
             hf_model="hf-model",
             generation_process_every=1,
         )
@@ -109,12 +109,16 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
         backend,
         FakeTokenizer(),
         examples,
-        mode="thinking_on",
-        batch_size=2,
+        config=EvalConfig(
+            batch_size=2,
+            apply_chat_template=True,
+            enable_thinking=True,
+        ),
     )
 
     assert result["protocol"] == "official_chat_template_answer_generation_v1"
     assert result["max_new_tokens"] == 2048
+    assert result["enable_thinking"] is True
     assert result["tasks"]["piqa"]["accuracy"] == 1.0
     assert result["tasks"]["svamp"]["accuracy"] == 1.0
     assert result["tasks"]["piqa"]["parse_rate"] == 1.0
@@ -163,13 +167,12 @@ def test_chat_processor_metadata_comes_from_backend(
     )
     result = run_chat_benchmarks(
         tasks=["piqa"],
-        mode="thinking_off",
-        batch_size=1,
+        config=EvalConfig(batch_size=1, apply_chat_template=True),
         tokenizer_path=tmp_path,
         processor_enabled=requested,
         **{"hf_model" if target == "hf" else "checkpoint": tmp_path},
     )
-    assert result["schema"] == "gcw.chat_benchmark_matrix.v2"
+    assert result["schema"] == "gcw.chat_benchmark.v3"
     for field in (
         "processor_requested",
         "processor_present",
@@ -197,8 +200,7 @@ def test_chat_rejects_processor_only_overrides_for_hf(requested, override):
     with pytest.raises(ValueError, match="HF targets|only to GCW"):
         run_chat_benchmarks(
             tasks=["piqa"],
-            mode="thinking_off",
-            batch_size=1,
+            config=EvalConfig(batch_size=1, apply_chat_template=True),
             hf_model="unused-local-path",
             processor_enabled=requested,
             **{override: 1},

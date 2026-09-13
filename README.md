@@ -85,10 +85,36 @@ uv run --extra cpu --extra eval gcw eval all \
 ```
 
 Evaluation creates an independent record under `data/eval-runs/`. It does not mutate training state.
+Standard suites use plain prompts. Use `--apply-chat-template` to enable chat
+formatting. When chat formatting is active and `--enable-thinking` is omitted,
+native checkpoints inherit `data.sft_enable_thinking` from their training
+provenance; targets without that setting default to thinking disabled.
 
-### Legacy paper7 compatibility
+### Paper7 evaluation
 
-Use `paper7-legacy` only when reproducing martin-branch paper7 results or comparing new checkpoints directly against those historical runs. It keeps the old lm-eval task set, generation limits, chat template invocation, special-token handling, and legacy JSON shape. The `paper7` suite name is retained as an alias for this compatibility path.
+Use `paper7` for new evaluations. It applies the selected chat and thinking
+settings to the four answer-generation tasks, while LogiQA and Gaokao use their
+canonical plain-prompt option-likelihood protocol. Corrected results include a
+`paper7_mixed_prompt_v1` protocol block with the effective setting for every
+evaluated task.
+
+Use `paper7-legacy` when evaluating martin-branch checkpoints or comparing new
+checkpoints against historical Paper7 results. It retains suite-wide chat
+formatting, special-token handling, and the legacy JSON shape. Both commands
+allow 2,048 generated tokens for every generative task. Chat formatting is
+enabled by default when the checkpoint tokenizer provides a template and
+otherwise falls back to plain prompts. When thinking is not specified, the
+command inherits the checkpoint's training setting when present and otherwise
+disables it.
+
+```bash
+uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7 \
+  --checkpoint /path/to/checkpoint \
+  --batch-size 16 \
+  --out results/<run>_paper7.json
+```
+
+For a historical comparison instead:
 
 ```bash
 GCW_EVAL_SKIP_TASKS=theoremqa \
@@ -107,7 +133,7 @@ but are not used for routing.
 
 When evaluating in a pre-synced cluster environment, add `--locked --no-sync` to `uv run` to avoid changing the installed runtime during a Slurm job.
 
-Report paper7 legacy results in the martin table order:
+Report Paper7 results in the martin table order:
 
 | Column | Task | Metric |
 |---|---|---|

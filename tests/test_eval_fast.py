@@ -1,6 +1,5 @@
 from gcw.evaluation.core import (
     _normalize_until,
-    _should_apply_chat_template,
     _trim_until,
 )
 from gcw.evaluation.scoring import (
@@ -25,13 +24,6 @@ def test_normalize_until_accepts_string_list_and_none():
     assert _normalize_until(None) == ()
     assert _normalize_until("stop") == ("stop",)
     assert _normalize_until(["a", None, "b"]) == ("a", "b")
-
-
-def test_plain_protocol_never_applies_a_chat_template():
-    tokenizer = type("Tokenizer", (), {"chat_template": "template"})()
-    assert not _should_apply_chat_template(tokenizer, "plain")
-    assert _should_apply_chat_template(tokenizer, "thinking_off")
-    assert _should_apply_chat_template(tokenizer, "thinking_on")
 
 
 def test_native_hf_families_require_original_tokenizer(monkeypatch):
