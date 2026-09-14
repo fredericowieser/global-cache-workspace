@@ -155,8 +155,24 @@ evaluated task.
 ```bash
 uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7 \
   --checkpoint /path/to/checkpoint \
-  --batch-size 16 \
+  --batch-size auto \
+  --max-batch-size 64 \
   --out results/<run>_paper7.json
+```
+
+The lm-eval-backed `paper7`, `paper7-legacy`, `all`, `math`, `general`, and
+`tasks` suites accept `--batch-size auto`. Automatic batching starts at the
+smaller of the remaining workload and `--max-batch-size` (64 by default). If a
+CUDA out-of-memory error occurs, it retries that workload at half the batch
+size and retains the reduced limit for later batches of the same request type.
+A batch-one OOM remains fatal. Integer batch sizes retain their existing fixed
+behavior.
+
+For array jobs, pass the same settings through the launcher environment:
+
+```bash
+EVAL_BATCH_SIZE=auto EVAL_MAX_BATCH_SIZE=64 \
+scripts/cluster/submit_array.sh configs/experiments/example.yaml
 ```
 
 For corrected Paper7, `--apply-chat-template false` disables chat formatting

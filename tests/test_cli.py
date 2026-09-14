@@ -168,6 +168,7 @@ def test_paper7_eval_parsers_expose_shared_options():
         assert args.suite == suite
         assert args.checkpoint == "checkpoint-3000"
         assert args.batch_size == 16
+        assert args.max_batch_size == 64
         assert args.generation_process_every == 1
         assert args.head_selection_method == "random"
         assert args.enable_thinking is None
@@ -175,6 +176,50 @@ def test_paper7_eval_parsers_expose_shared_options():
         assert args.dtype == "auto"
         assert not hasattr(args, "prompt_mode")
         assert not hasattr(args, "processor")
+
+
+@pytest.mark.parametrize(
+    ("suite", "target"),
+    [
+        ("paper7", ["--checkpoint", "checkpoint"]),
+        ("paper7-legacy", ["--checkpoint", "checkpoint"]),
+        ("all", ["--hf-model", "model"]),
+        ("math", ["--hf-model", "model"]),
+        ("general", ["--hf-model", "model"]),
+        ("tasks", ["--hf-model", "model", "--tasks", "piqa"]),
+    ],
+)
+def test_lm_eval_parsers_accept_automatic_batching(suite, target):
+    args = cli.build_parser().parse_args(
+        [
+            "eval",
+            suite,
+            *target,
+            "--batch-size",
+            "auto",
+            "--max-batch-size",
+            "32",
+        ]
+    )
+
+    assert args.batch_size == "auto"
+    assert args.max_batch_size == 32
+
+
+def test_chat_eval_parser_rejects_automatic_batching():
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(
+            [
+                "eval",
+                "chat",
+                "--hf-model",
+                "model",
+                "--tasks",
+                "piqa",
+                "--batch-size",
+                "auto",
+            ]
+        )
 
 
 def test_legacy_paper7_eval_parser_can_enable_thinking():

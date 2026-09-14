@@ -440,13 +440,14 @@ def evaluate_benchmark(
 ) -> dict[str, Any]:
     if not config.apply_chat_template:
         raise ValueError("GSM8K reproduction requires chat formatting")
+    batch_size = config.fixed_batch_size
     examples = _prepare(rows, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
         batches = [
             sorted(examples, key=lambda example: len(example.prompt_ids))[
-                offset : offset + config.batch_size
+                offset : offset + batch_size
             ]
-            for offset in range(0, len(examples), config.batch_size)
+            for offset in range(0, len(examples), batch_size)
         ]
         grouping = "length_sorted_left_padding"
     else:
@@ -454,9 +455,9 @@ def evaluate_benchmark(
         for example in examples:
             groups[len(example.prompt_ids)].append(example)
         batches = [
-            group[offset : offset + config.batch_size]
+            group[offset : offset + batch_size]
             for _, group in sorted(groups.items())
-            for offset in range(0, len(group), config.batch_size)
+            for offset in range(0, len(group), batch_size)
         ]
         grouping = "exact_prompt_token_length"
     generated_rows: list[dict[str, Any] | None] = [None] * len(examples)
@@ -537,7 +538,7 @@ def evaluate_benchmark(
         "generation": {
             "do_sample": False,
             "max_new_tokens": max_new_tokens,
-            "batch_size": config.batch_size,
+            "batch_size": batch_size,
             "grouping": grouping,
             "eos_token_ids": list(backend.eos_ids),
             "pad_token_id": backend.pad_id,

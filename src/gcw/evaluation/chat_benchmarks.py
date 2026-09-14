@@ -361,12 +361,13 @@ def evaluate_chat_examples(
 ) -> dict[str, Any]:
     if not config.apply_chat_template:
         raise ValueError("chat benchmark evaluation requires chat formatting")
+    batch_size = config.fixed_batch_size
     prepared = _prepare_examples(examples, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
         ordered = sorted(prepared, key=lambda item: len(item.prompt_ids))
         batches = [
-            ordered[offset : offset + config.batch_size]
-            for offset in range(0, len(ordered), config.batch_size)
+            ordered[offset : offset + batch_size]
+            for offset in range(0, len(ordered), batch_size)
         ]
         grouping = "length_sorted_left_padding"
     else:
@@ -374,9 +375,9 @@ def evaluate_chat_examples(
         for example in prepared:
             by_length[len(example.prompt_ids)].append(example)
         batches = [
-            group[offset : offset + config.batch_size]
+            group[offset : offset + batch_size]
             for _length, group in sorted(by_length.items())
-            for offset in range(0, len(group), config.batch_size)
+            for offset in range(0, len(group), batch_size)
         ]
         grouping = "exact_prompt_token_length"
 
@@ -470,7 +471,7 @@ def evaluate_chat_examples(
         "enable_thinking": config.enable_thinking,
         "protocol": "official_chat_template_answer_generation_v1",
         "max_new_tokens": max_new_tokens,
-        "batch_size": config.batch_size,
+        "batch_size": batch_size,
         "grouping": grouping,
         "elapsed_seconds": time.monotonic() - started,
         "peak_memory_bytes": peak_memory,

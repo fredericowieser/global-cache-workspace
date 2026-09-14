@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 def convert_hf(*args: Any, **kwargs: Any) -> Any:
@@ -17,6 +17,12 @@ def _positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
+
+
+def _eval_batch_size(value: str) -> int | Literal["auto"]:
+    if value == "auto":
+        return value
+    return _positive_int(value)
 
 
 def _boolean(value: str) -> bool:
@@ -86,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
         legacy = eval_sub.add_parser(suite)
         legacy.add_argument("--checkpoint", required=True)
         legacy.add_argument("--limit", type=int, default=None)
-        legacy.add_argument("--batch-size", type=int, default=8)
+        legacy.add_argument("--batch-size", type=_eval_batch_size, default=8)
+        legacy.add_argument("--max-batch-size", type=_positive_int, default=64)
         legacy.add_argument(
             "--apply-chat-template",
             nargs="?",
@@ -126,7 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--generation-process-every", type=_positive_int, default=None
         )
         command.add_argument("--limit", type=int, default=None)
-        command.add_argument("--batch-size", type=int, default=8)
+        command.add_argument(
+            "--batch-size", type=_eval_batch_size, default=8
+        )
+        command.add_argument(
+            "--max-batch-size", type=_positive_int, default=64
+        )
         command.add_argument(
             "--apply-chat-template",
             nargs="?",
@@ -350,6 +362,7 @@ def dispatch(args: argparse.Namespace) -> None:
             )
             eval_config = EvalConfig(
                 batch_size=args.batch_size,
+                max_batch_size=args.max_batch_size,
                 limit=args.limit,
                 apply_chat_template=args.apply_chat_template,
                 enable_thinking=args.enable_thinking,
@@ -467,6 +480,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 "checkpoint": args.checkpoint,
                 "config": EvalConfig(
                     batch_size=args.batch_size,
+                    max_batch_size=args.max_batch_size,
                     limit=args.limit,
                     apply_chat_template=args.apply_chat_template,
                     enable_thinking=args.enable_thinking,

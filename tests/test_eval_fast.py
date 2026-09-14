@@ -1,3 +1,6 @@
+import pytest
+import torch
+
 from gcw.evaluation.core import (
     _normalize_until,
     _trim_until,
@@ -7,6 +10,44 @@ from gcw.evaluation.scoring import (
     trim_generated_token_ids,
     truncate_context_continuation,
 )
+from gcw.evaluation.lm_eval_adapter import GCWEvalLM
+
+
+def test_auto_batching_retries_cuda_oom_and_retains_reduced_limit():
+    lm = GCWEvalLM.__new__(GCWEvalLM)
+    lm.batch_size = "auto"
+    lm._auto_batch_sizes = {"generation": 8}
+    attempts = []
+
+    def run_batch(rows):
+        attempts.append(len(rows))
+        if len(rows) > 2:
+            raise torch.cuda.OutOfMemoryError("CUDA out of memory")
+        return [row * 2 for row in rows]
+
+    assert lm._run_batches(
+        list(range(5)), "generation", run_batch
+    ) == [0, 2, 4, 6, 8]
+    assert attempts == [5, 2, 2, 1]
+    assert lm._auto_batch_sizes["generation"] == 2
+
+    attempts.clear()
+    assert lm._run_batches(
+        list(range(3)), "generation", run_batch
+    ) == [0, 2, 4]
+    assert attempts == [2, 1]
+
+
+def test_auto_batching_does_not_hide_batch_one_oom():
+    lm = GCWEvalLM.__new__(GCWEvalLM)
+    lm.batch_size = "auto"
+    lm._auto_batch_sizes = {"loglikelihood": 1}
+
+    def run_batch(_rows):
+        raise torch.cuda.OutOfMemoryError("CUDA out of memory")
+
+    with pytest.raises(torch.cuda.OutOfMemoryError):
+        lm._run_batches([1], "loglikelihood", run_batch)
 
 
 def test_trim_until_matches_existing_ordered_stop_semantics():

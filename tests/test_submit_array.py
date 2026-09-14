@@ -216,6 +216,37 @@ def test_eval_only_targets_one_step_with_generation_cadence(
     assert "step3000_generation-process-every1_paper7-legacy.json" in invocation
 
 
+def test_eval_only_passes_automatic_batching_options(tmp_path: Path) -> None:
+    capture = tmp_path / "uv-args"
+    config, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"',
+    )
+    env.update(
+        {
+            "EVAL_ONLY": "1",
+            "EVAL_BATCH_SIZE": "auto",
+            "EVAL_MAX_BATCH_SIZE": "32",
+            "UV_CAPTURE": str(capture),
+        }
+    )
+
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", str(config)],
+        env,
+    )
+    state_dir = _state_dir(result.stdout)
+    _wait_for_status(state_dir, env, "SUCCEEDED")
+
+    invocation = next(
+        line
+        for line in capture.read_text(encoding="utf-8").splitlines()
+        if " gcw eval " in f" {line} "
+    )
+    assert "--batch-size auto" in invocation
+    assert "--max-batch-size 32" in invocation
+
+
 def test_generation_cadence_rejects_non_generative_eval_suite(
     tmp_path: Path,
 ) -> None:
