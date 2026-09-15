@@ -40,7 +40,6 @@ KEEP_STEP_CHECKPOINTS="${KEEP_STEP_CHECKPOINTS:-auto}"
 KEEP_STEP_CHECKPOINT_EVERY="${KEEP_STEP_CHECKPOINT_EVERY:-1000}"
 OUT_DIR="${OUT_DIR:-results}"
 
-OPENMATH_DATA="${OPENMATH_DATA:-/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl}"
 SFT_BACKBONE="${SFT_BACKBONE:-/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf/model.safetensors}"
 TOKENIZER_DIR="${TOKENIZER_DIR:-/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model}"
 LOCAL_GPUS="${LOCAL_GPUS:-}"
@@ -122,6 +121,41 @@ validate_eval_batching() {
       ;;
   esac
   positive_int EVAL_MAX_BATCH_SIZE "$EVAL_MAX_BATCH_SIZE"
+}
+
+write_slurm_environment() {
+  local path="$1"
+  local config_list="$2"
+  local state_dir="$3"
+
+  env -0 \
+    "GCW_ARRAY_MODE=worker" \
+    "GCW_REPO_ROOT=$repo_root" \
+    "CONFIG_LIST=$config_list" \
+    "STATE_DIR=$state_dir" \
+    "JOB_NAME=$JOB_NAME" \
+    "GPUS=$GPUS" \
+    "EVAL_GPUS=$EVAL_GPUS" \
+    "EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN" \
+    "EVAL_ONLY=$EVAL_ONLY" \
+    "EVAL_SUITE=$EVAL_SUITE" \
+    "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE" \
+    "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE" \
+    "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP" \
+    "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY" \
+    "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD" \
+    "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS" \
+    "WANDB_MODE=$WANDB_MODE" \
+    "PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF" \
+    "UV_EXTRAS=$UV_EXTRAS" \
+    "TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS" \
+    "EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS" \
+    "KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS" \
+    "KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY" \
+    "OUT_DIR=$OUT_DIR" \
+    "SFT_BACKBONE=$SFT_BACKBONE" \
+    "TOKENIZER_DIR=$TOKENIZER_DIR" \
+    "SLURM_EXPORT_ENV=ALL" > "$path"
 }
 
 validate_backend() {
@@ -293,7 +327,6 @@ run_one_config() {
   local output_dir max_steps keep_step_checkpoints run_name manifest step out nproc
 
   require_path "$config"
-  require_path "$OPENMATH_DATA"
 
   output_dir="$(config_output_dir "$config")"
   if [[ -z "$output_dir" ]]; then
@@ -711,7 +744,6 @@ start_local_worker() {
     "KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS"
     "KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY"
     "OUT_DIR=$OUT_DIR"
-    "OPENMATH_DATA=$OPENMATH_DATA"
     "SFT_BACKBONE=$SFT_BACKBONE"
     "TOKENIZER_DIR=$TOKENIZER_DIR"
   )
@@ -946,7 +978,7 @@ cancel_main() {
 
 launcher_main() {
   local configs_file="" dry_run=0 state_dir config_list workers_arg
-  local alloc_gpus
+  local alloc_gpus export_file
   local args=()
 
   while [[ $# -gt 0 ]]; do
@@ -1081,6 +1113,9 @@ launcher_main() {
   fi
 
   workers_arg="0-$((ARRAY_WORKERS - 1))"
+  export_file="$state_dir/slurm-environment"
+  write_slurm_environment "$export_file" "$config_list" "$state_dir"
+  chmod 600 "$export_file"
   echo "Backend: slurm"
   echo "Config list: $config_list"
   echo "Submitting $ARRAY_WORKERS worker(s) as array $workers_arg"
@@ -1098,7 +1133,7 @@ launcher_main() {
     --mem="$MEM"
     --array="$workers_arg"
     --output="$SLURM_LOG_DIR/${JOB_NAME}-%A_%a.out"
-    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE,EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP,GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY,EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS,EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
+    --export-file="$export_file"
   )
   if [[ -n "$DEPENDENCY" ]]; then
     sbatch_cmd+=(--dependency="$DEPENDENCY")
@@ -1111,10 +1146,17 @@ launcher_main() {
   if [[ "$dry_run" == "1" ]]; then
     printf '%q ' "${sbatch_cmd[@]}"
     printf '\n'
+    rm -f "$export_file"
     return
   fi
 
-  job_id="$("${sbatch_cmd[@]}")"
+  if job_id="$("${sbatch_cmd[@]}")"; then
+    rm -f "$export_file"
+  else
+    rc="$?"
+    rm -f "$export_file"
+    return "$rc"
+  fi
   echo "Submitted array job $job_id"
 }
 

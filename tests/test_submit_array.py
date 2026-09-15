@@ -16,14 +16,12 @@ def _write_fixture(
     bin_dir.mkdir(parents=True)
     (repo_root / "scripts" / "cluster").mkdir(parents=True)
     config = tmp_path / "config.yaml"
-    data = tmp_path / "data.jsonl"
     (repo_root / "scripts" / "cluster" / "check_cuda_env.py").write_text(
         "# fake\n", encoding="utf-8"
     )
     config.write_text(
         f"output_dir: {tmp_path / 'output'}\nmax_steps: 1\n", encoding="utf-8"
     )
-    data.write_text("", encoding="utf-8")
     uv = bin_dir / "uv"
     uv.write_text(f"#!/usr/bin/env bash\n{uv_body}\n", encoding="utf-8")
     uv.chmod(0o755)
@@ -34,7 +32,6 @@ def _write_fixture(
             "HOME": str(home),
             "GCW_REPO_ROOT": str(repo_root),
             "LOCAL_STATE_ROOT": str(tmp_path / "local-state"),
-            "OPENMATH_DATA": str(data),
             "EVAL_AFTER_TRAIN": "0",
             "JOB_NAME": "test-array",
             "LOCAL_STOP_WHEN_IDLE": "0",
@@ -147,7 +144,65 @@ def test_local_worker_records_success_and_status(tmp_path: Path) -> None:
     ).strip() == "local"
 
 
-def test_dev_defaults_use_qwen35_legacy_eval_and_cluster_preflight(
+def test_worker_does_not_validate_unrelated_openmath_override(
+    tmp_path: Path,
+) -> None:
+    config, env = _write_fixture(tmp_path)
+    env["OPENMATH_DATA"] = str(tmp_path / "missing.jsonl")
+
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", str(config)], env
+    )
+
+    _wait_for_status(_state_dir(result.stdout), env, "SUCCEEDED")
+
+
+def test_slurm_uses_ephemeral_export_file_without_login_env_retrieval(
+    tmp_path: Path,
+) -> None:
+    config, env = _write_fixture(tmp_path)
+    state_root = tmp_path / "slurm-state"
+    capture = tmp_path / "captured-environment"
+    bin_dir = Path(env["HOME"]) / ".local" / "bin"
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text(
+        "#!/usr/bin/env bash\n"
+        "for arg in \"$@\"; do\n"
+        "  if [[ \"$arg\" == --export-file=* ]]; then\n"
+        "    cp \"${arg#--export-file=}\" \"$SBATCH_EXPORT_CAPTURE\"\n"
+        "  fi\n"
+        "done\n"
+        "printf '321\\n'\n",
+        encoding="utf-8",
+    )
+    sbatch.chmod(0o755)
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env['PATH']}",
+            "SLURM_STATE_ROOT": str(state_root),
+            "SLURM_LOG_DIR": str(tmp_path / "slurm-logs"),
+            "SBATCH_EXPORT_CAPTURE": str(capture),
+        }
+    )
+
+    result = _run(["--backend", "slurm", str(config)], env)
+
+    assert "Submitted array job 321" in result.stdout
+    state_dir = next(state_root.iterdir())
+    assert not (state_dir / "slurm-environment").exists()
+    entries = dict(
+        item.split(b"=", 1)
+        for item in capture.read_bytes().split(b"\0")
+        if item
+    )
+    assert entries[b"GCW_ARRAY_MODE"] == b"worker"
+    assert entries[b"CONFIG_LIST"] == str(
+        state_dir / "configs.txt"
+    ).encode()
+    assert entries[b"SLURM_EXPORT_ENV"] == b"ALL"
+
+
+def test_dev_defaults_use_qwen35_paper7_eval_and_cluster_preflight(
     tmp_path: Path,
 ) -> None:
     capture = tmp_path / "uv-args"
@@ -173,7 +228,7 @@ def test_dev_defaults_use_qwen35_legacy_eval_and_cluster_preflight(
         f"{expected_prefix} gcw train --config " in line for line in invocations
     )
     assert any(
-        f"{expected_prefix} gcw eval paper7-legacy --checkpoint " in line
+        f"{expected_prefix} gcw eval paper7 --checkpoint " in line
         for line in invocations
     )
 
@@ -213,7 +268,7 @@ def test_eval_only_targets_one_step_with_generation_cadence(
     assert "--generation-process-every 1" in invocation
     assert "--head-selection-method random" in invocation
     assert "--batch-size 16" in invocation
-    assert "step3000_generation-process-every1_paper7-legacy.json" in invocation
+    assert "step3000_generation-process-every1_paper7.json" in invocation
 
 
 def test_eval_only_passes_automatic_batching_options(tmp_path: Path) -> None:
