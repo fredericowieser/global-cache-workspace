@@ -343,6 +343,21 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(
     monkeypatch.setattr(
         paper7, "_eval_device", lambda local_rank: torch.device("cpu")
     )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "reset_peak_memory_stats",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "max_memory_allocated",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
     monkeypatch.setattr(
         paper7, "_write_progress", lambda progress, merged: None
     )
@@ -397,6 +412,21 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(
 def test_run_paper7_uses_mixed_prompt_protocol(monkeypatch):
     monkeypatch.setattr(paper7, "HAS_LM_EVAL", True)
     monkeypatch.setattr(lm_eval_adapter, "HAS_LM_EVAL", True)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "reset_peak_memory_stats",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "max_memory_allocated",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
 
     calls = []
 

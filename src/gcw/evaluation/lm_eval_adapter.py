@@ -269,8 +269,8 @@ class GCWEvalLM(TemplateLM):
     def reset_runtime_metrics(self) -> None:
         self._runtime_metrics = {
             "successful_batch_sizes": {
-                "generation": [],
-                "loglikelihood": [],
+                "generation": {},
+                "loglikelihood": {},
             },
             "generated_responses": 0,
             "answer_tokens": 0,
@@ -283,6 +283,11 @@ class GCWEvalLM(TemplateLM):
         if not hasattr(self, "_runtime_metrics"):
             self.reset_runtime_metrics()
         return self._runtime_metrics
+
+    def _record_successful_batch_size(self, workload: str, size: int) -> None:
+        counts = self._metrics()["successful_batch_sizes"][workload]
+        key = str(size)
+        counts[key] = counts.get(key, 0) + 1
 
     def pop_runtime_metrics(self) -> dict[str, Any]:
         metrics = self._metrics()
@@ -300,19 +305,19 @@ class GCWEvalLM(TemplateLM):
         )
         if dist.is_available() and dist.is_initialized():
             dist.all_reduce(counters)
-            gathered: list[dict[str, list[int]] | None] = [
+            gathered: list[dict[str, dict[str, int]] | None] = [
                 None
             ] * dist.get_world_size()
             dist.all_gather_object(gathered, batches)
-            batches = {
-                workload: [
-                    size
-                    for rank_batches in gathered
-                    if rank_batches is not None
-                    for size in rank_batches[workload]
-                ]
-                for workload in ("generation", "loglikelihood")
-            }
+            batches = {"generation": {}, "loglikelihood": {}}
+            for rank_batches in gathered:
+                if rank_batches is None:
+                    continue
+                for workload, counts in rank_batches.items():
+                    for size, count in counts.items():
+                        batches[workload][size] = (
+                            batches[workload].get(size, 0) + count
+                        )
         generated, answer, thinking, unterminated, truncated = (
             int(value) for value in counters.tolist()
         )
@@ -390,9 +395,7 @@ class GCWEvalLM(TemplateLM):
                         f"{workload} batch returned {len(batch_results)} "
                         f"results for {len(chunk)} rows"
                     )
-                self._metrics()["successful_batch_sizes"][workload].append(
-                    len(chunk)
-                )
+                self._record_successful_batch_size(workload, len(chunk))
                 results.extend(batch_results)
             return results
 
@@ -425,9 +428,7 @@ class GCWEvalLM(TemplateLM):
                     f"for {batch_size} rows"
                 )
             results.extend(batch_results)
-            self._metrics()["successful_batch_sizes"][workload].append(
-                batch_size
-            )
+            self._record_successful_batch_size(workload, batch_size)
             start += batch_size
         return results
 
@@ -591,7 +592,7 @@ class GCWEvalLM(TemplateLM):
                 tokens, stop_seqs, self.eot_token_id
             )
             termination = "max_new_tokens" if len(tokens) >= max_new else "stop"
-            self._metrics()["successful_batch_sizes"]["generation"].append(1)
+            self._record_successful_batch_size("generation", 1)
             self._record_generated_tokens(tokens, termination)
             text = self.tok_decode(tokens)
             outs.append(_trim_until(text, until))

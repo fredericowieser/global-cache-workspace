@@ -1,3 +1,6 @@
+import sys
+import types
+
 import pytest
 import torch
 
@@ -40,13 +43,10 @@ def test_auto_batching_retries_cuda_oom_and_retains_reduced_limit():
     attempts.clear()
     assert lm._run_batches(list(range(3)), "generation", run_batch) == [0, 2, 4]
     assert attempts == [2, 1]
-    assert lm._metrics()["successful_batch_sizes"]["generation"] == [
-        2,
-        2,
-        1,
-        2,
-        1,
-    ]
+    assert lm._metrics()["successful_batch_sizes"]["generation"] == {
+        "1": 2,
+        "2": 3,
+    }
 
 
 class ThinkingTokenizer:
@@ -123,7 +123,7 @@ def test_lm_runtime_metrics_aggregate_and_reset():
     lm.reset_runtime_metrics()
     lm._record_generated_tokens([10, 11, 20, 12, 13, 30], "eos")
     lm._record_generated_tokens([20, 21], "max_new_tokens")
-    lm._metrics()["successful_batch_sizes"]["generation"] = [2]
+    lm._metrics()["successful_batch_sizes"]["generation"] = {"2": 1}
 
     runtime = lm.pop_runtime_metrics()
 
@@ -135,7 +135,7 @@ def test_lm_runtime_metrics_aggregate_and_reset():
     assert runtime["unterminated_thinking_responses"] == 1
     assert runtime["thinking_truncated_responses"] == 1
     assert runtime["thinking_truncation_rate"] == 0.5
-    assert runtime["successful_batch_sizes"] == {"generation": [2]}
+    assert runtime["successful_batch_sizes"] == {"generation": {"2": 1}}
     assert lm._metrics()["generated_responses"] == 0
 
 
@@ -152,7 +152,7 @@ def test_lm_runtime_metrics_aggregate_across_distributed_ranks(monkeypatch):
     )()
     lm.reset_runtime_metrics()
     lm._runtime_metrics.update({"generated_responses": 1, "answer_tokens": 3})
-    lm._runtime_metrics["successful_batch_sizes"]["generation"] = [1]
+    lm._runtime_metrics["successful_batch_sizes"]["generation"] = {"1": 1}
     monkeypatch.setattr(adapter.dist, "is_available", lambda: True)
     monkeypatch.setattr(adapter.dist, "is_initialized", lambda: True)
     monkeypatch.setattr(adapter.dist, "get_world_size", lambda: 2)
@@ -164,7 +164,10 @@ def test_lm_runtime_metrics_aggregate_across_distributed_ranks(monkeypatch):
 
     def gather(output, local):
         output[0] = local
-        output[1] = {"generation": [2], "loglikelihood": [4]}
+        output[1] = {
+            "generation": {"1": 2, "2": 1},
+            "loglikelihood": {"4": 1},
+        }
 
     monkeypatch.setattr(adapter.dist, "all_gather_object", gather)
 
@@ -173,8 +176,78 @@ def test_lm_runtime_metrics_aggregate_across_distributed_ranks(monkeypatch):
     assert runtime["generated_responses"] == 3
     assert runtime["answer_tokens_total"] == 8
     assert runtime["successful_batch_sizes"] == {
-        "generation": [1, 2],
-        "loglikelihood": [4],
+        "generation": {"1": 3, "2": 1},
+        "loglikelihood": {"4": 1},
+    }
+
+
+def test_stale_partial_is_ignored_and_does_not_resume_progress(
+    tmp_path, monkeypatch
+):
+    import gcw.evaluation.progress as progress
+
+    runs = [(["task"], 0)]
+    stale = progress._empty_eval_results()
+    stale["results"]["task"] = {"metric": 1.0}
+    stale["gcw_runtime"]["task"] = {
+        "elapsed_seconds": 1.0,
+        "processor_calls": 0,
+    }
+    monkeypatch.setenv("GCW_EVAL_PARTIAL_DIR", str(tmp_path))
+    progress._write_partial_results(stale)
+    old_progress = progress._new_progress(runs, resume=False)
+    old_progress["started_time"] = 1.0
+    progress._write_progress(old_progress, stale)
+
+    with pytest.warns(UserWarning, match="ignoring the stale partial"):
+        assert progress._load_partial_results(runs) is None
+    fresh_progress = progress._new_progress(runs, resume=False)
+
+    assert fresh_progress["started_time"] != 1.0
+    assert fresh_progress["runs"][0]["status"] == "pending"
+
+    current = progress._empty_eval_results()
+    current["results"]["task"] = {"metric": 1.0}
+    current["gcw_runtime"].update(
+        {
+            "task": {
+                "requested_batch_size": 4,
+                "configured_auto_max_batch_size": None,
+                "successful_batch_sizes": {"loglikelihood": {"4": 2, "1": 1}},
+            },
+            "evaluation": {
+                "scope": (
+                    "cumulative_active_end_to_end_including_loading_and_setup"
+                ),
+                "elapsed_seconds": 5.0,
+            },
+        }
+    )
+    progress._write_partial_results(current)
+    assert progress._load_partial_results(runs) == current
+
+
+def test_evaluation_timer_accumulates_resume_time_and_preserves_noop(
+    monkeypatch,
+):
+    import gcw.evaluation.progress as progress
+
+    results = progress._empty_eval_results()
+    results["gcw_runtime"]["evaluation"] = {
+        "scope": "cumulative_active_end_to_end_including_loading_and_setup",
+        "elapsed_seconds": 7.0,
+    }
+    timer = progress.EvaluationTimer.from_results(results, started=10.0)
+    monkeypatch.setattr(progress.time, "monotonic", lambda: 20.0)
+    timer.update_results(results)
+    assert results["gcw_runtime"]["evaluation"]["elapsed_seconds"] == 7.0
+
+    timer.mark_evaluated()
+    monkeypatch.setattr(progress.time, "monotonic", lambda: 23.0)
+    timer.update_results(results)
+    assert results["gcw_runtime"]["evaluation"] == {
+        "scope": "cumulative_active_end_to_end_including_loading_and_setup",
+        "elapsed_seconds": 20.0,
     }
 
 
@@ -214,6 +287,78 @@ def test_fineweb_reports_execution_and_end_to_end_timing(monkeypatch):
     assert result["val_nll"] == 1.25
     assert result["elapsed_seconds"] >= 0.0
     assert result["end_to_end_elapsed_seconds"] >= result["elapsed_seconds"]
+
+
+def test_task_group_cuda_metrics_follow_the_selected_device(monkeypatch):
+    import gcw.evaluation.core as core
+
+    class TaskManager:
+        def __init__(self, **kwargs):
+            pass
+
+    def simple_evaluate(**kwargs):
+        return {
+            "results": {"task": {"metric": 1.0}},
+            "groups": {},
+            "n-samples": {},
+            "n-shot": {},
+            "versions": {},
+            "higher_is_better": {},
+        }
+
+    tasks_module = types.ModuleType("lm_eval.tasks")
+    tasks_module.TaskManager = TaskManager
+    tasks_module.get_task_dict = lambda tasks, manager: {}
+    monkeypatch.setitem(
+        sys.modules,
+        "lm_eval",
+        types.SimpleNamespace(simple_evaluate=simple_evaluate),
+    )
+    monkeypatch.setitem(sys.modules, "lm_eval.tasks", tasks_module)
+    monkeypatch.setattr(core, "HAS_LM_EVAL", True)
+    monkeypatch.setattr(core, "_distributed_eval_state", lambda: (None, 0, 1))
+    monkeypatch.setattr(core, "_eval_device", lambda rank: torch.device("cpu"))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "reset_peak_memory_stats",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "max_memory_allocated",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
+
+    class Tokenizer:
+        eot_id = 0
+
+        @staticmethod
+        def encode(text, **kwargs):
+            return [1]
+
+        @staticmethod
+        def decode(tokens):
+            return ""
+
+    class Model(torch.nn.Module):
+        config = type("Config", (), {"sequence_len": 8})()
+
+        @staticmethod
+        def get_device():
+            return torch.device("cpu")
+
+    result = core.run_task_groups(
+        None,
+        [(["task"], 0)],
+        loaded_target=(Model(), Tokenizer()),
+    )
+
+    assert result["gcw_runtime"]["task"]["peak_memory_mib"] == 0.0
 
 
 def test_auto_batching_does_not_hide_batch_one_oom():

@@ -60,17 +60,21 @@ their historical meaning and must not be interpreted as effective processor stat
 
 Lm-eval-backed results keep per-task-group execution time under
 `gcw_runtime[task_group].elapsed_seconds`. The reserved
-`gcw_runtime.evaluation` entry is explicitly scoped to end-to-end evaluator
-time, including target loading and task setup. Specialized generation, FineWeb,
-and answer-NLL results similarly retain `elapsed_seconds` for execution and add
+`gcw_runtime.evaluation` entry is explicitly scoped to cumulative active
+end-to-end evaluator time, including target loading and task setup. Resumed
+evaluations add time spent in each evaluator process but exclude downtime
+between processes. Reopening an already completed partial without running a
+task preserves the recorded duration. Specialized generation, FineWeb, and
+answer-NLL results similarly retain `elapsed_seconds` for execution and add
 `end_to_end_elapsed_seconds` for loading and setup. These boundaries are not
 interchangeable.
 
 Lm-eval task groups report the requested batch size, the configured automatic
-maximum when automatic batching is selected, and every successfully executed
-batch size separately for generation and likelihood. Failed OOM attempts are
-not included; reduced retries and tail batches are. Likelihood-only tasks omit
-generated-token fields.
+maximum when automatic batching is selected, and a successful-batch-size
+histogram separately for generation and likelihood. Histogram keys are batch
+sizes and values are execution counts. Failed OOM attempts are not included;
+reduced retries and tail batches are. Likelihood-only tasks omit generated-token
+fields.
 
 Generated responses are classified from their final token IDs after EOS and
 stop-sequence trimming. With thinking disabled, every response token is an

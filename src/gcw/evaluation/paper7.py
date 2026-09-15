@@ -15,6 +15,7 @@ from gcw.evaluation.lm_eval_adapter import (
     _load_eval_target,
 )
 from gcw.evaluation.progress import (
+    EvaluationTimer,
     _empty_eval_results,
     _load_partial_results,
     _new_progress,
@@ -117,12 +118,11 @@ def _run_paper7_groups(
         include_path=str(Path("configs/tasks_legacy/paper7").resolve()),
         verbosity="ERROR",
     )
-    merged = (
-        _paper7_empty_results(_load_partial_results(runs))
-        or _paper7_empty_results()
-    )
+    partial = _load_partial_results(runs)
+    merged = _paper7_empty_results(partial)
+    evaluation_timer = EvaluationTimer.from_results(merged, evaluation_started)
     task_protocols = {}
-    _write_progress(_new_progress(runs), merged)
+    _write_progress(_new_progress(runs, resume=partial is not None), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
         apply_chat_template = config.apply_chat_template
         if not legacy and tasks[0] in PAPER7_MULTIPLE_CHOICE_TASKS:
@@ -162,7 +162,7 @@ def _run_paper7_groups(
                     get_task_dict(tasks, task_manager)
         lm.reset_runtime_metrics()
         started = time.monotonic()
-        if torch.cuda.is_available():
+        if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
         try:
             out = lm_eval.simple_evaluate(
@@ -203,7 +203,7 @@ def _run_paper7_groups(
             "processor_enabled": processor is not None,
             "peak_memory_mib": (
                 torch.cuda.max_memory_allocated(device) / 1024 / 1024
-                if torch.cuda.is_available()
+                if device.type == "cuda"
                 else 0.0
             ),
             **lm_runtime,
@@ -219,6 +219,8 @@ def _run_paper7_groups(
         for key in merged:
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
+        evaluation_timer.mark_evaluated()
+        evaluation_timer.update_results(merged)
         _write_partial_results({**_empty_eval_results(), **merged})
         _write_progress(
             _update_progress(
@@ -226,10 +228,7 @@ def _run_paper7_groups(
             ),
             merged,
         )
-    merged.setdefault("gcw_runtime", {})["evaluation"] = {
-        "scope": "end_to_end_including_loading_and_setup",
-        "elapsed_seconds": time.monotonic() - evaluation_started,
-    }
+    evaluation_timer.update_results(merged)
     _write_partial_results({**_empty_eval_results(), **merged})
     if not legacy:
         merged["gcw_protocol"] = {
