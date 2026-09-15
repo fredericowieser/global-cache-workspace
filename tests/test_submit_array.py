@@ -302,6 +302,42 @@ def test_eval_only_passes_automatic_batching_options(tmp_path: Path) -> None:
     assert "--max-batch-size 32" in invocation
 
 
+def test_eval_only_runs_multiple_thinking_modes_in_one_queue(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "uv-args"
+    config, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"',
+    )
+    env.update(
+        {
+            "EVAL_ONLY": "1",
+            "EVAL_CHECKPOINT_STEP": "2000",
+            "EVAL_THINKING_MODES": "false,true",
+            "UV_CAPTURE": str(capture),
+        }
+    )
+
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", str(config)],
+        env,
+    )
+    state_dir = _state_dir(result.stdout)
+    _wait_for_status(state_dir, env, "SUCCEEDED")
+
+    invocations = [
+        line
+        for line in capture.read_text(encoding="utf-8").splitlines()
+        if " gcw eval " in f" {line} "
+    ]
+    assert len(invocations) == 2
+    assert "--enable-thinking false" in invocations[0]
+    assert "step2000_paper7_thinking-off.json" in invocations[0]
+    assert "--enable-thinking true" in invocations[1]
+    assert "step2000_paper7_thinking-on.json" in invocations[1]
+
+
 def test_generation_cadence_rejects_non_generative_eval_suite(
     tmp_path: Path,
 ) -> None:

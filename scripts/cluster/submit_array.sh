@@ -33,6 +33,7 @@ EVAL_GPUS="${EVAL_GPUS:-1}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 EVAL_MAX_BATCH_SIZE="${EVAL_MAX_BATCH_SIZE:-64}"
 EVAL_CHECKPOINT_STEP="${EVAL_CHECKPOINT_STEP:-}"
+EVAL_THINKING_MODES="${EVAL_THINKING_MODES:-}"
 GENERATION_PROCESS_EVERY="${GENERATION_PROCESS_EVERY:-}"
 EVAL_HEAD_SELECTION_METHOD="${EVAL_HEAD_SELECTION_METHOD:-}"
 GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"
@@ -72,6 +73,7 @@ Common environment overrides:
   BACKEND, JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
   EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, EVAL_MAX_BATCH_SIZE, OUT_DIR
+  EVAL_THINKING_MODES (comma-separated true/false values)
   EVAL_CHECKPOINT_STEP, GENERATION_PROCESS_EVERY
   EVAL_HEAD_SELECTION_METHOD
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
@@ -123,6 +125,25 @@ validate_eval_batching() {
   positive_int EVAL_MAX_BATCH_SIZE "$EVAL_MAX_BATCH_SIZE"
 }
 
+validate_eval_thinking_modes() {
+  local mode
+  local -a modes
+  if [[ -z "$EVAL_THINKING_MODES" ]]; then
+    return
+  fi
+  if [[ "$EVAL_SUITE" == "fineweb" ]]; then
+    echo "EVAL_THINKING_MODES is not supported for fineweb evaluation" >&2
+    exit 1
+  fi
+  IFS=',' read -r -a modes <<< "$EVAL_THINKING_MODES"
+  for mode in "${modes[@]}"; do
+    if [[ "$mode" != "true" && "$mode" != "false" ]]; then
+      echo "EVAL_THINKING_MODES values must be true or false; got '$mode'" >&2
+      exit 1
+    fi
+  done
+}
+
 write_slurm_environment() {
   local path="$1"
   local config_list="$2"
@@ -142,6 +163,7 @@ write_slurm_environment() {
     "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE" \
     "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE" \
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP" \
+    "EVAL_THINKING_MODES=$EVAL_THINKING_MODES" \
     "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY" \
     "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD" \
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS" \
@@ -270,6 +292,7 @@ worker_uv_run_eval() {
 run_eval() {
   local checkpoint="$1"
   local out="$2"
+  local enable_thinking="${3:-}"
   local ngpu="$EVAL_GPUS"
   local gcw_args=(eval "$EVAL_SUITE" --checkpoint "$checkpoint")
 
@@ -290,6 +313,9 @@ run_eval() {
   fi
   if [[ -n "$EVAL_HEAD_SELECTION_METHOD" ]]; then
     gcw_args+=(--head-selection-method "$EVAL_HEAD_SELECTION_METHOD")
+  fi
+  if [[ -n "$enable_thinking" ]]; then
+    gcw_args+=(--enable-thinking "$enable_thinking")
   fi
   if [[ "$EVAL_SUITE" == "fineweb" && -n "${DATA_DIR:-}" ]]; then
     gcw_args+=(--data-dir "$DATA_DIR")
@@ -312,19 +338,39 @@ run_eval() {
   fi
 }
 
+run_eval_modes() {
+  local checkpoint="$1"
+  local out="$2"
+  local mode suffix
+  local -a modes
+  if [[ -z "$EVAL_THINKING_MODES" ]]; then
+    run_eval "$checkpoint" "$out"
+    return
+  fi
+  IFS=',' read -r -a modes <<< "$EVAL_THINKING_MODES"
+  for mode in "${modes[@]}"; do
+    if [[ "$mode" == "true" ]]; then
+      suffix="on"
+    else
+      suffix="off"
+    fi
+    run_eval "$checkpoint" "${out%.json}_thinking-${suffix}.json" "$mode"
+  done
+}
+
 run_eval_manifest() {
   local manifest="$1"
   while IFS=$'\t' read -r manifest_checkpoint manifest_out; do
     if [[ -z "$manifest_checkpoint" ]]; then
       continue
     fi
-    run_eval "$manifest_checkpoint" "$manifest_out"
+    run_eval_modes "$manifest_checkpoint" "$manifest_out"
   done < "$manifest"
 }
 
 run_one_config() {
   local config="$1"
-  local output_dir max_steps keep_step_checkpoints run_name manifest step out nproc
+  local output_dir max_steps keep_step_checkpoints run_name manifest step out nproc triton_run_id
 
   require_path "$config"
 
@@ -365,6 +411,8 @@ run_one_config() {
   export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
   export WANDB_MODE
   export PYTORCH_CUDA_ALLOC_CONF
+  triton_run_id="${SLURM_JOB_ID:-$(basename "$STATE_DIR")}"
+  export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/gcw-triton-${triton_run_id}-${SLURM_ARRAY_TASK_ID:-0}}"
   export GCW_KEEP_STEP_CHECKPOINTS="$keep_step_checkpoints"
   export GCW_STEP_CHECKPOINT_EVERY="$KEEP_STEP_CHECKPOINT_EVERY"
   mkdir -p "$WANDB_DIR" slurm_out
@@ -388,7 +436,7 @@ run_one_config() {
   export GCW_EVAL_SKIP_TASKS
   worker_uv_run_eval python scripts/cluster/check_cuda_env.py || return $?
   if [[ -n "${CHECKPOINT:-}" || -n "${OUT:-}" ]]; then
-    run_eval "${CHECKPOINT:-$output_dir/checkpoint}" "${OUT:-${OUT_DIR}/${run_name}_${OUT_SUFFIX:-final}_${EVAL_SUITE}.json}"
+    run_eval_modes "${CHECKPOINT:-$output_dir/checkpoint}" "${OUT:-${OUT_DIR}/${run_name}_${OUT_SUFFIX:-final}_${EVAL_SUITE}.json}"
   elif [[ -n "$EVAL_CHECKPOINT_STEP" ]]; then
     positive_int EVAL_CHECKPOINT_STEP "$EVAL_CHECKPOINT_STEP"
     out="${OUT_DIR}/${run_name}_step${EVAL_CHECKPOINT_STEP}"
@@ -396,7 +444,7 @@ run_one_config() {
       out+="_${OUT_SUFFIX}"
     fi
     out+="_${EVAL_SUITE}.json"
-    run_eval "$output_dir/checkpoint-$EVAL_CHECKPOINT_STEP" "$out"
+    run_eval_modes "$output_dir/checkpoint-$EVAL_CHECKPOINT_STEP" "$out"
   elif [[ "$keep_step_checkpoints" == "1" ]]; then
     manifest="${EVAL_MANIFEST:-slurm_out/${run_name}_${EVAL_SUITE}_checkpoints.tsv}"
     : > "$manifest"
@@ -406,7 +454,7 @@ run_one_config() {
     done
     run_eval_manifest "$manifest"
   else
-    run_eval "$output_dir/checkpoint" "${OUT_DIR}/${run_name}_final_${EVAL_SUITE}.json"
+    run_eval_modes "$output_dir/checkpoint" "${OUT_DIR}/${run_name}_final_${EVAL_SUITE}.json"
   fi
 }
 
@@ -733,6 +781,7 @@ start_local_worker() {
     "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE"
     "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE"
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP"
+    "EVAL_THINKING_MODES=$EVAL_THINKING_MODES"
     "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY"
     "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD"
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS"
@@ -1042,6 +1091,7 @@ launcher_main() {
   positive_int GPUS "$GPUS"
   positive_int EVAL_GPUS "$EVAL_GPUS"
   validate_eval_batching
+  validate_eval_thinking_modes
   if [[ -n "$GENERATION_PROCESS_EVERY" ]]; then
     positive_int GENERATION_PROCESS_EVERY "$GENERATION_PROCESS_EVERY"
     if [[ "$EVAL_SUITE" == "fineweb" ]]; then

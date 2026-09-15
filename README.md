@@ -119,7 +119,8 @@ uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7 \
 For lm-eval-backed suites, automatic batching retries CUDA out-of-memory
 failures with progressively smaller batches. The maximum defaults to 64.
 With `scripts/cluster/submit_array.sh`, set `EVAL_BATCH_SIZE=auto` and optionally
-override `EVAL_MAX_BATCH_SIZE=64`.
+override `EVAL_MAX_BATCH_SIZE=64`. Set `EVAL_THINKING_MODES=false,true` to run
+both thinking conditions sequentially for each claimed config in one array.
 
 For a historical comparison instead:
 
