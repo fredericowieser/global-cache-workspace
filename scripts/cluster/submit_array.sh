@@ -11,6 +11,12 @@ repo_root="${GCW_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -
 script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 cd "$repo_root"
 
+if [[ -n "${GCW_SLURM_ENV_FILE:-}" ]]; then
+  while IFS= read -r -d '' assignment; do
+    export "$assignment"
+  done < "$GCW_SLURM_ENV_FILE"
+fi
+
 JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
 BACKEND="${BACKEND:-auto}"
 PARTITION="${PARTITION:-agent-xlong-15,agent-xlong}"
@@ -1183,7 +1189,7 @@ launcher_main() {
     --mem="$MEM"
     --array="$workers_arg"
     --output="$SLURM_LOG_DIR/${JOB_NAME}-%A_%a.out"
-    --export-file="$export_file"
+    --export="ALL,GCW_SLURM_ENV_FILE=$export_file"
   )
   if [[ -n "$DEPENDENCY" ]]; then
     sbatch_cmd+=(--dependency="$DEPENDENCY")
