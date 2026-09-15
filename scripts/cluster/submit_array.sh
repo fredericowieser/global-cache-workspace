@@ -343,7 +343,9 @@ run_eval() {
   fi
 
   if [[ "$EVAL_SUITE" != "fineweb" && "$ngpu" -gt 1 ]]; then
-    worker_uv_run_eval torchrun --standalone --nproc-per-node="$ngpu" -m gcw.cli "${gcw_args[@]}" || return $?
+    worker_uv_run_eval torchrun --standalone --nproc-per-node="$ngpu" --no-python \
+      bash -c 'export TRITON_CACHE_DIR="${TRITON_CACHE_DIR}-rank-${LOCAL_RANK}"; exec python -m gcw.cli "$@"' \
+      bash "${gcw_args[@]}" || return $?
   else
     worker_uv_run_eval gcw "${gcw_args[@]}" || return $?
   fi
@@ -443,7 +445,9 @@ run_one_config() {
     if [[ "$nproc" == "1" ]]; then
       worker_uv_run_train gcw train --config "$config" || return $?
     else
-      worker_uv_run_train torchrun --standalone --nproc_per_node="$nproc" -m gcw.cli train --config "$config" || return $?
+      worker_uv_run_train torchrun --standalone --nproc_per_node="$nproc" --no-python \
+        bash -c 'export TRITON_CACHE_DIR="${TRITON_CACHE_DIR}-rank-${LOCAL_RANK}"; exec python -m gcw.cli train --config "$1"' \
+        bash "$config" || return $?
     fi
 
     if [[ "$EVAL_AFTER_TRAIN" != "1" ]]; then
