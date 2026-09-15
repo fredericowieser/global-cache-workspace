@@ -16,14 +16,18 @@ from typing import Any, Literal, Mapping, Protocol, Sequence, cast
 import torch
 
 from gcw.config import EvalConfig
-from gcw.evaluation.scoring import extract_numeric_answer
+from gcw.evaluation.scoring import (
+    classify_generated_tokens,
+    extract_numeric_answer,
+)
 
 DATASET_REPO_ID = "openai/gsm8k"
 DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
 MAX_NEW_TOKENS = 2_048
 DEFAULT_BATCH_SIZE = 64
-RESULT_SCHEMA = "gcw.gsm8k_reproduction.v4"
+RESULT_SCHEMA = "gcw.gsm8k_reproduction.v5"
+PREVIOUS_RESULT_SCHEMA = "gcw.gsm8k_reproduction.v4"
 HISTORICAL_RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
 ScoringProtocol = Literal["numeric_last_answer", "lm_eval_flexible_exact"]
 TargetKind = Literal["hf", "gcw"]
@@ -482,6 +486,12 @@ def evaluate_benchmark(
             chunk, output[:, prompt_width:].detach().cpu().tolist(), strict=True
         ):
             response_ids, termination = _trim_at_eos(token_row, backend.eos_ids)
+            token_stats = classify_generated_tokens(
+                tokenizer,
+                response_ids,
+                enable_thinking=config.enable_thinking,
+                termination=termination,
+            )
             response = tokenizer.decode(
                 response_ids,
                 skip_special_tokens=True,
@@ -505,6 +515,10 @@ def evaluate_benchmark(
                 "target_answer": str(example.target_answer),
                 "prompt_tokens": len(example.prompt_ids),
                 "response_tokens": len(response_ids),
+                "answer_tokens": token_stats.answer_tokens,
+                "thinking_tokens": token_stats.thinking_tokens,
+                "thinking_terminated": token_stats.thinking_terminated,
+                "thinking_truncated": token_stats.thinking_truncated,
                 "termination": termination,
                 "response": response,
                 "numeric_prediction": (
@@ -521,6 +535,11 @@ def evaluate_benchmark(
         raise RuntimeError("generation did not produce every GSM8K row")
     final_rows = [row for row in generated_rows if row is not None]
     correct = sum(bool(row["correct"]) for row in final_rows)
+    answer_tokens = sum(int(row["answer_tokens"]) for row in final_rows)
+    thinking_tokens = sum(int(row["thinking_tokens"]) for row in final_rows)
+    thinking_truncated = sum(
+        bool(row["thinking_truncated"]) for row in final_rows
+    )
     return {
         "apply_chat_template": config.apply_chat_template,
         "enable_thinking": config.enable_thinking,
@@ -534,6 +553,18 @@ def evaluate_benchmark(
         "flexible_exact_correct": sum(
             bool(row["flexible_exact_correct"]) for row in final_rows
         ),
+        "response_tokens": sum(
+            int(row["response_tokens"]) for row in final_rows
+        ),
+        "answer_tokens": answer_tokens,
+        "answer_tokens_mean": answer_tokens / len(final_rows),
+        "thinking_tokens": thinking_tokens,
+        "thinking_tokens_mean": thinking_tokens / len(final_rows),
+        "unterminated_thinking": sum(
+            not bool(row["thinking_terminated"]) for row in final_rows
+        ),
+        "thinking_truncated": thinking_truncated,
+        "thinking_truncation_rate": thinking_truncated / len(final_rows),
         "elapsed_seconds": time.monotonic() - started,
         "generation": {
             "do_sample": False,
@@ -574,6 +605,7 @@ def _publish_json(path: Path, payload: Mapping[str, Any]) -> None:
 def run_gsm8k_reproduction(
     config: BenchmarkConfig, repository: str | Path = "."
 ) -> dict[str, Any]:
+    end_to_end_started = time.monotonic()
     repository_path = Path(repository).resolve()
     if subprocess.check_output(
         ["git", "-C", str(repository_path), "status", "--porcelain"], text=True
@@ -610,6 +642,9 @@ def run_gsm8k_reproduction(
         max_new_tokens=config.max_new_tokens,
         scoring_protocol=config.scoring_protocol,
     )
+    evaluation["end_to_end_elapsed_seconds"] = (
+        time.monotonic() - end_to_end_started
+    )
     config_identity = asdict(config)
     config_identity.update(config_identity.pop("eval_config"))
     config_identity["processor_requested"] = config_identity.pop(
@@ -643,7 +678,7 @@ def load_benchmark_result(
 ) -> dict[str, Any]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     schema = payload.get("schema")
-    if schema == RESULT_SCHEMA:
+    if schema in {RESULT_SCHEMA, PREVIOUS_RESULT_SCHEMA}:
         if enable_thinking is not None and (
             payload.get("enable_thinking") is not enable_thinking
         ):

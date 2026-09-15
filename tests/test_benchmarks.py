@@ -114,6 +114,11 @@ def test_hf_evaluation_left_pads_variable_length_prompts():
     assert attention_mask.tolist() == [[0, 0, 1], [1, 1, 1]]
     assert result["generation"]["grouping"] == "length_sorted_left_padding"
     assert result["correct"] == 2
+    assert result["answer_tokens"] == 2
+    assert result["answer_tokens_mean"] == 1.0
+    assert result["thinking_tokens"] == 0
+    assert result["thinking_truncation_rate"] == 0.0
+    assert all(row["thinking_terminated"] for row in result["rows"])
 
 
 def test_native_evaluation_keeps_exact_length_batches():
@@ -173,7 +178,7 @@ def test_historical_matrix_reader_selects_one_boolean_condition(tmp_path):
         )
     )
     result = load_benchmark_result(path, enable_thinking=True)
-    assert result["schema"] == "gcw.gsm8k_reproduction.v4"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
     assert result["enable_thinking"] is True
     assert result["apply_chat_template"] is True
     assert result["accuracy"] == 0.75
@@ -383,12 +388,13 @@ def test_hf_has_no_gcw_processor_and_matrix_records_request(
             processor_enabled=requested,
         )
     )
-    assert result["schema"] == "gcw.gsm8k_reproduction.v4"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
     assert result["config"]["apply_chat_template"] is True
     assert result["config"]["enable_thinking"] is False
     assert result["config"]["processor_requested"] is requested
     assert "processor_enabled" not in result["config"]
     assert result["target"] == backend.identity
+    assert result["end_to_end_elapsed_seconds"] >= 0.0
     assert json.loads(
         (tmp_path / "result" / "result.json").read_text()
     ) == json.loads(json.dumps(result))

@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 
 from gcw.checkpoint import load_checkpoint
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
+    classify_generated_tokens,
     encode_generate_prompt,
     stop_token_sequences,
     tokenizer_for_checkpoint,
@@ -262,6 +264,89 @@ class GCWEvalLM(TemplateLM):
         self.max_length = model.config.sequence_len
         self.add_special_tokens_for_generate = False
         self.eval_config = eval_config
+        self.reset_runtime_metrics()
+
+    def reset_runtime_metrics(self) -> None:
+        self._runtime_metrics = {
+            "successful_batch_sizes": {
+                "generation": [],
+                "loglikelihood": [],
+            },
+            "generated_responses": 0,
+            "answer_tokens": 0,
+            "thinking_tokens": 0,
+            "unterminated_thinking": 0,
+            "thinking_truncated": 0,
+        }
+
+    def _metrics(self) -> dict[str, Any]:
+        if not hasattr(self, "_runtime_metrics"):
+            self.reset_runtime_metrics()
+        return self._runtime_metrics
+
+    def pop_runtime_metrics(self) -> dict[str, Any]:
+        metrics = self._metrics()
+        batches = metrics["successful_batch_sizes"]
+        counters = torch.tensor(
+            [
+                metrics["generated_responses"],
+                metrics["answer_tokens"],
+                metrics["thinking_tokens"],
+                metrics["unterminated_thinking"],
+                metrics["thinking_truncated"],
+            ],
+            dtype=torch.long,
+            device=self.model.get_device(),
+        )
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(counters)
+            gathered: list[dict[str, list[int]] | None] = [
+                None
+            ] * dist.get_world_size()
+            dist.all_gather_object(gathered, batches)
+            batches = {
+                workload: [
+                    size
+                    for rank_batches in gathered
+                    if rank_batches is not None
+                    for size in rank_batches[workload]
+                ]
+                for workload in ("generation", "loglikelihood")
+            }
+        generated, answer, thinking, unterminated, truncated = (
+            int(value) for value in counters.tolist()
+        )
+        result: dict[str, Any] = {
+            "requested_batch_size": self.batch_size,
+            "configured_auto_max_batch_size": (
+                self.eval_config.max_batch_size
+                if self.batch_size == "auto"
+                else None
+            ),
+            "successful_batch_sizes": {
+                workload: sizes for workload, sizes in batches.items() if sizes
+            },
+        }
+        if generated:
+            result.update(
+                {
+                    "generated_responses": generated,
+                    "answer_tokens_total": answer,
+                    "answer_tokens_mean": answer / generated,
+                }
+            )
+            if self.eval_config.enable_thinking:
+                result.update(
+                    {
+                        "thinking_tokens_total": thinking,
+                        "thinking_tokens_mean": thinking / generated,
+                        "unterminated_thinking_responses": unterminated,
+                        "thinking_truncated_responses": truncated,
+                        "thinking_truncation_rate": truncated / generated,
+                    }
+                )
+        self.reset_runtime_metrics()
+        return result
 
     @property
     def tokenizer_name(self) -> str:
@@ -296,11 +381,20 @@ class GCWEvalLM(TemplateLM):
         run_batch: Callable[[list[BatchRow]], list[BatchResult]],
     ) -> list[BatchResult]:
         if self.batch_size != "auto":
-            return [
-                result
-                for start in range(0, len(rows), self.batch_size)
-                for result in run_batch(rows[start : start + self.batch_size])
-            ]
+            results: list[BatchResult] = []
+            for start in range(0, len(rows), self.batch_size):
+                chunk = rows[start : start + self.batch_size]
+                batch_results = run_batch(chunk)
+                if len(batch_results) != len(chunk):
+                    raise RuntimeError(
+                        f"{workload} batch returned {len(batch_results)} "
+                        f"results for {len(chunk)} rows"
+                    )
+                self._metrics()["successful_batch_sizes"][workload].append(
+                    len(chunk)
+                )
+                results.extend(batch_results)
+            return results
 
         results: list[BatchResult] = []
         start = 0
@@ -331,6 +425,9 @@ class GCWEvalLM(TemplateLM):
                     f"for {batch_size} rows"
                 )
             results.extend(batch_results)
+            self._metrics()["successful_batch_sizes"][workload].append(
+                batch_size
+            )
             start += batch_size
         return results
 
@@ -342,6 +439,7 @@ class GCWEvalLM(TemplateLM):
             range(len(requests)),
             key=lambda i: len(requests[i][1]) + len(requests[i][2]),
         )
+
         def run_batch(idxs: list[int]) -> list[tuple[float, bool]]:
             inputs, continuations = [], []
             for i in idxs:
@@ -366,10 +464,12 @@ class GCWEvalLM(TemplateLM):
                 logp = logprobs[row, inp_len - cont_len : inp_len]
                 target = torch.tensor(cont, dtype=torch.long, device=device)
                 vals = logp.gather(-1, target[:, None]).squeeze(-1)
-                batch_results.append((
-                    float(vals.sum().item()),
-                    bool((logp.argmax(-1) == target).all().item()),
-                ))
+                batch_results.append(
+                    (
+                        float(vals.sum().item()),
+                        bool((logp.argmax(-1) == target).all().item()),
+                    )
+                )
             return batch_results
 
         for i, result in zip(
@@ -448,6 +548,10 @@ class GCWEvalLM(TemplateLM):
                     tokens = trim_generated_token_ids(
                         tokens, stop_seqs, self.eot_token_id
                     )
+                    termination = (
+                        "max_new_tokens" if len(tokens) >= max_new else "stop"
+                    )
+                    self._record_generated_tokens(tokens, termination)
                     text = _trim_until(self.tok_decode(tokens), until)
                     batch_results.append(text)
                 return batch_results
@@ -481,6 +585,32 @@ class GCWEvalLM(TemplateLM):
             gen = self.model.generate(
                 ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id
             )[0].tolist()
-            text = self.tok_decode(gen[len(ids[0]) :])
+            tokens = gen[len(ids[0]) :]
+            stop_seqs = stop_token_sequences(self.tokenizer, until)
+            tokens = trim_generated_token_ids(
+                tokens, stop_seqs, self.eot_token_id
+            )
+            termination = "max_new_tokens" if len(tokens) >= max_new else "stop"
+            self._metrics()["successful_batch_sizes"]["generation"].append(1)
+            self._record_generated_tokens(tokens, termination)
+            text = self.tok_decode(tokens)
             outs.append(_trim_until(text, until))
         return outs
+
+    def _record_generated_tokens(
+        self, tokens: list[int], termination: str
+    ) -> None:
+        classified = classify_generated_tokens(
+            self.tokenizer,
+            tokens,
+            enable_thinking=self.eval_config.enable_thinking,
+            termination=termination,
+        )
+        metrics = self._metrics()
+        metrics["generated_responses"] += 1
+        metrics["answer_tokens"] += classified.answer_tokens
+        metrics["thinking_tokens"] += classified.thinking_tokens
+        metrics["unterminated_thinking"] += int(
+            not classified.thinking_terminated
+        )
+        metrics["thinking_truncated"] += int(classified.thinking_truncated)

@@ -21,7 +21,10 @@ from gcw.evaluation.benchmarks import (
     _trim_at_eos,
     apply_qwen_chat_template,
 )
-from gcw.evaluation.scoring import extract_numeric_answer
+from gcw.evaluation.scoring import (
+    classify_generated_tokens,
+    extract_numeric_answer,
+)
 
 GENERAL_CHAT_TASKS = (
     "hellaswag",
@@ -48,7 +51,7 @@ GENERAL_TASK_LIMITS = {
     "arc_challenge": 1_000,
     "mmlu": 20,  # Per subject: 57 subjects, at most 1,140 rows.
 }
-RESULT_SCHEMA = "gcw.chat_benchmark.v3"
+RESULT_SCHEMA = "gcw.chat_benchmark.v4"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
@@ -406,6 +409,12 @@ def evaluate_chat_examples(
             chunk, output[:, width:].detach().cpu().tolist(), strict=True
         ):
             response_ids, termination = _trim_at_eos(tokens, backend.eos_ids)
+            token_stats = classify_generated_tokens(
+                tokenizer,
+                response_ids,
+                enable_thinking=config.enable_thinking,
+                termination=termination,
+            )
             response = tokenizer.decode(
                 response_ids,
                 skip_special_tokens=True,
@@ -432,6 +441,10 @@ def evaluate_chat_examples(
                 **asdict(source_example),
                 "prompt_tokens": len(item.prompt_ids),
                 "response_tokens": len(response_ids),
+                "answer_tokens": token_stats.answer_tokens,
+                "thinking_tokens": token_stats.thinking_tokens,
+                "thinking_terminated": token_stats.thinking_terminated,
+                "thinking_truncated": token_stats.thinking_truncated,
                 "termination": termination,
                 "response": response,
                 "prediction": prediction,
@@ -454,6 +467,11 @@ def evaluate_chat_examples(
         truncated = sum(
             row["termination"] == "max_new_tokens" for row in selected
         )
+        answer_tokens = sum(int(row["answer_tokens"]) for row in selected)
+        thinking_tokens = sum(int(row["thinking_tokens"]) for row in selected)
+        thinking_truncated = sum(
+            bool(row["thinking_truncated"]) for row in selected
+        )
         task_results[task] = {
             "correct": correct_count,
             "total": len(selected),
@@ -465,6 +483,15 @@ def evaluate_chat_examples(
             "response_tokens": sum(
                 int(row["response_tokens"]) for row in selected
             ),
+            "answer_tokens": answer_tokens,
+            "answer_tokens_mean": answer_tokens / len(selected),
+            "thinking_tokens": thinking_tokens,
+            "thinking_tokens_mean": thinking_tokens / len(selected),
+            "unterminated_thinking": sum(
+                not bool(row["thinking_terminated"]) for row in selected
+            ),
+            "thinking_truncated": thinking_truncated,
+            "thinking_truncation_rate": thinking_truncated / len(selected),
         }
     return {
         "apply_chat_template": config.apply_chat_template,
@@ -492,6 +519,7 @@ def run_chat_benchmarks(
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
 ) -> dict[str, Any]:
+    end_to_end_started = time.monotonic()
     config = config or EvalConfig(apply_chat_template=True)
     if not config.apply_chat_template:
         raise ValueError("chat benchmark evaluation requires chat formatting")
@@ -571,6 +599,7 @@ def run_chat_benchmarks(
         field_evaluations = pop_diffusion_field_evaluation_count(backend_model)
         if field_evaluations:
             result["diffusion_field_evaluations"] = field_evaluations
+    result["end_to_end_elapsed_seconds"] = time.monotonic() - end_to_end_started
     payload = {
         "schema": RESULT_SCHEMA,
         "target": backend.identity,

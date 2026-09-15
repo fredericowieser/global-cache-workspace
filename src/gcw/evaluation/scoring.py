@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from fractions import Fraction
 import re
 
@@ -10,6 +11,55 @@ import torch.distributed as dist
 
 from gcw.config import LossBackend
 from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, IntTokenizer, get_tokenizer
+
+
+@dataclass(frozen=True)
+class GeneratedTokenStats:
+    answer_tokens: int
+    thinking_tokens: int
+    thinking_terminated: bool
+    thinking_truncated: bool
+
+
+def classify_generated_tokens(
+    tokenizer,
+    tokens: list[int],
+    *,
+    enable_thinking: bool,
+    termination: str,
+) -> GeneratedTokenStats:
+    if not enable_thinking:
+        return GeneratedTokenStats(len(tokens), 0, True, False)
+
+    def encode(delimiter: str) -> list[int]:
+        encoder = getattr(tokenizer, "encode", None)
+        if not callable(encoder):
+            return []
+        try:
+            return list(encoder(delimiter, add_special_tokens=False))
+        except TypeError:
+            return list(encoder(delimiter))
+
+    opening = encode("<think>")
+    closing = encode("</think>")
+    content_start = (
+        len(opening) if opening and tokens[: len(opening)] == opening else 0
+    )
+    close_start = find_subsequence(tokens[content_start:], closing)
+    if close_start is None:
+        return GeneratedTokenStats(
+            answer_tokens=0,
+            thinking_tokens=len(tokens) - content_start,
+            thinking_terminated=False,
+            thinking_truncated=termination == "max_new_tokens",
+        )
+    close_start += content_start
+    return GeneratedTokenStats(
+        answer_tokens=len(tokens) - close_start - len(closing),
+        thinking_tokens=close_start - content_start,
+        thinking_terminated=True,
+        thinking_truncated=False,
+    )
 
 
 def truncate_context_continuation(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
 
 import torch
 
@@ -69,6 +70,7 @@ def _run_paper7_groups(
     legacy: bool,
     lm_class,
 ) -> dict:
+    evaluation_started = time.monotonic()
     config = config or EvalConfig(apply_chat_template=True)
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -110,6 +112,7 @@ def _run_paper7_groups(
             )
         config.apply_chat_template = False
     lm = lm_class(model, tokenizer, config)
+    processor = getattr(model, "cache_processor", None)
     task_manager = TaskManager(
         include_path=str(Path("configs/tasks_legacy/paper7").resolve()),
         verbosity="ERROR",
@@ -154,6 +157,10 @@ def _run_paper7_groups(
             with dist_state.main_process_first():
                 if local_rank == 0:
                     get_task_dict(tasks, task_manager)
+        lm.reset_runtime_metrics()
+        started = time.monotonic()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(device)
         try:
             out = lm_eval.simple_evaluate(
                 model=lm,
@@ -180,8 +187,32 @@ def _run_paper7_groups(
                 merged,
             )
             raise
+        lm_runtime = lm.pop_runtime_metrics()
         if out is None:
             continue
+        runtime = {
+            "elapsed_seconds": time.monotonic() - started,
+            "processor_calls": (
+                int(processor.pop_call_count())
+                if callable(getattr(processor, "pop_call_count", None))
+                else 0
+            ),
+            "processor_enabled": processor is not None,
+            "peak_memory_mib": (
+                torch.cuda.max_memory_allocated(device) / 1024 / 1024
+                if torch.cuda.is_available()
+                else 0.0
+            ),
+            **lm_runtime,
+        }
+        from gcw.models.cache_processors.diffusion import (
+            pop_diffusion_field_evaluation_count,
+        )
+
+        field_evaluations = pop_diffusion_field_evaluation_count(model)
+        if field_evaluations:
+            runtime["diffusion_field_evaluations"] = field_evaluations
+        out.setdefault("gcw_runtime", {})[",".join(tasks)] = runtime
         for key in merged:
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
@@ -192,6 +223,11 @@ def _run_paper7_groups(
             ),
             merged,
         )
+    merged.setdefault("gcw_runtime", {})["evaluation"] = {
+        "scope": "end_to_end_including_loading_and_setup",
+        "elapsed_seconds": time.monotonic() - evaluation_started,
+    }
+    _write_partial_results({**_empty_eval_results(), **merged})
     if not legacy:
         merged["gcw_protocol"] = {
             "name": "paper7_mixed_prompt_v1",
@@ -210,4 +246,5 @@ def _paper7_empty_results(results: dict | None = None) -> dict:
         "n-shot": dict(payload.get("n-shot", {})),
         "versions": dict(payload.get("versions", {})),
         "higher_is_better": dict(payload.get("higher_is_better", {})),
+        "gcw_runtime": dict(payload.get("gcw_runtime", {})),
     }

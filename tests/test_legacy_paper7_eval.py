@@ -387,9 +387,11 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(
         "n-shot",
         "versions",
         "higher_is_better",
+        "gcw_runtime",
     }
     assert "gcw_protocol" not in out
-    assert "gcw_runtime" not in out
+    assert "evaluation" in out["gcw_runtime"]
+    assert "gsm8k_openmath" in out["gcw_runtime"]
 
 
 def test_run_paper7_uses_mixed_prompt_protocol(monkeypatch):

@@ -127,6 +127,26 @@ def _validate_partial_results(
                 raise ValueError(
                     f"authenticated partial results contain unexpected task: {task}"
                 )
+    runtime = payload["gcw_runtime"]
+    required_runtime_fields = {
+        "requested_batch_size",
+        "configured_auto_max_batch_size",
+        "successful_batch_sizes",
+    }
+    for tasks, _fewshot in runs:
+        if not all(
+            task in payload["results"] or task in payload["groups"]
+            for task in tasks
+        ):
+            continue
+        task_runtime = runtime.get(",".join(tasks))
+        if not isinstance(
+            task_runtime, dict
+        ) or not required_runtime_fields <= set(task_runtime):
+            raise ValueError(
+                "partial results lack current evaluation runtime measurements; "
+                "a fresh evaluation is required"
+            )
     return payload
 
 

@@ -150,6 +150,7 @@ def run_task_groups(
     diffusion_eval_solver_steps: int | None = None,
     loaded_target: tuple[Any, Any] | None = None,
 ) -> dict:
+    evaluation_started = time.monotonic()
     config = config or EvalConfig()
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -207,6 +208,7 @@ def run_task_groups(
             with dist_state.main_process_first():
                 if local_rank == 0:
                     get_task_dict(tasks, task_manager)
+        lm.reset_runtime_metrics()
         started = time.monotonic()
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats(device)
@@ -236,6 +238,7 @@ def run_task_groups(
                 merged,
             )
             raise
+        lm_runtime = lm.pop_runtime_metrics()
         if out is None:
             continue
         elapsed = time.monotonic() - started
@@ -250,6 +253,7 @@ def run_task_groups(
                 if torch.cuda.is_available()
                 else 0.0
             ),
+            **lm_runtime,
         }
         from gcw.models.cache_processors.diffusion import (
             pop_diffusion_field_evaluation_count,
@@ -285,5 +289,10 @@ def run_task_groups(
     }
     if diffusion_eval_solver_steps is not None:
         protocol["diffusion_eval_solver_steps"] = diffusion_eval_solver_steps
+    merged.setdefault("gcw_runtime", {})["evaluation"] = {
+        "scope": "end_to_end_including_loading_and_setup",
+        "elapsed_seconds": time.monotonic() - evaluation_started,
+    }
+    _write_partial_results(merged)
     merged["gcw_protocol"] = protocol
     return merged

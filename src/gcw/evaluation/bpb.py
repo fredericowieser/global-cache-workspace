@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 import torch
 
 from gcw.checkpoint import load_checkpoint
@@ -19,6 +20,7 @@ def run_fineweb(
     *,
     dtype: torch.dtype | str | None = "auto",
 ) -> dict:
+    end_to_end_started = time.monotonic()
     config = config or EvalConfig(batch_size=16)
     if config.limit is not None:
         raise ValueError("FineWeb evaluation does not support a row limit")
@@ -41,6 +43,7 @@ def run_fineweb(
         infinite=True,
     )
     loss_backend = checkpoint_loss_backend(state, torch.device(device))
+    execution_started = time.monotonic()
     nll, bpb = evaluate_nll_bpb(
         model,
         batches,
@@ -55,4 +58,6 @@ def run_fineweb(
         "eval_tokens": steps * batch_size * cfg.sequence_len,
         "batch_size": batch_size,
         "sequence_len": cfg.sequence_len,
+        "elapsed_seconds": time.monotonic() - execution_started,
+        "end_to_end_elapsed_seconds": time.monotonic() - end_to_end_started,
     }

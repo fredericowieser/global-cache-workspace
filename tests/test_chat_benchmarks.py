@@ -123,6 +123,12 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
     assert result["tasks"]["svamp"]["accuracy"] == 1.0
     assert result["tasks"]["piqa"]["parse_rate"] == 1.0
     assert result["tasks"]["svamp"]["truncation_rate"] == 0.0
+    assert result["tasks"]["piqa"]["answer_tokens"] == 0
+    assert result["tasks"]["piqa"]["thinking_tokens"] == 1
+    assert result["tasks"]["piqa"]["unterminated_thinking"] == 1
+    assert result["tasks"]["piqa"]["thinking_truncation_rate"] == 0.0
+    assert result["rows"][0]["thinking_terminated"] is False
+    assert result["rows"][0]["thinking_truncated"] is False
     assert backend.calls[0][2] == 2048
 
 
@@ -172,7 +178,7 @@ def test_chat_processor_metadata_comes_from_backend(
         processor_enabled=requested,
         **{"hf_model" if target == "hf" else "checkpoint": tmp_path},
     )
-    assert result["schema"] == "gcw.chat_benchmark.v3"
+    assert result["schema"] == "gcw.chat_benchmark.v4"
     for field in (
         "processor_requested",
         "processor_present",
@@ -181,6 +187,7 @@ def test_chat_processor_metadata_comes_from_backend(
         assert result[field] is backend.identity[field]
         assert result[field] is result["target"][field]
     assert result["tasks"]["piqa"]["accuracy"] == 1.0
+    assert result["end_to_end_elapsed_seconds"] >= result["elapsed_seconds"]
     digest = result.pop("payload_sha256")
     assert (
         digest

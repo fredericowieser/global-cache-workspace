@@ -36,8 +36,8 @@ For a cache-processor checkpoint, `--generation-process-every N` overrides the p
 
 ## Processor provenance in GSM8K and chat results
 
-GSM8K schema `gcw.gsm8k_reproduction.v4` and chat schema
-`gcw.chat_benchmark.v3` distinguish three booleans:
+GSM8K schema `gcw.gsm8k_reproduction.v5` and chat schema
+`gcw.chat_benchmark.v4` distinguish three booleans:
 
 - `processor_requested`: the requested `--processor on/off` policy.
 - `processor_present`: an actual GCW cache processor was loaded, before bypass.
@@ -55,6 +55,33 @@ when on and bypass to their exact loaded backbone when off. Processor-only caden
 and diffusion solver overrides require an applicable active processor. Native
 loading, generation cadence, and stopping are unchanged. Older schemas retain
 their historical meaning and must not be interpreted as effective processor state.
+
+## Evaluation runtime and generated-token measurements
+
+Lm-eval-backed results keep per-task-group execution time under
+`gcw_runtime[task_group].elapsed_seconds`. The reserved
+`gcw_runtime.evaluation` entry is explicitly scoped to end-to-end evaluator
+time, including target loading and task setup. Specialized generation, FineWeb,
+and answer-NLL results similarly retain `elapsed_seconds` for execution and add
+`end_to_end_elapsed_seconds` for loading and setup. These boundaries are not
+interchangeable.
+
+Lm-eval task groups report the requested batch size, the configured automatic
+maximum when automatic batching is selected, and every successfully executed
+batch size separately for generation and likelihood. Failed OOM attempts are
+not included; reduced retries and tail batches are. Likelihood-only tasks omit
+generated-token fields.
+
+Generated responses are classified from their final token IDs after EOS and
+stop-sequence trimming. With thinking disabled, every response token is an
+answer token. With thinking enabled, content before the first encoded
+`</think>` is thinking and content after it is answer; encoded structural
+`<think>` and `</think>` delimiters are excluded. A generated opening delimiter
+is optional. If the closing delimiter is absent, all content is thinking and
+the answer count is zero. Such a response is unterminated, but it is marked as
+thinking-truncated only when generation reached `max_new_tokens`; EOS or another
+stop leaves it unterminated without marking it truncated. Truncation rate uses
+all generated responses as its denominator.
 
 ## Answer-only teacher-forced NLL
 
