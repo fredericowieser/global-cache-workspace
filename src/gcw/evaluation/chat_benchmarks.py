@@ -527,6 +527,10 @@ def run_chat_benchmarks(
         raise ValueError(
             f"chat benchmark protocol requires max_new_tokens={MAX_NEW_TOKENS}"
         )
+    if checkpoint is not None and tokenizer_path is None:
+        raise ValueError(
+            "native chat benchmark evaluation requires tokenizer_path"
+        )
     if not torch.cuda.is_available():
         raise RuntimeError("chat benchmark evaluation requires CUDA")
     device = torch.device("cuda")
@@ -549,12 +553,12 @@ def run_chat_benchmarks(
             diffusion_eval_solver_steps=diffusion_eval_solver_steps,
             tokenizer_path=tokenizer_path,
         )
-        if tokenizer_path is None:
-            raise ValueError(
-                "native chat benchmark evaluation requires tokenizer_path"
-            )
-        tokenizer_source = Path(tokenizer_path).expanduser().resolve()
-    tokenizer, tokenizer_identity = _load_tokenizer(tokenizer_source)
+        tokenizer_source = (
+            Path(cast(str | Path, tokenizer_path)).expanduser().resolve()
+        )
+    tokenizer, tokenizer_identity = _load_tokenizer(
+        tokenizer_source, backend.tokenizer
+    )
     examples, dataset_identity = _load_task_examples(tasks)
     result = evaluate_chat_examples(
         backend,

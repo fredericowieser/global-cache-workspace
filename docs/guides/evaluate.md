@@ -40,7 +40,8 @@ Generation stops at any configured EOS/end-of-turn token and pads finished rows
 independently. Native checkpoint EOS/pad overrides source `generation_config.json`,
 then `config.json` (including `text_config`), with tokenizer IDs as fallback.
 Tokenizer selection is explicit `tokenizer_path`, then checkpoint `tokenizer_source`,
-then `source`; these origins must remain accessible. HF targets use source/tokenizer
+then `source`. GSM8K and chat resolve these origins locally; pass `tokenizer_path`
+when the recorded source is unavailable. HF targets use source/tokenizer
 metadata without checkpoint overrides; native tokenizers retain EOT. Padding defaults to the
 first EOS when absent. ID zero is valid; an empty EOS list disables EOS stopping
 and requires padding metadata. Likelihood's scalar EOT is unchanged. Results record
@@ -53,7 +54,7 @@ generation; scoring trims at the earliest EOS or task stop.
 
 ## Processor provenance in GSM8K and chat results
 
-GSM8K schema `gcw.gsm8k_reproduction.v4` and chat schema
+GSM8K schema `gcw.gsm8k_reproduction.v5` and chat schema
 `gcw.chat_benchmark.v3` distinguish three booleans:
 
 - `processor_requested`: the requested `--processor on/off` policy.

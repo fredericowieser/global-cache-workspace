@@ -28,7 +28,8 @@ DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
 MAX_NEW_TOKENS = 2_048
 DEFAULT_BATCH_SIZE = 64
-RESULT_SCHEMA = "gcw.gsm8k_reproduction.v4"
+RESULT_SCHEMA = "gcw.gsm8k_reproduction.v5"
+PREVIOUS_RESULT_SCHEMA = "gcw.gsm8k_reproduction.v4"
 HISTORICAL_RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
 ScoringProtocol = Literal["numeric_last_answer", "lm_eval_flexible_exact"]
 TargetKind = Literal["hf", "gcw"]
@@ -81,6 +82,7 @@ class BenchmarkBackend(Protocol):
     identity: dict[str, Any]
     eos_ids: tuple[int, ...]
     pad_id: int
+    tokenizer: Any | None
     device: torch.device
     supports_left_padding: bool
 
@@ -118,7 +120,9 @@ class HFBenchmarkBackend:
         )
         self.device = device
         self.supports_left_padding = True
-        generation_config = generation_config_for_source(source)
+        generation_config = generation_config_for_source(
+            source, local_files_only=True
+        )
         tokenizer = None
         if generation_config.get("_from_model_config") or any(
             generation_config.get(key) is None
@@ -134,6 +138,7 @@ class HFBenchmarkBackend:
         self.eos_ids, self.pad_id = generation_token_ids(
             tokenizer, generation_config
         )
+        self.tokenizer = tokenizer
         self.identity = {
             **_directory_identity(source, kind="hf"),
             "processor_requested": processor_enabled,
@@ -218,7 +223,7 @@ class GCWBenchmarkBackend:
         self.device = device
         self.supports_left_padding = False
         tokenizer = tokenizer_for_checkpoint(
-            config, state, source=tokenizer_path
+            config, state, source=tokenizer_path, local_files_only=True
         )
         generation_config = (
             getattr(tokenizer, "generation_config", None) or state
@@ -226,6 +231,7 @@ class GCWBenchmarkBackend:
         self.eos_ids, self.pad_id = generation_token_ids(
             tokenizer, generation_config
         )
+        self.tokenizer = tokenizer
         self.identity = {
             **_directory_identity(checkpoint, kind="gcw"),
             "architecture": config.architecture_name,
@@ -357,12 +363,15 @@ def _source_commit(repository: Path) -> str:
     ).strip()
 
 
-def _load_tokenizer(source: Path) -> tuple[Any, dict[str, Any]]:
-    from transformers import AutoTokenizer
+def _load_tokenizer(
+    source: Path, tokenizer: Any | None = None
+) -> tuple[Any, dict[str, Any]]:
+    if tokenizer is None:
+        from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        source, local_files_only=True, trust_remote_code=False
-    )
+        tokenizer = AutoTokenizer.from_pretrained(
+            source, local_files_only=True, trust_remote_code=False
+        )
     if not getattr(tokenizer, "chat_template", None):
         raise ValueError("benchmark tokenizer has no official chat template")
     files: dict[str, dict[str, Any]] = {}
@@ -617,7 +626,9 @@ def run_gsm8k_reproduction(
     tokenizer_source = (
         Path(config.tokenizer_path or config.model_path).expanduser().resolve()
     )
-    tokenizer, tokenizer_identity = _load_tokenizer(tokenizer_source)
+    tokenizer, tokenizer_identity = _load_tokenizer(
+        tokenizer_source, backend.tokenizer
+    )
     rows, dataset_identity = _load_test_rows(config.eval_config.limit)
     evaluation = evaluate_benchmark(
         backend,
@@ -660,7 +671,7 @@ def load_benchmark_result(
 ) -> dict[str, Any]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     schema = payload.get("schema")
-    if schema == RESULT_SCHEMA:
+    if schema in {RESULT_SCHEMA, PREVIOUS_RESULT_SCHEMA}:
         if enable_thinking is not None and (
             payload.get("enable_thinking") is not enable_thinking
         ):

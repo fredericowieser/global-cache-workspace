@@ -12,7 +12,13 @@ import torch
 import torch.distributed as dist
 
 from gcw.config import LossBackend
-from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, IntTokenizer, get_tokenizer
+from gcw.data.tokenizers import (
+    COSMO2_VOCAB_SIZE,
+    IntTokenizer,
+    Tokenizer,
+    TransformersTokenizer,
+    get_tokenizer,
+)
 
 
 def truncate_context_continuation(
@@ -38,18 +44,29 @@ def encode_generate_prompt(
     return ids[-max_length:]
 
 
-def generation_config_for_source(source: str | Path) -> dict[str, Any]:
+def generation_config_for_source(
+    source: str | Path, *, local_files_only: bool = False
+) -> dict[str, Any]:
     from transformers.utils.hub import cached_file
 
     for filename in ("generation_config.json", "config.json"):
         path = cached_file(
-            str(source), filename, _raise_exceptions_for_missing_entries=False
+            str(source),
+            filename,
+            _raise_exceptions_for_missing_entries=False,
+            local_files_only=local_files_only,
         )
         if path is not None:
             with open(path) as handle:
                 config = json.load(handle)
             if filename == "config.json":
-                config = {**config, **(config.get("text_config") or {})}
+                text_config = config.get("text_config") or {}
+                for key in ("eos_token_id", "pad_token_id"):
+                    if (
+                        config.get(key) is None
+                        and text_config.get(key) is not None
+                    ):
+                        config[key] = text_config[key]
             config["_from_model_config"] = filename == "config.json"
             return config
     return {}
@@ -62,8 +79,10 @@ def generation_token_ids(
     eos = config.get("eos_token_id")
     if eos is None:
         eos = getattr(tokenizer, "eos_token_id", None)
-    if eos is None and not hasattr(tokenizer, "eos_token_id"):
-        eos = getattr(tokenizer, "eot_id", None)
+    if eos is None and isinstance(
+        tokenizer, (IntTokenizer, Tokenizer, TransformersTokenizer)
+    ):
+        eos = tokenizer.eot_id
     if eos is None:
         raise ValueError(
             "generation requires EOS metadata from the model or tokenizer"
@@ -95,7 +114,9 @@ def generation_token_ids(
     return eos_ids, pad
 
 
-def tokenizer_for_checkpoint(config, state, *, source=None):
+def tokenizer_for_checkpoint(
+    config, state, *, source=None, local_files_only: bool = False
+):
     source = source or state.get("tokenizer_source") or state.get("source")
     if source and config.family in {
         "llama",
@@ -111,9 +132,13 @@ def tokenizer_for_checkpoint(config, state, *, source=None):
                 "Converted HF checkpoints require transformers for eval tokenization."
             ) from exc
         tokenizer = AutoTokenizer.from_pretrained(
-            source, trust_remote_code=False
+            source,
+            local_files_only=local_files_only,
+            trust_remote_code=False,
         )
-        generation_config = generation_config_for_source(source)
+        generation_config = generation_config_for_source(
+            source, local_files_only=local_files_only
+        )
         model_source = state.get("source")
         if (
             state.get("eos_token_id") is None
@@ -121,7 +146,12 @@ def tokenizer_for_checkpoint(config, state, *, source=None):
             and model_source
             and str(model_source) != str(source)
         ):
-            generation_config = generation_config_for_source(model_source)
+            try:
+                generation_config = generation_config_for_source(
+                    model_source, local_files_only=local_files_only
+                )
+            except OSError:
+                generation_config = {}
         generation_config.update(
             (key, state[key])
             for key in ("eos_token_id", "pad_token_id")

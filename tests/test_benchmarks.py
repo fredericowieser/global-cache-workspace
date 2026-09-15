@@ -173,7 +173,7 @@ def test_historical_matrix_reader_selects_one_boolean_condition(tmp_path):
         )
     )
     result = load_benchmark_result(path, enable_thinking=True)
-    assert result["schema"] == "gcw.gsm8k_reproduction.v4"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
     assert result["enable_thinking"] is True
     assert result["apply_chat_template"] is True
     assert result["accuracy"] == 0.75
@@ -228,6 +228,14 @@ def test_native_processor_policy_and_tf_off_regression(
     monkeypatch.setattr(
         "gcw.checkpoint.load_checkpoint",
         lambda *args, **kwargs: (loaded, config, state),
+    )
+
+    def load_tokenizer(*args, **kwargs):
+        assert kwargs["local_files_only"] is True
+        return object()
+
+    monkeypatch.setattr(
+        "gcw.evaluation.benchmarks.tokenizer_for_checkpoint", load_tokenizer
     )
     present = config.variant != "tf"
     if not present:
@@ -373,7 +381,9 @@ def test_hf_has_no_gcw_processor_and_matrix_records_request(
         benchmarks, "_source_commit", lambda path: "test-commit"
     )
     monkeypatch.setattr(
-        benchmarks, "_load_tokenizer", lambda path: (EvaluationTokenizer(), {})
+        benchmarks,
+        "_load_tokenizer",
+        lambda path, tokenizer=None: (EvaluationTokenizer(), {}),
     )
     monkeypatch.setattr(benchmarks, "_load_test_rows", lambda limit: ([], {}))
     monkeypatch.setattr(benchmarks, "evaluate_benchmark", lambda *a, **k: {})
@@ -384,7 +394,7 @@ def test_hf_has_no_gcw_processor_and_matrix_records_request(
             processor_enabled=requested,
         )
     )
-    assert result["schema"] == "gcw.gsm8k_reproduction.v4"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
     assert result["config"]["apply_chat_template"] is True
     assert result["config"]["enable_thinking"] is False
     assert result["config"]["processor_requested"] is requested

@@ -42,7 +42,9 @@ def test_hf_tokenizer_wrappers_preserve_eos_zero(monkeypatch):
 
 
 def test_native_tokenizer_and_padding_fallback():
-    assert generation_token_ids(SimpleNamespace(eot_id=0)) == ((0,), 0)
+    from gcw.data.tokenizers import IntTokenizer
+
+    assert generation_token_ids(IntTokenizer(eot_id=0)) == ((0,), 0)
     assert generation_token_ids(SimpleNamespace(eos_token_id=9)) == ((9,), 9)
 
 
@@ -83,6 +85,10 @@ def test_generation_file_then_text_config_fallback(tmp_path):
         json.dumps({"text_config": {"eos_token_id": 7, "pad_token_id": 0}})
     )
     assert generation_config_for_source(tmp_path)["eos_token_id"] == 7
+    (tmp_path / "config.json").write_text(
+        json.dumps({"eos_token_id": [7, 9], "text_config": {"eos_token_id": 7}})
+    )
+    assert generation_config_for_source(tmp_path)["eos_token_id"] == [7, 9]
     (tmp_path / "generation_config.json").write_text(
         json.dumps({"eos_token_id": [7, 9], "pad_token_id": 0})
     )
@@ -161,6 +167,27 @@ def test_separate_tokenizer_keeps_model_generation_metadata(
     expected = (9, 7) if saved_eos is None else (8,)
     assert generation_token_ids(tokenizer, tokenizer.generation_config) == (
         expected,
+        0,
+    )
+
+
+def test_stale_model_source_falls_back_to_tokenizer(tmp_path, monkeypatch):
+    from transformers import AutoTokenizer
+
+    tokenizer_source = tmp_path / "tokenizer"
+    tokenizer_source.mkdir()
+    monkeypatch.setattr(
+        AutoTokenizer,
+        "from_pretrained",
+        lambda *a, **kw: Tokenizer(eos_token_id=7, pad_token_id=0),
+    )
+    tokenizer = tokenizer_for_checkpoint(
+        SimpleNamespace(family="qwen3_5"),
+        {"source": str(tmp_path / "missing")},
+        source=tokenizer_source,
+    )
+    assert generation_token_ids(tokenizer, tokenizer.generation_config) == (
+        (7,),
         0,
     )
 

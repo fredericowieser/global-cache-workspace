@@ -163,6 +163,7 @@ class LanguageModel(nn.Module):
         input_ids: torch.Tensor,
         max_new_tokens: int,
         eos_token_id: int | list[int] | tuple[int, ...] | None = None,
+        *,
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
     ) -> torch.Tensor:

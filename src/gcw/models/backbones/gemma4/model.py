@@ -315,9 +315,10 @@ class Gemma4TF(TF):
         process_prefill_windows: bool = True,
         process_after_prefill: bool = False,
         relative_generation_cadence: bool = False,
+        generation_process_every: int | None = None,
+        *,
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
-        generation_process_every: int | None = None,
     ) -> torch.Tensor:
         if self._uniform_cache_shape():
             return super().generate_fast(

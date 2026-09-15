@@ -36,6 +36,7 @@ class FakeBackend:
     identity = {"kind": "fake"}
     eos_ids = (99,)
     pad_id = 0
+    tokenizer = None
     device = torch.device("cpu")
 
     def __init__(self, *, supports_left_padding: bool = True):
@@ -79,6 +80,11 @@ def test_final_choice_extraction_requires_an_explicit_final_answer():
 
 def test_numeric_prompt_preserves_the_calibrated_question():
     assert format_numeric_prompt("  What is 1 + 1?  ") == "What is 1 + 1?"
+
+
+def test_native_chat_requires_tokenizer_before_loading():
+    with pytest.raises(ValueError, match="requires tokenizer_path"):
+        run_chat_benchmarks(tasks=["piqa"], checkpoint="unused")
 
 
 def test_chat_generation_cadence_requires_active_gcw_processor():
@@ -151,7 +157,9 @@ def test_chat_processor_metadata_comes_from_backend(
     monkeypatch.setattr(chat, "GCWBenchmarkBackend", load_backend)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(
-        chat, "_load_tokenizer", lambda path: (FakeTokenizer(), {})
+        chat,
+        "_load_tokenizer",
+        lambda path, tokenizer=None: (FakeTokenizer(), {}),
     )
     monkeypatch.setattr(
         chat,
