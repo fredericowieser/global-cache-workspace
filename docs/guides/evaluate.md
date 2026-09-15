@@ -36,8 +36,8 @@ For a cache-processor checkpoint, `--generation-process-every N` overrides the p
 
 ## Processor provenance in GSM8K and chat results
 
-GSM8K schema `gcw.gsm8k_reproduction.v5` and chat schema
-`gcw.chat_benchmark.v4` distinguish three booleans:
+GSM8K schema `gcw.gsm8k_reproduction.v6` and chat schema
+`gcw.chat_benchmark.v5` distinguish three booleans:
 
 - `processor_requested`: the requested `--processor on/off` policy.
 - `processor_present`: an actual GCW cache processor was loaded, before bypass.
@@ -175,9 +175,9 @@ arguments as `gcw eval answer-nll`.
 selected chat-template and thinking settings to GSM8K OpenMath, SVAMP,
 TheoremQA, and GSM8K Hard. LogiQA and Gaokao MathQA always use plain prompts,
 thinking disabled, and benchmark-native option likelihood. One model load is
-shared across all six tasks. Its result includes a `paper7_mixed_prompt_v1`
-protocol block recording the effective booleans and request type for every
-evaluated task.
+shared across all six tasks. Its result includes a `paper7_mixed_prompt_v2`
+protocol block recording the effective booleans, request type, and generation
+limit for every evaluated task.
 
 ```bash
 uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7 \
@@ -206,22 +206,22 @@ For corrected Paper7, `--apply-chat-template false` disables chat formatting
 for the four generation tasks as well. It has no effect on LogiQA or Gaokao,
 which remain plain by definition.
 
-`gcw eval paper7-legacy` exists for direct compatibility with martin-branch
-Paper7 evaluation runs. Use it for old-checkpoint replication and for new
-checkpoints that must be compared against those legacy result files. It applies
-one suite-wide chat-template setting to all six tasks and retains the legacy
-lm-eval-compatible top-level result shape.
+`gcw eval paper7-legacy` retains martin-branch checkpoint loading, task
+definitions, suite-wide chat formatting, and the lm-eval-compatible top-level
+result shape. Its current 32,768-token generation budget means newly generated
+scores are not direct protocol replicas of historical 2,048-token results.
 
 For a Longshot random-routing ablation, add `--head-selection-method random`.
 This runtime-only override applies to both the initial head selection and every
 reachable internal reselection. Learned-selector parameters remain loaded from
 the checkpoint but are not used for routing.
 
-The legacy compatibility path preserves the old task and scoring protocol while
-making its thinking behavior explicit:
+The legacy compatibility path preserves the old task definitions and formatting
+behavior while making thinking explicit and using the current generation
+budget:
 
 - task YAMLs are loaded from `configs/tasks_legacy/paper7`;
-- every generative task receives up to 2,048 new tokens;
+- every generative task receives up to 32,768 new tokens;
 - chat templates are applied by default when the tokenizer provides one;
 - thinking inherits the checkpoint's training setting when present and
   otherwise defaults to false; `--enable-thinking true|false` overrides it;
@@ -268,7 +268,7 @@ uv run --extra eval python scripts/extract_paper_table.py \
 Keep two protocols separate:
 
 - Multiple-choice scores use full LM Evaluation Harness datasets, no chat template, and benchmark-native option likelihood. They are comparable to the corresponding harness protocol and have no thinking dimension.
-- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, numeric-last-answer scoring, and the same 2,048-token cap in both conditions.
+- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, numeric-last-answer scoring, and the same 32,768-token cap in both conditions.
 
 Generated multiple-choice answers are useful only as supplementary instruction-following diagnostics. Do not substitute them for canonical likelihood scores or schedule them across every experiment arm.
 
@@ -283,7 +283,7 @@ uv run --extra gpu --extra eval gcw eval chat \
   --tokenizer-path /path/to/qwen-tokenizer \
   --tasks gsm8k_openmath svamp gsm8k_hard \
   --enable-thinking \
-  --max-new-tokens 2048 \
+  --max-new-tokens 32768 \
   --out data/eval-runs/chat-thinking-on.json
 ```
 

@@ -40,15 +40,15 @@ def test_legacy_task_yaml_uses_thinking_generation_budget():
     hard = (root / "gsm8k_hard.yaml").read_text()
     theoremqa = (root / "theoremqa.yaml").read_text()
     logiqa = (root / "logiqa.yaml").read_text()
-    assert "max_gen_toks: 2048" in gsm8k
-    assert "version: 1.2" in gsm8k
+    assert "max_gen_toks: 32768" in gsm8k
+    assert "version: 1.3" in gsm8k
     assert "revision:" not in gsm8k
-    assert "max_gen_toks: 2048" in svamp
-    assert "version: 1.1" in svamp
-    assert "max_gen_toks: 2048" in hard
-    assert "version: 1.1" in hard
-    assert "max_gen_toks: 2048" in theoremqa
-    assert "version: 2.1" in theoremqa
+    assert "max_gen_toks: 32768" in svamp
+    assert "version: 1.2" in svamp
+    assert "max_gen_toks: 32768" in hard
+    assert "version: 1.2" in hard
+    assert "max_gen_toks: 32768" in theoremqa
+    assert "version: 2.2" in theoremqa
     assert "version: 1.1" in logiqa
 
 
@@ -489,38 +489,44 @@ def test_run_paper7_uses_mixed_prompt_protocol(monkeypatch):
         "gsm8k_hard": True,
     }
     assert out["gcw_protocol"] == {
-        "name": "paper7_mixed_prompt_v1",
-        "version": 1,
+        "name": "paper7_mixed_prompt_v2",
+        "version": 2,
         "tasks": {
             "gsm8k_openmath": {
                 "apply_chat_template": True,
                 "enable_thinking": True,
                 "request_type": "answer_generation",
+                "max_new_tokens": 32768,
             },
             "svamp": {
                 "apply_chat_template": True,
                 "enable_thinking": True,
                 "request_type": "answer_generation",
+                "max_new_tokens": 32768,
             },
             "theoremqa": {
                 "apply_chat_template": True,
                 "enable_thinking": True,
                 "request_type": "answer_generation",
+                "max_new_tokens": 32768,
             },
             "logiqa": {
                 "apply_chat_template": False,
                 "enable_thinking": False,
                 "request_type": "multiple_choice_likelihood",
+                "max_new_tokens": None,
             },
             "agieval_gaokao_mathqa": {
                 "apply_chat_template": False,
                 "enable_thinking": False,
                 "request_type": "multiple_choice_likelihood",
+                "max_new_tokens": None,
             },
             "gsm8k_hard": {
                 "apply_chat_template": True,
                 "enable_thinking": True,
                 "request_type": "answer_generation",
+                "max_new_tokens": 32768,
             },
         },
     }

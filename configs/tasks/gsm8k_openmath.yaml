@@ -19,7 +19,7 @@ generation_kwargs:
     - "\nQuestion:"
   do_sample: false
   temperature: 0.0
-  max_gen_toks: 2048
+  max_gen_toks: 32768
 repeats: 1
 # Multiple extraction strategies for the same generation — we only generate
 # once, then score the same output under each filter. Lets us see how the
@@ -66,4 +66,4 @@ metric_list:
       - "\\.$"
       - "\\s+"
 metadata:
-  version: 1.1
+  version: 1.2

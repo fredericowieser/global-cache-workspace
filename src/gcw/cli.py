@@ -180,7 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_boolean,
     )
     chat.add_argument("--batch-size", type=int, default=8)
-    chat.add_argument("--max-new-tokens", type=int, default=2048)
+    chat.add_argument("--max-new-tokens", type=int, default=32768)
     chat.add_argument("--out", default=None)
     fineweb = eval_sub.add_parser("fineweb")
     fineweb.add_argument("--checkpoint", required=True)

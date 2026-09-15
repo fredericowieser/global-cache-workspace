@@ -21,7 +21,7 @@ generation_kwargs:
     - "\nQuestion:"
   do_sample: false
   temperature: 0.0
-  max_gen_toks: 2048
+  max_gen_toks: 32768
 repeats: 1
 filter_list:
   - name: "boxed"
@@ -55,4 +55,4 @@ metric_list:
       - "\\s+"
       - "\\.0+$"    # strip trailing ``.0`` so float targets match integer-style predictions
 metadata:
-  version: 1.1
+  version: 1.2

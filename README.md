@@ -95,13 +95,14 @@ provenance; targets without that setting default to thinking disabled.
 Use `paper7` for new evaluations. It applies the selected chat and thinking
 settings to the four answer-generation tasks, while LogiQA and Gaokao use their
 canonical plain-prompt option-likelihood protocol. Corrected results include a
-`paper7_mixed_prompt_v1` protocol block with the effective setting for every
+`paper7_mixed_prompt_v2` protocol block with the effective setting for every
 evaluated task.
 
-Use `paper7-legacy` when evaluating martin-branch checkpoints or comparing new
-checkpoints against historical Paper7 results. It retains suite-wide chat
-formatting, special-token handling, and the legacy JSON shape. Both commands
-allow 2,048 generated tokens for every generative task. Chat formatting is
+Use `paper7-legacy` when evaluating martin-branch checkpoints while retaining
+their suite-wide chat formatting, special-token handling, and legacy JSON
+shape. Both commands allow 32,768 generated tokens for every generative task;
+new results therefore are not directly comparable to historical 2,048-token
+Paper7 scores. Chat formatting is
 enabled by default when the checkpoint tokenizer provides a template and
 otherwise falls back to plain prompts. When thinking is not specified, the
 command inherits the checkpoint's training setting when present and otherwise

@@ -24,10 +24,10 @@ from gcw.evaluation.scoring import (
 DATASET_REPO_ID = "openai/gsm8k"
 DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
-MAX_NEW_TOKENS = 2_048
+MAX_NEW_TOKENS = 32_768
 DEFAULT_BATCH_SIZE = 64
-RESULT_SCHEMA = "gcw.gsm8k_reproduction.v5"
-PREVIOUS_RESULT_SCHEMA = "gcw.gsm8k_reproduction.v4"
+RESULT_SCHEMA = "gcw.gsm8k_reproduction.v6"
+PREVIOUS_RESULT_SCHEMA = "gcw.gsm8k_reproduction.v5"
 HISTORICAL_RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
 ScoringProtocol = Literal["numeric_last_answer", "lm_eval_flexible_exact"]
 TargetKind = Literal["hf", "gcw"]

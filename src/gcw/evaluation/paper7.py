@@ -138,6 +138,9 @@ def _run_paper7_groups(
                     if tasks[0] in PAPER7_MULTIPLE_CHOICE_TASKS
                     else "answer_generation"
                 ),
+                "max_new_tokens": (
+                    None if tasks[0] in PAPER7_MULTIPLE_CHOICE_TASKS else 32768
+                ),
             }
         progress = _update_progress(run_idx, "running", runs, merged)
         if _run_is_complete(tasks, merged):
@@ -230,8 +233,8 @@ def _run_paper7_groups(
     _write_partial_results({**_empty_eval_results(), **merged})
     if not legacy:
         merged["gcw_protocol"] = {
-            "name": "paper7_mixed_prompt_v1",
-            "version": 1,
+            "name": "paper7_mixed_prompt_v2",
+            "version": 2,
             "tasks": task_protocols,
         }
     return merged

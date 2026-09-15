@@ -20,7 +20,7 @@ def test_chat_eval_parser_leaves_thinking_unspecified():
     assert args.suite == "chat"
     assert args.tasks == ["mmlu", "gsm8k_openmath"]
     assert args.enable_thinking is None
-    assert args.max_new_tokens == 2048
+    assert args.max_new_tokens == 32768
 
 
 def test_chat_eval_parser_can_enable_thinking():

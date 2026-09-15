@@ -51,7 +51,7 @@ GENERAL_TASK_LIMITS = {
     "arc_challenge": 1_000,
     "mmlu": 20,  # Per subject: 57 subjects, at most 1,140 rows.
 }
-RESULT_SCHEMA = "gcw.chat_benchmark.v4"
+RESULT_SCHEMA = "gcw.chat_benchmark.v5"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
@@ -496,7 +496,7 @@ def evaluate_chat_examples(
     return {
         "apply_chat_template": config.apply_chat_template,
         "enable_thinking": config.enable_thinking,
-        "protocol": "official_chat_template_answer_generation_v1",
+        "protocol": "official_chat_template_answer_generation_v2",
         "max_new_tokens": max_new_tokens,
         "batch_size": batch_size,
         "grouping": grouping,

@@ -103,7 +103,7 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(
     assert series._processor_states("icarus") == ("off", "on")
     assert series._processor_states("diffusion-bgt-t4-sigma0") == ("off", "on")
     assert series._processor_states("full-sft") == ("on",)
-    assert plan["schema"] == "gcw.math_experiment_series.v2"
+    assert plan["schema"] == "gcw.math_experiment_series.v3"
     assert "lambada_openai" not in plan["tasks"]["canonical_multiple_choice"]
     assert plan["tasks"]["canonical_multiple_choice"] == list(
         series.CANONICAL_TASKS
@@ -115,7 +115,7 @@ def test_plan_declares_full_order_scheduler_and_drop_last_epoch(
     )
     assert (
         plan["evaluation_protocols"]["numeric_generation"]["max_new_tokens"]
-        == 2048
+        == 32768
     )
     assert (
         plan["evaluation_protocols"]["numeric_generation"]["scoring"]
@@ -146,7 +146,7 @@ def test_numeric_result_validation_rejects_choice_rows(tmp_path):
         json.dumps(
             {
                 "mode": "thinking_off",
-                "max_new_tokens": 2048,
+                "max_new_tokens": 32768,
                 "tasks": {"gsm8k_openmath": {}},
                 "datasets": {"gsm8k_openmath": {}},
                 "rows": [{"target_kind": "choice"}],

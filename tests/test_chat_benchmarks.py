@@ -116,8 +116,8 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
         ),
     )
 
-    assert result["protocol"] == "official_chat_template_answer_generation_v1"
-    assert result["max_new_tokens"] == 2048
+    assert result["protocol"] == "official_chat_template_answer_generation_v2"
+    assert result["max_new_tokens"] == 32768
     assert result["enable_thinking"] is True
     assert result["tasks"]["piqa"]["accuracy"] == 1.0
     assert result["tasks"]["svamp"]["accuracy"] == 1.0
@@ -129,7 +129,7 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
     assert result["tasks"]["piqa"]["thinking_truncation_rate"] == 0.0
     assert result["rows"][0]["thinking_terminated"] is False
     assert result["rows"][0]["thinking_truncated"] is False
-    assert backend.calls[0][2] == 2048
+    assert backend.calls[0][2] == 32768
 
 
 @pytest.mark.parametrize("target", ["hf", "tf", "bgt"])
@@ -178,7 +178,7 @@ def test_chat_processor_metadata_comes_from_backend(
         processor_enabled=requested,
         **{"hf_model" if target == "hf" else "checkpoint": tmp_path},
     )
-    assert result["schema"] == "gcw.chat_benchmark.v4"
+    assert result["schema"] == "gcw.chat_benchmark.v5"
     for field in (
         "processor_requested",
         "processor_present",

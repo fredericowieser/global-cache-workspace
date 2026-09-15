@@ -178,7 +178,7 @@ def test_historical_matrix_reader_selects_one_boolean_condition(tmp_path):
         )
     )
     result = load_benchmark_result(path, enable_thinking=True)
-    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v6"
     assert result["enable_thinking"] is True
     assert result["apply_chat_template"] is True
     assert result["accuracy"] == 0.75
@@ -388,7 +388,7 @@ def test_hf_has_no_gcw_processor_and_matrix_records_request(
             processor_enabled=requested,
         )
     )
-    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v6"
     assert result["config"]["apply_chat_template"] is True
     assert result["config"]["enable_thinking"] is False
     assert result["config"]["processor_requested"] is requested
