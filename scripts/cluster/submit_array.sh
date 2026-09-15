@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Submit a small worker array that consumes a list of configs.
+# Submit a small worker array that consumes a list of configs or evaluation tasks.
 #
 # The Slurm backend uses one array submission. The local backend starts detached,
 # GPU-pinned process groups and records their PIDs. With either backend, each worker
@@ -11,11 +11,14 @@ repo_root="${GCW_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -
 script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 cd "$repo_root"
 
-if [[ -n "${GCW_SLURM_ENV_FILE:-}" ]]; then
+load_environment_file() {
+  local path="$1"
+  local assignment
+
   while IFS= read -r -d '' assignment; do
     export "$assignment"
-  done < "$GCW_SLURM_ENV_FILE"
-fi
+  done < "$path"
+}
 
 JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
 BACKEND="${BACKEND:-auto}"
@@ -40,6 +43,7 @@ EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 EVAL_MAX_BATCH_SIZE="${EVAL_MAX_BATCH_SIZE:-64}"
 EVAL_CHECKPOINT_STEP="${EVAL_CHECKPOINT_STEP:-}"
 EVAL_THINKING_MODES="${EVAL_THINKING_MODES:-}"
+GCW_EVAL_TASK_MODE="${GCW_EVAL_TASK_MODE:-0}"
 GENERATION_PROCESS_EVERY="${GENERATION_PROCESS_EVERY:-}"
 EVAL_HEAD_SELECTION_METHOD="${EVAL_HEAD_SELECTION_METHOD:-}"
 GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"
@@ -63,7 +67,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   scripts/cluster/submit_array.sh [--backend auto|slurm|local] [--workers N] [--local-gpus LIST]
-                                  [--configs-file FILE] [--dry-run] CONFIG [CONFIG ...]
+                                  [--configs-file FILE | --eval-tasks-file FILE]
+                                  [--dry-run] [CONFIG ...]
   scripts/cluster/submit_array.sh status STATE_DIR
   scripts/cluster/submit_array.sh cancel [--force] STATE_DIR
 
@@ -73,6 +78,8 @@ Options:
   --local-gpus LIST    Comma-separated GPU IDs available to local workers. By default, uses
                        GPU indices reported by nvidia-smi.
   --configs-file FILE  File containing one config path per line. Blank lines and # comments are ignored.
+  --eval-tasks-file FILE
+                       Tab-separated CHECKPOINT, OUTPUT, and THINKING rows for eval-only workers.
   --dry-run            Print the submission plan without starting workers.
 
 Common environment overrides:
@@ -170,6 +177,7 @@ write_slurm_environment() {
     "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE" \
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP" \
     "EVAL_THINKING_MODES=$EVAL_THINKING_MODES" \
+    "GCW_EVAL_TASK_MODE=$GCW_EVAL_TASK_MODE" \
     "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY" \
     "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD" \
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS" \
@@ -374,9 +382,25 @@ run_eval_manifest() {
   done < "$manifest"
 }
 
+prepare_worker_environment() {
+  local triton_run_id
+
+  export PATH="$HOME/.local/bin:$PATH"
+  export GCW_STRICT_FLASH="${GCW_STRICT_FLASH:-1}"
+  if [[ -d "$PWD/.venv/include/python3.12" ]]; then
+    export CPATH="$PWD/.venv/include/python3.12:$PWD/.venv/include${CPATH:+:$CPATH}"
+  fi
+  export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
+  export WANDB_MODE
+  export PYTORCH_CUDA_ALLOC_CONF
+  triton_run_id="${SLURM_JOB_ID:-$(basename "$STATE_DIR")}"
+  export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/gcw-triton-${triton_run_id}-${SLURM_ARRAY_TASK_ID:-0}}"
+  mkdir -p "$WANDB_DIR" slurm_out "$OUT_DIR"
+}
+
 run_one_config() {
   local config="$1"
-  local output_dir max_steps keep_step_checkpoints run_name manifest step out nproc triton_run_id
+  local output_dir max_steps keep_step_checkpoints run_name manifest step out nproc
 
   require_path "$config"
 
@@ -409,19 +433,9 @@ run_one_config() {
   fi
   echo "Output dir: $output_dir"
 
-  export PATH="$HOME/.local/bin:$PATH"
-  export GCW_STRICT_FLASH="${GCW_STRICT_FLASH:-1}"
-  if [[ -d "$PWD/.venv/include/python3.12" ]]; then
-    export CPATH="$PWD/.venv/include/python3.12:$PWD/.venv/include${CPATH:+:$CPATH}"
-  fi
-  export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
-  export WANDB_MODE
-  export PYTORCH_CUDA_ALLOC_CONF
-  triton_run_id="${SLURM_JOB_ID:-$(basename "$STATE_DIR")}"
-  export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/gcw-triton-${triton_run_id}-${SLURM_ARRAY_TASK_ID:-0}}"
+  prepare_worker_environment
   export GCW_KEEP_STEP_CHECKPOINTS="$keep_step_checkpoints"
   export GCW_STEP_CHECKPOINT_EVERY="$KEEP_STEP_CHECKPOINT_EVERY"
-  mkdir -p "$WANDB_DIR" slurm_out
 
   if [[ "$EVAL_ONLY" != "1" ]]; then
     worker_uv_run_train python scripts/cluster/check_cuda_env.py || return $?
@@ -464,6 +478,32 @@ run_one_config() {
   fi
 }
 
+run_one_eval_task() {
+  local task="$1"
+  local checkpoint out enable_thinking extra
+
+  IFS=$'\t' read -r checkpoint out enable_thinking extra <<< "$task"
+  require_path "$checkpoint"
+  if [[ -z "$out" || -z "$enable_thinking" || -n "$extra" ]]; then
+    echo "Invalid evaluation task; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING: $task" >&2
+    return 1
+  fi
+  case "$enable_thinking" in
+    true|false) ;;
+    *)
+      echo "Evaluation task thinking mode must be true or false: $task" >&2
+      return 1
+      ;;
+  esac
+
+  prepare_worker_environment
+  export GCW_EVAL_SKIP_TASKS
+
+  echo "=== Evaluating $checkpoint (thinking=$enable_thinking) ==="
+  worker_uv_run_eval python scripts/cluster/check_cuda_env.py || return $?
+  run_eval "$checkpoint" "$out" "$enable_thinking"
+}
+
 claim_next_config() {
   local config
   (
@@ -490,6 +530,14 @@ claim_next_config() {
   ) 200>"$LOCK_FILE"
 }
 
+run_claimed_item() {
+  if [[ "$GCW_EVAL_TASK_MODE" == "1" ]]; then
+    run_one_eval_task "$1"
+  else
+    run_one_config "$1"
+  fi
+}
+
 worker_main() {
   CONFIG_LIST="${CONFIG_LIST:?CONFIG_LIST is required in worker mode}"
   STATE_DIR="${STATE_DIR:?STATE_DIR is required in worker mode}"
@@ -513,7 +561,7 @@ worker_main() {
       echo "No unclaimed configs remain; exiting"
       break
     fi
-    if run_one_config "$claim_result"; then
+    if run_claimed_item "$claim_result"; then
       (
         flock -x 200
         printf "%s\n" "$claim_result" >> "$COMPLETED_FILE"
@@ -560,6 +608,40 @@ write_config_list() {
     echo "No configs provided" >&2
     usage
     exit 1
+  fi
+}
+
+write_eval_task_list() {
+  local list_path="$1"
+  local tasks_file="$2"
+  local line checkpoint out enable_thinking extra
+  local line_number=0
+
+  : > "$list_path"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_number=$((line_number + 1))
+    if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+      continue
+    fi
+    IFS=$'\t' read -r checkpoint out enable_thinking extra <<< "$line"
+    if [[ -z "$checkpoint" || -z "$out" || -z "$enable_thinking" || -n "$extra" ]]; then
+      echo "Invalid evaluation task on line $line_number of $tasks_file; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING" >&2
+      return 1
+    fi
+    if [[ ! -e "$checkpoint" ]]; then
+      echo "Missing checkpoint on line $line_number of $tasks_file: $checkpoint" >&2
+      return 1
+    fi
+    if [[ "$enable_thinking" != "true" && "$enable_thinking" != "false" ]]; then
+      echo "Evaluation task thinking mode must be true or false on line $line_number of $tasks_file; got '$enable_thinking'" >&2
+      return 1
+    fi
+    printf "%s\t%s\t%s\n" "$checkpoint" "$out" "$enable_thinking" >> "$list_path"
+  done < "$tasks_file"
+
+  if [[ ! -s "$list_path" ]]; then
+    echo "No evaluation tasks provided in $tasks_file" >&2
+    return 1
   fi
 }
 
@@ -788,6 +870,7 @@ start_local_worker() {
     "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE"
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP"
     "EVAL_THINKING_MODES=$EVAL_THINKING_MODES"
+    "GCW_EVAL_TASK_MODE=$GCW_EVAL_TASK_MODE"
     "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY"
     "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD"
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS"
@@ -1032,7 +1115,7 @@ cancel_main() {
 }
 
 launcher_main() {
-  local configs_file="" dry_run=0 state_dir config_list workers_arg
+  local configs_file="" eval_tasks_file="" dry_run=0 state_dir config_list workers_arg
   local alloc_gpus export_file
   local args=()
 
@@ -1059,6 +1142,14 @@ launcher_main() {
         configs_file="${2:-}"
         if [[ -z "$configs_file" ]]; then
           echo "--configs-file requires a path" >&2
+          exit 1
+        fi
+        shift 2
+        ;;
+      --eval-tasks-file)
+        eval_tasks_file="${2:-}"
+        if [[ -z "$eval_tasks_file" ]]; then
+          echo "--eval-tasks-file requires a path" >&2
           exit 1
         fi
         shift 2
@@ -1098,6 +1189,22 @@ launcher_main() {
   positive_int EVAL_GPUS "$EVAL_GPUS"
   validate_eval_batching
   validate_eval_thinking_modes
+  if [[ -n "$eval_tasks_file" ]]; then
+    if [[ -n "$configs_file" || "${#args[@]}" -gt 0 ]]; then
+      echo "--eval-tasks-file cannot be combined with configs" >&2
+      return 1
+    fi
+    if [[ "$EVAL_ONLY" != "1" ]]; then
+      echo "--eval-tasks-file requires EVAL_ONLY=1" >&2
+      return 1
+    fi
+    if [[ -n "$EVAL_CHECKPOINT_STEP" || -n "$EVAL_THINKING_MODES" ]]; then
+      echo "--eval-tasks-file cannot be combined with EVAL_CHECKPOINT_STEP or EVAL_THINKING_MODES" >&2
+      return 1
+    fi
+    require_path "$eval_tasks_file"
+    GCW_EVAL_TASK_MODE=1
+  fi
   if [[ -n "$GENERATION_PROCESS_EVERY" ]]; then
     positive_int GENERATION_PROCESS_EVERY "$GENERATION_PROCESS_EVERY"
     if [[ "$EVAL_SUITE" == "fineweb" ]]; then
@@ -1161,7 +1268,11 @@ launcher_main() {
   fi
   mkdir -p "$state_dir"
   config_list="$state_dir/configs.txt"
-  write_config_list "$config_list" "$configs_file" "${args[@]}"
+  if [[ -n "$eval_tasks_file" ]]; then
+    write_eval_task_list "$config_list" "$eval_tasks_file"
+  else
+    write_config_list "$config_list" "$configs_file" "${args[@]}"
+  fi
 
   if [[ "$BACKEND" == "local" ]]; then
     local_launcher "$state_dir" "$config_list" "$alloc_gpus" "$dry_run"
@@ -1172,6 +1283,7 @@ launcher_main() {
   export_file="$state_dir/slurm-environment"
   write_slurm_environment "$export_file" "$config_list" "$state_dir"
   chmod 600 "$export_file"
+  load_environment_file "$export_file"
   echo "Backend: slurm"
   echo "Config list: $config_list"
   echo "Submitting $ARRAY_WORKERS worker(s) as array $workers_arg"
@@ -1189,7 +1301,7 @@ launcher_main() {
     --mem="$MEM"
     --array="$workers_arg"
     --output="$SLURM_LOG_DIR/${JOB_NAME}-%A_%a.out"
-    --export="ALL,GCW_SLURM_ENV_FILE=$export_file"
+    --export=ALL
   )
   if [[ -n "$DEPENDENCY" ]]; then
     sbatch_cmd+=(--dependency="$DEPENDENCY")

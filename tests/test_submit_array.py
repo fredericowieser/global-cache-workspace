@@ -157,7 +157,7 @@ def test_worker_does_not_validate_unrelated_openmath_override(
     _wait_for_status(_state_dir(result.stdout), env, "SUCCEEDED")
 
 
-def test_slurm_uses_ephemeral_export_file_without_login_env_retrieval(
+def test_slurm_passes_ephemeral_environment_file_without_login_env_retrieval(
     tmp_path: Path,
 ) -> None:
     config, env = _write_fixture(tmp_path)
@@ -167,11 +167,14 @@ def test_slurm_uses_ephemeral_export_file_without_login_env_retrieval(
     sbatch = bin_dir / "sbatch"
     sbatch.write_text(
         "#!/usr/bin/env bash\n"
+        "found_export=0\n"
         "for arg in \"$@\"; do\n"
-        "  if [[ \"$arg\" == --export-file=* ]]; then\n"
-        "    cp \"${arg#--export-file=}\" \"$SBATCH_EXPORT_CAPTURE\"\n"
+        "  if [[ \"$arg\" == --export=ALL ]]; then\n"
+        "    found_export=1\n"
         "  fi\n"
         "done\n"
+        "[[ \"$found_export\" == 1 ]] || exit 1\n"
+        "env -0 > \"$SBATCH_EXPORT_CAPTURE\"\n"
         "printf '321\\n'\n",
         encoding="utf-8",
     )
@@ -336,6 +339,106 @@ def test_eval_only_runs_multiple_thinking_modes_in_one_queue(
     assert "step2000_paper7_thinking-off.json" in invocations[0]
     assert "--enable-thinking true" in invocations[1]
     assert "step2000_paper7_thinking-on.json" in invocations[1]
+
+
+def test_eval_tasks_file_runs_heterogeneous_checkpoints_and_thinking_modes(
+    tmp_path: Path,
+) -> None:
+    capture = tmp_path / "uv-args"
+    _, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"',
+    )
+    checkpoint_1000 = tmp_path / "run-a" / "checkpoint-1000"
+    checkpoint_2000 = tmp_path / "run-b" / "checkpoint-2000"
+    checkpoint_1000.mkdir(parents=True)
+    checkpoint_2000.mkdir(parents=True)
+    out_1000 = tmp_path / "results" / "run-a-corrected.json"
+    out_2000 = tmp_path / "results" / "run-b-thinking.json"
+    tasks = tmp_path / "eval-tasks.tsv"
+    tasks.write_text(
+        f"# checkpoint\\toutput\\tthinking\n"
+        f"{checkpoint_1000}\t{out_1000}\tfalse\n"
+        f"{checkpoint_2000}\t{out_2000}\ttrue\n",
+        encoding="utf-8",
+    )
+    env.update(
+        {
+            "EVAL_ONLY": "1",
+            "EVAL_BATCH_SIZE": "auto",
+            "EVAL_MAX_BATCH_SIZE": "32",
+            "UV_CAPTURE": str(capture),
+        }
+    )
+
+    result = _run(
+        [
+            "--backend",
+            "local",
+            "--local-gpus",
+            "GPU-test",
+            "--eval-tasks-file",
+            str(tasks),
+        ],
+        env,
+    )
+    state_dir = _state_dir(result.stdout)
+    _wait_for_status(state_dir, env, "SUCCEEDED")
+
+    invocations = [
+        line
+        for line in capture.read_text(encoding="utf-8").splitlines()
+        if " gcw eval " in f" {line} "
+    ]
+    assert len(invocations) == 2
+    assert f"--checkpoint {checkpoint_1000}" in invocations[0]
+    assert f"--out {out_1000}" in invocations[0]
+    assert "--enable-thinking false" in invocations[0]
+    assert f"--checkpoint {checkpoint_2000}" in invocations[1]
+    assert f"--out {out_2000}" in invocations[1]
+    assert "--enable-thinking true" in invocations[1]
+    assert all("--batch-size auto" in invocation for invocation in invocations)
+    assert all("--max-batch-size 32" in invocation for invocation in invocations)
+    assert (state_dir / "configs.txt").read_text(encoding="utf-8") == (
+        f"{checkpoint_1000}\t{out_1000}\tfalse\n"
+        f"{checkpoint_2000}\t{out_2000}\ttrue\n"
+    )
+
+
+def test_eval_tasks_file_rejects_global_checkpoint_or_thinking_overrides(
+    tmp_path: Path,
+) -> None:
+    _, env = _write_fixture(tmp_path)
+    checkpoint = tmp_path / "checkpoint-2000"
+    checkpoint.mkdir()
+    tasks = tmp_path / "eval-tasks.tsv"
+    tasks.write_text(
+        f"{checkpoint}\t{tmp_path / 'result.json'}\ttrue\n",
+        encoding="utf-8",
+    )
+    env.update(
+        {
+            "EVAL_ONLY": "1",
+            "EVAL_CHECKPOINT_STEP": "2000",
+        }
+    )
+
+    result = _run(
+        [
+            "--backend",
+            "local",
+            "--dry-run",
+            "--local-gpus",
+            "GPU-test",
+            "--eval-tasks-file",
+            str(tasks),
+        ],
+        env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "cannot be combined with EVAL_CHECKPOINT_STEP" in result.stdout
 
 
 def test_generation_cadence_rejects_non_generative_eval_suite(

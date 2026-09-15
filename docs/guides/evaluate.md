@@ -206,6 +206,24 @@ EVAL_BATCH_SIZE=auto EVAL_MAX_BATCH_SIZE=64 \
 scripts/cluster/submit_array.sh configs/experiments/example.yaml
 ```
 
+To evaluate heterogeneous checkpoints or thinking modes in one worker array,
+provide a tab-separated task file with checkpoint, output, and thinking fields:
+
+```text
+/path/to/checkpoint-1000	results/run_step1000_paper7.json	false
+/path/to/checkpoint-2000	results/run_step2000_paper7_thinking-on.json	true
+```
+
+Submit the task queue through the standard launcher. Task files require
+evaluation-only mode and cannot be combined with `EVAL_CHECKPOINT_STEP` or
+`EVAL_THINKING_MODES`, because those settings are supplied per task.
+
+```bash
+EVAL_ONLY=1 EVAL_BATCH_SIZE=auto EVAL_MAX_BATCH_SIZE=64 \
+scripts/cluster/submit_array.sh --workers 4 \
+  --eval-tasks-file /path/to/eval-tasks.tsv
+```
+
 For corrected Paper7, `--apply-chat-template false` disables chat formatting
 for the four generation tasks as well. It has no effect on LogiQA or Gaokao,
 which remain plain by definition.
