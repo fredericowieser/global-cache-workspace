@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -24,6 +24,7 @@ from gcw.evaluation.benchmarks import (
 from gcw.evaluation.scoring import (
     classify_generated_tokens,
     extract_numeric_answer,
+    token_length_distribution,
 )
 
 GENERAL_CHAT_TASKS = (
@@ -51,7 +52,7 @@ GENERAL_TASK_LIMITS = {
     "arc_challenge": 1_000,
     "mmlu": 20,  # Per subject: 57 subjects, at most 1,140 rows.
 }
-RESULT_SCHEMA = "gcw.chat_benchmark.v5"
+RESULT_SCHEMA = "gcw.chat_benchmark.v7"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
@@ -445,6 +446,7 @@ def evaluate_chat_examples(
                 "thinking_tokens": token_stats.thinking_tokens,
                 "thinking_terminated": token_stats.thinking_terminated,
                 "thinking_truncated": token_stats.thinking_truncated,
+                "generation_cap_hit": termination == "max_new_tokens",
                 "termination": termination,
                 "response": response,
                 "prediction": prediction,
@@ -467,6 +469,7 @@ def evaluate_chat_examples(
         truncated = sum(
             row["termination"] == "max_new_tokens" for row in selected
         )
+        response_tokens = sum(int(row["response_tokens"]) for row in selected)
         answer_tokens = sum(int(row["answer_tokens"]) for row in selected)
         thinking_tokens = sum(int(row["thinking_tokens"]) for row in selected)
         thinking_truncated = sum(
@@ -480,13 +483,26 @@ def evaluate_chat_examples(
             "parse_rate": parsed / len(selected),
             "truncated": truncated,
             "truncation_rate": truncated / len(selected),
-            "response_tokens": sum(
-                int(row["response_tokens"]) for row in selected
+            "response_tokens": response_tokens,
+            "response_tokens_mean": response_tokens / len(selected),
+            "generation_cap_hits": truncated,
+            "generation_cap_hit_rate": truncated / len(selected),
+            **token_length_distribution(
+                Counter(int(row["response_tokens"]) for row in selected),
+                "response_tokens",
             ),
             "answer_tokens": answer_tokens,
             "answer_tokens_mean": answer_tokens / len(selected),
+            **token_length_distribution(
+                Counter(int(row["answer_tokens"]) for row in selected),
+                "answer_tokens",
+            ),
             "thinking_tokens": thinking_tokens,
             "thinking_tokens_mean": thinking_tokens / len(selected),
+            **token_length_distribution(
+                Counter(int(row["thinking_tokens"]) for row in selected),
+                "thinking_tokens",
+            ),
             "unterminated_thinking": sum(
                 not bool(row["thinking_terminated"]) for row in selected
             ),

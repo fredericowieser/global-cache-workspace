@@ -11,6 +11,7 @@ from gcw.checkpoint import load_checkpoint
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
     classify_generated_tokens,
+    token_length_distribution,
     encode_generate_prompt,
     stop_token_sequences,
     tokenizer_for_checkpoint,
@@ -277,6 +278,12 @@ class GCWEvalLM(TemplateLM):
             "thinking_tokens": 0,
             "unterminated_thinking": 0,
             "thinking_truncated": 0,
+            "generation_cap_hits": 0,
+            "token_lengths": {
+                "response": {},
+                "answer": {},
+                "thinking": {},
+            },
         }
 
     def _metrics(self) -> dict[str, Any]:
@@ -292,6 +299,7 @@ class GCWEvalLM(TemplateLM):
     def pop_runtime_metrics(self) -> dict[str, Any]:
         metrics = self._metrics()
         batches = metrics["successful_batch_sizes"]
+        lengths = metrics["token_lengths"]
         counters = torch.tensor(
             [
                 metrics["generated_responses"],
@@ -299,26 +307,35 @@ class GCWEvalLM(TemplateLM):
                 metrics["thinking_tokens"],
                 metrics["unterminated_thinking"],
                 metrics["thinking_truncated"],
+                metrics["generation_cap_hits"],
             ],
             dtype=torch.long,
             device=self.model.get_device(),
         )
         if dist.is_available() and dist.is_initialized():
             dist.all_reduce(counters)
-            gathered: list[dict[str, dict[str, int]] | None] = [
+            gathered: list[dict[str, dict] | None] = [
                 None
             ] * dist.get_world_size()
-            dist.all_gather_object(gathered, batches)
+            dist.all_gather_object(
+                gathered, {"batches": batches, "lengths": lengths}
+            )
             batches = {"generation": {}, "loglikelihood": {}}
-            for rank_batches in gathered:
-                if rank_batches is None:
+            lengths = {"response": {}, "answer": {}, "thinking": {}}
+            for rank_metrics in gathered:
+                if rank_metrics is None:
                     continue
-                for workload, counts in rank_batches.items():
+                for workload, counts in rank_metrics["batches"].items():
                     for size, count in counts.items():
                         batches[workload][size] = (
                             batches[workload].get(size, 0) + count
                         )
-        generated, answer, thinking, unterminated, truncated = (
+                for category, counts in rank_metrics["lengths"].items():
+                    for length, count in counts.items():
+                        lengths[category][length] = (
+                            lengths[category].get(length, 0) + count
+                        )
+        generated, answer, thinking, unterminated, truncated, cap_hits = (
             int(value) for value in counters.tolist()
         )
         result: dict[str, Any] = {
@@ -333,11 +350,24 @@ class GCWEvalLM(TemplateLM):
             },
         }
         if generated:
+            response_total = sum(
+                length * count for length, count in lengths["response"].items()
+            )
             result.update(
                 {
                     "generated_responses": generated,
+                    "generation_cap_hits": cap_hits,
+                    "generation_cap_hit_rate": cap_hits / generated,
                     "answer_tokens_total": answer,
                     "answer_tokens_mean": answer / generated,
+                    "response_tokens_total": response_total,
+                    "response_tokens_mean": response_total / generated,
+                    **token_length_distribution(
+                        lengths["response"], "response_tokens"
+                    ),
+                    **token_length_distribution(
+                        lengths["answer"], "answer_tokens"
+                    ),
                 }
             )
             if self.eval_config.enable_thinking:
@@ -345,6 +375,9 @@ class GCWEvalLM(TemplateLM):
                     {
                         "thinking_tokens_total": thinking,
                         "thinking_tokens_mean": thinking / generated,
+                        **token_length_distribution(
+                            lengths["thinking"], "thinking_tokens"
+                        ),
                         "unterminated_thinking_responses": unterminated,
                         "thinking_truncated_responses": truncated,
                         "thinking_truncation_rate": truncated / generated,
@@ -615,3 +648,11 @@ class GCWEvalLM(TemplateLM):
             not classified.thinking_terminated
         )
         metrics["thinking_truncated"] += int(classified.thinking_truncated)
+        metrics["generation_cap_hits"] += int(termination == "max_new_tokens")
+        for category, length in (
+            ("response", len(tokens)),
+            ("answer", classified.answer_tokens),
+            ("thinking", classified.thinking_tokens),
+        ):
+            counts = metrics["token_lengths"][category]
+            counts[length] = counts.get(length, 0) + 1

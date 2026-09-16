@@ -189,6 +189,45 @@ def _validate_partial_results(
                 "partial results lack current evaluation runtime measurements; "
                 "a fresh evaluation is required"
             )
+        if task_runtime.get("generated_responses", 0):
+            if not {"generation_cap_hits", "generation_cap_hit_rate"} <= set(
+                task_runtime
+            ):
+                raise IncompatiblePartialResultsError(
+                    "partial results lack generation cap-hit metrics; "
+                    "a fresh evaluation is required"
+                )
+            distribution_fields = {
+                f"{prefix}_{suffix}"
+                for prefix in ("response_tokens", "answer_tokens")
+                for suffix in (
+                    "stddev",
+                    "max",
+                    "p50",
+                    "p95",
+                    "p99",
+                    "above_2x_mean_count",
+                    "above_2x_mean_rate",
+                )
+            }
+            if "thinking_tokens_mean" in task_runtime:
+                distribution_fields.update(
+                    f"thinking_tokens_{suffix}"
+                    for suffix in (
+                        "stddev",
+                        "max",
+                        "p50",
+                        "p95",
+                        "p99",
+                        "above_2x_mean_count",
+                        "above_2x_mean_rate",
+                    )
+                )
+            if not distribution_fields <= set(task_runtime):
+                raise IncompatiblePartialResultsError(
+                    "partial results lack token-length distribution metrics; "
+                    "a fresh evaluation is required"
+                )
         batch_sizes = task_runtime["successful_batch_sizes"]
         if (
             not isinstance(batch_sizes, dict)

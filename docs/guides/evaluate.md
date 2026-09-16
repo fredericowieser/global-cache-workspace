@@ -36,8 +36,8 @@ For a cache-processor checkpoint, `--generation-process-every N` overrides the p
 
 ## Processor provenance in GSM8K and chat results
 
-GSM8K schema `gcw.gsm8k_reproduction.v6` and chat schema
-`gcw.chat_benchmark.v5` distinguish three booleans:
+GSM8K schema `gcw.gsm8k_reproduction.v8` and chat schema
+`gcw.chat_benchmark.v7` distinguish three booleans:
 
 - `processor_requested`: the requested `--processor on/off` policy.
 - `processor_present`: an actual GCW cache processor was loaded, before bypass.
@@ -86,6 +86,24 @@ the answer count is zero. Such a response is unterminated, but it is marked as
 thinking-truncated only when generation reached `max_new_tokens`; EOS or another
 stop leaves it unterminated without marking it truncated. Truncation rate uses
 all generated responses as its denominator.
+
+`generation_cap_hits` counts responses that reached `max_new_tokens` without
+an earlier EOS or stop; `generation_cap_hit_rate` divides that count by all
+generated responses. These fields apply whether thinking is enabled or not.
+They measure full-response cap hits, unlike `thinking_truncated`, which only
+counts cap hits with an unclosed thinking section. Chat retains its older
+`truncated` and `truncation_rate` fields for compatibility.
+
+Generation aggregates also report exact per-response token-length distributions
+for full responses and answers, plus thinking when enabled: population standard
+deviation, maximum, median (p50), p95, p99, and the count and rate strictly
+above twice that category's mean. Percentiles use the nearest-rank definition;
+zero-token answers or thinking traces remain in the denominator. Specialized
+results retain zero-valued thinking summaries when thinking is disabled. Lm-eval results
+keep compact in-memory length histograms until each task group completes, then
+persist only these summaries. The over-2x count directly identifies how many
+prompts form a long tail relative to the average; p95/p99 show its typical
+upper extent, while max identifies the single longest response.
 
 ## Answer-only teacher-forced NLL
 

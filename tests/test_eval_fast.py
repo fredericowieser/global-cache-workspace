@@ -11,6 +11,7 @@ from gcw.evaluation.core import (
 )
 from gcw.evaluation.scoring import (
     classify_generated_tokens,
+    token_length_distribution,
     tokenizer_for_checkpoint,
     trim_generated_token_ids,
     truncate_context_continuation,
@@ -110,6 +111,17 @@ def test_unterminated_thinking_distinguishes_stop_from_token_cap():
     assert capped.thinking_truncated is True
 
 
+def test_token_length_distribution_exposes_tail_count_and_exact_percentiles():
+    summary = token_length_distribution({1: 4, 10: 1}, "answer_tokens")
+    assert summary["answer_tokens_stddev"] == pytest.approx(3.6)
+    assert summary["answer_tokens_max"] == 10
+    assert summary["answer_tokens_p50"] == 1
+    assert summary["answer_tokens_p95"] == 10
+    assert summary["answer_tokens_p99"] == 10
+    assert summary["answer_tokens_above_2x_mean_count"] == 1
+    assert summary["answer_tokens_above_2x_mean_rate"] == 0.2
+
+
 def test_lm_runtime_metrics_aggregate_and_reset():
     lm = GCWEvalLM.__new__(GCWEvalLM)
     lm.batch_size = "auto"
@@ -130,8 +142,17 @@ def test_lm_runtime_metrics_aggregate_and_reset():
     assert runtime["generated_responses"] == 2
     assert runtime["answer_tokens_total"] == 1
     assert runtime["answer_tokens_mean"] == 0.5
+    assert runtime["answer_tokens_stddev"] == 0.5
+    assert runtime["answer_tokens_max"] == 1
+    assert runtime["response_tokens_mean"] == 4.0
+    assert runtime["response_tokens_stddev"] == 2.0
+    assert runtime["response_tokens_p95"] == 6
     assert runtime["thinking_tokens_total"] == 3
     assert runtime["thinking_tokens_mean"] == 1.5
+    assert runtime["thinking_tokens_stddev"] == 0.5
+    assert runtime["thinking_tokens_max"] == 2
+    assert runtime["generation_cap_hits"] == 1
+    assert runtime["generation_cap_hit_rate"] == 0.5
     assert runtime["unterminated_thinking_responses"] == 1
     assert runtime["thinking_truncated_responses"] == 1
     assert runtime["thinking_truncation_rate"] == 0.5
@@ -139,7 +160,29 @@ def test_lm_runtime_metrics_aggregate_and_reset():
     assert lm._metrics()["generated_responses"] == 0
 
 
+def test_lm_cap_hits_are_distinct_from_thinking_truncation():
+    lm = GCWEvalLM.__new__(GCWEvalLM)
+    lm.batch_size = 2
+    lm.eval_config = type(
+        "Config", (), {"max_batch_size": 2, "enable_thinking": True}
+    )()
+    lm.tokenizer = ThinkingTokenizer()
+    lm.model = type(
+        "Model", (), {"get_device": lambda self: torch.device("cpu")}
+    )()
+    lm.reset_runtime_metrics()
+    lm._record_generated_tokens([20, 12, 13, 30], "max_new_tokens")
+    lm._record_generated_tokens([20], "eos")
+
+    runtime = lm.pop_runtime_metrics()
+    assert runtime["generation_cap_hits"] == 1
+    assert runtime["generation_cap_hit_rate"] == 0.5
+    assert runtime["unterminated_thinking_responses"] == 1
+    assert runtime["thinking_truncated_responses"] == 0
+
+
 def test_lm_runtime_metrics_aggregate_across_distributed_ranks(monkeypatch):
+
     import gcw.evaluation.lm_eval_adapter as adapter
 
     lm = GCWEvalLM.__new__(GCWEvalLM)
@@ -153,20 +196,29 @@ def test_lm_runtime_metrics_aggregate_across_distributed_ranks(monkeypatch):
     lm.reset_runtime_metrics()
     lm._runtime_metrics.update({"generated_responses": 1, "answer_tokens": 3})
     lm._runtime_metrics["successful_batch_sizes"]["generation"] = {"1": 1}
+    for category, length in (("response", 3), ("answer", 3), ("thinking", 0)):
+        lm._runtime_metrics["token_lengths"][category] = {length: 1}
     monkeypatch.setattr(adapter.dist, "is_available", lambda: True)
     monkeypatch.setattr(adapter.dist, "is_initialized", lambda: True)
     monkeypatch.setattr(adapter.dist, "get_world_size", lambda: 2)
     monkeypatch.setattr(
         adapter.dist,
         "all_reduce",
-        lambda counters: counters.add_(torch.tensor([2, 5, 0, 0, 0])),
+        lambda counters: counters.add_(torch.tensor([2, 5, 0, 0, 0, 2])),
     )
 
     def gather(output, local):
         output[0] = local
         output[1] = {
-            "generation": {"1": 2, "2": 1},
-            "loglikelihood": {"4": 1},
+            "batches": {
+                "generation": {"1": 2, "2": 1},
+                "loglikelihood": {"4": 1},
+            },
+            "lengths": {
+                "response": {2: 1, 3: 1},
+                "answer": {2: 1, 3: 1},
+                "thinking": {0: 2},
+            },
         }
 
     monkeypatch.setattr(adapter.dist, "all_gather_object", gather)
@@ -175,6 +227,10 @@ def test_lm_runtime_metrics_aggregate_across_distributed_ranks(monkeypatch):
 
     assert runtime["generated_responses"] == 3
     assert runtime["answer_tokens_total"] == 8
+    assert runtime["answer_tokens_max"] == 3
+    assert runtime["response_tokens_p95"] == 3
+    assert runtime["generation_cap_hits"] == 2
+    assert runtime["generation_cap_hit_rate"] == pytest.approx(2 / 3)
     assert runtime["successful_batch_sizes"] == {
         "generation": {"1": 3, "2": 1},
         "loglikelihood": {"4": 1},
@@ -205,6 +261,32 @@ def test_stale_partial_is_ignored_and_does_not_resume_progress(
 
     assert fresh_progress["started_time"] != 1.0
     assert fresh_progress["runs"][0]["status"] == "pending"
+
+    stale_distribution = progress._empty_eval_results()
+    stale_distribution["results"]["task"] = {"metric": 1.0}
+    stale_distribution["gcw_runtime"].update(
+        {
+            "task": {
+                "requested_batch_size": 4,
+                "configured_auto_max_batch_size": None,
+                "successful_batch_sizes": {"generation": {"1": 1}},
+                "generated_responses": 1,
+                "generation_cap_hits": 0,
+                "generation_cap_hit_rate": 0.0,
+            },
+            "evaluation": {
+                "scope": "cumulative_active_end_to_end_including_loading_and_setup",
+                "elapsed_seconds": 5.0,
+            },
+        }
+    )
+    progress._write_partial_results(stale_distribution)
+    with pytest.warns(UserWarning, match="distribution metrics"):
+        assert progress._load_partial_results(runs) is None
+    del stale_distribution["gcw_runtime"]["task"]["generation_cap_hits"]
+    progress._write_partial_results(stale_distribution)
+    with pytest.warns(UserWarning, match="cap-hit metrics"):
+        assert progress._load_partial_results(runs) is None
 
     current = progress._empty_eval_results()
     current["results"]["task"] = {"metric": 1.0}
