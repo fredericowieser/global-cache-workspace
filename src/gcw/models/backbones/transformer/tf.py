@@ -666,13 +666,16 @@ class TF(Backbone):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
         processor: ProcessorFn | None = None,
         process_every: int = 64,
         process_prefill_windows: bool = True,
         process_after_prefill: bool = False,
         relative_generation_cadence: bool = False,
         generation_process_every: int | None = None,
+        *,
+        stop_sequences: list[list[int]] | None = None,
+        pad_token_id: int | None = None,
     ) -> torch.Tensor:
         return generate_tf(
             self,
@@ -685,6 +688,8 @@ class TF(Backbone):
             process_prefill_windows=process_prefill_windows,
             process_after_prefill=process_after_prefill,
             relative_generation_cadence=relative_generation_cadence,
+            stop_sequences=stop_sequences,
+            pad_token_id=pad_token_id,
         )
 
     @torch.no_grad()
@@ -692,15 +697,16 @@ class TF(Backbone):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
         processor: ProcessorFn | None = None,
         process_every: int = 64,
         process_prefill_windows: bool = True,
         process_after_prefill: bool = False,
         relative_generation_cadence: bool = False,
+        generation_process_every: int | None = None,
+        *,
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
-        generation_process_every: int | None = None,
     ) -> torch.Tensor:
         return generate_fast_tf(
             self,

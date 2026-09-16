@@ -51,7 +51,7 @@ GENERAL_TASK_LIMITS = {
     "arc_challenge": 1_000,
     "mmlu": 20,  # Per subject: 57 subjects, at most 1,140 rows.
 }
-RESULT_SCHEMA = "gcw.chat_benchmark.v7"
+RESULT_SCHEMA = "gcw.chat_benchmark.v8"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
@@ -575,6 +575,10 @@ def run_chat_benchmarks(
         raise ValueError(
             "generation_process_every requires processor_enabled=True"
         )
+    if checkpoint is not None and tokenizer_path is None:
+        raise ValueError(
+            "native chat benchmark evaluation requires tokenizer_path"
+        )
     if not torch.cuda.is_available():
         raise RuntimeError("chat benchmark evaluation requires CUDA")
     device = torch.device("cuda")
@@ -583,6 +587,7 @@ def run_chat_benchmarks(
             Path(hf_model).expanduser().resolve(),
             device,
             processor_enabled=processor_enabled,
+            tokenizer_path=tokenizer_path,
         )
         tokenizer_source = (
             Path(tokenizer_path or hf_model).expanduser().resolve()
@@ -594,13 +599,14 @@ def run_chat_benchmarks(
             processor_enabled=processor_enabled,
             generation_process_every=generation_process_every,
             diffusion_eval_solver_steps=diffusion_eval_solver_steps,
+            tokenizer_path=tokenizer_path,
         )
-        if tokenizer_path is None:
-            raise ValueError(
-                "native chat benchmark evaluation requires tokenizer_path"
-            )
-        tokenizer_source = Path(tokenizer_path).expanduser().resolve()
-    tokenizer, tokenizer_identity = _load_tokenizer(tokenizer_source)
+        tokenizer_source = (
+            Path(cast(str | Path, tokenizer_path)).expanduser().resolve()
+        )
+    tokenizer, tokenizer_identity = _load_tokenizer(
+        tokenizer_source, backend.tokenizer
+    )
     examples, dataset_identity = _load_task_examples(tasks)
     result = evaluate_chat_examples(
         backend,

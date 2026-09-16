@@ -13,6 +13,8 @@ from gcw.evaluation.scoring import (
     classify_generated_tokens,
     token_length_distribution,
     encode_generate_prompt,
+    generation_config_for_source,
+    generation_token_ids,
     stop_token_sequences,
     tokenizer_for_checkpoint,
     trim_generated_token_ids,
@@ -206,7 +208,9 @@ def _load_hf_eval_target(source: str | Path, device: torch.device):
         ),
     ).to(device)
     adapter = HFCausalLMAdapter(hf_model)
-    return adapter, HFTokenizerAdapter(tokenizer, str(source))
+    return adapter, HFTokenizerAdapter(
+        tokenizer, str(source), generation_config_for_source(source)
+    )
 
 
 class HFCausalLMAdapter(nn.Module):
@@ -230,15 +234,40 @@ class HFCausalLMAdapter(nn.Module):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
+        *,
+        stop_sequences: list[list[int]] | None = None,
+        pad_token_id: int | None = None,
     ):
+        from transformers import StoppingCriteriaList
+        from gcw.models.backbones.transformer.generation import (
+            _matches_stop_sequence,
+        )
+
+        prompt_len = input_ids.shape[1]
+        stopping_criteria = (
+            StoppingCriteriaList(
+                [
+                    lambda ids, scores, **kwargs: _matches_stop_sequence(
+                        ids[:, prompt_len:], stop_sequences
+                    )
+                ]
+            )
+            if stop_sequences
+            else None
+        )
         return cast(Any, self.model).generate(
             input_ids=input_ids,
             attention_mask=torch.ones_like(input_ids),
             do_sample=False,
             max_new_tokens=max_new_tokens,
-            eos_token_id=eos_token_id,
-            pad_token_id=eos_token_id,
+            eos_token_id=(
+                list(eos_token_id)
+                if isinstance(eos_token_id, tuple)
+                else eos_token_id
+            ),
+            pad_token_id=pad_token_id,
+            stopping_criteria=stopping_criteria,
             use_cache=True,
         )
 
@@ -553,6 +582,9 @@ class GCWEvalLM(TemplateLM):
             )
             groups.setdefault((len(ids), max_new, until), []).append((i, ids))
 
+        eos_ids, pad_id = generation_token_ids(
+            self.tokenizer, getattr(self.tokenizer, "generation_config", None)
+        )
         use_fast = hasattr(self.model, "generate_fast")
         for (_, max_new, until), rows in groups.items():
             stop_seqs = stop_token_sequences(self.tokenizer, until)
@@ -570,21 +602,23 @@ class GCWEvalLM(TemplateLM):
                     gen = self.model.generate_fast(
                         batch_ids,
                         max_new_tokens=max_new,
-                        eos_token_id=self.eot_token_id,
+                        eos_token_id=eos_ids,
                         stop_sequences=stop_seqs,
-                        pad_token_id=self.eot_token_id,
+                        pad_token_id=pad_id,
                     )
                 else:
                     gen = self.model.generate(
                         batch_ids,
                         max_new_tokens=max_new,
-                        eos_token_id=self.eot_token_id,
+                        eos_token_id=eos_ids,
+                        stop_sequences=stop_seqs,
+                        pad_token_id=pad_id,
                     )
                 batch_results = []
                 for row, _ in enumerate(chunk):
                     tokens = gen[row, prompt_len:].tolist()
                     tokens = trim_generated_token_ids(
-                        tokens, stop_seqs, self.eot_token_id
+                        tokens, stop_seqs, eos_ids
                     )
                     termination = (
                         "max_new_tokens" if len(tokens) >= max_new else "stop"
@@ -606,6 +640,9 @@ class GCWEvalLM(TemplateLM):
     def _generate_until_reference(self, requests):
         outs = []
         device = self.model.get_device()
+        eos_ids, pad_id = generation_token_ids(
+            self.tokenizer, getattr(self.tokenizer, "generation_config", None)
+        )
         for req in requests:
             prompt, kwargs = req.args
             max_new = int(
@@ -624,13 +661,16 @@ class GCWEvalLM(TemplateLM):
                 dtype=torch.long,
                 device=device,
             ).unsqueeze(0)
-            gen = self.model.generate(
-                ids, max_new_tokens=max_new, eos_token_id=self.eot_token_id
-            )[0].tolist()
-            tokens = gen[len(ids[0]) :]
             stop_seqs = stop_token_sequences(self.tokenizer, until)
+            gen = self.model.generate(
+                ids,
+                max_new_tokens=max_new,
+                eos_token_id=eos_ids,
+                stop_sequences=stop_seqs,
+                pad_token_id=pad_id,
+            )[0].tolist()
             tokens = trim_generated_token_ids(
-                tokens, stop_seqs, self.eot_token_id
+                gen[len(ids[0]) :], stop_seqs, eos_ids
             )
             termination = "max_new_tokens" if len(tokens) >= max_new else "stop"
             self._record_successful_batch_size("generation", 1)

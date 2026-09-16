@@ -88,13 +88,21 @@ class CacheProcessor(nn.Module):
             ProcessorLayer(config) for _ in range(config.num_layers)
         )
         self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
-        fixed_output_scale = config.output_scale_mode == "fixed_one" or (
+        scheduled_diffusion = (
             diffusion_config is not None
             and diffusion_config.training_method == "scheduled"
+        )
+        fixed_output_scale = config.output_scale_mode == "fixed_one" or (
+            scheduled_diffusion and config.update_gate_type == "static_scalar"
         )
         if fixed_output_scale and config.update_gate_type != "static_scalar":
             raise ValueError(
                 "contextual cache update gates require learned output scaling"
+            )
+        if scheduled_diffusion and config.out_proj_init != "zero":
+            raise ValueError(
+                "scheduled diffusion requires cache_processor.out_proj_init='zero' "
+                "to preserve the initial no-op"
             )
         self.gate_dim = config.update_gate_dim(self.output_dim)
         self.out_proj: nn.Module

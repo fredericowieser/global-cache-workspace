@@ -76,6 +76,7 @@ def test_generation_default_depends_on_thinking_and_task_override_wins(
 
     class Tokenizer:
         eot_id = 0
+        eos_token_id = 0
 
         def encode(self, text, add_special_tokens=False):
             return [4]
@@ -525,7 +526,7 @@ def test_normalize_until_accepts_string_list_and_none():
     assert _normalize_until(["a", None, "b"]) == ("a", "b")
 
 
-def test_native_hf_families_require_original_tokenizer(monkeypatch):
+def test_native_hf_families_require_original_tokenizer(monkeypatch, tmp_path):
     calls = []
 
     class AutoTokenizer:
@@ -550,7 +551,7 @@ def test_native_hf_families_require_original_tokenizer(monkeypatch):
     for family in ("qwen3_5", "gemma4"):
         tokenizer_for_checkpoint(
             type("Config", (), {"family": family, "vocab_size": 2})(),
-            {"source": "model"},
+            {"source": str(tmp_path)},
         )
     assert len(calls) == 2
 

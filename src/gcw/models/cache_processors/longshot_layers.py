@@ -67,10 +67,10 @@ def _initialize_contextual_output_projection(
     if isinstance(projection, nn.Linear):
         delta_weight = projection.weight[:delta_dim]
         gate_weight = projection.weight[delta_dim:]
-        delta_bias = (
+        delta_bias: torch.Tensor | None = (
             None if projection.bias is None else projection.bias[:delta_dim]
         )
-        gate_bias = (
+        gate_bias: torch.Tensor | None = (
             None if projection.bias is None else projection.bias[delta_dim:]
         )
     elif isinstance(projection, PerCacheHeadLinear):

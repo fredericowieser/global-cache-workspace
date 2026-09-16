@@ -28,7 +28,7 @@ class Backbone(nn.Module, ABC):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         """Generate tokens with the reference cache implementation."""
@@ -38,7 +38,7 @@ class Backbone(nn.Module, ABC):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
         **kwargs: Any,
     ) -> torch.Tensor:
         """Generate tokens with the preallocated cache implementation."""

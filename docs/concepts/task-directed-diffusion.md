@@ -35,12 +35,24 @@ The processor may construct any cache representation that supports future predic
 
 `training_method: fixed` is the default and retains the original learned-gate
 recurrence, state-dict keys, initialization/RNG order, and serialized identity
-when the new controls are unset. `training_method: scheduled` removes both the
-refinement and write scalar gates; it requires `cache_processor.out_proj_init:
-zero` for an initial no-op. Scheduled writes remain fixed-one even when
-`output_scale_mode` is left at its `learned` default. Explicit `output_scale_mode:
-fixed_one` is also available without scheduled diffusion for BGT and Longshot,
-with the same zero-readout requirement.
+when the new controls are unset. `training_method: scheduled` removes the
+refinement gate and, with the default `update_gate_type: static_scalar`, the
+write scalar gate. This legacy scheduled write remains fixed-one even when
+`output_scale_mode` is left at its `learned` default. Every scheduled treatment
+requires `cache_processor.out_proj_init: zero` for an initial no-op.
+
+Longshot can opt into a contextual scalar or vector **writeback** gate with
+`update_gate_type: contextual_scalar` or `contextual_vector` and
+`output_scale_mode: learned`. The existing fused output projections predict
+update and gate channels from the final solver output, once per intervention,
+not once per field call. Neither the Euler solver nor its fixed step scale gains
+a gate. For example, `gate_mode: sigmoid` and `gate_init: -2.0` initialize these
+write gates to approximately 0.1192. KV and linear-state readouts own their gates
+separately; see [Longshot update gating](../development/longshot-update-gating.md).
+
+Explicit `output_scale_mode: fixed_one` remains incompatible with contextual
+write gates and is also available without scheduled diffusion for BGT and
+Longshot, with the same zero-readout requirement.
 
 ```yaml
 diffusion_processor:
@@ -85,7 +97,10 @@ These counters are exact for inference without checkpoint replay; they do not
 measure checkpointed backward computation. Replay may repeat a field or stop
 inside it before the counter increments.
 Training FLOPs use configured K (or mean sampled depth for coupled schedules);
-telemetry reports sampled level/time/sigma and the fixed-one write scale.
+telemetry reports sampled level/time/sigma and the runtime write-gate mean
+(one for legacy scheduled writes). Contextual linear-state gates have a separate
+mean. Gate projections and activations are counted once per invocation, outside
+the K field evaluations.
 
 ## Information and computation
 

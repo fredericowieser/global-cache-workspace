@@ -1,4 +1,5 @@
 from dataclasses import replace
+from io import BytesIO
 
 import pytest
 import torch
@@ -8,7 +9,12 @@ from gcw.config import (
     CacheProcessorConfig,
     DiffusionProcessorConfig,
     ModelConfig,
+    to_dict,
 )
+from gcw.flops import processor_forward_flops_per_sequence
+from gcw.models.cache_processors.longshot import GlobalCacheProcessor
+from gcw.models.cache_processors.state import CacheState
+from gcw.params import processor_params
 from gcw.models.cache_processors.longshot_layers import PerCacheHeadLinear
 from gcw.models.cache_processors.longshot_linear_state import (
     LinearStateAdapter,
@@ -331,16 +337,24 @@ def test_contextual_update_gates_require_learned_output_scaling(gate_type):
         "update_gate_output_scale"
     }
 
-    scheduled = CacheProcessorConfig(
-        update_gate_type=gate_type, out_proj_init="zero"
+    diffusion = DiffusionProcessorConfig(
+        training_method="scheduled",
+        schedule_horizon=50,
+        training_solver_steps=4,
     )
-    with pytest.raises(CompatibilityError) as scheduled_error:
+    scheduled = replace(fixed_scale, output_scale_mode="learned")
+    assert resolve_model(
         ModelConfig(
             variant="longshot",
             cache_processor=scheduled,
-            diffusion_processor=DiffusionProcessorConfig(
-                training_method="scheduled"
-            ),
+            diffusion_processor=diffusion,
+        )
+    ).report.compatible
+    with pytest.raises(CompatibilityError) as scheduled_error:
+        ModelConfig(
+            variant="longshot",
+            cache_processor=fixed_scale,
+            diffusion_processor=diffusion,
         )
     assert {issue.code for issue in scheduled_error.value.report.issues} == {
         "update_gate_output_scale"
@@ -386,6 +400,318 @@ def test_static_and_contextual_projection_keys_round_trip_strictly():
         restored.load_state_dict(source.state_dict(), strict=True)
 
         assert set(restored.state_dict()) == set(source.state_dict())
+
+
+def _scheduled_model_config(**processor_overrides) -> ModelConfig:
+    return replace(
+        _linear_state_model_config(),
+        variant="longshot",
+        vocab_size=32,
+        sequence_len=8,
+        processor_layer_indices=[1],
+        linear_num_key_heads=1,
+        cache_processor=_processor_config(
+            **{
+                "topk_heads": 1,
+                "encoder_method": "query_attention",
+                "encoder_query_source": "final_token",
+                "linear_state_cache": True,
+                "live_rank1_linear_writer": True,
+                "out_proj_init": "zero",
+                **processor_overrides,
+            }
+        ),
+        diffusion_processor=DiffusionProcessorConfig(
+            training_method="scheduled",
+            schedule_horizon=50,
+            training_solver_steps=4,
+            inference_solver_steps=4,
+            noise_scale=0.1,
+        ),
+    )
+
+
+def _scheduled_cache() -> CacheState:
+    # Distinct examples, without reseeding the process-global RNG.
+    keys = torch.arange(24, dtype=torch.float32).reshape(2, 1, 3, 4).sin()
+    values = (keys + 0.3).cos()
+    recurrent = torch.arange(24, dtype=torch.float32).reshape(2, 2, 2, 3).cos()
+    return CacheState(
+        keys=[keys],
+        values=[values],
+        scores=torch.ones(2, 3),
+        linear_states={0: (recurrent, torch.ones(2, 8, 2))},
+    )
+
+
+@pytest.mark.parametrize(
+    "gate_type", ["contextual_scalar", "contextual_vector"]
+)
+def test_scheduled_contextual_cache_writeback_noop_and_live_gradients(
+    gate_type,
+):
+    processor = GlobalCacheProcessor(
+        _scheduled_model_config(update_gate_type=gate_type)
+    ).eval()
+    block = processor.block
+    adapter = block.linear_state_adapter
+    assert adapter is not None and block.diffusion is not None
+    assert block.gate is None and block.diffusion.refinement_gate is None
+    assert torch.count_nonzero(adapter.output_proj.weight[:2]) > 0
+    assert torch.count_nonzero(adapter.output_proj.weight[2:5]) == 0
+    projections = {}
+    calls = []
+
+    def record(name):
+        def hook(_module, _inputs, output):
+            calls.append(name)
+            projections[name] = output
+
+        return hook
+
+    handles = [
+        block.out_proj.register_forward_hook(record("primary")),
+        adapter.output_proj.register_forward_hook(record("linear")),
+    ]
+    try:
+        # K changes field evaluations, never the number of cache-write gates.
+        for developed, solver_steps in ((False, 4), (True, 7)):
+            processor.train(not developed)
+            block.diffusion.set_eval_solver_steps(solver_steps)
+            calls.clear()
+            cache = _scheduled_cache()
+            old_keys, old_values = cache.keys[0], cache.values[0]
+            old_state, old_conv = cache.linear_states[0]
+            result = processor(cache, select_all=True)
+            assert calls == ["primary", "linear"]
+            assert block.diffusion.pop_field_evaluation_count() == solver_steps
+            primary_dim = 1 if gate_type == "contextual_scalar" else 8
+            linear_dim = 1 if gate_type == "contextual_scalar" else 5
+            assert block._gate_value.shape == (2, 1, primary_dim)
+            assert adapter._gate_value.shape == (2, 2, linear_dim)
+            primary, logits = projections["primary"].split([8, primary_dim], -1)
+            factors, linear_logits = projections["linear"].split(
+                [5, linear_dim], -1
+            )
+            gated = factors * linear_logits.sigmoid()
+            key, value = gated.split([2, 3], -1)
+            expected_matrix_delta = torch.einsum(
+                "bhk,bhv->bhkv",
+                torch.nn.functional.normalize(key, dim=-1),
+                value,
+            )
+            matrix_delta = result.linear_states[0][0] - old_state
+            torch.testing.assert_close(matrix_delta, expected_matrix_delta)
+            torch.testing.assert_close(
+                torch.cat(
+                    [
+                        result.keys[0][:, :, -1] - old_keys[:, :, -1],
+                        result.values[0][:, :, -1] - old_values[:, :, -1],
+                    ],
+                    -1,
+                ),
+                primary * logits.sigmoid(),
+            )
+            assert result.linear_states[0][1] is old_conv
+            if not developed:
+                assert torch.equal(result.keys[0], old_keys)
+                assert torch.equal(result.values[0], old_values)
+                assert torch.equal(result.linear_states[0][0], old_state)
+                # Live rank-one keys are allowed; only the matrix update must vanish.
+                assert torch.count_nonzero(key) > 0
+                assert torch.count_nonzero(value) == 0
+                for gate in (block._gate_value, adapter._gate_value):
+                    torch.testing.assert_close(
+                        gate, torch.sigmoid(torch.tensor(-2.0)).expand_as(gate)
+                    )
+            else:
+                assert torch.count_nonzero(matrix_delta) > 0
+                assert torch.count_nonzero(primary) > 0
+                for gate in (block._gate_value, adapter._gate_value):
+                    assert not torch.equal(gate[0], gate[1])
+                    if gate_type == "contextual_vector":
+                        assert not torch.equal(gate[..., 0], gate[..., 1])
+
+            # Exercise the real scatter writer, not a loss on unused key factors.
+            loss = result.keys[0].sum() + result.values[0].sum()
+            target = torch.linspace(-0.7, 0.9, matrix_delta.numel()).reshape_as(
+                matrix_delta
+            )
+            (loss + (matrix_delta * target).sum()).backward()
+            for projection, delta_start, delta_end in (
+                (block.out_proj, 0, 8),
+                (adapter.output_proj, 2, 5),
+            ):
+                grad = projection.weight.grad
+                assert grad is not None and torch.isfinite(grad).all()
+                assert torch.count_nonzero(grad[delta_start:delta_end]) > 0
+                assert bool(torch.count_nonzero(grad[delta_end:])) == developed
+                bias_grad = projection.bias.grad
+                assert bias_grad is not None
+                assert (
+                    bool(torch.count_nonzero(bias_grad[delta_end:]))
+                    == developed
+                )
+                if not developed:
+                    # Simulate a learned nonzero update, without running training.
+                    with torch.no_grad():
+                        projection.weight[delta_start:delta_end].add_(
+                            grad[delta_start:delta_end], alpha=-0.1
+                        )
+                        gate_weights = projection.weight[delta_end:]
+                        gate_weights.copy_(
+                            torch.linspace(
+                                -0.2, 0.3, gate_weights.numel()
+                            ).reshape_as(gate_weights)
+                        )
+            block.zero_grad(set_to_none=True)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
+@pytest.mark.parametrize(
+    "gate_type", ["static_scalar", "contextual_scalar", "contextual_vector"]
+)
+def test_scheduled_gate_checkpoint_roundtrip_and_exact_parameter_count(
+    gate_type,
+):
+    config = _scheduled_model_config(update_gate_type=gate_type)
+    source = GlobalCacheProcessor(config).eval()
+    assert processor_params(config) == sum(
+        p.numel() for p in source.parameters()
+    )
+    # A nontrivial learned checkpoint must roundtrip, not just the initial no-op.
+    with torch.no_grad():
+        for projection, width in (
+            (source.block.out_proj, 8),
+            (source.block.linear_state_adapter.output_proj, 5),
+        ):
+            projection.weight[:width].fill_(0.03)
+            if gate_type != "static_scalar":
+                projection.weight[width:].fill_(0.07)
+                projection.bias[width:].fill_(-1.3)
+    payload = _config_payload(config.cache_processor)
+    restored_config = replace(
+        config, cache_processor=CacheProcessorConfig(**payload)
+    )
+    restored = GlobalCacheProcessor(restored_config).eval()
+    checkpoint = BytesIO()
+    torch.save(source.state_dict(), checkpoint)
+    checkpoint.seek(0)
+    restored.load_state_dict(
+        torch.load(checkpoint, weights_only=True), strict=True
+    )
+    assert source.state_dict().keys() == restored.state_dict().keys()
+    for name, value in source.state_dict().items():
+        assert torch.equal(value, restored.state_dict()[name]), name
+    with torch.no_grad():
+        expected = source(_scheduled_cache(), select_all=True)
+        actual = restored(_scheduled_cache(), select_all=True)
+    assert torch.equal(expected.keys[0], actual.keys[0])
+    assert torch.equal(expected.values[0], actual.values[0])
+    assert torch.equal(expected.linear_states[0][0], actual.linear_states[0][0])
+    assert source.block.diffusion.state_dict() == {}
+    if gate_type == "static_scalar":
+        assert "update_gate_type" not in payload
+        assert restored.config.update_gate_type == "static_scalar"
+        assert source.block.gate is None
+        assert source.block._gate_value.item() == 1.0
+        assert source.block.linear_state_adapter._gate_value is None
+        assert source.block.out_proj.weight.shape == (8, 4)
+        assert source.block.linear_state_adapter.output_proj.weight.shape == (
+            5,
+            4,
+        )
+        assert "block.gate" not in source.state_dict()
+        assert "block.diffusion.refinement_gate" not in source.state_dict()
+    else:
+        assert payload["update_gate_type"] == gate_type
+
+
+def test_scheduled_implicit_static_gate_preserves_rng_payload_and_state_abi():
+    implicit = _scheduled_model_config(live_rank1_linear_writer=False)
+    explicit = replace(
+        implicit,
+        cache_processor=replace(
+            implicit.cache_processor, update_gate_type="static_scalar"
+        ),
+    )
+    for serialize in (to_dict, _config_payload):
+        assert serialize(implicit) == serialize(explicit)
+    assert "update_gate_type" not in _config_payload(implicit.cache_processor)
+    # Compare the legacy omitted opt-in with its explicit default, preserving RNG.
+    with torch.random.fork_rng(devices=[]):
+        initial_rng = torch.random.get_rng_state()
+        source = GlobalCacheProcessor(implicit)
+        next_rng = torch.random.get_rng_state()
+        torch.random.set_rng_state(initial_rng)
+        restored = GlobalCacheProcessor(explicit)
+        assert torch.equal(next_rng, torch.random.get_rng_state())
+    assert source.state_dict().keys() == restored.state_dict().keys()
+    for name, value in source.state_dict().items():
+        assert torch.equal(value, restored.state_dict()[name]), name
+    restored.load_state_dict(source.state_dict(), strict=True)
+    assert torch.count_nonzero(source.block.out_proj.weight) == 0
+    assert (
+        torch.count_nonzero(
+            source.block.linear_state_adapter.output_proj.weight
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "gate_type", ["static_scalar", "contextual_scalar", "contextual_vector"]
+)
+def test_scheduled_gate_sigmoid_flops_are_outside_solver(gate_type):
+    config = _scheduled_model_config(update_gate_type=gate_type)
+    calls = len(
+        range(
+            config.cache_processor.process_every,
+            8,
+            config.cache_processor.process_every,
+        )
+    )
+    # One KV head and two linear heads, with output widths 8 and 5.
+    gate_ops = {
+        "static_scalar": 0,
+        "contextual_scalar": 3,
+        "contextual_vector": 18,
+    }
+    costs = []
+    for solver_steps in (4, 7):
+        sigmoid = replace(
+            config,
+            diffusion_processor=replace(
+                config.diffusion_processor, training_solver_steps=solver_steps
+            ),
+        )
+        direct = replace(
+            sigmoid,
+            cache_processor=replace(
+                sigmoid.cache_processor, gate_mode="direct"
+            ),
+        )
+        cost = processor_forward_flops_per_sequence(sigmoid, 8)
+        assert (
+            cost - processor_forward_flops_per_sequence(direct, 8)
+            == calls * gate_ops[gate_type]
+        )
+        costs.append(cost)
+    assert costs[1] > costs[0]
+
+
+def test_scheduled_contextual_direct_construction_still_requires_zero_projection():
+    with pytest.raises(
+        ValueError, match="scheduled diffusion requires.*out_proj_init"
+    ):
+        CacheProcessor(
+            8,
+            1,
+            _processor_config(update_gate_type="contextual_scalar"),
+            diffusion_config=_scheduled_model_config().diffusion_processor,
+        )
 
 
 def test_contextual_primary_and_linear_state_gates_are_reported():

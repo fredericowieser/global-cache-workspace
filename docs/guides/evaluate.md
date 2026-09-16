@@ -38,10 +38,32 @@ neither option.
 
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
+## Generation stopping
+
+Generation stops at any configured EOS/end-of-turn token and pads finished rows
+independently. Native checkpoint EOS/pad overrides source `generation_config.json`,
+then `config.json` (including `text_config`), with tokenizer IDs as fallback.
+Tokenizer selection is explicit `tokenizer_path`, then checkpoint `tokenizer_source`,
+then `source`. GSM8K and chat resolve these origins locally. Without an explicit
+path, native GSM8K prefers tokenizer files bundled in the checkpoint before
+recorded sources. Tokenizer receipts hash the selected local or cached files.
+Scoring uses the underlying HF tokenizer, or loads the supplied benchmark
+tokenizer for non-HF native families. Chat still requires `tokenizer_path`.
+HF targets use source/tokenizer
+metadata without checkpoint overrides; native tokenizers retain EOT. Padding defaults to the
+first EOS when absent. ID zero is valid; an empty EOS list disables EOS stopping
+and requires padding metadata. Likelihood's scalar EOT is unchanged. Results record
+resolved IDs; historical evaluations with incorrect stopping are not comparable.
+Model-config fallback also retains tokenizer EOS/end-of-turn; an explicit
+generation file is authoritative. Tokenizer-only overrides without EOS metadata
+recover generation settings from the recorded model source.
+Task stop sequences match only generated tokens, including in reference and HF
+generation; scoring trims at the earliest EOS or task stop.
+
 ## Processor provenance in GSM8K and chat results
 
-GSM8K schema `gcw.gsm8k_reproduction.v8` and chat schema
-`gcw.chat_benchmark.v7` distinguish three booleans:
+GSM8K schema `gcw.gsm8k_reproduction.v9` and chat schema
+`gcw.chat_benchmark.v8` distinguish three booleans:
 
 - `processor_requested`: the requested `--processor on/off` policy.
 - `processor_present`: an actual GCW cache processor was loaded, before bypass.
@@ -56,9 +78,15 @@ Plain TF (including full-SFT) and HF targets have present/enabled both false und
 either policy; TF retains its loaded model without a bypass wrapper. Use
 `--processor off` for full-SFT controls. Composed checkpoints retain their processor
 when on and bypass to their exact loaded backbone when off. Processor-only cadence
-and diffusion solver overrides require an applicable active processor. Native
-loading, generation cadence, and stopping are unchanged. Older schemas retain
-their historical meaning and must not be interpreted as effective processor state.
+and diffusion solver overrides require an applicable active processor. Processor
+on/off policy does not change native loading, generation cadence, or stopping.
+Older schemas retain their historical meaning and must not be interpreted as
+effective processor state.
+
+GSM8K v9 and chat v8 also identify results generated with the merged EOS and
+task-stop behavior. Older GSM8K results remain readable, but their scores are not directly
+comparable. Both development branches wrote GSM8K v5 with different stopping
+behavior, so that schema alone does not identify its protocol.
 
 ## Evaluation runtime and generated-token measurements
 

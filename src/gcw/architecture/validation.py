@@ -97,12 +97,9 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                 "contextual cache update gates require variant='longshot'",
                 "model.cache_processor.update_gate_type",
             )
-        if processor.update_gate_type != "static_scalar" and (
-            processor.output_scale_mode == "fixed_one"
-            or (
-                diffusion is not None
-                and diffusion.training_method == "scheduled"
-            )
+        if (
+            processor.update_gate_type != "static_scalar"
+            and processor.output_scale_mode == "fixed_one"
         ):
             add(
                 "update_gate_output_scale",
@@ -129,7 +126,7 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
         ):
             add(
                 "scheduled_diffusion_readout_init",
-                "scheduled diffusion requires cache_processor.out_proj_init='zero' because it writes without learned scalar gates",
+                "scheduled diffusion requires cache_processor.out_proj_init='zero' to preserve the initial no-op",
                 "model.cache_processor.out_proj_init",
             )
         if (

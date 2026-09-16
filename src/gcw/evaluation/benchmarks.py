@@ -17,9 +17,13 @@ import torch
 
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
+    HFTokenizerAdapter,
     classify_generated_tokens,
     extract_numeric_answer,
+    generation_config_for_source,
+    generation_token_ids,
     token_length_distribution,
+    tokenizer_for_checkpoint,
 )
 
 DATASET_REPO_ID = "openai/gsm8k"
@@ -27,12 +31,13 @@ DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
 MAX_NEW_TOKENS = 32_768
 DEFAULT_BATCH_SIZE = 64
-RESULT_SCHEMA = "gcw.gsm8k_reproduction.v8"
+RESULT_SCHEMA = "gcw.gsm8k_reproduction.v9"
 PREVIOUS_RESULT_SCHEMAS = {
     "gcw.gsm8k_reproduction.v4",
     "gcw.gsm8k_reproduction.v5",
     "gcw.gsm8k_reproduction.v6",
     "gcw.gsm8k_reproduction.v7",
+    "gcw.gsm8k_reproduction.v8",
 }
 HISTORICAL_RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
 ScoringProtocol = Literal["numeric_last_answer", "lm_eval_flexible_exact"]
@@ -86,6 +91,7 @@ class BenchmarkBackend(Protocol):
     identity: dict[str, Any]
     eos_ids: tuple[int, ...]
     pad_id: int
+    tokenizer: Any | None
     device: torch.device
     supports_left_padding: bool
 
@@ -104,6 +110,7 @@ class HFBenchmarkBackend:
         device: torch.device,
         *,
         processor_enabled: bool = True,
+        tokenizer_path: str | Path | None = None,
     ):
         from transformers import AutoModelForCausalLM
 
@@ -122,11 +129,25 @@ class HFBenchmarkBackend:
         )
         self.device = device
         self.supports_left_padding = True
-        self.eos_ids = _eos_ids(self.model, None)
-        self.pad_id = int(
-            getattr(self.model.generation_config, "pad_token_id", None)
-            or self.eos_ids[0]
+        generation_config = generation_config_for_source(
+            source, local_files_only=True
         )
+        tokenizer = None
+        if generation_config.get("_from_model_config") or any(
+            generation_config.get(key) is None
+            for key in ("eos_token_id", "pad_token_id")
+        ):
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                tokenizer_path or source,
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+        self.eos_ids, self.pad_id = generation_token_ids(
+            tokenizer, generation_config
+        )
+        self.tokenizer = tokenizer
         self.identity = {
             **_directory_identity(source, kind="hf"),
             "processor_requested": processor_enabled,
@@ -164,6 +185,7 @@ class GCWBenchmarkBackend:
         processor_enabled: bool,
         generation_process_every: int | None = None,
         diffusion_eval_solver_steps: int | None = None,
+        tokenizer_path: str | Path | None = None,
     ):
         from gcw.checkpoint import load_checkpoint
         from gcw.evaluation.core import ProcessorBypass
@@ -209,10 +231,22 @@ class GCWBenchmarkBackend:
         self.model = model.eval()
         self.device = device
         self.supports_left_padding = False
-        self.eos_ids: tuple[int, ...] = (
-            int(state.get("eos_token_id", 151645)),
+        if tokenizer_path is None and (checkpoint / "tokenizer.json").is_file():
+            tokenizer_path = checkpoint
+        tokenizer = tokenizer_for_checkpoint(
+            config, state, source=tokenizer_path, local_files_only=True
         )
-        self.pad_id = int(state.get("pad_token_id", self.eos_ids[0]))
+        generation_config = (
+            getattr(tokenizer, "generation_config", None) or state
+        )
+        self.eos_ids, self.pad_id = generation_token_ids(
+            tokenizer, generation_config
+        )
+        self.tokenizer = (
+            tokenizer.tokenizer
+            if isinstance(tokenizer, HFTokenizerAdapter)
+            else None
+        )
         self.identity = {
             **_directory_identity(checkpoint, kind="gcw"),
             "architecture": config.architecture_name,
@@ -225,6 +259,8 @@ class GCWBenchmarkBackend:
                 else None
             ),
             "checkpoint_state": state,
+            "eos_token_ids": list(self.eos_ids),
+            "pad_token_id": self.pad_id,
         }
         if diffusion_eval_solver_steps is not None:
             self.identity["diffusion_eval_solver_steps"] = (
@@ -244,7 +280,7 @@ class GCWBenchmarkBackend:
         return cast(Any, self.model).generate_fast(
             input_ids,
             max_new_tokens=max_new_tokens,
-            eos_token_id=self.eos_ids[0],
+            eos_token_id=self.eos_ids,
             pad_token_id=self.pad_id,
         )
 
@@ -342,20 +378,32 @@ def _source_commit(repository: Path) -> str:
     ).strip()
 
 
-def _load_tokenizer(source: Path) -> tuple[Any, dict[str, Any]]:
-    from transformers import AutoTokenizer
+def _load_tokenizer(
+    source: Path, tokenizer: Any | None = None
+) -> tuple[Any, dict[str, Any]]:
+    from transformers.utils.hub import cached_file
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        source, local_files_only=True, trust_remote_code=False
-    )
+    if tokenizer is None:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            source, local_files_only=True, trust_remote_code=False
+        )
     if not getattr(tokenizer, "chat_template", None):
         raise ValueError("benchmark tokenizer has no official chat template")
+    selected_source = getattr(tokenizer, "name_or_path", None) or str(source)
     files: dict[str, dict[str, Any]] = {}
-    identity: dict[str, Any] = {"path": str(source), "files": files}
+    identity: dict[str, Any] = {"path": str(selected_source), "files": files}
     for name in ("tokenizer.json", "tokenizer_config.json"):
-        path = source / name
-        if not path.is_file():
+        filename = cached_file(
+            selected_source,
+            name,
+            local_files_only=True,
+            _raise_exceptions_for_missing_entries=False,
+        )
+        if filename is None:
             raise FileNotFoundError(f"tokenizer source is missing {name}")
+        path = Path(filename)
         files[name] = {
             "bytes": path.stat().st_size,
             "sha256": _sha256_file(path),
@@ -414,19 +462,6 @@ def _prepare(
         )
         for index, row in enumerate(rows)
     ]
-
-
-def _eos_ids(model: Any, tokenizer: Any | None) -> tuple[int, ...]:
-    value = getattr(model.generation_config, "eos_token_id", None)
-    if value is None and tokenizer is not None:
-        value = tokenizer.eos_token_id
-    values = value if isinstance(value, (list, tuple)) else [value]
-    result = tuple(
-        dict.fromkeys(int(token) for token in values if token is not None)
-    )
-    if not result:
-        raise ValueError("model has no EOS token")
-    return result
 
 
 def _trim_at_eos(
@@ -647,16 +682,24 @@ def run_gsm8k_reproduction(
     backend: BenchmarkBackend
     if config.target_kind == "hf":
         backend = HFBenchmarkBackend(
-            target, device, processor_enabled=config.processor_enabled
+            target,
+            device,
+            processor_enabled=config.processor_enabled,
+            tokenizer_path=config.tokenizer_path,
         )
     else:
         backend = GCWBenchmarkBackend(
-            target, device, processor_enabled=config.processor_enabled
+            target,
+            device,
+            processor_enabled=config.processor_enabled,
+            tokenizer_path=config.tokenizer_path,
         )
     tokenizer_source = (
         Path(config.tokenizer_path or config.model_path).expanduser().resolve()
     )
-    tokenizer, tokenizer_identity = _load_tokenizer(tokenizer_source)
+    tokenizer, tokenizer_identity = _load_tokenizer(
+        tokenizer_source, backend.tokenizer
+    )
     rows, dataset_identity = _load_test_rows(config.eval_config.limit)
     evaluation = evaluate_benchmark(
         backend,
