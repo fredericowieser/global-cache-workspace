@@ -26,6 +26,7 @@ from gcw.evaluation.benchmarks import (
     evaluate_benchmark,
     score_lm_eval_flexible,
     score_numeric_response,
+    _load_tokenizer,
 )
 
 
@@ -335,6 +336,124 @@ def test_processor_overrides_require_applicable_active_processor(
                 processor_enabled=requested,
                 **kwargs,
             )
+
+
+@pytest.mark.parametrize(
+    "family,origin",
+    [
+        ("llama", "metadata"),
+        ("llama", "checkpoint"),
+        ("llama", "explicit"),
+        ("smollm", "explicit"),
+        ("cosmo2", "explicit"),
+    ],
+)
+def test_native_backend_tokenizer_to_scoring(
+    tmp_path, monkeypatch, family, origin
+):
+    from tokenizers import Tokenizer as FastTokenizer, models
+    from transformers import PreTrainedTokenizerFast
+    from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, Tokenizer
+    from gcw.evaluation.chat_benchmarks import (
+        ChatExample,
+        evaluate_chat_examples,
+    )
+
+    checkpoint = tmp_path / "checkpoint"
+    source = checkpoint if origin == "checkpoint" else tmp_path / "tokenizer"
+    raw = FastTokenizer(
+        models.WordLevel(
+            {
+                "<unk>": 0,
+                "question": 1,
+                "<pad>": 2,
+                "a": 3,
+                "b": 4,
+                "<aux>": 5,
+                ".": 6,
+                "7": 7,
+                "c": 8,
+                "<eos>": 9,
+            },
+            unk_token="<unk>",
+        )
+    )
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=raw,
+        unk_token="<unk>",
+        pad_token="<pad>",
+        eos_token="<eos>",
+        additional_special_tokens=["<aux>"],
+        chat_template="{{ messages[0]['content'] }}",
+    )
+    tokenizer.save_pretrained(source)
+    if family == "cosmo2":
+        monkeypatch.setattr(
+            "gcw.evaluation.scoring.get_tokenizer", lambda _: Tokenizer(raw)
+        )
+    config = ModelConfig(
+        family="llama" if family == "llama" else "smollm",
+        variant="tf",
+        vocab_size=COSMO2_VOCAB_SIZE if family == "cosmo2" else 64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+    )
+    model = build_model(config)
+    model.init_weights()
+    state = {
+        "source": str(source if origin == "metadata" else tmp_path / "missing"),
+        "eos_token_id": 9,
+        "pad_token_id": 2,
+    }
+    save_checkpoint(checkpoint, model, config, state)
+    if origin == "explicit":
+        tokenizer.save_pretrained(checkpoint)
+        (checkpoint / "tokenizer_config.json").write_text("{}")
+    backend = GCWBenchmarkBackend(
+        checkpoint,
+        torch.device("cpu"),
+        processor_enabled=False,
+        tokenizer_path=source if origin == "explicit" else None,
+    )
+    selected, identity = _load_tokenizer(
+        source if origin == "explicit" else checkpoint, backend.tokenizer
+    )
+    assert identity["path"] == str(source)
+    for name, info in identity["files"].items():
+        assert (
+            info["sha256"]
+            == hashlib.sha256((source / name).read_bytes()).hexdigest()
+        )
+
+    def generate(ids, **kwargs):
+        return torch.cat(
+            (ids, torch.tensor([[7, 5, 6, 9]]).expand(len(ids), -1)), dim=1
+        )
+
+    monkeypatch.setattr(backend.model, "generate_fast", generate)
+    evaluation = EvalConfig(batch_size=1, apply_chat_template=True)
+    gsm8k = evaluate_benchmark(
+        backend,
+        selected,
+        [{"question": "question", "answer": "#### 7"}],
+        config=evaluation,
+        max_new_tokens=4,
+        scoring_protocol="lm_eval_flexible_exact",
+    )
+    chat = evaluate_chat_examples(
+        backend,
+        selected,
+        [ChatExample(0, "svamp", "svamp", 0, "question", "numeric", "7")],
+        config=evaluation,
+        max_new_tokens=4,
+    )
+    assert gsm8k["correct"] == chat["tasks"]["svamp"]["correct"] == 1
+    assert gsm8k["rows"][0]["response"] == chat["rows"][0]["response"] == "7 ."
 
 
 @pytest.mark.parametrize("requested", [False, True])

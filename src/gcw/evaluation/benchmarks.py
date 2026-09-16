@@ -17,6 +17,7 @@ import torch
 
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
+    HFTokenizerAdapter,
     extract_numeric_answer,
     generation_config_for_source,
     generation_token_ids,
@@ -222,6 +223,8 @@ class GCWBenchmarkBackend:
         self.model = model.eval()
         self.device = device
         self.supports_left_padding = False
+        if tokenizer_path is None and (checkpoint / "tokenizer.json").is_file():
+            tokenizer_path = checkpoint
         tokenizer = tokenizer_for_checkpoint(
             config, state, source=tokenizer_path, local_files_only=True
         )
@@ -231,7 +234,11 @@ class GCWBenchmarkBackend:
         self.eos_ids, self.pad_id = generation_token_ids(
             tokenizer, generation_config
         )
-        self.tokenizer = tokenizer
+        self.tokenizer = (
+            tokenizer.tokenizer
+            if isinstance(tokenizer, HFTokenizerAdapter)
+            else None
+        )
         self.identity = {
             **_directory_identity(checkpoint, kind="gcw"),
             "architecture": config.architecture_name,
@@ -366,6 +373,8 @@ def _source_commit(repository: Path) -> str:
 def _load_tokenizer(
     source: Path, tokenizer: Any | None = None
 ) -> tuple[Any, dict[str, Any]]:
+    from transformers.utils.hub import cached_file
+
     if tokenizer is None:
         from transformers import AutoTokenizer
 
@@ -374,12 +383,19 @@ def _load_tokenizer(
         )
     if not getattr(tokenizer, "chat_template", None):
         raise ValueError("benchmark tokenizer has no official chat template")
+    selected_source = getattr(tokenizer, "name_or_path", None) or str(source)
     files: dict[str, dict[str, Any]] = {}
-    identity: dict[str, Any] = {"path": str(source), "files": files}
+    identity: dict[str, Any] = {"path": str(selected_source), "files": files}
     for name in ("tokenizer.json", "tokenizer_config.json"):
-        path = source / name
-        if not path.is_file():
+        filename = cached_file(
+            selected_source,
+            name,
+            local_files_only=True,
+            _raise_exceptions_for_missing_entries=False,
+        )
+        if filename is None:
             raise FileNotFoundError(f"tokenizer source is missing {name}")
+        path = Path(filename)
         files[name] = {
             "bytes": path.stat().st_size,
             "sha256": _sha256_file(path),
