@@ -75,6 +75,13 @@ uv run --extra gpu gcw train --config /path/to/experiment.yaml
 
 New local run records live under `data/training-runs/`. They contain resolved config, metrics, logs, environment, provenance, and W&B identity. Mutable checkpoints remain separate.
 
+For Slurm worker arrays, set `GPUS` to the number of GPUs per worker when
+needed. `scripts/cluster/submit_array.sh` otherwise leaves partition, time,
+CPU count, and memory to Slurm defaults. Set `PARTITION`, `ARRAY_TIME`,
+`CPUS_PER_TASK`, or `MEM` to override them explicitly. 
+If you are on alpha (89.124.38.93) you should set MEM=180G, CPUS_PER_TASK=8, 
+PARTITION=agent-xlong-15,agent-xlong, and ARRAY_TIME=5-00:00:00.
+
 ## Evaluate
 
 ```bash

@@ -22,14 +22,14 @@ load_environment_file() {
 
 JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
 BACKEND="${BACKEND:-auto}"
-PARTITION="${PARTITION:-agent-xlong-15,agent-xlong}"
+PARTITION="${PARTITION:-}"
 ARRAY_WORKERS="${ARRAY_WORKERS:-1}"
-ARRAY_TIME="${ARRAY_TIME:-5-00:00:00}"
+ARRAY_TIME="${ARRAY_TIME:-}"
 EXCLUDE="${EXCLUDE:-}"
 DEPENDENCY="${DEPENDENCY:-}"
 GPUS="${GPUS:-1}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-8}"
-MEM="${MEM:-180G}"
+CPUS_PER_TASK="${CPUS_PER_TASK:-}"
+MEM="${MEM:-}"
 WANDB_MODE="${WANDB_MODE:-online}"
 PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 UV_EXTRAS="${UV_EXTRAS:---extra gpu --extra eval --extra qwen35}"
@@ -84,6 +84,7 @@ Options:
 
 Common environment overrides:
   BACKEND, JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
+  Slurm chooses partition, time, CPUs, and memory when their overrides are unset.
   EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, EVAL_MAX_BATCH_SIZE, OUT_DIR
   EVAL_THINKING_MODES (comma-separated true/false values)
@@ -1296,17 +1297,23 @@ launcher_main() {
     sbatch
     --parsable
     --job-name="$JOB_NAME"
-    --partition="$PARTITION"
-    --time="$ARRAY_TIME"
-    --nodes=1
-    --ntasks-per-node=1
     --gres="gpu:$alloc_gpus"
-    --cpus-per-task="$CPUS_PER_TASK"
-    --mem="$MEM"
     --array="$workers_arg"
     --output="$SLURM_LOG_DIR/${JOB_NAME}-%A_%a.out"
     --export=ALL
   )
+  if [[ -n "$PARTITION" ]]; then
+    sbatch_cmd+=(--partition="$PARTITION")
+  fi
+  if [[ -n "$ARRAY_TIME" ]]; then
+    sbatch_cmd+=(--time="$ARRAY_TIME")
+  fi
+  if [[ -n "$CPUS_PER_TASK" ]]; then
+    sbatch_cmd+=(--cpus-per-task="$CPUS_PER_TASK")
+  fi
+  if [[ -n "$MEM" ]]; then
+    sbatch_cmd+=(--mem="$MEM")
+  fi
   if [[ -n "$DEPENDENCY" ]]; then
     sbatch_cmd+=(--dependency="$DEPENDENCY")
   fi

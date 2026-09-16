@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -155,6 +156,28 @@ def test_worker_does_not_validate_unrelated_openmath_override(
     )
 
     _wait_for_status(_state_dir(result.stdout), env, "SUCCEEDED")
+
+
+def test_slurm_uses_resource_defaults_except_gpus(tmp_path: Path) -> None:
+    config, env = _write_fixture(tmp_path)
+    for name in ("PARTITION", "ARRAY_TIME", "CPUS_PER_TASK", "MEM"):
+        env.pop(name, None)
+    env["GPUS"] = "2"
+
+    result = _run(["--backend", "slurm", "--dry-run", str(config)], env)
+    command = shlex.split(result.stdout.splitlines()[-1])
+
+    assert "--gres=gpu:2" in command
+    assert "--array=0-0" in command
+    for prefix in (
+        "--partition=",
+        "--time=",
+        "--nodes=",
+        "--ntasks-per-node=",
+        "--cpus-per-task=",
+        "--mem=",
+    ):
+        assert not any(arg.startswith(prefix) for arg in command)
 
 
 def test_slurm_passes_ephemeral_environment_file_without_login_env_retrieval(
