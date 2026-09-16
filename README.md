@@ -82,6 +82,8 @@ CPU count, and memory to Slurm defaults. Set `PARTITION`, `ARRAY_TIME`,
 If you are on alpha (89.124.38.93) you should set MEM=180G, CPUS_PER_TASK=8, 
 PARTITION=agent-xlong-15,agent-xlong, and ARRAY_TIME=5-00:00:00.
 
+Run `susers` to see GPUs allocated to running Slurm jobs by user.
+
 ## Evaluate
 
 ```bash
