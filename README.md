@@ -100,9 +100,9 @@ evaluated task.
 
 Use `paper7-legacy` when evaluating martin-branch checkpoints while retaining
 their suite-wide chat formatting, special-token handling, and legacy JSON
-shape. Both commands allow 32,768 generated tokens for every generative task;
-new results therefore are not directly comparable to historical 2,048-token
-Paper7 scores. Chat formatting is
+shape. Generative tasks default to 2,048 new tokens with thinking disabled
+and 4,096 with thinking enabled. Results from the earlier 32,768-token
+campaign use a different generation cap. Chat formatting is
 enabled by default when the checkpoint tokenizer provides a template and
 otherwise falls back to plain prompts. When thinking is not specified, the
 command inherits the checkpoint's training setting when present and otherwise

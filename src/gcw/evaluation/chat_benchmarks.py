@@ -16,7 +16,6 @@ from gcw.evaluation.benchmarks import (
     BenchmarkBackend,
     GCWBenchmarkBackend,
     HFBenchmarkBackend,
-    MAX_NEW_TOKENS,
     _load_tokenizer,
     _trim_at_eos,
     apply_qwen_chat_template,
@@ -361,10 +360,14 @@ def evaluate_chat_examples(
     examples: Sequence[ChatExample],
     *,
     config: EvalConfig,
-    max_new_tokens: int = MAX_NEW_TOKENS,
+    max_new_tokens: int | None = None,
 ) -> dict[str, Any]:
     if not config.apply_chat_template:
         raise ValueError("chat benchmark evaluation requires chat formatting")
+    if max_new_tokens is None:
+        max_new_tokens = config.default_max_new_tokens
+    if type(max_new_tokens) is not int or max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be a positive integer")
     batch_size = config.fixed_batch_size
     prepared = _prepare_examples(examples, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
@@ -531,7 +534,7 @@ def run_chat_benchmarks(
     hf_model: str | Path | None = None,
     tokenizer_path: str | Path | None = None,
     processor_enabled: bool = True,
-    max_new_tokens: int = MAX_NEW_TOKENS,
+    max_new_tokens: int | None = None,
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
 ) -> dict[str, Any]:
@@ -539,6 +542,10 @@ def run_chat_benchmarks(
     config = config or EvalConfig(apply_chat_template=True)
     if not config.apply_chat_template:
         raise ValueError("chat benchmark evaluation requires chat formatting")
+    if max_new_tokens is None:
+        max_new_tokens = config.default_max_new_tokens
+    if type(max_new_tokens) is not int or max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be a positive integer")
     unknown = sorted(set(tasks) - set(CHAT_TASKS))
     if unknown:
         raise ValueError(f"unknown chat benchmark tasks: {unknown}")
@@ -567,10 +574,6 @@ def run_chat_benchmarks(
     if generation_process_every is not None and not processor_enabled:
         raise ValueError(
             "generation_process_every requires processor_enabled=True"
-        )
-    if max_new_tokens != MAX_NEW_TOKENS:
-        raise ValueError(
-            f"chat benchmark protocol requires max_new_tokens={MAX_NEW_TOKENS}"
         )
     if not torch.cuda.is_available():
         raise RuntimeError("chat benchmark evaluation requires CUDA")

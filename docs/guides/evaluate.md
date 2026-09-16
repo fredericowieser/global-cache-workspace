@@ -27,6 +27,10 @@ is active and `--enable-thinking` is omitted, native checkpoints inherit
 `data.sft_enable_thinking` from a recorded training fingerprint or a
 published `run_config.json`; checkpoints without that setting and Hugging Face
 targets default to false. Explicit `--enable-thinking true|false` always wins.
+Generation defaults to 2,048 new tokens with thinking disabled and 4,096
+with thinking enabled for Paper7, standard lm-eval suites, and chat evaluation.
+Task-specific `max_gen_toks` and chat `--max-new-tokens` overrides take precedence.
+The GSM8K reproduction command retains its fixed 32,768-token protocol.
 Chat and GSM8K reproduction always apply chat formatting, so they expose only
 `--enable-thinking`. Paper7 exposes both settings and defaults
 `--apply-chat-template` to true for legacy compatibility. FineWeb exposes
@@ -248,8 +252,9 @@ which remain plain by definition.
 
 `gcw eval paper7-legacy` retains martin-branch checkpoint loading, task
 definitions, suite-wide chat formatting, and the lm-eval-compatible top-level
-result shape. Its current 32,768-token generation budget means newly generated
-scores are not direct protocol replicas of historical 2,048-token results.
+result shape. Its generative tasks now default to 2,048 new tokens with
+thinking disabled and 4,096 with thinking enabled. Thinking-enabled scores
+therefore use a different cap from historical 2,048-token results.
 
 For a Longshot random-routing ablation, add `--head-selection-method random`.
 This runtime-only override applies to both the initial head selection and every
@@ -261,7 +266,8 @@ behavior while making thinking explicit and using the current generation
 budget:
 
 - task YAMLs are loaded from `configs/tasks_legacy/paper7`;
-- every generative task receives up to 32,768 new tokens;
+- generative tasks default to 2,048 new tokens with thinking disabled or
+  4,096 with thinking enabled;
 - chat templates are applied by default when the tokenizer provides one;
 - thinking inherits the checkpoint's training setting when present and
   otherwise defaults to false; `--enable-thinking true|false` overrides it;
@@ -308,7 +314,7 @@ uv run --extra eval python scripts/extract_paper_table.py \
 Keep two protocols separate:
 
 - Multiple-choice scores use full LM Evaluation Harness datasets, no chat template, and benchmark-native option likelihood. They are comparable to the corresponding harness protocol and have no thinking dimension.
-- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, numeric-last-answer scoring, and the same 32,768-token cap in both conditions.
+- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, and numeric-last-answer scoring. By default, the thinking-disabled cap is 2,048 and the thinking-enabled cap is 4,096; record the cap when comparing results.
 
 Generated multiple-choice answers are useful only as supplementary instruction-following diagnostics. Do not substitute them for canonical likelihood scores or schedule them across every experiment arm.
 
@@ -323,7 +329,6 @@ uv run --extra gpu --extra eval gcw eval chat \
   --tokenizer-path /path/to/qwen-tokenizer \
   --tasks gsm8k_openmath svamp gsm8k_hard \
   --enable-thinking \
-  --max-new-tokens 32768 \
   --out data/eval-runs/chat-thinking-on.json
 ```
 

@@ -431,3 +431,7 @@ class EvalConfig:
                 "batch_size='auto' is supported only by lm-eval suites"
             )
         return self.batch_size
+
+    @property
+    def default_max_new_tokens(self) -> int:
+        return 4096 if self.enable_thinking else 2048

@@ -17,7 +17,6 @@ generation_kwargs:
     - "\nQuestion:"
   do_sample: false
   temperature: 0.0
-  max_gen_toks: 32768
 repeats: 1
 # Multiple extraction strategies for the same generation - we only generate
 # once, then score the same output under each filter. Lets us see how the

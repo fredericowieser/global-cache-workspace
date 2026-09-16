@@ -133,12 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
             "--generation-process-every", type=_positive_int, default=None
         )
         command.add_argument("--limit", type=int, default=None)
-        command.add_argument(
-            "--batch-size", type=_eval_batch_size, default=8
-        )
-        command.add_argument(
-            "--max-batch-size", type=_positive_int, default=64
-        )
+        command.add_argument("--batch-size", type=_eval_batch_size, default=8)
+        command.add_argument("--max-batch-size", type=_positive_int, default=64)
         command.add_argument(
             "--apply-chat-template",
             nargs="?",
@@ -180,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_boolean,
     )
     chat.add_argument("--batch-size", type=int, default=8)
-    chat.add_argument("--max-new-tokens", type=int, default=32768)
+    chat.add_argument("--max-new-tokens", type=_positive_int, default=None)
     chat.add_argument("--out", default=None)
     fineweb = eval_sub.add_parser("fineweb")
     fineweb.add_argument("--checkpoint", required=True)
@@ -336,13 +332,16 @@ def dispatch(args: argparse.Namespace) -> None:
                 checkpoint=args.checkpoint,
                 apply_chat_template=True,
             )
+            eval_config = EvalConfig(
+                batch_size=args.batch_size,
+                apply_chat_template=True,
+                enable_thinking=args.enable_thinking,
+            )
+            if args.max_new_tokens is None:
+                args.max_new_tokens = eval_config.default_max_new_tokens
             results = run_chat_benchmarks(
                 tasks=args.tasks,
-                config=EvalConfig(
-                    batch_size=args.batch_size,
-                    apply_chat_template=True,
-                    enable_thinking=args.enable_thinking,
-                ),
+                config=eval_config,
                 max_new_tokens=args.max_new_tokens,
                 checkpoint=args.checkpoint,
                 hf_model=args.hf_model,

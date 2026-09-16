@@ -9,8 +9,7 @@ test_split: test
 # Prompt is the RAW question (matching gsm8k_openmath, which scores 35%): the
 # OMI-2-SFT'd backbones emit \boxed{} naturally on a bare question. An added
 # "reason step by step" instruction pushed them off-distribution and zeroed
-# the smoke. max_gen_toks is 32768 so long university-level
-# derivations aren't truncated before the boxed answer. Image questions
+# the smoke. Image questions
 # (Picture != None, 53/800) stay in the denominator to match prior text-only
 # reporting. (v1 used exact_match + numeric regex and scored ~3% vs paper ~11%.)
 doc_to_text: "{{Question}}"
@@ -26,7 +25,6 @@ generation_kwargs:
     - "\nQuestion:"
   do_sample: false
   temperature: 0.0
-  max_gen_toks: 32768
 repeats: 1
 metric_list:
   - metric: exact_match

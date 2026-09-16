@@ -117,7 +117,7 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
     )
 
     assert result["protocol"] == "official_chat_template_answer_generation_v2"
-    assert result["max_new_tokens"] == 32768
+    assert result["max_new_tokens"] == 4096
     assert result["enable_thinking"] is True
     assert result["tasks"]["piqa"]["accuracy"] == 1.0
     assert result["tasks"]["svamp"]["accuracy"] == 1.0
@@ -135,7 +135,7 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
     assert result["tasks"]["piqa"]["thinking_truncation_rate"] == 0.0
     assert result["rows"][0]["thinking_terminated"] is False
     assert result["rows"][0]["thinking_truncated"] is False
-    assert backend.calls[0][2] == 32768
+    assert backend.calls[0][2] == 4096
 
 
 @pytest.mark.parametrize("enable_thinking", [False, True])

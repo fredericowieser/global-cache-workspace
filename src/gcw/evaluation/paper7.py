@@ -139,7 +139,9 @@ def _run_paper7_groups(
                     else "answer_generation"
                 ),
                 "max_new_tokens": (
-                    None if tasks[0] in PAPER7_MULTIPLE_CHOICE_TASKS else 32768
+                    None
+                    if tasks[0] in PAPER7_MULTIPLE_CHOICE_TASKS
+                    else config.default_max_new_tokens
                 ),
             }
         progress = _update_progress(run_idx, "running", runs, merged)

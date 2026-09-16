@@ -539,7 +539,11 @@ class GCWEvalLM(TemplateLM):
         ] = {}
         for i, req in enumerate(requests):
             prompt, kwargs = req.args
-            max_new = int(kwargs.get("max_gen_toks", 32768))
+            max_new = int(
+                kwargs.get(
+                    "max_gen_toks", self.eval_config.default_max_new_tokens
+                )
+            )
             until = _normalize_until(kwargs.get("until"))
             ids = encode_generate_prompt(
                 self.tokenizer,
@@ -604,7 +608,11 @@ class GCWEvalLM(TemplateLM):
         device = self.model.get_device()
         for req in requests:
             prompt, kwargs = req.args
-            max_new = int(kwargs.get("max_gen_toks", 32768))
+            max_new = int(
+                kwargs.get(
+                    "max_gen_toks", self.eval_config.default_max_new_tokens
+                )
+            )
             until = _normalize_until(kwargs.get("until"))
             ids = torch.tensor(
                 encode_generate_prompt(

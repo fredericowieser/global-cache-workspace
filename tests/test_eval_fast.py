@@ -50,6 +50,59 @@ def test_auto_batching_retries_cuda_oom_and_retains_reduced_limit():
     }
 
 
+@pytest.mark.parametrize(
+    "enable_thinking,expected", [(False, 2048), (True, 4096)]
+)
+@pytest.mark.parametrize("reference", [False, True])
+def test_generation_default_depends_on_thinking_and_task_override_wins(
+    monkeypatch, enable_thinking, expected, reference
+):
+    if reference:
+        monkeypatch.setenv("GCW_EVAL_REFERENCE_GENERATE", "1")
+    else:
+        monkeypatch.delenv("GCW_EVAL_REFERENCE_GENERATE", raising=False)
+
+    seen = []
+
+    class Model:
+        def get_device(self):
+            return torch.device("cpu")
+
+        def generate(self, ids, *, max_new_tokens, **kwargs):
+            seen.append(max_new_tokens)
+            return torch.cat((ids, torch.tensor([[9, 0]])), dim=1)
+
+        generate_fast = generate
+
+    class Tokenizer:
+        eot_id = 0
+
+        def encode(self, text, add_special_tokens=False):
+            return [4]
+
+        def decode(self, tokens):
+            return "".join(map(str, tokens))
+
+    lm = GCWEvalLM.__new__(GCWEvalLM)
+    lm.model = Model()
+    lm.tokenizer = Tokenizer()
+    lm.eval_config = EvalConfig(
+        apply_chat_template=enable_thinking,
+        enable_thinking=enable_thinking,
+    )
+    lm.max_length = 16
+    lm.add_special_tokens_for_generate = False
+    lm.batch_size = 1
+    lm.reset_runtime_metrics()
+    requests = [
+        types.SimpleNamespace(args=("question", {})),
+        types.SimpleNamespace(args=("question", {"max_gen_toks": 777})),
+    ]
+
+    assert lm.generate_until(requests) == ["9", "9"]
+    assert seen == [expected, 777]
+
+
 class ThinkingTokenizer:
     @staticmethod
     def encode(text, add_special_tokens=False):

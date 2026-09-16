@@ -19,7 +19,6 @@ generation_kwargs:
     - "\nQuestion:"
   do_sample: false
   temperature: 0.0
-  max_gen_toks: 32768
 repeats: 1
 filter_list:
   # \boxed{N} - format matching OpenMathInstruct-2 SFT outputs.
