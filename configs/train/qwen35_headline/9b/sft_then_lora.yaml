@@ -1,0 +1,169 @@
+# DRAFT: see docs/experiments/qwen35-headline.md before launch.
+# Single seed 24; inputs are planned paths; two-GPU qualification is pending.
+model:
+  variant: tf
+  family: qwen3_5
+  sequence_len: 262144
+  vocab_size: 248320
+  hidden_size: 4096
+  intermediate_size: 12288
+  num_layers: 32
+  num_heads: 16
+  num_kv_heads: 4
+  head_dim: 256
+  hidden_act: silu
+  rope_theta: 10000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: false
+  qk_norm: true
+  rotary_style: llama
+  partial_rotary_factor: 0.25
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: 128
+  linear_value_head_dim: 128
+  linear_num_key_heads: 16
+  linear_num_value_heads: 32
+  layer_types:
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  processor_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  - 19
+  - 23
+  - 27
+  - 31
+  processor_generation_mode: windowed
+  lora:
+    rank: 39
+    alpha: 39.0
+    dropout: 0.0
+    targets:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+    - in_proj_qkv
+    - in_proj_z
+    - in_proj_b
+    - in_proj_a
+    - out_proj
+  cache_processor: null
+  diffusion_processor: null
+data:
+  kind: sft
+  dataset: /mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2-headline-v1/train.jsonl
+  tokenizer: hf
+  tokenizer_source: Qwen/Qwen3.5-9B
+  sft_skip_rows: 512000
+  sft_take_rows: 512000
+  prompt_suffix: ''
+  response_prefix: ''
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  validation_dataset: null
+mode: sft
+seed: 24
+distributed: ddp
+freeze_backbone: false
+trainable: lora
+backbone_checkpoint: /mnt/jfs-00/team-agent/home/f50056118/gcw-experiments/qwen35-headline-v2/qwen35-9b-sft-stage1-seed24/checkpoint
+init_checkpoint: null
+resume: null
+output_dir: /mnt/jfs-00/team-agent/home/f50056118/gcw-experiments/qwen35-headline-v2/qwen35-9b-sft-then-lora-seed24
+batch_size: 1
+sequence_len: 2048
+global_batch_rows: 128
+total_batch_size: 0
+logical_pair_grouping: false
+max_steps: 4000
+learning_rate: 0.0001
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1.0e-08
+weight_decay: 0.0
+warmup_steps: 0
+warmdown_ratio: 0.0
+final_lr_frac: 0.0
+grad_clip: 1.0
+precision: bf16_mixed
+loss_backend: liger
+activation_checkpointing: none
+activation_checkpoint_windows: 0
+backbone_chunk_backend: eager
+longshot_gradient_checkpointing_seq_len_threshold: null
+truncated_bptt_windows: 0
+checkpoint_format: native_safetensors
+save_cache_processor_only: false
+save_every: 1000
+save_final: true
+eval_every: 0
+eval_on_start: false
+performance:
+  adaptive_batching:
+    enabled: false
+  noisy_diffusion:
+    recurrence_backend: eager
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  name: qwen35-9b-sft-then-lora-seed24
+  group: qwen35-headline-v2-draft
+  tags:
+  - headline-draft
+  - 9b
+  - stage2
+  - lora
+  - fp32-parameters
+metadata:
+  protocol: qwen35-headline-v2-draft
+  readiness: requires_prepared_data_backbones_and_two_gpu_qualification
+  arm: sft_then_lora
+  stage: stage2
+  world_size: 2
+  seed_count: 1
+  pretrained_source: Qwen/Qwen3.5-9B
+  pretrained_source_revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+  backbone_text_parameters: 8953803264
+  trainable_parameters: 105490944
+  prepared_training_rows: 1024000
+  planned_dataset_source: nvidia/OpenMathInstruct-2
+  planned_dataset_source_revision: 469216e3f46f4dacf476b382e192485ea51a143e
+  planned_dataset_source_split: train_2M
+  parent_run: qwen35-9b-sft-stage1-seed24

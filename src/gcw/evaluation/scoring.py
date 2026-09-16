@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import json
+from pathlib import Path
 import re
+from typing import Any, Mapping
 
 import math
 
@@ -9,7 +12,13 @@ import torch
 import torch.distributed as dist
 
 from gcw.config import LossBackend
-from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, IntTokenizer, get_tokenizer
+from gcw.data.tokenizers import (
+    COSMO2_VOCAB_SIZE,
+    IntTokenizer,
+    Tokenizer,
+    TransformersTokenizer,
+    get_tokenizer,
+)
 
 
 def truncate_context_continuation(
@@ -35,8 +44,80 @@ def encode_generate_prompt(
     return ids[-max_length:]
 
 
-def tokenizer_for_checkpoint(config, state):
-    source = state.get("source") or state.get("tokenizer_source")
+def generation_config_for_source(
+    source: str | Path, *, local_files_only: bool = False
+) -> dict[str, Any]:
+    from transformers.utils.hub import cached_file
+
+    for filename in ("generation_config.json", "config.json"):
+        path = cached_file(
+            str(source),
+            filename,
+            _raise_exceptions_for_missing_entries=False,
+            local_files_only=local_files_only,
+        )
+        if path is not None:
+            with open(path) as handle:
+                config = json.load(handle)
+            if filename == "config.json":
+                text_config = config.get("text_config") or {}
+                for key in ("eos_token_id", "pad_token_id"):
+                    if (
+                        config.get(key) is None
+                        and text_config.get(key) is not None
+                    ):
+                        config[key] = text_config[key]
+            config["_from_model_config"] = filename == "config.json"
+            return config
+    return {}
+
+
+def generation_token_ids(
+    tokenizer: Any, generation_config: Mapping[str, Any] | None = None
+) -> tuple[tuple[int, ...], int]:
+    config = generation_config or {}
+    eos = config.get("eos_token_id")
+    if eos is None:
+        eos = getattr(tokenizer, "eos_token_id", None)
+    if eos is None and isinstance(
+        tokenizer, (IntTokenizer, Tokenizer, TransformersTokenizer)
+    ):
+        eos = tokenizer.eot_id
+    if eos is None:
+        raise ValueError(
+            "generation requires EOS metadata from the model or tokenizer"
+        )
+    values = (eos,) if isinstance(eos, int) else eos
+    tokenizer_eos = getattr(tokenizer, "eos_token_id", None)
+    if (
+        config.get("_from_model_config")
+        and tokenizer_eos is not None
+        and isinstance(values, (list, tuple))
+    ):
+        values = (*values, tokenizer_eos)
+    if not isinstance(values, (list, tuple)) or any(
+        type(value) is not int or value < 0 for value in values
+    ):
+        raise ValueError(
+            "eos_token_id must be a nonnegative integer or list of integers"
+        )
+    eos_ids = tuple(dict.fromkeys(values))
+    pad = config.get("pad_token_id")
+    if pad is None:
+        pad = getattr(tokenizer, "pad_token_id", None)
+    if pad is None and eos_ids:
+        pad = eos_ids[0]
+    if type(pad) is not int or pad < 0:
+        raise ValueError(
+            "generation requires a nonnegative pad_token_id or EOS"
+        )
+    return eos_ids, pad
+
+
+def tokenizer_for_checkpoint(
+    config, state, *, source=None, local_files_only: bool = False
+):
+    source = source or state.get("tokenizer_source") or state.get("source")
     if source and config.family in {
         "llama",
         "qwen3",
@@ -51,9 +132,34 @@ def tokenizer_for_checkpoint(config, state):
                 "Converted HF checkpoints require transformers for eval tokenization."
             ) from exc
         tokenizer = AutoTokenizer.from_pretrained(
-            source, trust_remote_code=False
+            source,
+            local_files_only=local_files_only,
+            trust_remote_code=False,
         )
-        return HFTokenizerAdapter(tokenizer, str(source))
+        generation_config = generation_config_for_source(
+            source, local_files_only=local_files_only
+        )
+        model_source = state.get("source")
+        if (
+            state.get("eos_token_id") is None
+            and generation_config.get("eos_token_id") is None
+            and model_source
+            and str(model_source) != str(source)
+        ):
+            try:
+                generation_config = generation_config_for_source(
+                    model_source, local_files_only=local_files_only
+                )
+            except OSError:
+                generation_config = {}
+        generation_config.update(
+            (key, state[key])
+            for key in ("eos_token_id", "pad_token_id")
+            if state.get(key) is not None
+        )
+        if state.get("eos_token_id") is not None:
+            generation_config["_from_model_config"] = False
+        return HFTokenizerAdapter(tokenizer, str(source), generation_config)
     if config.family in {"llama", "qwen3", "qwen3_5", "qwen3_5_moe", "gemma4"}:
         raise ValueError(
             "HF-family checkpoints require train_state.json to include 'source' "
@@ -65,13 +171,23 @@ def tokenizer_for_checkpoint(config, state):
 
 
 class HFTokenizerAdapter:
-    def __init__(self, tokenizer, name_or_path: str | None = None):
+    def __init__(
+        self,
+        tokenizer,
+        name_or_path: str | None = None,
+        generation_config: Mapping[str, Any] | None = None,
+    ):
         self.tokenizer = tokenizer
         self.name_or_path = name_or_path or str(
             getattr(tokenizer, "name_or_path", "")
         )
         self.source = self.name_or_path
-        self.eot_id = tokenizer.eos_token_id or tokenizer.pad_token_id or 0
+        self.generation_config = generation_config
+        self.eos_token_id = tokenizer.eos_token_id
+        self.pad_token_id = tokenizer.pad_token_id
+        self.eot_id = self.eos_token_id
+        if self.eot_id is None:
+            self.eot_id = self.pad_token_id or 0
         self.vocab_size = len(tokenizer)
         self.chat_template = getattr(tokenizer, "chat_template", None)
         self.default_chat_template = getattr(
@@ -119,12 +235,15 @@ def stop_token_sequences(tokenizer, until: tuple[str, ...]) -> list[list[int]]:
 def trim_generated_token_ids(
     tokens: list[int],
     stop_sequences: list[list[int]],
-    eos_token_id: int | None,
+    eos_token_id: int | list[int] | tuple[int, ...] | None,
 ) -> list[int]:
     end = len(tokens)
     if eos_token_id is not None:
+        eos_ids = (
+            (eos_token_id,) if isinstance(eos_token_id, int) else eos_token_id
+        )
         for index, token in enumerate(tokens):
-            if token == eos_token_id:
+            if token in eos_ids:
                 end = min(end, index)
                 break
     for stop in stop_sequences:

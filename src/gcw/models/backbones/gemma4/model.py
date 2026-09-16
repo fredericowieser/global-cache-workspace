@@ -309,15 +309,16 @@ class Gemma4TF(TF):
         self,
         input_ids: torch.Tensor,
         max_new_tokens: int,
-        eos_token_id: int | None = None,
+        eos_token_id: int | list[int] | tuple[int, ...] | None = None,
         processor=None,
         process_every: int = 64,
         process_prefill_windows: bool = True,
         process_after_prefill: bool = False,
         relative_generation_cadence: bool = False,
+        generation_process_every: int | None = None,
+        *,
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
-        generation_process_every: int | None = None,
     ) -> torch.Tensor:
         if self._uniform_cache_shape():
             return super().generate_fast(
@@ -354,12 +355,18 @@ class Gemma4TF(TF):
         if logits is None:
             raise ValueError("generate requires at least one input token")
 
+        prompt_len = out.shape[1]
+        eos_ids = torch.tensor(
+            eos_token_id if eos_token_id is not None else [],
+            dtype=input_ids.dtype,
+            device=out.device,
+        ).reshape(-1)
         finished = torch.zeros(
             out.shape[0], dtype=torch.bool, device=out.device
         )
-        fill_id = eos_token_id if pad_token_id is None else pad_token_id
+        fill_id = pad_token_id
         if fill_id is None:
-            fill_id = 0
+            fill_id = int(eos_ids[0].item()) if eos_ids.numel() else 0
         fill = torch.full(
             (out.shape[0], 1),
             int(fill_id),
@@ -371,9 +378,10 @@ class Gemma4TF(TF):
             if bool(finished.any()):
                 next_id = torch.where(finished[:, None], fill, next_id)
             out = torch.cat([out, next_id], dim=1)
-            if eos_token_id is not None:
-                finished = finished | (next_id.squeeze(1) == eos_token_id)
-            finished = finished | _matches_stop_sequence(out, stop_sequences)
+            finished = finished | torch.isin(next_id.squeeze(1), eos_ids)
+            finished = finished | _matches_stop_sequence(
+                out[:, prompt_len:], stop_sequences
+            )
             if bool(finished.all()):
                 break
             pos = out.shape[1] - 1

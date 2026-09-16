@@ -116,15 +116,32 @@ between zero and one. Direct contextual gating can remain available for
 controlled experiments and equivalence tests, but it permits negative and
 amplifying updates and should not be the default.
 
-Contextual gates are mutually exclusive with fixed output scaling. Both
-`output_scale_mode="fixed_one"` and scheduled diffusion training pin the write
-scale to one and allocate no learned scalar gate, which directly contradicts a
-learned, data-dependent scale. Admission rejects the combination as
-`update_gate_output_scale` instead of letting either setting silently override
-the other, and `CacheProcessor` repeats the check for processors constructed
-without a `ModelConfig`. Fixed output scaling therefore remains available only
-with `static_scalar`, and contextual gates require
-`output_scale_mode="learned"`.
+Contextual gates require `output_scale_mode="learned"`. Explicit
+`output_scale_mode="fixed_one"` contradicts a learned, data-dependent scale;
+admission rejects this combination as `update_gate_output_scale`, and
+`CacheProcessor` repeats the check for direct construction.
+
+### Scheduled diffusion writeback
+
+Scheduled Diffusion–Longshot preserves its legacy fixed-one write scale when
+`update_gate_type="static_scalar"`, even with the default
+`output_scale_mode="learned"`. It allocates neither a write scalar nor a
+refinement gate. Existing checkpoint shapes, default receipt identities, and
+initialization/RNG behavior are unchanged.
+
+Choosing a contextual gate with learned output scaling explicitly opts into
+**gated writeback after the solver**. The final scheduled latent feeds the same
+fused primary and linear-state output projections as ordinary Longshot. Each
+projection and gate runs once per intervention, independent of solver depth K;
+no gate is inserted into the vector field or Euler step. H, K, routing, cadence,
+and the training perturbation remain separate, unchanged controls.
+
+All scheduled variants still require `out_proj_init="zero"`, including direct
+processor construction. With `gate_mode="sigmoid"` and `gate_init=-2.0`, gate
+weights start at zero and biases at −2, giving an initial scale of about 0.1192.
+An initially zero residual has zero gate gradient; the gate can learn once the
+update becomes nonzero. A zero first-step gate gradient is not a dead writer.
+This is a new treatment, not evidence of improved loss or depth scaling.
 
 ## Relation to gated attention
 
@@ -201,10 +218,10 @@ gate networks or regularization.
 - In `gcw.architecture.validation._model_issues`, reject contextual gate types
   unless `ModelConfig.variant == "longshot"`. Add the corresponding validation
   code to `_MODEL_CONFIG_VALIDATION_CODES`.
-- In the same function, reject contextual gate types when
-  `output_scale_mode == "fixed_one"` or the diffusion processor uses
-  `training_method == "scheduled"`, because both pin the write scale to one.
-  Add that validation code to `_MODEL_CONFIG_VALIDATION_CODES` as well.
+- In the same function, reject contextual gate types with explicit
+  `output_scale_mode == "fixed_one"`. Scheduled diffusion admits contextual
+  learned writeback but retains its zero-readout requirement. Keep the validation
+  codes in `_MODEL_CONFIG_VALIDATION_CODES`.
 - In `gcw.architecture.contracts._config_payload`, omit `update_gate_type` when
   it is `static_scalar`, preserving the canonical architecture payload for
   existing configurations.
@@ -302,6 +319,17 @@ The existing configuration resolution sets `gate_linear_state_delta` to false
 for `linear_state_update_mode: gated_delta`. Do not expand `output_proj` or
 produce unused gate logits in that case.
 
+For `outer_product`, the output channels are the key and value **factors**, not
+every entry of the recurrent-state matrix. The existing writer normalizes the
+key factor **after gating**, so the update is
+$\operatorname{normalize}(\gamma_k\odot k)(\gamma_v\odot v)^\top$.
+A uniform positive key scale cancels outside the normalization epsilon regime;
+vector key gates can instead change its direction. This is not a simple squared
+matrix scale. With `live_rank1_linear_writer`,
+random key weights and zero value weights keep the initial matrix residual zero
+while giving the value slice a first-step gradient. Contextual gate slices keep
+their own zero weights and `gate_init` biases.
+
 ### Parameter, FLOP, and telemetry accounting
 
 - Update `gcw.params._longshot_processor_params` so the Longshot block counts
@@ -326,8 +354,9 @@ Extend the configuration and architecture tests to cover:
 
 - The `static_scalar` default, all accepted values, invalid-value rejection,
   and rejection of contextual types for BT, BGT, and Icarus.
-- Rejection of contextual types combined with `output_scale_mode="fixed_one"`
-  or scheduled diffusion, and continued admission of `static_scalar` with both.
+- Rejection of contextual types with `output_scale_mode="fixed_one"`, admission
+  with scheduled diffusion and learned scaling, and continued admission of
+  `static_scalar` with both fixed scaling and scheduled diffusion.
 - Omission of the default from canonical architecture payloads and inclusion of
   non-default contextual types.
 

@@ -479,19 +479,22 @@ def evaluate_answer_nll(
         backbone_files[str(backbone_path.resolve())] = file_sha256(
             backbone_path
         )
-    model, config, state = load_checkpoint_bytes(
+    model, model_config, state = load_checkpoint_bytes(
         config_bytes=payloads["config.json"].content,
         train_state_bytes=payloads["train_state.json"].content,
         model_bytes=payloads["model.safetensors"].content,
         device=device,
         dtype=dtype,
     )
-    migrations = _validate_loaded_config(saved_config, to_dict(config))
-    if state != saved_state or to_dict(model.config) != to_dict(config):
+    migrations = _validate_loaded_config(saved_config, to_dict(model_config))
+    if state != saved_state or to_dict(model.config) != to_dict(model_config):
         raise ValueError("loaded model metadata differs from checkpoint")
-    if options.sequence_len > config.sequence_len:
+    if options.sequence_len > model_config.sequence_len:
         raise ValueError("evaluation sequence length exceeds model context")
-    diffusion, processor = config.diffusion_processor, config.cache_processor
+    diffusion, processor = (
+        model_config.diffusion_processor,
+        model_config.cache_processor,
+    )
     if diffusion is not None and diffusion.inference_mode != "deterministic":
         raise ValueError(
             "answer NLL requires deterministic diffusion inference"
@@ -528,7 +531,7 @@ def evaluate_answer_nll(
             "loaded model state SHA256 differs from expected identity"
         )
     del weights, upgraded, actual_state, payloads, blob, tensor, actual
-    loaded_config = to_dict(config)
+    loaded_config = to_dict(model_config)
     if solver_steps is not None:
         if type(solver_steps) is not int or solver_steps <= 0:
             raise ValueError("solver_steps must be a positive integer")
