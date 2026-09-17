@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 import hashlib
@@ -18,19 +18,27 @@ import torch
 from gcw.config import EvalConfig
 from gcw.evaluation.scoring import (
     HFTokenizerAdapter,
+    classify_generated_tokens,
     extract_numeric_answer,
     generation_config_for_source,
     generation_token_ids,
+    token_length_distribution,
     tokenizer_for_checkpoint,
 )
 
 DATASET_REPO_ID = "openai/gsm8k"
 DATASET_REVISION = "740312add88f781978c0658806c59bc2815b9866"
 EXPECTED_TEST_ROWS = 1_319
-MAX_NEW_TOKENS = 2_048
+MAX_NEW_TOKENS = 32_768
 DEFAULT_BATCH_SIZE = 64
-RESULT_SCHEMA = "gcw.gsm8k_reproduction.v5"
-PREVIOUS_RESULT_SCHEMA = "gcw.gsm8k_reproduction.v4"
+RESULT_SCHEMA = "gcw.gsm8k_reproduction.v9"
+PREVIOUS_RESULT_SCHEMAS = {
+    "gcw.gsm8k_reproduction.v4",
+    "gcw.gsm8k_reproduction.v5",
+    "gcw.gsm8k_reproduction.v6",
+    "gcw.gsm8k_reproduction.v7",
+    "gcw.gsm8k_reproduction.v8",
+}
 HISTORICAL_RESULT_SCHEMA = "gcw.benchmark_matrix.v3"
 ScoringProtocol = Literal["numeric_last_answer", "lm_eval_flexible_exact"]
 TargetKind = Literal["hf", "gcw"]
@@ -477,13 +485,14 @@ def evaluate_benchmark(
 ) -> dict[str, Any]:
     if not config.apply_chat_template:
         raise ValueError("GSM8K reproduction requires chat formatting")
+    batch_size = config.fixed_batch_size
     examples = _prepare(rows, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
         batches = [
             sorted(examples, key=lambda example: len(example.prompt_ids))[
-                offset : offset + config.batch_size
+                offset : offset + batch_size
             ]
-            for offset in range(0, len(examples), config.batch_size)
+            for offset in range(0, len(examples), batch_size)
         ]
         grouping = "length_sorted_left_padding"
     else:
@@ -491,9 +500,9 @@ def evaluate_benchmark(
         for example in examples:
             groups[len(example.prompt_ids)].append(example)
         batches = [
-            group[offset : offset + config.batch_size]
+            group[offset : offset + batch_size]
             for _, group in sorted(groups.items())
-            for offset in range(0, len(group), config.batch_size)
+            for offset in range(0, len(group), batch_size)
         ]
         grouping = "exact_prompt_token_length"
     generated_rows: list[dict[str, Any] | None] = [None] * len(examples)
@@ -518,6 +527,12 @@ def evaluate_benchmark(
             chunk, output[:, prompt_width:].detach().cpu().tolist(), strict=True
         ):
             response_ids, termination = _trim_at_eos(token_row, backend.eos_ids)
+            token_stats = classify_generated_tokens(
+                tokenizer,
+                response_ids,
+                enable_thinking=config.enable_thinking,
+                termination=termination,
+            )
             response = tokenizer.decode(
                 response_ids,
                 skip_special_tokens=True,
@@ -541,6 +556,11 @@ def evaluate_benchmark(
                 "target_answer": str(example.target_answer),
                 "prompt_tokens": len(example.prompt_ids),
                 "response_tokens": len(response_ids),
+                "answer_tokens": token_stats.answer_tokens,
+                "thinking_tokens": token_stats.thinking_tokens,
+                "thinking_terminated": token_stats.thinking_terminated,
+                "thinking_truncated": token_stats.thinking_truncated,
+                "generation_cap_hit": termination == "max_new_tokens",
                 "termination": termination,
                 "response": response,
                 "numeric_prediction": (
@@ -557,6 +577,15 @@ def evaluate_benchmark(
         raise RuntimeError("generation did not produce every GSM8K row")
     final_rows = [row for row in generated_rows if row is not None]
     correct = sum(bool(row["correct"]) for row in final_rows)
+    response_tokens = sum(int(row["response_tokens"]) for row in final_rows)
+    answer_tokens = sum(int(row["answer_tokens"]) for row in final_rows)
+    thinking_tokens = sum(int(row["thinking_tokens"]) for row in final_rows)
+    generation_cap_hits = sum(
+        bool(row["generation_cap_hit"]) for row in final_rows
+    )
+    thinking_truncated = sum(
+        bool(row["thinking_truncated"]) for row in final_rows
+    )
     return {
         "apply_chat_template": config.apply_chat_template,
         "enable_thinking": config.enable_thinking,
@@ -570,11 +599,36 @@ def evaluate_benchmark(
         "flexible_exact_correct": sum(
             bool(row["flexible_exact_correct"]) for row in final_rows
         ),
+        "response_tokens": response_tokens,
+        "response_tokens_mean": response_tokens / len(final_rows),
+        "generation_cap_hits": generation_cap_hits,
+        "generation_cap_hit_rate": generation_cap_hits / len(final_rows),
+        **token_length_distribution(
+            Counter(int(row["response_tokens"]) for row in final_rows),
+            "response_tokens",
+        ),
+        "answer_tokens": answer_tokens,
+        "answer_tokens_mean": answer_tokens / len(final_rows),
+        **token_length_distribution(
+            Counter(int(row["answer_tokens"]) for row in final_rows),
+            "answer_tokens",
+        ),
+        "thinking_tokens": thinking_tokens,
+        "thinking_tokens_mean": thinking_tokens / len(final_rows),
+        **token_length_distribution(
+            Counter(int(row["thinking_tokens"]) for row in final_rows),
+            "thinking_tokens",
+        ),
+        "unterminated_thinking": sum(
+            not bool(row["thinking_terminated"]) for row in final_rows
+        ),
+        "thinking_truncated": thinking_truncated,
+        "thinking_truncation_rate": thinking_truncated / len(final_rows),
         "elapsed_seconds": time.monotonic() - started,
         "generation": {
             "do_sample": False,
             "max_new_tokens": max_new_tokens,
-            "batch_size": config.batch_size,
+            "batch_size": batch_size,
             "grouping": grouping,
             "eos_token_ids": list(backend.eos_ids),
             "pad_token_id": backend.pad_id,
@@ -610,6 +664,7 @@ def _publish_json(path: Path, payload: Mapping[str, Any]) -> None:
 def run_gsm8k_reproduction(
     config: BenchmarkConfig, repository: str | Path = "."
 ) -> dict[str, Any]:
+    end_to_end_started = time.monotonic()
     repository_path = Path(repository).resolve()
     if subprocess.check_output(
         ["git", "-C", str(repository_path), "status", "--porcelain"], text=True
@@ -654,6 +709,9 @@ def run_gsm8k_reproduction(
         max_new_tokens=config.max_new_tokens,
         scoring_protocol=config.scoring_protocol,
     )
+    evaluation["end_to_end_elapsed_seconds"] = (
+        time.monotonic() - end_to_end_started
+    )
     config_identity = asdict(config)
     config_identity.update(config_identity.pop("eval_config"))
     config_identity["processor_requested"] = config_identity.pop(
@@ -687,7 +745,7 @@ def load_benchmark_result(
 ) -> dict[str, Any]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     schema = payload.get("schema")
-    if schema in {RESULT_SCHEMA, PREVIOUS_RESULT_SCHEMA}:
+    if schema == RESULT_SCHEMA or schema in PREVIOUS_RESULT_SCHEMAS:
         if enable_thinking is not None and (
             payload.get("enable_thinking") is not enable_thinking
         ):

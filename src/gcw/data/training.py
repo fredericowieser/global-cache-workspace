@@ -451,6 +451,8 @@ def training_data_identity(config: TrainConfig) -> dict[str, Any]:
         if config.data.dataset is None:
             raise ValueError("SFT mode requires data.dataset JSONL path")
         path = Path(config.data.dataset).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"SFT dataset does not exist: {path}")
         return {
             "kind": "sft",
             "path": str(path),

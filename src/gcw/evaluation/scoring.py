@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from fractions import Fraction
 import json
 from pathlib import Path
 import re
-from typing import Any, Mapping
+from typing import Any
 
 import math
 
@@ -19,6 +21,94 @@ from gcw.data.tokenizers import (
     TransformersTokenizer,
     get_tokenizer,
 )
+
+
+@dataclass(frozen=True)
+class GeneratedTokenStats:
+    answer_tokens: int
+    thinking_tokens: int
+    thinking_terminated: bool
+    thinking_truncated: bool
+
+
+def token_length_distribution(
+    counts: Mapping[int, int], prefix: str
+) -> dict[str, int | float]:
+    total_responses = sum(counts.values())
+    if total_responses <= 0:
+        raise ValueError("token length distribution requires responses")
+    total_tokens = sum(length * count for length, count in counts.items())
+    mean = total_tokens / total_responses
+    variance = (
+        sum(length * length * count for length, count in counts.items())
+        / total_responses
+        - mean * mean
+    )
+    ordered = sorted(counts.items())
+    percentiles = {}
+    cumulative = 0
+    targets = {
+        name: math.ceil(total_responses * percentile)
+        for name, percentile in (("p50", 0.5), ("p95", 0.95), ("p99", 0.99))
+    }
+    for length, count in ordered:
+        cumulative += count
+        for name, target in targets.items():
+            if name not in percentiles and cumulative >= target:
+                percentiles[name] = length
+    above_twice_mean = sum(
+        count
+        for length, count in counts.items()
+        if length * total_responses > 2 * total_tokens
+    )
+    return {
+        f"{prefix}_stddev": math.sqrt(max(0.0, variance)),
+        f"{prefix}_max": ordered[-1][0],
+        **{f"{prefix}_{name}": value for name, value in percentiles.items()},
+        f"{prefix}_above_2x_mean_count": above_twice_mean,
+        f"{prefix}_above_2x_mean_rate": above_twice_mean / total_responses,
+    }
+
+
+def classify_generated_tokens(
+    tokenizer,
+    tokens: list[int],
+    *,
+    enable_thinking: bool,
+    termination: str,
+) -> GeneratedTokenStats:
+    if not enable_thinking:
+        return GeneratedTokenStats(len(tokens), 0, True, False)
+
+    def encode(delimiter: str) -> list[int]:
+        encoder = getattr(tokenizer, "encode", None)
+        if not callable(encoder):
+            return []
+        try:
+            return list(encoder(delimiter, add_special_tokens=False))
+        except TypeError:
+            return list(encoder(delimiter))
+
+    opening = encode("<think>")
+    closing = encode("</think>")
+    content_start = (
+        len(opening) if opening and tokens[: len(opening)] == opening else 0
+    )
+    close_start = find_subsequence(tokens[content_start:], closing)
+    if close_start is None:
+        return GeneratedTokenStats(
+            answer_tokens=0,
+            thinking_tokens=len(tokens) - content_start,
+            thinking_terminated=False,
+            thinking_truncated=termination == "max_new_tokens",
+        )
+    close_start += content_start
+    return GeneratedTokenStats(
+        answer_tokens=len(tokens) - close_start - len(closing),
+        thinking_tokens=close_start - content_start,
+        thinking_terminated=True,
+        thinking_truncated=False,
+    )
 
 
 def truncate_context_continuation(

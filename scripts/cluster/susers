@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Show GPUs allocated to running Slurm jobs by user."""
+
+import json
+import subprocess
+from collections import defaultdict
+
+
+jobs = json.loads(subprocess.check_output(["squeue", "--json"], text=True))["jobs"]
+totals = defaultdict(int)
+for job in jobs:
+    if "RUNNING" not in job["job_state"]:
+        continue
+    for resource in job["tres_alloc_str"].split(","):
+        if resource.startswith("gres/gpu="):
+            totals[job["user_name"]] += int(resource.split("=", 1)[1])
+
+print(f'{"USER":<20} {"GPUS":>5}')
+for user, gpus in sorted(totals.items(), key=lambda item: (-item[1], item[0])):
+    print(f"{user:<20} {gpus:>5}")
+print(f'{"TOTAL":<20} {sum(totals.values()):>5}')

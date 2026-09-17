@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 def convert_hf(*args: Any, **kwargs: Any) -> Any:
@@ -17,6 +17,12 @@ def _positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
+
+
+def _eval_batch_size(value: str) -> int | Literal["auto"]:
+    if value == "auto":
+        return value
+    return _positive_int(value)
 
 
 def _boolean(value: str) -> bool:
@@ -86,7 +92,8 @@ def build_parser() -> argparse.ArgumentParser:
         legacy = eval_sub.add_parser(suite)
         legacy.add_argument("--checkpoint", required=True)
         legacy.add_argument("--limit", type=int, default=None)
-        legacy.add_argument("--batch-size", type=int, default=8)
+        legacy.add_argument("--batch-size", type=_eval_batch_size, default=8)
+        legacy.add_argument("--max-batch-size", type=_positive_int, default=64)
         legacy.add_argument(
             "--apply-chat-template",
             nargs="?",
@@ -126,7 +133,8 @@ def build_parser() -> argparse.ArgumentParser:
             "--generation-process-every", type=_positive_int, default=None
         )
         command.add_argument("--limit", type=int, default=None)
-        command.add_argument("--batch-size", type=int, default=8)
+        command.add_argument("--batch-size", type=_eval_batch_size, default=8)
+        command.add_argument("--max-batch-size", type=_positive_int, default=64)
         command.add_argument(
             "--apply-chat-template",
             nargs="?",
@@ -168,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_boolean,
     )
     chat.add_argument("--batch-size", type=int, default=8)
-    chat.add_argument("--max-new-tokens", type=int, default=2048)
+    chat.add_argument("--max-new-tokens", type=_positive_int, default=None)
     chat.add_argument("--out", default=None)
     fineweb = eval_sub.add_parser("fineweb")
     fineweb.add_argument("--checkpoint", required=True)
@@ -324,13 +332,16 @@ def dispatch(args: argparse.Namespace) -> None:
                 checkpoint=args.checkpoint,
                 apply_chat_template=True,
             )
+            eval_config = EvalConfig(
+                batch_size=args.batch_size,
+                apply_chat_template=True,
+                enable_thinking=args.enable_thinking,
+            )
+            if args.max_new_tokens is None:
+                args.max_new_tokens = eval_config.default_max_new_tokens
             results = run_chat_benchmarks(
                 tasks=args.tasks,
-                config=EvalConfig(
-                    batch_size=args.batch_size,
-                    apply_chat_template=True,
-                    enable_thinking=args.enable_thinking,
-                ),
+                config=eval_config,
                 max_new_tokens=args.max_new_tokens,
                 checkpoint=args.checkpoint,
                 hf_model=args.hf_model,
@@ -350,6 +361,7 @@ def dispatch(args: argparse.Namespace) -> None:
             )
             eval_config = EvalConfig(
                 batch_size=args.batch_size,
+                max_batch_size=args.max_batch_size,
                 limit=args.limit,
                 apply_chat_template=args.apply_chat_template,
                 enable_thinking=args.enable_thinking,
@@ -467,6 +479,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 "checkpoint": args.checkpoint,
                 "config": EvalConfig(
                     batch_size=args.batch_size,
+                    max_batch_size=args.max_batch_size,
                     limit=args.limit,
                     apply_chat_template=args.apply_chat_template,
                     enable_thinking=args.enable_thinking,

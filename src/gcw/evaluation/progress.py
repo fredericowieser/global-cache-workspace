@@ -1,11 +1,51 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
 import time
+import warnings
+
+
+class IncompatiblePartialResultsError(ValueError):
+    pass
+
+
+@dataclass
+class EvaluationTimer:
+    started: float
+    prior_elapsed: float
+    has_prior: bool
+    evaluated_any: bool = False
+
+    @classmethod
+    def from_results(cls, results: dict, started: float) -> EvaluationTimer:
+        evaluation = results["gcw_runtime"].get("evaluation")
+        return cls(
+            started=started,
+            prior_elapsed=(
+                float(evaluation["elapsed_seconds"])
+                if isinstance(evaluation, dict)
+                else 0.0
+            ),
+            has_prior=isinstance(evaluation, dict),
+        )
+
+    def mark_evaluated(self) -> None:
+        self.evaluated_any = True
+
+    def update_results(self, results: dict) -> None:
+        elapsed = self.prior_elapsed
+        if self.evaluated_any or not self.has_prior:
+            elapsed += time.monotonic() - self.started
+        results["gcw_runtime"]["evaluation"] = {
+            "scope": "cumulative_active_end_to_end_including_loading_and_setup",
+            "elapsed_seconds": elapsed,
+        }
 
 
 def is_main_process() -> bool:
@@ -127,6 +167,107 @@ def _validate_partial_results(
                 raise ValueError(
                     f"authenticated partial results contain unexpected task: {task}"
                 )
+    runtime = payload["gcw_runtime"]
+    required_runtime_fields = {
+        "requested_batch_size",
+        "configured_auto_max_batch_size",
+        "successful_batch_sizes",
+    }
+    completed = False
+    for tasks, _fewshot in runs:
+        if not all(
+            task in payload["results"] or task in payload["groups"]
+            for task in tasks
+        ):
+            continue
+        completed = True
+        task_runtime = runtime.get(",".join(tasks))
+        if not isinstance(
+            task_runtime, dict
+        ) or not required_runtime_fields <= set(task_runtime):
+            raise IncompatiblePartialResultsError(
+                "partial results lack current evaluation runtime measurements; "
+                "a fresh evaluation is required"
+            )
+        if task_runtime.get("generated_responses", 0):
+            if not {"generation_cap_hits", "generation_cap_hit_rate"} <= set(
+                task_runtime
+            ):
+                raise IncompatiblePartialResultsError(
+                    "partial results lack generation cap-hit metrics; "
+                    "a fresh evaluation is required"
+                )
+            distribution_fields = {
+                f"{prefix}_{suffix}"
+                for prefix in ("response_tokens", "answer_tokens")
+                for suffix in (
+                    "stddev",
+                    "max",
+                    "p50",
+                    "p95",
+                    "p99",
+                    "above_2x_mean_count",
+                    "above_2x_mean_rate",
+                )
+            }
+            if "thinking_tokens_mean" in task_runtime:
+                distribution_fields.update(
+                    f"thinking_tokens_{suffix}"
+                    for suffix in (
+                        "stddev",
+                        "max",
+                        "p50",
+                        "p95",
+                        "p99",
+                        "above_2x_mean_count",
+                        "above_2x_mean_rate",
+                    )
+                )
+            if not distribution_fields <= set(task_runtime):
+                raise IncompatiblePartialResultsError(
+                    "partial results lack token-length distribution metrics; "
+                    "a fresh evaluation is required"
+                )
+        batch_sizes = task_runtime["successful_batch_sizes"]
+        if (
+            not isinstance(batch_sizes, dict)
+            or not set(batch_sizes) <= {"generation", "loglikelihood"}
+            or any(
+                not isinstance(counts, dict)
+                or any(
+                    not str(size).isdigit()
+                    or int(str(size)) <= 0
+                    or type(count) is not int
+                    or count <= 0
+                    for size, count in counts.items()
+                )
+                for counts in batch_sizes.values()
+            )
+        ):
+            raise IncompatiblePartialResultsError(
+                "partial results use an older batch telemetry format; "
+                "a fresh evaluation is required"
+            )
+    evaluation = runtime.get("evaluation")
+    if completed or evaluation is not None:
+        elapsed = (
+            evaluation.get("elapsed_seconds")
+            if isinstance(evaluation, dict)
+            else None
+        )
+        if (
+            not isinstance(evaluation, dict)
+            or evaluation.get("scope")
+            != "cumulative_active_end_to_end_including_loading_and_setup"
+            or not isinstance(elapsed, (int, float))
+            or isinstance(elapsed, bool)
+            or not math.isfinite(elapsed)
+            or elapsed < 0
+        ):
+            raise IncompatiblePartialResultsError(
+                "partial results lack resumable end-to-end timing; "
+                "a fresh evaluation is required"
+            )
     return payload
 
 
@@ -140,7 +281,11 @@ def _load_partial_results(runs: list[tuple[list[str], int]]) -> dict | None:
     payload = _load_authenticated_json(
         path, kind="flow_math_eval_partial_results"
     )
-    return _validate_partial_results(payload, runs)
+    try:
+        return _validate_partial_results(payload, runs)
+    except IncompatiblePartialResultsError as exc:
+        warnings.warn(f"{exc}; ignoring the stale partial", stacklevel=2)
+        return None
 
 
 def _progress_path() -> Path | None:
@@ -229,9 +374,11 @@ def _estimate_eta(progress: dict) -> float | None:
     return sum(completed) / len(completed) * remaining
 
 
-def _new_progress(runs: list[tuple[list[str], int]]) -> dict:
+def _new_progress(
+    runs: list[tuple[list[str], int]], *, resume: bool = True
+) -> dict:
     path = _progress_path()
-    if path is not None and path.exists():
+    if resume and path is not None and path.exists():
         payload = _load_authenticated_json(path, kind="flow_math_eval_progress")
         return _validate_progress(payload, runs)
     now = time.time()

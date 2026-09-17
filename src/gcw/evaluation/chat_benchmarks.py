@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -16,12 +16,15 @@ from gcw.evaluation.benchmarks import (
     BenchmarkBackend,
     GCWBenchmarkBackend,
     HFBenchmarkBackend,
-    MAX_NEW_TOKENS,
     _load_tokenizer,
     _trim_at_eos,
     apply_qwen_chat_template,
 )
-from gcw.evaluation.scoring import extract_numeric_answer
+from gcw.evaluation.scoring import (
+    classify_generated_tokens,
+    extract_numeric_answer,
+    token_length_distribution,
+)
 
 GENERAL_CHAT_TASKS = (
     "hellaswag",
@@ -48,7 +51,7 @@ GENERAL_TASK_LIMITS = {
     "arc_challenge": 1_000,
     "mmlu": 20,  # Per subject: 57 subjects, at most 1,140 rows.
 }
-RESULT_SCHEMA = "gcw.chat_benchmark.v3"
+RESULT_SCHEMA = "gcw.chat_benchmark.v8"
 _SELECTION_SEED = 24
 _CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 _FINAL_CHOICES_RE = re.compile(
@@ -357,16 +360,21 @@ def evaluate_chat_examples(
     examples: Sequence[ChatExample],
     *,
     config: EvalConfig,
-    max_new_tokens: int = MAX_NEW_TOKENS,
+    max_new_tokens: int | None = None,
 ) -> dict[str, Any]:
     if not config.apply_chat_template:
         raise ValueError("chat benchmark evaluation requires chat formatting")
+    if max_new_tokens is None:
+        max_new_tokens = config.default_max_new_tokens
+    if type(max_new_tokens) is not int or max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be a positive integer")
+    batch_size = config.fixed_batch_size
     prepared = _prepare_examples(examples, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
         ordered = sorted(prepared, key=lambda item: len(item.prompt_ids))
         batches = [
-            ordered[offset : offset + config.batch_size]
-            for offset in range(0, len(ordered), config.batch_size)
+            ordered[offset : offset + batch_size]
+            for offset in range(0, len(ordered), batch_size)
         ]
         grouping = "length_sorted_left_padding"
     else:
@@ -374,9 +382,9 @@ def evaluate_chat_examples(
         for example in prepared:
             by_length[len(example.prompt_ids)].append(example)
         batches = [
-            group[offset : offset + config.batch_size]
+            group[offset : offset + batch_size]
             for _length, group in sorted(by_length.items())
-            for offset in range(0, len(group), config.batch_size)
+            for offset in range(0, len(group), batch_size)
         ]
         grouping = "exact_prompt_token_length"
 
@@ -405,6 +413,12 @@ def evaluate_chat_examples(
             chunk, output[:, width:].detach().cpu().tolist(), strict=True
         ):
             response_ids, termination = _trim_at_eos(tokens, backend.eos_ids)
+            token_stats = classify_generated_tokens(
+                tokenizer,
+                response_ids,
+                enable_thinking=config.enable_thinking,
+                termination=termination,
+            )
             response = tokenizer.decode(
                 response_ids,
                 skip_special_tokens=True,
@@ -431,6 +445,11 @@ def evaluate_chat_examples(
                 **asdict(source_example),
                 "prompt_tokens": len(item.prompt_ids),
                 "response_tokens": len(response_ids),
+                "answer_tokens": token_stats.answer_tokens,
+                "thinking_tokens": token_stats.thinking_tokens,
+                "thinking_terminated": token_stats.thinking_terminated,
+                "thinking_truncated": token_stats.thinking_truncated,
+                "generation_cap_hit": termination == "max_new_tokens",
                 "termination": termination,
                 "response": response,
                 "prediction": prediction,
@@ -453,6 +472,12 @@ def evaluate_chat_examples(
         truncated = sum(
             row["termination"] == "max_new_tokens" for row in selected
         )
+        response_tokens = sum(int(row["response_tokens"]) for row in selected)
+        answer_tokens = sum(int(row["answer_tokens"]) for row in selected)
+        thinking_tokens = sum(int(row["thinking_tokens"]) for row in selected)
+        thinking_truncated = sum(
+            bool(row["thinking_truncated"]) for row in selected
+        )
         task_results[task] = {
             "correct": correct_count,
             "total": len(selected),
@@ -461,16 +486,38 @@ def evaluate_chat_examples(
             "parse_rate": parsed / len(selected),
             "truncated": truncated,
             "truncation_rate": truncated / len(selected),
-            "response_tokens": sum(
-                int(row["response_tokens"]) for row in selected
+            "response_tokens": response_tokens,
+            "response_tokens_mean": response_tokens / len(selected),
+            "generation_cap_hits": truncated,
+            "generation_cap_hit_rate": truncated / len(selected),
+            **token_length_distribution(
+                Counter(int(row["response_tokens"]) for row in selected),
+                "response_tokens",
             ),
+            "answer_tokens": answer_tokens,
+            "answer_tokens_mean": answer_tokens / len(selected),
+            **token_length_distribution(
+                Counter(int(row["answer_tokens"]) for row in selected),
+                "answer_tokens",
+            ),
+            "thinking_tokens": thinking_tokens,
+            "thinking_tokens_mean": thinking_tokens / len(selected),
+            **token_length_distribution(
+                Counter(int(row["thinking_tokens"]) for row in selected),
+                "thinking_tokens",
+            ),
+            "unterminated_thinking": sum(
+                not bool(row["thinking_terminated"]) for row in selected
+            ),
+            "thinking_truncated": thinking_truncated,
+            "thinking_truncation_rate": thinking_truncated / len(selected),
         }
     return {
         "apply_chat_template": config.apply_chat_template,
         "enable_thinking": config.enable_thinking,
-        "protocol": "official_chat_template_answer_generation_v1",
+        "protocol": "official_chat_template_answer_generation_v2",
         "max_new_tokens": max_new_tokens,
-        "batch_size": config.batch_size,
+        "batch_size": batch_size,
         "grouping": grouping,
         "elapsed_seconds": time.monotonic() - started,
         "peak_memory_bytes": peak_memory,
@@ -487,13 +534,18 @@ def run_chat_benchmarks(
     hf_model: str | Path | None = None,
     tokenizer_path: str | Path | None = None,
     processor_enabled: bool = True,
-    max_new_tokens: int = MAX_NEW_TOKENS,
+    max_new_tokens: int | None = None,
     generation_process_every: int | None = None,
     diffusion_eval_solver_steps: int | None = None,
 ) -> dict[str, Any]:
+    end_to_end_started = time.monotonic()
     config = config or EvalConfig(apply_chat_template=True)
     if not config.apply_chat_template:
         raise ValueError("chat benchmark evaluation requires chat formatting")
+    if max_new_tokens is None:
+        max_new_tokens = config.default_max_new_tokens
+    if type(max_new_tokens) is not int or max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be a positive integer")
     unknown = sorted(set(tasks) - set(CHAT_TASKS))
     if unknown:
         raise ValueError(f"unknown chat benchmark tasks: {unknown}")
@@ -522,10 +574,6 @@ def run_chat_benchmarks(
     if generation_process_every is not None and not processor_enabled:
         raise ValueError(
             "generation_process_every requires processor_enabled=True"
-        )
-    if max_new_tokens != MAX_NEW_TOKENS:
-        raise ValueError(
-            f"chat benchmark protocol requires max_new_tokens={MAX_NEW_TOKENS}"
         )
     if checkpoint is not None and tokenizer_path is None:
         raise ValueError(
@@ -576,6 +624,7 @@ def run_chat_benchmarks(
         field_evaluations = pop_diffusion_field_evaluation_count(backend_model)
         if field_evaluations:
             result["diffusion_field_evaluations"] = field_evaluations
+    result["end_to_end_elapsed_seconds"] = time.monotonic() - end_to_end_started
     payload = {
         "schema": RESULT_SCHEMA,
         "target": backend.identity,

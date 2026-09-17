@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 import torch
 
 from gcw.checkpoint import load_checkpoint
@@ -19,20 +20,22 @@ def run_fineweb(
     *,
     dtype: torch.dtype | str | None = "auto",
 ) -> dict:
+    end_to_end_started = time.monotonic()
     config = config or EvalConfig(batch_size=16)
     if config.limit is not None:
         raise ValueError("FineWeb evaluation does not support a row limit")
     if config.apply_chat_template or config.enable_thinking:
         raise ValueError("FineWeb evaluation does not support chat formatting")
+    batch_size = config.fixed_batch_size
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, cfg, state = load_checkpoint(checkpoint, device=device, dtype=dtype)
     if cfg.family != "smollm" or cfg.vocab_size != COSMO2_VOCAB_SIZE:
         raise ValueError(
             "FineWeb NLL/BPB eval currently expects a cosmo2 SmolLM checkpoint"
         )
-    steps = max(1, eval_tokens // (config.batch_size * cfg.sequence_len))
+    steps = max(1, eval_tokens // (batch_size * cfg.sequence_len))
     batches = data_loader(
-        config.batch_size,
+        batch_size,
         cfg.sequence_len,
         split="val",
         device=device,
@@ -40,6 +43,7 @@ def run_fineweb(
         infinite=True,
     )
     loss_backend = checkpoint_loss_backend(state, torch.device(device))
+    execution_started = time.monotonic()
     nll, bpb = evaluate_nll_bpb(
         model,
         batches,
@@ -51,7 +55,9 @@ def run_fineweb(
         "model_step": state.get("step"),
         "val_nll": nll,
         "val_bpb": bpb,
-        "eval_tokens": steps * config.batch_size * cfg.sequence_len,
-        "batch_size": config.batch_size,
+        "eval_tokens": steps * batch_size * cfg.sequence_len,
+        "batch_size": batch_size,
         "sequence_len": cfg.sequence_len,
+        "elapsed_seconds": time.monotonic() - execution_started,
+        "end_to_end_elapsed_seconds": time.monotonic() - end_to_end_started,
     }

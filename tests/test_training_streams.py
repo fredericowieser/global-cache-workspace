@@ -1,14 +1,17 @@
 import json
+import re
 
 import torch
 import pytest
 
+from gcw.config import DataConfig, TrainConfig
 from gcw.data.shards import ShardWriter
 from gcw.data.training import (
     FineWebBatchStream,
     IndexedJSONL,
     RandomBatchStream,
     SFTBatchStream,
+    training_data_identity,
 )
 
 
@@ -17,6 +20,22 @@ class TinyTokenizer:
 
     def encode(self, text: str) -> list[int]:
         return [ord(char) % 64 + 1 for char in text]
+
+
+def test_training_data_identity_reports_missing_configured_sft_dataset(
+    tmp_path,
+):
+    missing = tmp_path / "missing.jsonl"
+    config = TrainConfig(
+        mode="sft",
+        data=DataConfig(kind="sft", dataset=str(missing)),
+    )
+
+    with pytest.raises(
+        FileNotFoundError,
+        match=re.escape(f"SFT dataset does not exist: {missing.resolve()}"),
+    ):
+        training_data_identity(config)
 
 
 def test_random_stream_is_rank_distinct_and_resumable():

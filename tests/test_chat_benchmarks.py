@@ -122,14 +122,94 @@ def test_chat_evaluation_scores_choices_numbers_and_protocol_telemetry():
         ),
     )
 
-    assert result["protocol"] == "official_chat_template_answer_generation_v1"
-    assert result["max_new_tokens"] == 2048
+    assert result["protocol"] == "official_chat_template_answer_generation_v2"
+    assert result["max_new_tokens"] == 4096
     assert result["enable_thinking"] is True
     assert result["tasks"]["piqa"]["accuracy"] == 1.0
     assert result["tasks"]["svamp"]["accuracy"] == 1.0
     assert result["tasks"]["piqa"]["parse_rate"] == 1.0
     assert result["tasks"]["svamp"]["truncation_rate"] == 0.0
-    assert backend.calls[0][2] == 2048
+    assert result["tasks"]["svamp"]["generation_cap_hits"] == 0
+    assert result["rows"][0]["generation_cap_hit"] is False
+    assert result["tasks"]["piqa"]["answer_tokens"] == 0
+    assert result["tasks"]["piqa"]["thinking_tokens"] == 1
+    assert result["tasks"]["piqa"]["thinking_tokens_stddev"] == 0.0
+    assert result["tasks"]["piqa"]["thinking_tokens_max"] == 1
+    assert result["tasks"]["piqa"]["thinking_tokens_p95"] == 1
+    assert result["tasks"]["piqa"]["response_tokens_max"] == 1
+    assert result["tasks"]["piqa"]["unterminated_thinking"] == 1
+    assert result["tasks"]["piqa"]["thinking_truncation_rate"] == 0.0
+    assert result["rows"][0]["thinking_terminated"] is False
+    assert result["rows"][0]["thinking_truncated"] is False
+    assert backend.calls[0][2] == 4096
+
+
+@pytest.mark.parametrize("enable_thinking", [False, True])
+def test_chat_token_length_distribution_exposes_long_tail(enable_thinking):
+    class VariableLengthBackend(FakeBackend):
+        def generate(self, input_ids, attention_mask, max_new_tokens):
+            suffix = torch.full((input_ids.shape[0], 11), 99, dtype=torch.long)
+            for row, length in enumerate((1, 1, 1, 1, 10)):
+                suffix[row, :length] = 21
+            return torch.cat((input_ids, suffix), dim=1)
+
+    examples = [
+        ChatExample(
+            index, "piqa", "piqa", index, "prompt", "choice", "B", ("x", "y")
+        )
+        for index in range(5)
+    ]
+    result = evaluate_chat_examples(
+        VariableLengthBackend(),
+        FakeTokenizer(),
+        examples,
+        config=EvalConfig(
+            batch_size=5,
+            apply_chat_template=True,
+            enable_thinking=enable_thinking,
+        ),
+    )
+    task = result["tasks"]["piqa"]
+    assert task["response_tokens_mean"] == 2.8
+    assert task["response_tokens_stddev"] == pytest.approx(3.6)
+    assert task["response_tokens_max"] == 10
+    assert task["response_tokens_p50"] == 1
+    assert task["response_tokens_p95"] == 10
+    assert task["response_tokens_above_2x_mean_count"] == 1
+    assert task["response_tokens_above_2x_mean_rate"] == 0.2
+    category = "thinking_tokens" if enable_thinking else "answer_tokens"
+    assert task[f"{category}_stddev"] == pytest.approx(3.6)
+    assert task[f"{category}_max"] == 10
+
+
+def test_chat_cap_hits_include_max_length_and_exclude_eos():
+    class MixedStopBackend(FakeBackend):
+        def generate(self, input_ids, attention_mask, max_new_tokens):
+            assert max_new_tokens == 3
+            return torch.cat(
+                (input_ids, torch.tensor([[21, 22, 23], [21, 99, 99]])), dim=1
+            )
+
+    examples = [
+        ChatExample(
+            index, "piqa", "piqa", index, "prompt", "choice", "B", ("x", "y")
+        )
+        for index in range(2)
+    ]
+    result = evaluate_chat_examples(
+        MixedStopBackend(),
+        FakeTokenizer(),
+        examples,
+        config=EvalConfig(batch_size=2, apply_chat_template=True),
+        max_new_tokens=3,
+    )
+    assert [row["generation_cap_hit"] for row in result["rows"]] == [
+        True,
+        False,
+    ]
+    assert result["tasks"]["piqa"]["generation_cap_hits"] == 1
+    assert result["tasks"]["piqa"]["generation_cap_hit_rate"] == 0.5
+    assert result["tasks"]["piqa"]["truncated"] == 1
 
 
 @pytest.mark.parametrize("target", ["hf", "tf", "bgt"])
@@ -180,7 +260,7 @@ def test_chat_processor_metadata_comes_from_backend(
         processor_enabled=requested,
         **{"hf_model" if target == "hf" else "checkpoint": tmp_path},
     )
-    assert result["schema"] == "gcw.chat_benchmark.v3"
+    assert result["schema"] == "gcw.chat_benchmark.v8"
     for field in (
         "processor_requested",
         "processor_present",
@@ -189,6 +269,7 @@ def test_chat_processor_metadata_comes_from_backend(
         assert result[field] is backend.identity[field]
         assert result[field] is result["target"][field]
     assert result["tasks"]["piqa"]["accuracy"] == 1.0
+    assert result["end_to_end_elapsed_seconds"] >= result["elapsed_seconds"]
     digest = result.pop("payload_sha256")
     assert (
         digest

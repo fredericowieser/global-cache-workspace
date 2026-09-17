@@ -30,9 +30,9 @@ All runs mirror to `huawei-noahs-ark/global-cache-workspace`. Local run artifact
 
 ## Evaluation
 
-Evaluation protocol V3 has two lanes. HellaSwag, PIQA, WinoGrande, ARC Easy, ARC Challenge, MMLU, LogiQA, and AGIEval Gaokao MathQA use their full LM Evaluation Harness datasets, plain prompts, no chat template, and benchmark-native option likelihood. These scores have no thinking dimension. Gaokao follows the official harness rule: its selected argmax option counts as correct when it belongs to the gold set, including the seven multi-answer rows. GSM8K OpenMath, SVAMP, and GSM8K Hard use the official Qwen chat template with thinking off/on, deterministic generation, a 2,048-token cap, and numeric-last-answer scoring. Reports retain processor invocation count, elapsed time, peak VRAM, parse and truncation rates, trainable parameters, generated tokens, throughput, and FLOPs.
+Evaluation protocol V4 has two lanes. HellaSwag, PIQA, WinoGrande, ARC Easy, ARC Challenge, MMLU, LogiQA, and AGIEval Gaokao MathQA use their full LM Evaluation Harness datasets, plain prompts, no chat template, and benchmark-native option likelihood. These scores have no thinking dimension. Gaokao follows the official harness rule: its selected argmax option counts as correct when it belongs to the gold set, including the seven multi-answer rows. GSM8K OpenMath, SVAMP, and GSM8K Hard use the official Qwen chat template with thinking off/on, deterministic generation, a 32,768-token cap, and numeric-last-answer scoring. Reports retain processor invocation count, elapsed time, peak VRAM, parse and truncation rates, trainable parameters, generated tokens, throughput, and FLOPs.
 
-Completed V2 multiple-choice chat-generation results remain supplementary discontinued diagnostics. They never enter V3 aggregate tables. Valid canonical-likelihood and numeric-generation artifacts may be reused byte-for-byte when their hashes and protocol contracts pass validation; reuse manifests record the source path and digest. LAMBADA remains excluded because next-word completion has no meaningful thinking-on analogue.
+Completed V2 multiple-choice chat-generation results remain supplementary discontinued diagnostics. They never enter V4 aggregate tables. Valid canonical-likelihood and numeric-generation artifacts may be reused byte-for-byte when their hashes and protocol contracts pass validation; reuse manifests record the source path and digest. LAMBADA remains excluded because next-word completion has no meaningful thinking-on analogue.
 
 Processor-off results test the frozen-backbone invariant. Any material difference from the untouched instruct checkpoint indicates checkpoint or evaluation drift. High-throughput generation through separate batch controls, padded native decoding, continuous batching, or optimized kernels is deferred to a separately versioned protocol; see [Deferred extension: high-throughput generation](../guides/evaluate.md#deferred-extension-high-throughput-generation).
 
@@ -50,7 +50,7 @@ Every non-processor target gets full canonical-likelihood coverage plus thinking
 
 ### Completed H100 full-SFT numeric result
 
-Protocol V3 numeric generation for the completed 10,902-step full-SFT checkpoint is complete on the `lrc-h100-v1` lineage. Thinking modes remain separate metrics:
+Historical protocol V3 numeric generation for the completed 10,902-step full-SFT checkpoint is complete on the `lrc-h100-v1` lineage. Thinking modes remain separate metrics:
 
 | task | thinking off | thinking on | on − off | truncation off / on |
 | --- | ---: | ---: | ---: | ---: |

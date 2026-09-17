@@ -115,6 +115,42 @@ def test_hf_evaluation_left_pads_variable_length_prompts():
     assert attention_mask.tolist() == [[0, 0, 1], [1, 1, 1]]
     assert result["generation"]["grouping"] == "length_sorted_left_padding"
     assert result["correct"] == 2
+    assert result["answer_tokens"] == 2
+    assert result["answer_tokens_mean"] == 1.0
+    assert result["answer_tokens_stddev"] == 0.0
+    assert result["answer_tokens_max"] == 1
+    assert result["answer_tokens_p99"] == 1
+    assert result["response_tokens_above_2x_mean_count"] == 0
+    assert result["thinking_tokens"] == 0
+    assert result["generation_cap_hits"] == 0
+    assert all(not row["generation_cap_hit"] for row in result["rows"])
+    assert result["thinking_truncation_rate"] == 0.0
+    assert all(row["thinking_terminated"] for row in result["rows"])
+
+
+def test_gsm8k_cap_hits_include_max_length_and_exclude_eos():
+    class MixedStopBackend(RecordingBackend):
+        def generate(self, input_ids, attention_mask, max_new_tokens):
+            assert max_new_tokens == 2
+            return torch.cat((input_ids, torch.tensor([[7, 8], [7, 9]])), dim=1)
+
+    result = evaluate_benchmark(
+        MixedStopBackend(supports_left_padding=True),
+        EvaluationTokenizer(),
+        [
+            {"question": "abc", "answer": "#### 7"},
+            {"question": "abc", "answer": "#### 7"},
+        ],
+        config=EvalConfig(batch_size=2, apply_chat_template=True),
+        max_new_tokens=2,
+        scoring_protocol="lm_eval_flexible_exact",
+    )
+    assert [row["generation_cap_hit"] for row in result["rows"]] == [
+        True,
+        False,
+    ]
+    assert result["generation_cap_hits"] == 1
+    assert result["generation_cap_hit_rate"] == 0.5
 
 
 def test_native_evaluation_keeps_exact_length_batches():
@@ -174,11 +210,28 @@ def test_historical_matrix_reader_selects_one_boolean_condition(tmp_path):
         )
     )
     result = load_benchmark_result(path, enable_thinking=True)
-    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v9"
     assert result["enable_thinking"] is True
     assert result["apply_chat_template"] is True
     assert result["accuracy"] == 0.75
     assert "mode" not in result and "modes" not in result["config"]
+
+
+@pytest.mark.parametrize("version", [4, 5, 6, 7, 8])
+def test_gsm8k_reader_retains_prior_result_schemas(tmp_path, version):
+    path = tmp_path / "result.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": f"gcw.gsm8k_reproduction.v{version}",
+                "enable_thinking": False,
+                "accuracy": 0.5,
+            }
+        )
+    )
+    result = load_benchmark_result(path, enable_thinking=False)
+    assert result["accuracy"] == 0.5
+    assert result["schema"] == f"gcw.gsm8k_reproduction.v{version}"
 
 
 @pytest.fixture
@@ -513,12 +566,13 @@ def test_hf_has_no_gcw_processor_and_matrix_records_request(
             processor_enabled=requested,
         )
     )
-    assert result["schema"] == "gcw.gsm8k_reproduction.v5"
+    assert result["schema"] == "gcw.gsm8k_reproduction.v9"
     assert result["config"]["apply_chat_template"] is True
     assert result["config"]["enable_thinking"] is False
     assert result["config"]["processor_requested"] is requested
     assert "processor_enabled" not in result["config"]
     assert result["target"] == backend.identity
+    assert result["end_to_end_elapsed_seconds"] >= 0.0
     assert json.loads(
         (tmp_path / "result" / "result.json").read_text()
     ) == json.loads(json.dumps(result))

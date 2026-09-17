@@ -398,14 +398,19 @@ class TrainConfig:
 
 @dataclass
 class EvalConfig:
-    batch_size: int = 8
+    batch_size: int | Literal["auto"] = 8
+    max_batch_size: int = 64
     limit: int | None = None
     apply_chat_template: bool = False
     enable_thinking: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.batch_size) is not int or self.batch_size <= 0:
-            raise ValueError("batch_size must be a positive integer")
+        if self.batch_size != "auto" and (
+            type(self.batch_size) is not int or self.batch_size <= 0
+        ):
+            raise ValueError("batch_size must be 'auto' or a positive integer")
+        if type(self.max_batch_size) is not int or self.max_batch_size <= 0:
+            raise ValueError("max_batch_size must be a positive integer")
         if self.limit is not None and (
             type(self.limit) is not int or self.limit <= 0
         ):
@@ -418,3 +423,15 @@ class EvalConfig:
             raise ValueError(
                 "enable_thinking requires apply_chat_template=True"
             )
+
+    @property
+    def fixed_batch_size(self) -> int:
+        if self.batch_size == "auto":
+            raise ValueError(
+                "batch_size='auto' is supported only by lm-eval suites"
+            )
+        return self.batch_size
+
+    @property
+    def default_max_new_tokens(self) -> int:
+        return 4096 if self.enable_thinking else 2048

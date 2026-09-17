@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Submit a small worker array that consumes a list of configs.
+# Submit a small worker array that consumes a list of configs or evaluation tasks.
 #
 # The Slurm backend uses one array submission. The local backend starts detached,
 # GPU-pinned process groups and records their PIDs. With either backend, each worker
@@ -11,16 +11,25 @@ repo_root="${GCW_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -
 script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 cd "$repo_root"
 
+load_environment_file() {
+  local path="$1"
+  local assignment
+
+  while IFS= read -r -d '' assignment; do
+    export "$assignment"
+  done < "$path"
+}
+
 JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
 BACKEND="${BACKEND:-auto}"
-PARTITION="${PARTITION:-agent-xlong-15,agent-xlong}"
+PARTITION="${PARTITION:-}"
 ARRAY_WORKERS="${ARRAY_WORKERS:-1}"
-ARRAY_TIME="${ARRAY_TIME:-5-00:00:00}"
+ARRAY_TIME="${ARRAY_TIME:-}"
 EXCLUDE="${EXCLUDE:-}"
 DEPENDENCY="${DEPENDENCY:-}"
 GPUS="${GPUS:-1}"
-CPUS_PER_TASK="${CPUS_PER_TASK:-8}"
-MEM="${MEM:-180G}"
+CPUS_PER_TASK="${CPUS_PER_TASK:-}"
+MEM="${MEM:-}"
 WANDB_MODE="${WANDB_MODE:-online}"
 PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 UV_EXTRAS="${UV_EXTRAS:---extra gpu --extra eval --extra qwen35}"
@@ -28,10 +37,13 @@ TRAIN_UV_EXTRAS="${TRAIN_UV_EXTRAS:-$UV_EXTRAS}"
 EVAL_UV_EXTRAS="${EVAL_UV_EXTRAS:---extra gpu --extra eval --extra qwen35}"
 EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-1}"
 EVAL_ONLY="${EVAL_ONLY:-0}"
-EVAL_SUITE="${EVAL_SUITE:-paper7-legacy}"
+EVAL_SUITE="${EVAL_SUITE:-paper7}"
 EVAL_GPUS="${EVAL_GPUS:-1}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
+EVAL_MAX_BATCH_SIZE="${EVAL_MAX_BATCH_SIZE:-64}"
 EVAL_CHECKPOINT_STEP="${EVAL_CHECKPOINT_STEP:-}"
+EVAL_THINKING_MODES="${EVAL_THINKING_MODES:-}"
+GCW_EVAL_TASK_MODE="${GCW_EVAL_TASK_MODE:-0}"
 GENERATION_PROCESS_EVERY="${GENERATION_PROCESS_EVERY:-}"
 EVAL_HEAD_SELECTION_METHOD="${EVAL_HEAD_SELECTION_METHOD:-}"
 GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"
@@ -39,7 +51,6 @@ KEEP_STEP_CHECKPOINTS="${KEEP_STEP_CHECKPOINTS:-auto}"
 KEEP_STEP_CHECKPOINT_EVERY="${KEEP_STEP_CHECKPOINT_EVERY:-1000}"
 OUT_DIR="${OUT_DIR:-results}"
 
-OPENMATH_DATA="${OPENMATH_DATA:-/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl}"
 SFT_BACKBONE="${SFT_BACKBONE:-/mnt/jfs-01/shared/gcw/checkpoints/sft_backbones/llama32_1b/tf/model.safetensors}"
 TOKENIZER_DIR="${TOKENIZER_DIR:-/mnt/jfs-01/shared/bottleneck_llm/sft/llama-3.2-1b/final_model}"
 LOCAL_GPUS="${LOCAL_GPUS:-}"
@@ -56,7 +67,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   scripts/cluster/submit_array.sh [--backend auto|slurm|local] [--workers N] [--local-gpus LIST]
-                                  [--configs-file FILE] [--dry-run] CONFIG [CONFIG ...]
+                                  [--configs-file FILE | --eval-tasks-file FILE]
+                                  [--dry-run] [CONFIG ...]
   scripts/cluster/submit_array.sh status STATE_DIR
   scripts/cluster/submit_array.sh cancel [--force] STATE_DIR
 
@@ -66,12 +78,16 @@ Options:
   --local-gpus LIST    Comma-separated GPU IDs available to local workers. By default, uses
                        GPU indices reported by nvidia-smi.
   --configs-file FILE  File containing one config path per line. Blank lines and # comments are ignored.
+  --eval-tasks-file FILE
+                       Tab-separated CHECKPOINT, OUTPUT, and THINKING rows for eval-only workers.
   --dry-run            Print the submission plan without starting workers.
 
 Common environment overrides:
   BACKEND, JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
+  Slurm chooses partition, time, CPUs, and memory when their overrides are unset.
   EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
-  EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, OUT_DIR
+  EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, EVAL_MAX_BATCH_SIZE, OUT_DIR
+  EVAL_THINKING_MODES (comma-separated true/false values)
   EVAL_CHECKPOINT_STEP, GENERATION_PROCESS_EVERY
   EVAL_HEAD_SELECTION_METHOD
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
@@ -103,6 +119,80 @@ positive_int() {
     echo "$name must be a positive integer; got '$value'" >&2
     exit 1
   fi
+}
+
+validate_eval_batching() {
+  if [[ -z "$EVAL_BATCH_SIZE" ]]; then
+    return
+  fi
+  if [[ "$EVAL_BATCH_SIZE" != "auto" ]]; then
+    positive_int EVAL_BATCH_SIZE "$EVAL_BATCH_SIZE"
+    return
+  fi
+  case "$EVAL_SUITE" in
+    paper7|paper7-legacy|all|math|general|tasks) ;;
+    *)
+      echo "EVAL_BATCH_SIZE=auto is not supported for $EVAL_SUITE evaluation" >&2
+      exit 1
+      ;;
+  esac
+  positive_int EVAL_MAX_BATCH_SIZE "$EVAL_MAX_BATCH_SIZE"
+}
+
+validate_eval_thinking_modes() {
+  local mode
+  local -a modes
+  if [[ -z "$EVAL_THINKING_MODES" ]]; then
+    return
+  fi
+  if [[ "$EVAL_SUITE" == "fineweb" ]]; then
+    echo "EVAL_THINKING_MODES is not supported for fineweb evaluation" >&2
+    exit 1
+  fi
+  IFS=',' read -r -a modes <<< "$EVAL_THINKING_MODES"
+  for mode in "${modes[@]}"; do
+    if [[ "$mode" != "true" && "$mode" != "false" ]]; then
+      echo "EVAL_THINKING_MODES values must be true or false; got '$mode'" >&2
+      exit 1
+    fi
+  done
+}
+
+write_slurm_environment() {
+  local path="$1"
+  local config_list="$2"
+  local state_dir="$3"
+
+  env -0 \
+    "GCW_ARRAY_MODE=worker" \
+    "GCW_REPO_ROOT=$repo_root" \
+    "CONFIG_LIST=$config_list" \
+    "STATE_DIR=$state_dir" \
+    "JOB_NAME=$JOB_NAME" \
+    "GPUS=$GPUS" \
+    "EVAL_GPUS=$EVAL_GPUS" \
+    "EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN" \
+    "EVAL_ONLY=$EVAL_ONLY" \
+    "EVAL_SUITE=$EVAL_SUITE" \
+    "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE" \
+    "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE" \
+    "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP" \
+    "EVAL_THINKING_MODES=$EVAL_THINKING_MODES" \
+    "GCW_EVAL_TASK_MODE=$GCW_EVAL_TASK_MODE" \
+    "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY" \
+    "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD" \
+    "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS" \
+    "WANDB_MODE=$WANDB_MODE" \
+    "PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF" \
+    "UV_EXTRAS=$UV_EXTRAS" \
+    "TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS" \
+    "EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS" \
+    "KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS" \
+    "KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY" \
+    "OUT_DIR=$OUT_DIR" \
+    "SFT_BACKBONE=$SFT_BACKBONE" \
+    "TOKENIZER_DIR=$TOKENIZER_DIR" \
+    "SLURM_EXPORT_ENV=ALL" > "$path"
 }
 
 validate_backend() {
@@ -217,8 +307,11 @@ worker_uv_run_eval() {
 run_eval() {
   local checkpoint="$1"
   local out="$2"
+  local enable_thinking="${3:-}"
   local ngpu="$EVAL_GPUS"
   local gcw_args=(eval "$EVAL_SUITE" --checkpoint "$checkpoint")
+
+  validate_eval_batching
 
   if [[ -n "${LIMIT:-}" && "$EVAL_SUITE" != "fineweb" ]]; then
     gcw_args+=(--limit "$LIMIT")
@@ -226,12 +319,18 @@ run_eval() {
   if [[ -n "$EVAL_BATCH_SIZE" ]]; then
     gcw_args+=(--batch-size "$EVAL_BATCH_SIZE")
   fi
+  if [[ "$EVAL_BATCH_SIZE" == "auto" ]]; then
+    gcw_args+=(--max-batch-size "$EVAL_MAX_BATCH_SIZE")
+  fi
   if [[ -n "$GENERATION_PROCESS_EVERY" ]]; then
     positive_int GENERATION_PROCESS_EVERY "$GENERATION_PROCESS_EVERY"
     gcw_args+=(--generation-process-every "$GENERATION_PROCESS_EVERY")
   fi
   if [[ -n "$EVAL_HEAD_SELECTION_METHOD" ]]; then
     gcw_args+=(--head-selection-method "$EVAL_HEAD_SELECTION_METHOD")
+  fi
+  if [[ -n "$enable_thinking" ]]; then
+    gcw_args+=(--enable-thinking "$enable_thinking")
   fi
   if [[ "$EVAL_SUITE" == "fineweb" && -n "${DATA_DIR:-}" ]]; then
     gcw_args+=(--data-dir "$DATA_DIR")
@@ -245,7 +344,9 @@ run_eval() {
   fi
 
   if [[ "$EVAL_SUITE" != "fineweb" && "$ngpu" -gt 1 ]]; then
-    worker_uv_run_eval torchrun --standalone --nproc-per-node="$ngpu" -m gcw.cli "${gcw_args[@]}" || return $?
+    worker_uv_run_eval torchrun --standalone --nproc-per-node="$ngpu" --no-python \
+      bash -c 'export TRITON_CACHE_DIR="${TRITON_CACHE_DIR}-rank-${LOCAL_RANK}"; exec python -m gcw.cli "$@"' \
+      bash "${gcw_args[@]}" || return $?
   else
     worker_uv_run_eval gcw "${gcw_args[@]}" || return $?
   fi
@@ -254,14 +355,50 @@ run_eval() {
   fi
 }
 
+run_eval_modes() {
+  local checkpoint="$1"
+  local out="$2"
+  local mode suffix
+  local -a modes
+  if [[ -z "$EVAL_THINKING_MODES" ]]; then
+    run_eval "$checkpoint" "$out"
+    return
+  fi
+  IFS=',' read -r -a modes <<< "$EVAL_THINKING_MODES"
+  for mode in "${modes[@]}"; do
+    if [[ "$mode" == "true" ]]; then
+      suffix="on"
+    else
+      suffix="off"
+    fi
+    run_eval "$checkpoint" "${out%.json}_thinking-${suffix}.json" "$mode"
+  done
+}
+
 run_eval_manifest() {
   local manifest="$1"
   while IFS=$'\t' read -r manifest_checkpoint manifest_out; do
     if [[ -z "$manifest_checkpoint" ]]; then
       continue
     fi
-    run_eval "$manifest_checkpoint" "$manifest_out"
+    run_eval_modes "$manifest_checkpoint" "$manifest_out"
   done < "$manifest"
+}
+
+prepare_worker_environment() {
+  local triton_run_id
+
+  export PATH="$HOME/.local/bin:$PATH"
+  export GCW_STRICT_FLASH="${GCW_STRICT_FLASH:-1}"
+  if [[ -d "$PWD/.venv/include/python3.12" ]]; then
+    export CPATH="$PWD/.venv/include/python3.12:$PWD/.venv/include${CPATH:+:$CPATH}"
+  fi
+  export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
+  export WANDB_MODE
+  export PYTORCH_CUDA_ALLOC_CONF
+  triton_run_id="${SLURM_JOB_ID:-$(basename "$STATE_DIR")}"
+  export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/gcw-triton-${triton_run_id}-${SLURM_ARRAY_TASK_ID:-0}}"
+  mkdir -p "$WANDB_DIR" slurm_out "$OUT_DIR"
 }
 
 run_one_config() {
@@ -269,7 +406,6 @@ run_one_config() {
   local output_dir max_steps keep_step_checkpoints run_name manifest step out nproc
 
   require_path "$config"
-  require_path "$OPENMATH_DATA"
 
   output_dir="$(config_output_dir "$config")"
   if [[ -z "$output_dir" ]]; then
@@ -300,17 +436,9 @@ run_one_config() {
   fi
   echo "Output dir: $output_dir"
 
-  export PATH="$HOME/.local/bin:$PATH"
-  export GCW_STRICT_FLASH="${GCW_STRICT_FLASH:-1}"
-  if [[ -d "$PWD/.venv/include/python3.12" ]]; then
-    export CPATH="$PWD/.venv/include/python3.12:$PWD/.venv/include${CPATH:+:$CPATH}"
-  fi
-  export WANDB_DIR="${WANDB_DIR:-$PWD/wandb}"
-  export WANDB_MODE
-  export PYTORCH_CUDA_ALLOC_CONF
+  prepare_worker_environment
   export GCW_KEEP_STEP_CHECKPOINTS="$keep_step_checkpoints"
   export GCW_STEP_CHECKPOINT_EVERY="$KEEP_STEP_CHECKPOINT_EVERY"
-  mkdir -p "$WANDB_DIR" slurm_out
 
   if [[ "$EVAL_ONLY" != "1" ]]; then
     worker_uv_run_train python scripts/cluster/check_cuda_env.py || return $?
@@ -318,7 +446,9 @@ run_one_config() {
     if [[ "$nproc" == "1" ]]; then
       worker_uv_run_train gcw train --config "$config" || return $?
     else
-      worker_uv_run_train torchrun --standalone --nproc_per_node="$nproc" -m gcw.cli train --config "$config" || return $?
+      worker_uv_run_train torchrun --standalone --nproc_per_node="$nproc" --no-python \
+        bash -c 'export TRITON_CACHE_DIR="${TRITON_CACHE_DIR}-rank-${LOCAL_RANK}"; exec python -m gcw.cli train --config "$1"' \
+        bash "$config" || return $?
     fi
 
     if [[ "$EVAL_AFTER_TRAIN" != "1" ]]; then
@@ -331,7 +461,7 @@ run_one_config() {
   export GCW_EVAL_SKIP_TASKS
   worker_uv_run_eval python scripts/cluster/check_cuda_env.py || return $?
   if [[ -n "${CHECKPOINT:-}" || -n "${OUT:-}" ]]; then
-    run_eval "${CHECKPOINT:-$output_dir/checkpoint}" "${OUT:-${OUT_DIR}/${run_name}_${OUT_SUFFIX:-final}_${EVAL_SUITE}.json}"
+    run_eval_modes "${CHECKPOINT:-$output_dir/checkpoint}" "${OUT:-${OUT_DIR}/${run_name}_${OUT_SUFFIX:-final}_${EVAL_SUITE}.json}"
   elif [[ -n "$EVAL_CHECKPOINT_STEP" ]]; then
     positive_int EVAL_CHECKPOINT_STEP "$EVAL_CHECKPOINT_STEP"
     out="${OUT_DIR}/${run_name}_step${EVAL_CHECKPOINT_STEP}"
@@ -339,7 +469,7 @@ run_one_config() {
       out+="_${OUT_SUFFIX}"
     fi
     out+="_${EVAL_SUITE}.json"
-    run_eval "$output_dir/checkpoint-$EVAL_CHECKPOINT_STEP" "$out"
+    run_eval_modes "$output_dir/checkpoint-$EVAL_CHECKPOINT_STEP" "$out"
   elif [[ "$keep_step_checkpoints" == "1" ]]; then
     manifest="${EVAL_MANIFEST:-slurm_out/${run_name}_${EVAL_SUITE}_checkpoints.tsv}"
     : > "$manifest"
@@ -349,8 +479,34 @@ run_one_config() {
     done
     run_eval_manifest "$manifest"
   else
-    run_eval "$output_dir/checkpoint" "${OUT_DIR}/${run_name}_final_${EVAL_SUITE}.json"
+    run_eval_modes "$output_dir/checkpoint" "${OUT_DIR}/${run_name}_final_${EVAL_SUITE}.json"
   fi
+}
+
+run_one_eval_task() {
+  local task="$1"
+  local checkpoint out enable_thinking extra
+
+  IFS=$'\t' read -r checkpoint out enable_thinking extra <<< "$task"
+  require_path "$checkpoint"
+  if [[ -z "$out" || -z "$enable_thinking" || -n "$extra" ]]; then
+    echo "Invalid evaluation task; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING: $task" >&2
+    return 1
+  fi
+  case "$enable_thinking" in
+    true|false) ;;
+    *)
+      echo "Evaluation task thinking mode must be true or false: $task" >&2
+      return 1
+      ;;
+  esac
+
+  prepare_worker_environment
+  export GCW_EVAL_SKIP_TASKS
+
+  echo "=== Evaluating $checkpoint (thinking=$enable_thinking) ==="
+  worker_uv_run_eval python scripts/cluster/check_cuda_env.py || return $?
+  run_eval "$checkpoint" "$out" "$enable_thinking"
 }
 
 claim_next_config() {
@@ -361,7 +517,7 @@ claim_next_config() {
 
     if ! config="$(
       awk '
-        ARGIND == 1 { claimed[$0] = 1; next }
+        FILENAME == ARGV[1] { claimed[$0] = 1; next }
         /^[[:space:]]*($|#)/ { next }
         !($0 in claimed) { print; exit }
       ' "$CLAIMED_FILE" "$CONFIG_LIST"
@@ -377,6 +533,14 @@ claim_next_config() {
 
     echo "STOP"
   ) 200>"$LOCK_FILE"
+}
+
+run_claimed_item() {
+  if [[ "$GCW_EVAL_TASK_MODE" == "1" ]]; then
+    run_one_eval_task "$1"
+  else
+    run_one_config "$1"
+  fi
 }
 
 worker_main() {
@@ -402,7 +566,7 @@ worker_main() {
       echo "No unclaimed configs remain; exiting"
       break
     fi
-    if run_one_config "$claim_result"; then
+    if run_claimed_item "$claim_result"; then
       (
         flock -x 200
         printf "%s\n" "$claim_result" >> "$COMPLETED_FILE"
@@ -449,6 +613,40 @@ write_config_list() {
     echo "No configs provided" >&2
     usage
     exit 1
+  fi
+}
+
+write_eval_task_list() {
+  local list_path="$1"
+  local tasks_file="$2"
+  local line checkpoint out enable_thinking extra
+  local line_number=0
+
+  : > "$list_path"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_number=$((line_number + 1))
+    if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+      continue
+    fi
+    IFS=$'\t' read -r checkpoint out enable_thinking extra <<< "$line"
+    if [[ -z "$checkpoint" || -z "$out" || -z "$enable_thinking" || -n "$extra" ]]; then
+      echo "Invalid evaluation task on line $line_number of $tasks_file; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING" >&2
+      return 1
+    fi
+    if [[ ! -e "$checkpoint" ]]; then
+      echo "Missing checkpoint on line $line_number of $tasks_file: $checkpoint" >&2
+      return 1
+    fi
+    if [[ "$enable_thinking" != "true" && "$enable_thinking" != "false" ]]; then
+      echo "Evaluation task thinking mode must be true or false on line $line_number of $tasks_file; got '$enable_thinking'" >&2
+      return 1
+    fi
+    printf "%s\t%s\t%s\n" "$checkpoint" "$out" "$enable_thinking" >> "$list_path"
+  done < "$tasks_file"
+
+  if [[ ! -s "$list_path" ]]; then
+    echo "No evaluation tasks provided in $tasks_file" >&2
+    return 1
   fi
 }
 
@@ -674,7 +872,10 @@ start_local_worker() {
     "EVAL_ONLY=$EVAL_ONLY"
     "EVAL_SUITE=$EVAL_SUITE"
     "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE"
+    "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE"
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP"
+    "EVAL_THINKING_MODES=$EVAL_THINKING_MODES"
+    "GCW_EVAL_TASK_MODE=$GCW_EVAL_TASK_MODE"
     "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY"
     "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD"
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS"
@@ -686,7 +887,6 @@ start_local_worker() {
     "KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS"
     "KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY"
     "OUT_DIR=$OUT_DIR"
-    "OPENMATH_DATA=$OPENMATH_DATA"
     "SFT_BACKBONE=$SFT_BACKBONE"
     "TOKENIZER_DIR=$TOKENIZER_DIR"
   )
@@ -920,8 +1120,8 @@ cancel_main() {
 }
 
 launcher_main() {
-  local configs_file="" dry_run=0 state_dir config_list workers_arg
-  local alloc_gpus
+  local configs_file="" eval_tasks_file="" dry_run=0 state_dir config_list workers_arg
+  local alloc_gpus export_file
   local args=()
 
   while [[ $# -gt 0 ]]; do
@@ -947,6 +1147,14 @@ launcher_main() {
         configs_file="${2:-}"
         if [[ -z "$configs_file" ]]; then
           echo "--configs-file requires a path" >&2
+          exit 1
+        fi
+        shift 2
+        ;;
+      --eval-tasks-file)
+        eval_tasks_file="${2:-}"
+        if [[ -z "$eval_tasks_file" ]]; then
+          echo "--eval-tasks-file requires a path" >&2
           exit 1
         fi
         shift 2
@@ -984,6 +1192,24 @@ launcher_main() {
   positive_int ARRAY_WORKERS "$ARRAY_WORKERS"
   positive_int GPUS "$GPUS"
   positive_int EVAL_GPUS "$EVAL_GPUS"
+  validate_eval_batching
+  validate_eval_thinking_modes
+  if [[ -n "$eval_tasks_file" ]]; then
+    if [[ -n "$configs_file" || "${#args[@]}" -gt 0 ]]; then
+      echo "--eval-tasks-file cannot be combined with configs" >&2
+      return 1
+    fi
+    if [[ "$EVAL_ONLY" != "1" ]]; then
+      echo "--eval-tasks-file requires EVAL_ONLY=1" >&2
+      return 1
+    fi
+    if [[ -n "$EVAL_CHECKPOINT_STEP" || -n "$EVAL_THINKING_MODES" ]]; then
+      echo "--eval-tasks-file cannot be combined with EVAL_CHECKPOINT_STEP or EVAL_THINKING_MODES" >&2
+      return 1
+    fi
+    require_path "$eval_tasks_file"
+    GCW_EVAL_TASK_MODE=1
+  fi
   if [[ -n "$GENERATION_PROCESS_EVERY" ]]; then
     positive_int GENERATION_PROCESS_EVERY "$GENERATION_PROCESS_EVERY"
     if [[ "$EVAL_SUITE" == "fineweb" ]]; then
@@ -1047,7 +1273,11 @@ launcher_main() {
   fi
   mkdir -p "$state_dir"
   config_list="$state_dir/configs.txt"
-  write_config_list "$config_list" "$configs_file" "${args[@]}"
+  if [[ -n "$eval_tasks_file" ]]; then
+    write_eval_task_list "$config_list" "$eval_tasks_file"
+  else
+    write_config_list "$config_list" "$configs_file" "${args[@]}"
+  fi
 
   if [[ "$BACKEND" == "local" ]]; then
     local_launcher "$state_dir" "$config_list" "$alloc_gpus" "$dry_run"
@@ -1055,6 +1285,10 @@ launcher_main() {
   fi
 
   workers_arg="0-$((ARRAY_WORKERS - 1))"
+  export_file="$state_dir/slurm-environment"
+  write_slurm_environment "$export_file" "$config_list" "$state_dir"
+  chmod 600 "$export_file"
+  load_environment_file "$export_file"
   echo "Backend: slurm"
   echo "Config list: $config_list"
   echo "Submitting $ARRAY_WORKERS worker(s) as array $workers_arg"
@@ -1063,17 +1297,23 @@ launcher_main() {
     sbatch
     --parsable
     --job-name="$JOB_NAME"
-    --partition="$PARTITION"
-    --time="$ARRAY_TIME"
-    --nodes=1
-    --ntasks-per-node=1
     --gres="gpu:$alloc_gpus"
-    --cpus-per-task="$CPUS_PER_TASK"
-    --mem="$MEM"
     --array="$workers_arg"
     --output="$SLURM_LOG_DIR/${JOB_NAME}-%A_%a.out"
-    --export="ALL,GCW_ARRAY_MODE=worker,GCW_REPO_ROOT=$repo_root,CONFIG_LIST=$config_list,STATE_DIR=$state_dir,JOB_NAME=$JOB_NAME,GPUS=$GPUS,EVAL_GPUS=$EVAL_GPUS,EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN,EVAL_ONLY=$EVAL_ONLY,EVAL_SUITE=$EVAL_SUITE,EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE,EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP,GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY,EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD,GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS,WANDB_MODE=$WANDB_MODE,PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF,UV_EXTRAS=$UV_EXTRAS,TRAIN_UV_EXTRAS=$TRAIN_UV_EXTRAS,EVAL_UV_EXTRAS=$EVAL_UV_EXTRAS,KEEP_STEP_CHECKPOINTS=$KEEP_STEP_CHECKPOINTS,KEEP_STEP_CHECKPOINT_EVERY=$KEEP_STEP_CHECKPOINT_EVERY,OUT_DIR=$OUT_DIR,OPENMATH_DATA=$OPENMATH_DATA,SFT_BACKBONE=$SFT_BACKBONE,TOKENIZER_DIR=$TOKENIZER_DIR"
+    --export=ALL
   )
+  if [[ -n "$PARTITION" ]]; then
+    sbatch_cmd+=(--partition="$PARTITION")
+  fi
+  if [[ -n "$ARRAY_TIME" ]]; then
+    sbatch_cmd+=(--time="$ARRAY_TIME")
+  fi
+  if [[ -n "$CPUS_PER_TASK" ]]; then
+    sbatch_cmd+=(--cpus-per-task="$CPUS_PER_TASK")
+  fi
+  if [[ -n "$MEM" ]]; then
+    sbatch_cmd+=(--mem="$MEM")
+  fi
   if [[ -n "$DEPENDENCY" ]]; then
     sbatch_cmd+=(--dependency="$DEPENDENCY")
   fi
@@ -1085,10 +1325,17 @@ launcher_main() {
   if [[ "$dry_run" == "1" ]]; then
     printf '%q ' "${sbatch_cmd[@]}"
     printf '\n'
+    rm -f "$export_file"
     return
   fi
 
-  job_id="$("${sbatch_cmd[@]}")"
+  if job_id="$("${sbatch_cmd[@]}")"; then
+    rm -f "$export_file"
+  else
+    rc="$?"
+    rm -f "$export_file"
+    return "$rc"
+  fi
   echo "Submitted array job $job_id"
 }
 

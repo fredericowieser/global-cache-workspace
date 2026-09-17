@@ -296,7 +296,7 @@ def _plan(
             "math campaign epoch derivation differs from the approved contract"
         )
     return {
-        "schema": "gcw.math_experiment_series.v2",
+        "schema": "gcw.math_experiment_series.v3",
         "experiment": args.experiment,
         "source_commit": source_commit,
         "status": "planned_not_started",
@@ -356,7 +356,7 @@ def _plan(
                 "prompt": "official_chat_template",
                 "apply_chat_template": True,
                 "enable_thinking": [False, True],
-                "max_new_tokens": 2048,
+                "max_new_tokens": 32768,
                 "coverage": "full",
                 "scoring": "numeric_last_answer",
             },
@@ -892,12 +892,12 @@ def _numeric_summary(
             "payload_sha256": payload["payload_sha256"],
         }
     return {
-        "schema": "gcw.numeric_math_benchmark_composite.v1",
+        "schema": "gcw.numeric_math_benchmark_composite.v2",
         "arm": arm,
         "processor": processor,
         "enable_thinking": enable_thinking,
-        "protocol": "official_chat_template_numeric_last_v1",
-        "max_new_tokens": 2048,
+        "protocol": "official_chat_template_numeric_last_v2",
+        "max_new_tokens": 32768,
         "tasks": tasks,
     }
 
@@ -912,7 +912,7 @@ def _validate_numeric_result(
         is not enable_thinking
         or payload.get("mode", historical) != historical
         or payload.get("apply_chat_template", True) is not True
-        or payload.get("max_new_tokens") != 2048
+        or payload.get("max_new_tokens") != 32768
     ):
         raise ValueError(
             f"numeric result has the wrong generation contract: {result}"
@@ -973,7 +973,7 @@ def _evaluate_numeric_condition(
             _reuse_result(
                 legacy,
                 task_result,
-                protocol="official_chat_template_numeric_last_v1",
+                protocol="official_chat_template_numeric_last_v2",
             )
         if not task_result.is_file():
             task_cell.mkdir(parents=True, exist_ok=True)
@@ -988,7 +988,7 @@ def _evaluate_numeric_condition(
                 "--batch-size",
                 str(args.eval_batch_size),
                 "--max-new-tokens",
-                "2048",
+                "32768",
                 "--processor",
                 processor,
                 "--tokenizer-path",

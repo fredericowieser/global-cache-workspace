@@ -33,22 +33,22 @@ def test_paper7_legacy_task_order_and_skip(monkeypatch):
     ]
 
 
-def test_legacy_task_yaml_uses_thinking_generation_budget():
+def test_legacy_task_yaml_uses_evaluator_generation_budget():
     root = Path("configs/tasks_legacy/paper7")
     gsm8k = (root / "gsm8k_openmath.yaml").read_text()
     svamp = (root / "svamp.yaml").read_text()
     hard = (root / "gsm8k_hard.yaml").read_text()
     theoremqa = (root / "theoremqa.yaml").read_text()
     logiqa = (root / "logiqa.yaml").read_text()
-    assert "max_gen_toks: 2048" in gsm8k
-    assert "version: 1.2" in gsm8k
+    assert "max_gen_toks:" not in gsm8k
+    assert "version: 1.3" in gsm8k
     assert "revision:" not in gsm8k
-    assert "max_gen_toks: 2048" in svamp
-    assert "version: 1.1" in svamp
-    assert "max_gen_toks: 2048" in hard
-    assert "version: 1.1" in hard
-    assert "max_gen_toks: 2048" in theoremqa
-    assert "version: 2.1" in theoremqa
+    assert "max_gen_toks:" not in svamp
+    assert "version: 1.2" in svamp
+    assert "max_gen_toks:" not in hard
+    assert "version: 1.2" in hard
+    assert "max_gen_toks:" not in theoremqa
+    assert "version: 2.2" in theoremqa
     assert "version: 1.1" in logiqa
 
 
@@ -343,6 +343,21 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(
     monkeypatch.setattr(
         paper7, "_eval_device", lambda local_rank: torch.device("cpu")
     )
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "reset_peak_memory_stats",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "max_memory_allocated",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
     monkeypatch.setattr(
         paper7, "_write_progress", lambda progress, merged: None
     )
@@ -387,14 +402,36 @@ def test_run_paper7_legacy_calls_lm_eval_with_martin_protocol(
         "n-shot",
         "versions",
         "higher_is_better",
+        "gcw_runtime",
     }
     assert "gcw_protocol" not in out
-    assert "gcw_runtime" not in out
+    assert "evaluation" in out["gcw_runtime"]
+    assert "gsm8k_openmath" in out["gcw_runtime"]
 
 
-def test_run_paper7_uses_mixed_prompt_protocol(monkeypatch):
+@pytest.mark.parametrize(
+    "enable_thinking,max_new_tokens", [(False, 2048), (True, 4096)]
+)
+def test_run_paper7_uses_mixed_prompt_protocol(
+    monkeypatch, enable_thinking, max_new_tokens
+):
     monkeypatch.setattr(paper7, "HAS_LM_EVAL", True)
     monkeypatch.setattr(lm_eval_adapter, "HAS_LM_EVAL", True)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.cuda,
+        "reset_peak_memory_stats",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
+    monkeypatch.setattr(
+        torch.cuda,
+        "max_memory_allocated",
+        lambda device: pytest.fail(
+            "CUDA instrumentation received a CPU device"
+        ),
+    )
 
     calls = []
 
@@ -469,7 +506,7 @@ def test_run_paper7_uses_mixed_prompt_protocol(monkeypatch):
         config=EvalConfig(
             batch_size=16,
             apply_chat_template=True,
-            enable_thinking=True,
+            enable_thinking=enable_thinking,
         ),
     )
 
@@ -487,38 +524,44 @@ def test_run_paper7_uses_mixed_prompt_protocol(monkeypatch):
         "gsm8k_hard": True,
     }
     assert out["gcw_protocol"] == {
-        "name": "paper7_mixed_prompt_v1",
-        "version": 1,
+        "name": "paper7_mixed_prompt_v2",
+        "version": 2,
         "tasks": {
             "gsm8k_openmath": {
                 "apply_chat_template": True,
-                "enable_thinking": True,
+                "enable_thinking": enable_thinking,
                 "request_type": "answer_generation",
+                "max_new_tokens": max_new_tokens,
             },
             "svamp": {
                 "apply_chat_template": True,
-                "enable_thinking": True,
+                "enable_thinking": enable_thinking,
                 "request_type": "answer_generation",
+                "max_new_tokens": max_new_tokens,
             },
             "theoremqa": {
                 "apply_chat_template": True,
-                "enable_thinking": True,
+                "enable_thinking": enable_thinking,
                 "request_type": "answer_generation",
+                "max_new_tokens": max_new_tokens,
             },
             "logiqa": {
                 "apply_chat_template": False,
                 "enable_thinking": False,
                 "request_type": "multiple_choice_likelihood",
+                "max_new_tokens": None,
             },
             "agieval_gaokao_mathqa": {
                 "apply_chat_template": False,
                 "enable_thinking": False,
                 "request_type": "multiple_choice_likelihood",
+                "max_new_tokens": None,
             },
             "gsm8k_hard": {
                 "apply_chat_template": True,
-                "enable_thinking": True,
+                "enable_thinking": enable_thinking,
                 "request_type": "answer_generation",
+                "max_new_tokens": max_new_tokens,
             },
         },
     }

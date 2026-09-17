@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 import json
 import math
 from pathlib import Path
+import time
 from typing import Any, Literal
 
 import torch
@@ -265,7 +266,11 @@ def load_answer_nll_rows(
         )
     receipt = json.loads(blob.content)
     if (
-        receipt.get("schema") != "gcw.answer_nll.v1"
+        receipt.get("schema")
+        not in {
+            "gcw.answer_nll.v1",
+            "gcw.answer_nll.v2",
+        }
         or receipt.get("complete") is not True
     ):
         raise ValueError("incomplete or unsupported answer NLL receipt")
@@ -373,6 +378,7 @@ def evaluate_answer_nll(
     additionally require an externally anchored hash of the complete loaded state,
     because their manifest does not bind the external backbone's tensor bytes.
     """
+    end_to_end_started = time.monotonic()
     checkpoint, out = Path(checkpoint), Path(out)
     if config is not None and config.batch_size != 1:
         raise ValueError("answer NLL evaluation requires batch_size=1")
@@ -549,6 +555,7 @@ def evaluate_answer_nll(
     }
     options_hash = canonical_json_sha256(resolved_data_options)
     records: list[AnswerNLLRow] = []
+    execution_started = time.monotonic()
     with torch.inference_mode():
         for index, row in enumerate(rows):
             x, y, mask = sft_batch(
@@ -614,6 +621,7 @@ def evaluate_answer_nll(
                     scheduled_field_evaluations=field_evaluations,
                 )
             )
+    elapsed_seconds = time.monotonic() - execution_started
     for source in (data, *disjoint_from):
         if file_sha256(source.path) != source.sha256:
             raise ValueError("data changed during evaluation")
@@ -640,7 +648,7 @@ def evaluate_answer_nll(
     )
     row_payload = [asdict(row) for row in records]
     receipt = {
-        "schema": "gcw.answer_nll.v1",
+        "schema": "gcw.answer_nll.v2",
         "complete": True,
         "checkpoint": str(checkpoint.resolve()),
         "manifest_sha256": expected_manifest_sha256,
@@ -680,6 +688,8 @@ def evaluate_answer_nll(
         "torch_version": torch.__version__,
         "package_source_sha256": source_hash,
         "batch_size": 1,
+        "elapsed_seconds": elapsed_seconds,
+        "end_to_end_elapsed_seconds": time.monotonic() - end_to_end_started,
         "ce_dtype": "float32",
         "ce_target_chunk_size": 32,
         "reference_loss_execution": asdict(loss_execution),

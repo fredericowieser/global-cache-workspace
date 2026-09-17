@@ -16,9 +16,33 @@ from gcw.config import (
 def test_eval_config_defaults_to_plain_thinking_disabled() -> None:
     config = EvalConfig()
     assert config.batch_size == 8
+    assert config.max_batch_size == 64
     assert config.limit is None
     assert config.apply_chat_template is False
     assert config.enable_thinking is False
+
+
+def test_eval_config_accepts_bounded_automatic_batching() -> None:
+    config = EvalConfig(batch_size="auto", max_batch_size=32)
+
+    assert config.batch_size == "auto"
+    assert config.max_batch_size == 32
+    with pytest.raises(ValueError, match="only by lm-eval"):
+        config.fixed_batch_size
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"batch_size": "automatic"},
+        {"batch_size": 0},
+        {"max_batch_size": 0},
+        {"max_batch_size": True},
+    ],
+)
+def test_eval_config_rejects_invalid_batching(kwargs) -> None:
+    with pytest.raises(ValueError):
+        EvalConfig(**kwargs)
 
 
 @pytest.mark.parametrize(

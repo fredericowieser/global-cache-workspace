@@ -331,7 +331,9 @@ def test_real_native_load_score_token_weighted_receipt(
         expected_loaded_state_sha256=expected_hash,
         expected_step=1,
     )
+    assert receipt["schema"] == "gcw.answer_nll.v2"
     assert receipt["complete"] and receipt["n_examples"] == 2
+    assert receipt["end_to_end_elapsed_seconds"] >= receipt["elapsed_seconds"]
     assert receipt["loaded_state_sha256"] == expected_hash
     assert receipt["rows_sha256"] == canonical_json_sha256(receipt["rows"])
     scores = []

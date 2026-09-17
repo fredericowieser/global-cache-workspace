@@ -21,6 +21,7 @@ from gcw.evaluation.lm_eval_adapter import (
     _load_eval_target,
 )
 from gcw.evaluation.progress import (
+    EvaluationTimer,
     _empty_eval_results,
     _load_partial_results,
     _new_progress,
@@ -150,6 +151,7 @@ def run_task_groups(
     diffusion_eval_solver_steps: int | None = None,
     loaded_target: tuple[Any, Any] | None = None,
 ) -> dict:
+    evaluation_started = time.monotonic()
     config = config or EvalConfig()
     if not HAS_LM_EVAL:
         raise ImportError("Install the eval extra: uv sync --extra eval")
@@ -186,8 +188,10 @@ def run_task_groups(
     task_manager = TaskManager(
         include_path=str(Path("configs/tasks").resolve()), verbosity="ERROR"
     )
-    merged = _load_partial_results(runs) or _empty_eval_results()
-    _write_progress(_new_progress(runs), merged)
+    partial = _load_partial_results(runs)
+    merged = partial or _empty_eval_results()
+    evaluation_timer = EvaluationTimer.from_results(merged, evaluation_started)
+    _write_progress(_new_progress(runs, resume=partial is not None), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
         progress = _update_progress(run_idx, "running", runs, merged)
         if _run_is_complete(tasks, merged):
@@ -207,8 +211,9 @@ def run_task_groups(
             with dist_state.main_process_first():
                 if local_rank == 0:
                     get_task_dict(tasks, task_manager)
+        lm.reset_runtime_metrics()
         started = time.monotonic()
-        if torch.cuda.is_available():
+        if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats(device)
         try:
             out = lm_eval.simple_evaluate(
@@ -236,6 +241,7 @@ def run_task_groups(
                 merged,
             )
             raise
+        lm_runtime = lm.pop_runtime_metrics()
         if out is None:
             continue
         elapsed = time.monotonic() - started
@@ -247,9 +253,10 @@ def run_task_groups(
             "processor_enabled": processor is not None,
             "peak_memory_mib": (
                 torch.cuda.max_memory_allocated(device) / 1024 / 1024
-                if torch.cuda.is_available()
+                if device.type == "cuda"
                 else 0.0
             ),
+            **lm_runtime,
         }
         from gcw.models.cache_processors.diffusion import (
             pop_diffusion_field_evaluation_count,
@@ -262,6 +269,8 @@ def run_task_groups(
         for key in merged:
             if key in out and isinstance(out[key], dict):
                 merged[key].update(out[key])
+        evaluation_timer.mark_evaluated()
+        evaluation_timer.update_results(merged)
         _write_partial_results(merged)
         _write_progress(
             _update_progress(
@@ -285,5 +294,7 @@ def run_task_groups(
     }
     if diffusion_eval_solver_steps is not None:
         protocol["diffusion_eval_solver_steps"] = diffusion_eval_solver_steps
+    evaluation_timer.update_results(merged)
+    _write_partial_results(merged)
     merged["gcw_protocol"] = protocol
     return merged

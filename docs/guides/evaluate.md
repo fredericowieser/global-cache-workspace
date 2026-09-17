@@ -27,6 +27,10 @@ is active and `--enable-thinking` is omitted, native checkpoints inherit
 `data.sft_enable_thinking` from a recorded training fingerprint or a
 published `run_config.json`; checkpoints without that setting and Hugging Face
 targets default to false. Explicit `--enable-thinking true|false` always wins.
+Generation defaults to 2,048 new tokens with thinking disabled and 4,096
+with thinking enabled for Paper7, standard lm-eval suites, and chat evaluation.
+Task-specific `max_gen_toks` and chat `--max-new-tokens` overrides take precedence.
+The GSM8K reproduction command retains its fixed 32,768-token protocol.
 Chat and GSM8K reproduction always apply chat formatting, so they expose only
 `--enable-thinking`. Paper7 exposes both settings and defaults
 `--apply-chat-template` to true for legacy compatibility. FineWeb exposes
@@ -58,8 +62,8 @@ generation; scoring trims at the earliest EOS or task stop.
 
 ## Processor provenance in GSM8K and chat results
 
-GSM8K schema `gcw.gsm8k_reproduction.v5` and chat schema
-`gcw.chat_benchmark.v3` distinguish three booleans:
+GSM8K schema `gcw.gsm8k_reproduction.v9` and chat schema
+`gcw.chat_benchmark.v8` distinguish three booleans:
 
 - `processor_requested`: the requested `--processor on/off` policy.
 - `processor_present`: an actual GCW cache processor was loaded, before bypass.
@@ -74,9 +78,64 @@ Plain TF (including full-SFT) and HF targets have present/enabled both false und
 either policy; TF retains its loaded model without a bypass wrapper. Use
 `--processor off` for full-SFT controls. Composed checkpoints retain their processor
 when on and bypass to their exact loaded backbone when off. Processor-only cadence
-and diffusion solver overrides require an applicable active processor. Native
-loading, generation cadence, and stopping are unchanged. Older schemas retain
-their historical meaning and must not be interpreted as effective processor state.
+and diffusion solver overrides require an applicable active processor. Processor
+on/off policy does not change native loading, generation cadence, or stopping.
+Older schemas retain their historical meaning and must not be interpreted as
+effective processor state.
+
+GSM8K v9 and chat v8 also identify results generated with the merged EOS and
+task-stop behavior. Older GSM8K results remain readable, but their scores are not directly
+comparable. Both development branches wrote GSM8K v5 with different stopping
+behavior, so that schema alone does not identify its protocol.
+
+## Evaluation runtime and generated-token measurements
+
+Lm-eval-backed results keep per-task-group execution time under
+`gcw_runtime[task_group].elapsed_seconds`. The reserved
+`gcw_runtime.evaluation` entry is explicitly scoped to cumulative active
+end-to-end evaluator time, including target loading and task setup. Resumed
+evaluations add time spent in each evaluator process but exclude downtime
+between processes. Reopening an already completed partial without running a
+task preserves the recorded duration. Specialized generation, FineWeb, and
+answer-NLL results similarly retain `elapsed_seconds` for execution and add
+`end_to_end_elapsed_seconds` for loading and setup. These boundaries are not
+interchangeable.
+
+Lm-eval task groups report the requested batch size, the configured automatic
+maximum when automatic batching is selected, and a successful-batch-size
+histogram separately for generation and likelihood. Histogram keys are batch
+sizes and values are execution counts. Failed OOM attempts are not included;
+reduced retries and tail batches are. Likelihood-only tasks omit generated-token
+fields.
+
+Generated responses are classified from their final token IDs after EOS and
+stop-sequence trimming. With thinking disabled, every response token is an
+answer token. With thinking enabled, content before the first encoded
+`</think>` is thinking and content after it is answer; encoded structural
+`<think>` and `</think>` delimiters are excluded. A generated opening delimiter
+is optional. If the closing delimiter is absent, all content is thinking and
+the answer count is zero. Such a response is unterminated, but it is marked as
+thinking-truncated only when generation reached `max_new_tokens`; EOS or another
+stop leaves it unterminated without marking it truncated. Truncation rate uses
+all generated responses as its denominator.
+
+`generation_cap_hits` counts responses that reached `max_new_tokens` without
+an earlier EOS or stop; `generation_cap_hit_rate` divides that count by all
+generated responses. These fields apply whether thinking is enabled or not.
+They measure full-response cap hits, unlike `thinking_truncated`, which only
+counts cap hits with an unclosed thinking section. Chat retains its older
+`truncated` and `truncation_rate` fields for compatibility.
+
+Generation aggregates also report exact per-response token-length distributions
+for full responses and answers, plus thinking when enabled: population standard
+deviation, maximum, median (p50), p95, p99, and the count and rate strictly
+above twice that category's mean. Percentiles use the nearest-rank definition;
+zero-token answers or thinking traces remain in the denominator. Specialized
+results retain zero-valued thinking summaries when thinking is disabled. Lm-eval results
+keep compact in-memory length histograms until each task group completes, then
+persist only these summaries. The over-2x count directly identifies how many
+prompts form a long tail relative to the average; p95/p99 show its typical
+upper extent, while max identifies the single longest response.
 
 ## Answer-only teacher-forced NLL
 
@@ -170,37 +229,73 @@ arguments as `gcw eval answer-nll`.
 selected chat-template and thinking settings to GSM8K OpenMath, SVAMP,
 TheoremQA, and GSM8K Hard. LogiQA and Gaokao MathQA always use plain prompts,
 thinking disabled, and benchmark-native option likelihood. One model load is
-shared across all six tasks. Its result includes a `paper7_mixed_prompt_v1`
-protocol block recording the effective booleans and request type for every
-evaluated task.
+shared across all six tasks. Its result includes a `paper7_mixed_prompt_v2`
+protocol block recording the effective booleans, request type, and generation
+limit for every evaluated task.
 
 ```bash
 uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7 \
   --checkpoint /path/to/checkpoint \
-  --batch-size 16 \
+  --batch-size auto \
+  --max-batch-size 64 \
   --out results/<run>_paper7.json
+```
+
+The lm-eval-backed `paper7`, `paper7-legacy`, `all`, `math`, `general`, and
+`tasks` suites accept `--batch-size auto`. Automatic batching starts at the
+smaller of the remaining workload and `--max-batch-size` (64 by default). If a
+CUDA out-of-memory error occurs, it retries that workload at half the batch
+size and retains the reduced limit for later batches of the same request type.
+A batch-one OOM remains fatal. Integer batch sizes retain their existing fixed
+behavior.
+
+For array jobs, pass the same settings through the launcher environment:
+
+```bash
+EVAL_BATCH_SIZE=auto EVAL_MAX_BATCH_SIZE=64 \
+scripts/cluster/submit_array.sh configs/experiments/example.yaml
+```
+
+To evaluate heterogeneous checkpoints or thinking modes in one worker array,
+provide a tab-separated task file with checkpoint, output, and thinking fields:
+
+```text
+/path/to/checkpoint-1000	results/run_step1000_paper7.json	false
+/path/to/checkpoint-2000	results/run_step2000_paper7_thinking-on.json	true
+```
+
+Submit the task queue through the standard launcher. Task files require
+evaluation-only mode and cannot be combined with `EVAL_CHECKPOINT_STEP` or
+`EVAL_THINKING_MODES`, because those settings are supplied per task.
+
+```bash
+EVAL_ONLY=1 EVAL_BATCH_SIZE=auto EVAL_MAX_BATCH_SIZE=64 \
+scripts/cluster/submit_array.sh --workers 4 \
+  --eval-tasks-file /path/to/eval-tasks.tsv
 ```
 
 For corrected Paper7, `--apply-chat-template false` disables chat formatting
 for the four generation tasks as well. It has no effect on LogiQA or Gaokao,
 which remain plain by definition.
 
-`gcw eval paper7-legacy` exists for direct compatibility with martin-branch
-Paper7 evaluation runs. Use it for old-checkpoint replication and for new
-checkpoints that must be compared against those legacy result files. It applies
-one suite-wide chat-template setting to all six tasks and retains the legacy
-lm-eval-compatible top-level result shape.
+`gcw eval paper7-legacy` retains martin-branch checkpoint loading, task
+definitions, suite-wide chat formatting, and the lm-eval-compatible top-level
+result shape. Its generative tasks now default to 2,048 new tokens with
+thinking disabled and 4,096 with thinking enabled. Thinking-enabled scores
+therefore use a different cap from historical 2,048-token results.
 
 For a Longshot random-routing ablation, add `--head-selection-method random`.
 This runtime-only override applies to both the initial head selection and every
 reachable internal reselection. Learned-selector parameters remain loaded from
 the checkpoint but are not used for routing.
 
-The legacy compatibility path preserves the old task and scoring protocol while
-making its thinking behavior explicit:
+The legacy compatibility path preserves the old task definitions and formatting
+behavior while making thinking explicit and using the current generation
+budget:
 
 - task YAMLs are loaded from `configs/tasks_legacy/paper7`;
-- every generative task receives up to 2,048 new tokens;
+- generative tasks default to 2,048 new tokens with thinking disabled or
+  4,096 with thinking enabled;
 - chat templates are applied by default when the tokenizer provides one;
 - thinking inherits the checkpoint's training setting when present and
   otherwise defaults to false; `--enable-thinking true|false` overrides it;
@@ -247,7 +342,7 @@ uv run --extra eval python scripts/extract_paper_table.py \
 Keep two protocols separate:
 
 - Multiple-choice scores use full LM Evaluation Harness datasets, no chat template, and benchmark-native option likelihood. They are comparable to the corresponding harness protocol and have no thinking dimension.
-- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, numeric-last-answer scoring, and the same 2,048-token cap in both conditions.
+- Numeric thinking comparisons use the official tokenizer chat template, deterministic generation, and numeric-last-answer scoring. By default, the thinking-disabled cap is 2,048 and the thinking-enabled cap is 4,096; record the cap when comparing results.
 
 Generated multiple-choice answers are useful only as supplementary instruction-following diagnostics. Do not substitute them for canonical likelihood scores or schedule them across every experiment arm.
 
@@ -262,7 +357,6 @@ uv run --extra gpu --extra eval gcw eval chat \
   --tokenizer-path /path/to/qwen-tokenizer \
   --tasks gsm8k_openmath svamp gsm8k_hard \
   --enable-thinking \
-  --max-new-tokens 2048 \
   --out data/eval-runs/chat-thinking-on.json
 ```
 

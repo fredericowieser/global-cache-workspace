@@ -48,6 +48,7 @@ class LegacyPaper7EvalLM(GCWEvalLM):
             cont = list(cont)
             if not cont:
                 out[i] = (0.0, True)
+                self._record_successful_batch_size("loglikelihood", 1)
                 continue
 
             ctx, cont = truncate_context_continuation(
@@ -78,6 +79,7 @@ class LegacyPaper7EvalLM(GCWEvalLM):
                 float(vals.sum().item()),
                 bool((logits[0].argmax(-1) == target).all().item()),
             )
+            self._record_successful_batch_size("loglikelihood", 1)
         return out
 
 

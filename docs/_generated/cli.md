@@ -129,7 +129,7 @@ usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 | `--tasks` | required |
 | `--enable-thinking` | type: `_boolean` |
 | `--batch-size` | default: `8`; type: `int` |
-| `--max-new-tokens` | default: `2048`; type: `int` |
+| `--max-new-tokens` | default: based on thinking mode (2,048 or 4,096); type: positive integer |
 | `--out` | flag |
 
 ## `gcw eval fineweb`

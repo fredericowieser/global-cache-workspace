@@ -75,6 +75,15 @@ uv run --extra gpu gcw train --config /path/to/experiment.yaml
 
 New local run records live under `data/training-runs/`. They contain resolved config, metrics, logs, environment, provenance, and W&B identity. Mutable checkpoints remain separate.
 
+For Slurm worker arrays, set `GPUS` to the number of GPUs per worker when
+needed. `scripts/cluster/submit_array.sh` otherwise leaves partition, time,
+CPU count, and memory to Slurm defaults. Set `PARTITION`, `ARRAY_TIME`,
+`CPUS_PER_TASK`, or `MEM` to override them explicitly. 
+If you are on alpha (89.124.38.93) you should set MEM=180G, CPUS_PER_TASK=8, 
+PARTITION=agent-xlong-15,agent-xlong, and ARRAY_TIME=5-00:00:00.
+
+Run `susers` to see GPUs allocated to running Slurm jobs by user.
+
 ## Evaluate
 
 ```bash
@@ -95,13 +104,14 @@ provenance; targets without that setting default to thinking disabled.
 Use `paper7` for new evaluations. It applies the selected chat and thinking
 settings to the four answer-generation tasks, while LogiQA and Gaokao use their
 canonical plain-prompt option-likelihood protocol. Corrected results include a
-`paper7_mixed_prompt_v1` protocol block with the effective setting for every
+`paper7_mixed_prompt_v2` protocol block with the effective setting for every
 evaluated task.
 
-Use `paper7-legacy` when evaluating martin-branch checkpoints or comparing new
-checkpoints against historical Paper7 results. It retains suite-wide chat
-formatting, special-token handling, and the legacy JSON shape. Both commands
-allow 2,048 generated tokens for every generative task. Chat formatting is
+Use `paper7-legacy` when evaluating martin-branch checkpoints while retaining
+their suite-wide chat formatting, special-token handling, and legacy JSON
+shape. Generative tasks default to 2,048 new tokens with thinking disabled
+and 4,096 with thinking enabled. Results from the earlier 32,768-token
+campaign use a different generation cap. Chat formatting is
 enabled by default when the checkpoint tokenizer provides a template and
 otherwise falls back to plain prompts. When thinking is not specified, the
 command inherits the checkpoint's training setting when present and otherwise
@@ -110,9 +120,16 @@ disables it.
 ```bash
 uv run --extra gpu --extra eval --extra qwen35 gcw eval paper7 \
   --checkpoint /path/to/checkpoint \
-  --batch-size 16 \
+  --batch-size auto \
+  --max-batch-size 64 \
   --out results/<run>_paper7.json
 ```
+
+For lm-eval-backed suites, automatic batching retries CUDA out-of-memory
+failures with progressively smaller batches. The maximum defaults to 64.
+With `scripts/cluster/submit_array.sh`, set `EVAL_BATCH_SIZE=auto` and optionally
+override `EVAL_MAX_BATCH_SIZE=64`. Set `EVAL_THINKING_MODES=false,true` to run
+both thinking conditions sequentially for each claimed config in one array.
 
 For a historical comparison instead:
 
