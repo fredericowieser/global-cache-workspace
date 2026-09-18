@@ -195,3 +195,16 @@ Paths below are relative to `runs/experiments/`; each checkpoint is `<stem>/chec
 3. Completed: 21 launcher tests pass. Mixed tasks preserve per-row modes and suite exclusions and reject duplicate/existing outputs. Missing checkpoints may be queued only with a Slurm `afterok` dependency and are required at execution. Worker failures propagate to Slurm, so a failed training array will block 426.
 4. Completed: dry-run and actual Slurm records verified worker counts, GPU counts, default resources, and `afterok:435`. Both old held arrays were canceled after all replacements were accepted.
 5. Follow up: inspect training failures before resolving any blocked evaluation dependency; verify all four final checkpoints are at step 2000. Check result JSON task coverage and modes before marking this restart complete. A queued job is not evidence of completed training/evaluation.
+
+## Restore diffusion update logging to opt-in after re-run evaluations
+
+Temporary CLI default enabled for native Longshot diffusion checkpoint evaluations
+with a results destination and active processor. Future processes in arrays 427
+and 426 pick it up without restarting arrays; existing processes are unaffected.
+Sidecars use `<results-stem>.cache-update-metrics.jsonl`. No training logging is added.
+
+After the desired evaluations finish, remove the automatic-default block marked
+TODO in `_resolve_cache_update_metrics` in `src/gcw/cli.py`, adjust its default-selection
+tests, and restore opt-in wording in `docs/guides/evaluate.md`. Keep the existing
+explicit `--cache-update-metrics` support. Do not rerun completed evaluations just
+for logging.

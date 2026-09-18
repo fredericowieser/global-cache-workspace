@@ -44,7 +44,16 @@ Add `--cache-update-metrics` to a native evaluation command to write per-example
 update magnitudes beside its results, using the name
 `<results-stem>.cache-update-metrics.jsonl`. Use
 `--cache-update-metrics PATH` for an explicit destination. The option requires
-an enabled Longshot diffusion processor and is off by default.
+an enabled Longshot diffusion processor.
+
+**Temporary September 2026 default:** CLI evaluations with an output destination
+now enable this automatically for native Longshot diffusion checkpoints with the
+processor enabled. Other checkpoints, training, and the Python `EvalConfig`
+default are unchanged. Existing processes are unaffected; subsequent evaluations
+in worker arrays pick up the default. Remove the automatic-default block marked
+TODO in `src/gcw/cli.py` after the re-run campaign. Eager recurrence remains
+required, and results originally produced without metrics cannot be resumed with
+metrics enabled; use a fresh evaluation destination.
 
 Each solver step records min, max, mean, and population standard deviation
 across head magnitudes, then averages each statistic across processor

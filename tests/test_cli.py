@@ -442,3 +442,41 @@ def test_convert_hf_accepts_gemma4_family(monkeypatch):
             {"family": "gemma4", "variant": "tf", "dtype": "bfloat16"},
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "model,enabled",
+    [
+        ({"variant": "longshot", "diffusion_processor": {}, "cache_processor": {}}, True),
+        ({"variant": "longshot", "diffusion_processor": None, "cache_processor": {}}, False),
+        ({"variant": "bgt", "diffusion_processor": {}, "cache_processor": {}}, False),
+        ({"model_type": "qwen3_5"}, False),
+    ],
+)
+def test_diffusion_metrics_temporary_default(tmp_path, model, enabled):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text(json.dumps({"model": model}))
+    out = tmp_path / "eval.json"
+    parser = cli.build_parser()
+    command = ["eval", "paper7", "--checkpoint", str(checkpoint), "--out", str(out)]
+    args = parser.parse_args(command)
+    expected = str(tmp_path / "eval.cache-update-metrics.jsonl") if enabled else None
+    assert cli._resolve_cache_update_metrics(args) == expected
+    args = parser.parse_args([*command, "--cache-update-metrics", "custom.jsonl"])
+    assert cli._resolve_cache_update_metrics(args) == "custom.jsonl"
+
+
+def test_diffusion_metrics_default_requires_processor_and_destination(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"model": {
+        "variant": "longshot", "diffusion_processor": {}, "cache_processor": {},
+    }}))
+    args = cli.build_parser().parse_args([
+        "eval", "paper7", "--checkpoint", str(tmp_path), "--out", str(tmp_path / "eval.json"),
+    ])
+    args.processor = "off"
+    assert cli._resolve_cache_update_metrics(args) is None
+    args.processor = "on"
+    assert cli._resolve_cache_update_metrics(args).endswith(".cache-update-metrics.jsonl")
+    args.out = None
+    assert cli._resolve_cache_update_metrics(args) is None

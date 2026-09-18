@@ -67,6 +67,49 @@ def _resolve_enable_thinking(
     return False
 
 
+def _resolve_cache_update_metrics(args: argparse.Namespace) -> str | None:
+    metrics_path = args.cache_update_metrics
+    # TODO: Remove this automatic default after the diffusion re-run evaluations.
+    if metrics_path is None:
+        checkpoint = getattr(args, "checkpoint", None)
+        destination = getattr(args, "out", None) or getattr(args, "output_dir", None)
+        if checkpoint and destination and getattr(args, "processor", "on") != "off":
+            config_path = Path(checkpoint) / "config.json"
+            if config_path.is_file():
+                payload = json.loads(config_path.read_text(encoding="utf-8"))
+                model = payload.get("model", {})
+                if (
+                    model.get("variant") == "longshot"
+                    and model.get("diffusion_processor") is not None
+                    and model.get("cache_processor") is not None
+                ):
+                    metrics_path = "auto"
+    if metrics_path == "auto":
+        destination = getattr(args, "out", None)
+        if destination is None and getattr(args, "output_dir", None):
+            destination = Path(args.output_dir) / "result.json"
+        if destination is None:
+            raise ValueError(
+                "--cache-update-metrics requires PATH or an evaluation output destination"
+            )
+        destination = Path(destination)
+        metrics_path = str(
+            destination.with_name(
+                destination.stem + ".cache-update-metrics.jsonl"
+            )
+        )
+    if metrics_path is not None:
+        destination = getattr(args, "out", None)
+        if (
+            destination is not None
+            and Path(metrics_path).resolve() == Path(destination).resolve()
+        ):
+            raise ValueError(
+                "cache update metrics must have a separate output path"
+            )
+    return metrics_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the GCW command-line parser without importing execution systems."""
     parser = argparse.ArgumentParser(prog="gcw")
@@ -320,30 +363,7 @@ def dispatch(args: argparse.Namespace) -> None:
     elif args.cmd == "train":
         train_from_config(args.config)
     elif args.cmd == "eval":
-        metrics_path = args.cache_update_metrics
-        if metrics_path == "auto":
-            destination = getattr(args, "out", None)
-            if destination is None and getattr(args, "output_dir", None):
-                destination = Path(args.output_dir) / "result.json"
-            if destination is None:
-                raise ValueError(
-                    "--cache-update-metrics requires PATH or an evaluation output destination"
-                )
-            destination = Path(destination)
-            metrics_path = str(
-                destination.with_name(
-                    destination.stem + ".cache-update-metrics.jsonl"
-                )
-            )
-        if metrics_path is not None:
-            destination = getattr(args, "out", None)
-            if (
-                destination is not None
-                and Path(metrics_path).resolve() == Path(destination).resolve()
-            ):
-                raise ValueError(
-                    "cache update metrics must have a separate output path"
-                )
+        metrics_path = _resolve_cache_update_metrics(args)
         if args.suite == "fineweb":
             results = run_fineweb(
                 args.checkpoint,
