@@ -86,30 +86,27 @@ def test_writer_rejects_incompatible_configuration(changes: dict) -> None:
         replace(config().cache_processor, **changes)
 
 
-def test_writer_preserves_rng_shapes_and_zero_initial_logits() -> None:
-    torch.manual_seed(991)
-    disabled = build_model(config(live=False))
-    disabled.init_weights()
-    before = torch.random.get_rng_state()
-    torch.manual_seed(991)
-    enabled = build_model(config())
-    enabled.init_weights()
-    assert torch.equal(before, torch.random.get_rng_state())
-    old, new = disabled.state_dict(), enabled.state_dict()
-    assert old.keys() == new.keys()
-    changed = "cache_processor.block.linear_state_adapter.output_proj.weight"
-    for name in old:
-        assert old[name].shape == new[name].shape
-        if name != changed:
-            assert torch.equal(old[name], new[name]), name
-    adapter = enabled.cache_processor.block.linear_state_adapter
-    assert torch.count_nonzero(old[changed]) == 0
-    assert torch.count_nonzero(new[changed][: adapter.linear_key_dim]) > 0
-    assert torch.count_nonzero(new[changed][adapter.linear_key_dim :]) == 0
+@pytest.mark.parametrize(
+    "update_gate_type", ["static_scalar", "contextual_scalar", "contextual_vector"]
+)
+def test_zero_initialized_rank_one_writer_requires_live_key(update_gate_type) -> None:
+    with pytest.raises(ValueError, match="live_rank1_linear_writer=true"):
+        CacheProcessorConfig(
+            linear_state_cache=True,
+            linear_state_update_mode="outer_product",
+            out_proj_init="zero",
+            update_gate_type=update_gate_type,
+        )
+
+
+def test_writer_initializes_live_key_and_zero_value() -> None:
+    model = build_model(config())
+    model.init_weights()
+    adapter = model.cache_processor.block.linear_state_adapter
+    weight = adapter.output_proj.weight
+    assert torch.count_nonzero(weight[: adapter.linear_key_dim]) > 0
+    assert torch.count_nonzero(weight[adapter.linear_key_dim :]) == 0
     assert torch.count_nonzero(adapter.output_proj.bias) == 0
-    tokens = torch.arange(9).unsqueeze(0)
-    with torch.no_grad():
-        assert torch.equal(disabled.eval()(tokens), enabled.eval()(tokens))
     with torch.device("meta"):
         meta = build_model(config())
     assert all(p.is_meta for p in meta.parameters())
