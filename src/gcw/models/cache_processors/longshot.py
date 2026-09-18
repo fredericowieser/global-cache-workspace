@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from contextlib import nullcontext
 
 import torch
 import torch.nn.functional as F
@@ -10,6 +11,7 @@ from gcw.config import (
     linear_attention_following_cache_indices,
 )
 from gcw.models.cache_processors.base import CacheProcessorBase
+from gcw.models.cache_processors.update_metrics import UPDATE_BATCH
 from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
     gather_per_cache_head_kv,
@@ -155,6 +157,11 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if self.config.iteration_mode == "external":
             previous_selected_heads = None
             for iteration in range(1, self.config.iterations + 1):
+                batch_metrics = (
+                    UPDATE_BATCH.get() if not self.training else None
+                )
+                if batch_metrics is not None:
+                    batch_metrics.external_iteration = iteration
                 cache, selected_heads = self._forward_once(
                     cache, select_all=select_all
                 )
@@ -249,14 +256,23 @@ class GlobalCacheProcessor(CacheProcessorBase):
         if linear_inputs is not None:
             linear_features = linear_inputs.features
             topk_heads += _topk_linear_heads(self.config)
-        updated, linear_delta, selected_heads = self.block(
-            merged,
-            selected_heads,
-            kv_hidden=kv_hidden,
-            linear_features=linear_features,
-            topk_heads=topk_heads,
-            select_all=select_all,
+        batch_metrics = UPDATE_BATCH.get() if not self.training else None
+        observation = (
+            batch_metrics.application(
+                self, cache, linear_inputs.specs if linear_inputs else []
+            )
+            if batch_metrics is not None
+            else nullcontext()
         )
+        with observation:
+            updated, linear_delta, selected_heads = self.block(
+                merged,
+                selected_heads,
+                kv_hidden=kv_hidden,
+                linear_features=linear_features,
+                topk_heads=topk_heads,
+                select_all=select_all,
+            )
         if linear_inputs is not None:
             if linear_delta is None:
                 raise RuntimeError(

@@ -120,6 +120,8 @@ def _run_paper7_groups(
     )
     partial = _load_partial_results(runs)
     merged = _paper7_empty_results(partial)
+    if config.cache_update_metrics_path:
+        lm.update_metrics.validate_resume(merged)
     evaluation_timer = EvaluationTimer.from_results(merged, evaluation_started)
     task_protocols = {}
     _write_progress(_new_progress(runs, resume=partial is not None), merged)
@@ -193,6 +195,8 @@ def _run_paper7_groups(
             )
             raise
         lm_runtime = lm.pop_runtime_metrics()
+        if config.cache_update_metrics_path:
+            lm_runtime["cache_update_metrics"] = lm.update_metrics.finish(tasks)
         if out is None:
             continue
         runtime = {

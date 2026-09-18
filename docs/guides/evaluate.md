@@ -38,6 +38,20 @@ neither option.
 
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
+## Longshot diffusion update metrics
+
+Add `--cache-update-metrics` to a native evaluation command to write per-example
+update magnitudes beside its results, using the name
+`<results-stem>.cache-update-metrics.jsonl`. Use
+`--cache-update-metrics PATH` for an explicit destination. The option requires
+an enabled Longshot diffusion processor and is off by default.
+
+Each solver step records min, max, mean, and population standard deviation
+across head magnitudes, then averages each statistic across processor
+applications for that example. Metrics cover both latent changes and proposed
+KV/linear-state cache changes, before writeback gates and including solver
+step-size scaling. See [the metric definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
+
 ## Generation stopping
 
 Generation stops at any configured EOS/end-of-turn token and pads finished rows

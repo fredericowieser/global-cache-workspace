@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping, Sequence, cast
 import torch
 
 from gcw.config import EvalConfig
+from gcw.evaluation.update_metrics import CacheUpdateMetrics
 from gcw.evaluation.benchmarks import (
     BenchmarkBackend,
     GCWBenchmarkBackend,
@@ -368,6 +369,9 @@ def evaluate_chat_examples(
         max_new_tokens = config.default_max_new_tokens
     if type(max_new_tokens) is not int or max_new_tokens <= 0:
         raise ValueError("max_new_tokens must be a positive integer")
+    update_metrics = CacheUpdateMetrics(
+        getattr(backend, "model", None), config.cache_update_metrics_path
+    )
     batch_size = config.fixed_batch_size
     prepared = _prepare_examples(examples, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
@@ -408,7 +412,13 @@ def evaluate_chat_examples(
             )
             input_ids[row, -len(prompt) :] = prompt
             attention_mask[row, -len(prompt) :] = 1
-        output = backend.generate(input_ids, attention_mask, max_new_tokens)
+        with update_metrics.batch(
+            [
+                (item.example.task, str(item.example.index), "0")
+                for item in chunk
+            ]
+        ):
+            output = backend.generate(input_ids, attention_mask, max_new_tokens)
         for item, tokens in zip(
             chunk, output[:, width:].detach().cpu().tolist(), strict=True
         ):
@@ -512,7 +522,13 @@ def evaluate_chat_examples(
             "thinking_truncated": thinking_truncated,
             "thinking_truncation_rate": thinking_truncated / len(selected),
         }
+    metrics_metadata = update_metrics.finish()
     return {
+        **(
+            {"cache_update_metrics": metrics_metadata}
+            if metrics_metadata
+            else {}
+        ),
         "apply_chat_template": config.apply_chat_template,
         "enable_thinking": config.enable_thinking,
         "protocol": "official_chat_template_answer_generation_v2",

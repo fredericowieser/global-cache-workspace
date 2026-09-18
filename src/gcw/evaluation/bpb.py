@@ -6,6 +6,7 @@ import torch
 
 from gcw.checkpoint import load_checkpoint
 from gcw.config import EvalConfig
+from gcw.evaluation.update_metrics import CacheUpdateMetrics
 from gcw.data.shards import data_loader
 from gcw.data.tokenizers import COSMO2_VOCAB_SIZE, get_token_bytes
 from gcw.evaluation.scoring import evaluate_nll_bpb
@@ -43,6 +44,7 @@ def run_fineweb(
         infinite=True,
     )
     loss_backend = checkpoint_loss_backend(state, torch.device(device))
+    update_metrics = CacheUpdateMetrics(model, config.cache_update_metrics_path)
     execution_started = time.monotonic()
     nll, bpb = evaluate_nll_bpb(
         model,
@@ -50,8 +52,15 @@ def run_fineweb(
         steps,
         get_token_bytes(device),
         loss_backend=loss_backend,
+        update_metrics=update_metrics,
     )
+    metrics_metadata = update_metrics.finish()
     return {
+        **(
+            {"cache_update_metrics": metrics_metadata}
+            if metrics_metadata
+            else {}
+        ),
         "model_step": state.get("step"),
         "val_nll": nll,
         "val_bpb": bpb,

@@ -17,6 +17,7 @@ from gcw.evaluation.scoring import (
     truncate_context_continuation,
 )
 from gcw.evaluation.lm_eval_adapter import GCWEvalLM
+from gcw.evaluation.update_metrics import CacheUpdateMetrics
 
 
 def test_auto_batching_retries_cuda_oom_and_retains_reduced_limit():
@@ -86,6 +87,8 @@ def test_generation_default_depends_on_thinking_and_task_override_wins(
 
     lm = GCWEvalLM.__new__(GCWEvalLM)
     lm.model = Model()
+    lm.update_metrics = CacheUpdateMetrics(lm.model, None)
+    lm._diagnostic_requests = None
     lm.tokenizer = Tokenizer()
     lm.eval_config = EvalConfig(
         apply_chat_template=enable_thinking,

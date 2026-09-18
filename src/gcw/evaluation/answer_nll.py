@@ -19,6 +19,7 @@ from gcw.checkpoint import (
     _upgrade_qwen35_gated_delta_keys,
 )
 from gcw.config import EvalConfig, to_dict
+from gcw.evaluation.update_metrics import CacheUpdateMetrics
 from gcw.data.sft import sft_batch
 from gcw.data.tokenizers import (
     IntTokenizer,
@@ -41,7 +42,6 @@ from gcw.provenance import (
     tensor_state_sha256,
 )
 from gcw.qualification.inputs import capture_file
-from gcw.runtime import atomic_write_json
 from gcw.training.checkpoint.safetensors import (
     _parse_manifest_bytes,
     _verify_files,
@@ -371,6 +371,7 @@ def evaluate_answer_nll(
     expected_loaded_state_sha256: str | None = None,
     disjoint_from: Sequence[AnswerNLLData] = (),
     solver_steps: int | None = None,
+    cache_update_metrics_path: str | None = None,
 ) -> dict[str, Any]:
     """Load a native version-2 training checkpoint and atomically publish one receipt.
 
@@ -380,6 +381,26 @@ def evaluate_answer_nll(
     """
     end_to_end_started = time.monotonic()
     checkpoint, out = Path(checkpoint), Path(out)
+    configured_metrics_path = (
+        config.cache_update_metrics_path if config else None
+    )
+    if (
+        cache_update_metrics_path
+        and configured_metrics_path
+        and (
+            Path(cache_update_metrics_path).resolve()
+            != Path(configured_metrics_path).resolve()
+        )
+    ):
+        raise ValueError("conflicting cache update metrics paths")
+    metrics_path = cache_update_metrics_path or configured_metrics_path
+    if metrics_path is not None and (
+        checkpoint.resolve() in Path(metrics_path).resolve().parents
+        or Path(metrics_path).resolve() == out.resolve()
+    ):
+        raise ValueError(
+            "cache update metrics must be outside the checkpoint and separate from the receipt"
+        )
     if config is not None and config.batch_size != 1:
         raise ValueError("answer NLL evaluation requires batch_size=1")
     if checkpoint.resolve() in out.resolve().parents:
@@ -543,6 +564,7 @@ def evaluate_answer_nll(
             raise ValueError("solver_steps must be a positive integer")
         set_diffusion_eval_solver_steps(model, solver_steps)
     model.eval()
+    update_metrics = CacheUpdateMetrics(model, metrics_path)
     loss_execution = ReferenceLossConfig(
         mode="bounded", max_projected_positions=32
     )
@@ -575,13 +597,14 @@ def evaluate_answer_nll(
                     f"row {index} has padding or zero valid answer targets"
                 )
             pop_diffusion_field_evaluation_count(model)
-            token_losses = model(
-                x,
-                y,
-                attention_mask=mask,
-                loss_reduction="none",
-                loss_backend="reference",
-            )
+            with update_metrics.batch([("answer_nll", str(index), "0")]):
+                token_losses = model(
+                    x,
+                    y,
+                    attention_mask=mask,
+                    loss_reduction="none",
+                    loss_backend="reference",
+                )
             field_evaluations = pop_diffusion_field_evaluation_count(model)
             if (
                 token_losses.shape != y.shape
@@ -701,5 +724,5 @@ def evaluate_answer_nll(
         "rows_sha256": canonical_json_sha256(row_payload),
         "result": {**asdict(total), "nll": total.nll},
     }
-    atomic_write_json(out, receipt, exclusive=True, allow_nan=False)
+    update_metrics.write_receipt(out, receipt)
     return receipt

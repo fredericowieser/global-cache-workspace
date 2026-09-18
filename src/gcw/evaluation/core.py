@@ -190,6 +190,8 @@ def run_task_groups(
     )
     partial = _load_partial_results(runs)
     merged = partial or _empty_eval_results()
+    if config.cache_update_metrics_path:
+        lm.update_metrics.validate_resume(merged)
     evaluation_timer = EvaluationTimer.from_results(merged, evaluation_started)
     _write_progress(_new_progress(runs, resume=partial is not None), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
@@ -242,6 +244,8 @@ def run_task_groups(
             )
             raise
         lm_runtime = lm.pop_runtime_metrics()
+        if config.cache_update_metrics_path:
+            lm_runtime["cache_update_metrics"] = lm.update_metrics.finish(tasks)
         if out is None:
             continue
         elapsed = time.monotonic() - started

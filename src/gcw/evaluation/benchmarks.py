@@ -16,6 +16,7 @@ from typing import Any, Literal, Mapping, Protocol, Sequence, cast
 import torch
 
 from gcw.config import EvalConfig
+from gcw.evaluation.update_metrics import CacheUpdateMetrics
 from gcw.evaluation.scoring import (
     HFTokenizerAdapter,
     classify_generated_tokens,
@@ -485,6 +486,9 @@ def evaluate_benchmark(
 ) -> dict[str, Any]:
     if not config.apply_chat_template:
         raise ValueError("GSM8K reproduction requires chat formatting")
+    update_metrics = CacheUpdateMetrics(
+        getattr(backend, "model", None), config.cache_update_metrics_path
+    )
     batch_size = config.fixed_batch_size
     examples = _prepare(rows, tokenizer, config.enable_thinking)
     if backend.supports_left_padding:
@@ -522,7 +526,10 @@ def evaluate_benchmark(
             )
             input_ids[row_index, -len(prompt) :] = prompt
             attention_mask[row_index, -len(prompt) :] = 1
-        output = backend.generate(input_ids, attention_mask, max_new_tokens)
+        with update_metrics.batch(
+            [("gsm8k", str(item.index), "0") for item in chunk]
+        ):
+            output = backend.generate(input_ids, attention_mask, max_new_tokens)
         for example, token_row in zip(
             chunk, output[:, prompt_width:].detach().cpu().tolist(), strict=True
         ):
@@ -586,7 +593,13 @@ def evaluate_benchmark(
     thinking_truncated = sum(
         bool(row["thinking_truncated"]) for row in final_rows
     )
+    metrics_metadata = update_metrics.finish()
     return {
+        **(
+            {"cache_update_metrics": metrics_metadata}
+            if metrics_metadata
+            else {}
+        ),
         "apply_chat_template": config.apply_chat_template,
         "enable_thinking": config.enable_thinking,
         "scoring_protocol": scoring_protocol,

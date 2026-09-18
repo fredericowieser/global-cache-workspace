@@ -150,6 +150,100 @@ Long-horizon teacher-forced loss, free-running generation, unseen context length
 
 A diffusion claim requires non-zero training noise, time/noise conditioning, shared iterative refinement, and an authenticated stochastic treatment. Repeated deterministic computation alone is Flow-BGT or recurrence, not diffusion.
 
+## Per-example update diagnostics
+
+Native evaluation can record how each Longshot diffusion step changes the latent
+and the proposed cache update. Enable this explicitly:
+
+```bash
+gcw eval paper7 --checkpoint /path/to/checkpoint --out results/paper7.json \
+  --cache-update-metrics
+```
+
+This writes `results/paper7.cache-update-metrics.jsonl`. Pass
+`--cache-update-metrics /path/to/updates.jsonl` to choose another destination;
+an explicit path is required when evaluation has no results destination.
+The Python equivalent is `EvalConfig(cache_update_metrics_path="updates.jsonl")`.
+Answer NLL also accepts `cache_update_metrics_path` directly, preserving its
+automatic inference of chat settings from the checkpoint.
+
+The option supports fixed and scheduled Longshot diffusion in Paper7,
+Paper7-legacy, other native lm-eval tasks, chat/GSM8K benchmarks, answer NLL, and
+FineWeb. It requires eager diffusion recurrence. HF-only targets, processor
+bypass, and other model variants reject it.
+It adds no measurements to training. With the option disabled, no extra
+readouts or tensor reductions run.
+
+Each JSONL record identifies one task and example and contains a `steps` list.
+Each entry identifies `external_iteration` and `solver_step` (both start at 1)
+and provides the following groups under `metrics`:
+
+| Group | Magnitude for one head |
+| --- | --- |
+| `latent_kv` | L2 norm of that solver step's actual change to the KV latent vector |
+| `latent_linear` | The same for a linear-state latent vector |
+| `kv` | L2 norm of the change in the proposed KV update since the preceding solver step |
+| `linear_state` | Frobenius norm of the change in the proposed linear-state matrix update since the preceding solver step |
+
+The solver's step-size multiplier is included. Final writeback gates are excluded.
+Key normalization and the linear writer's own dynamics are included. In
+`gated_delta` mode, configuration disables the outer linear writeback gate;
+the writer's internal sigmoid and decay dynamics remain included. KV norms
+use the concatenated key/value vector, or just the value vector for value-only
+writeback. All destination heads across the relevant layers are included;
+attention selection does not restrict this population. Absent linear states
+produce no linear metric groups.
+
+For cache contributions, the first step is compared against a zero update;
+subsequent steps are compared against the preceding decoded proposal. Any
+projection bias therefore belongs to the first step. For the linear writer,
+each proposal is decoded against the same incoming recurrent state. Intermediate
+proposals are only measured; the real cache is still written once at the end.
+The measured contributions add up to the final ungated proposal.
+
+Every processor application produces a min, max, mean, and population standard
+deviation across per-head magnitudes. Each example's record then averages
+**each statistic separately** across applications. For example, if two
+applications have head magnitudes `[1, 3]` and `[5, 9]`, the reported values are
+`min=3`, `max=6`, `mean=4.5`, and `std=1.5`. The maximum is the average of the
+two maxima, not the largest magnitude encountered. Single-head standard
+deviation is zero. Each group also records `heads` and `applications`.
+
+Applications during prompt processing and generation are combined. Finished
+generation rows and padded input tails do not contribute. Multiple-choice
+examples combine applications from all their answer-option requests, weighted
+by application count, and record the number of requests. A FineWeb example is
+one evaluated token-sequence row. An example with no processor applications has
+an empty `steps` list. Batch retries discard unsuccessful observations;
+distributed harness padding requests are deduplicated.
+
+The sidecar schema is `gcw.cache_update_metrics.v1`. Evaluation results contain
+`cache_update_metrics` metadata (under each task's `gcw_runtime` for lm-eval
+suites) with the path, aggregation definition, completion flag, example count,
+and per-task content hashes. Resume checks these hashes before reusing completed
+tasks. A previous evaluation without diagnostics cannot resume into one that
+requires them.
+
+Answer NLL publishes the sidecar before its exclusive result receipt. If the
+receipt write fails before publication, the newly created sidecar is removed
+so evaluation can be retried. If the receipt was published but a subsequent
+filesystem synchronization fails, both files are retained. An existing receipt
+is rejected before publishing a sidecar. If another writer publishes a receipt
+concurrently, the new sidecar is removed only when that receipt can be read and
+does not reference it; an unreadable receipt leaves the sidecar intact.
+A hard process interruption cannot run cleanup: after confirming that the
+evaluation process has stopped and its receipt is absent, remove that run's orphan sidecar before
+retrying. An existing receipt and its referenced sidecar must be kept together.
+
+Diagnostics add one KV/linear readout pair for each intermediate solver step and
+reuse the existing final readout. Four steps therefore add three readout pairs.
+The outer-product writer's matrix-difference norms are calculated from factors
+without allocating full matrices. The gated-delta writer additionally evaluates
+the proposed state transitions, one layer at a time. Summaries accumulate on the
+device and transfer at batch boundaries. Wall time and memory overhead depend
+on the writer, head dimensions, and solver depth; these metrics measure update
+magnitude, not whether the updates improve predictions.
+
 ## References
 
 - [Diffusion-QL](https://arxiv.org/abs/2208.06193): diffusion outputs shifted by downstream utility while retaining a behavioural prior.
