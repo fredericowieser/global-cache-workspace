@@ -631,3 +631,187 @@ def test_idle_monitor_stops_nebius_only_after_gpu_is_idle(
 
 def test_shell_script_has_valid_syntax() -> None:
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
+
+
+def test_mixed_tasks_keep_training_modes_and_skip_lists_per_row(tmp_path: Path) -> None:
+    capture = tmp_path / "uv-args"
+    config, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s|%s\\n" "$GCW_EVAL_SKIP_TASKS" "$*" >> "$UV_CAPTURE"',
+    )
+    checkpoint = tmp_path / "existing checkpoint"
+    checkpoint.mkdir()
+    tasks = tmp_path / "tasks.tsv"
+    tasks.write_text(
+        f"train\t{config}\t{tmp_path / 'output/checkpoint'}\t"
+        f"{tmp_path / 'trained.json'}\tfalse\t-\n"
+        f"eval\t-\t{checkpoint}\t{tmp_path / 'eval.json'}\ttrue\ttheoremqa\n"
+        f"eval\t-\t{checkpoint}\t{tmp_path / 'both.json'}\tfalse,true\t-\n"
+    )
+    env.update({"UV_CAPTURE": str(capture), "EVAL_THINKING_MODES": "true"})
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", "--tasks-file", str(tasks)],
+        env,
+    )
+    state = _state_dir(result.stdout)
+    _wait_for_status(state, env, "SUCCEEDED")
+    lines = capture.read_text().splitlines()
+    assert sum(" gcw train " in line for line in lines) == 1
+    evaluations = [line for line in lines if " gcw eval " in line]
+    assert len(evaluations) == 4
+    assert evaluations[0].startswith("|")
+    assert "--enable-thinking false" in evaluations[0]
+    assert "trained_thinking-off.json" in evaluations[0]
+    assert evaluations[1].startswith("theoremqa|")
+    assert "--enable-thinking true" in evaluations[1]
+    assert f"--checkpoint {checkpoint}" in evaluations[1]
+    assert all(line.startswith("|") for line in evaluations[2:])
+    assert "--enable-thinking false" in evaluations[2]
+    assert "--enable-thinking true" in evaluations[3]
+    assert len((state / "completed_configs").read_text().splitlines()) == 3
+
+
+def test_mixed_tasks_propagate_failure_and_continue_next_task(tmp_path: Path) -> None:
+    capture = tmp_path / "uv-args"
+    config, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"\n'
+        '[[ "$*" != *" gcw train "* ]] || exit 17\n'
+        '[[ "$*" != *"bad_thinking-off.json"* ]] || exit 23',
+    )
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    tasks = tmp_path / "tasks.tsv"
+    tasks.write_text(
+        f"train\t{config}\t{checkpoint}\t{tmp_path / 'train.json'}\tfalse\t-\n"
+        f"eval\t-\t{checkpoint}\t{tmp_path / 'bad.json'}\tfalse,true\t-\n"
+        f"eval\t-\t{checkpoint}\t{tmp_path / 'good.json'}\tfalse\t-\n"
+    )
+    env["UV_CAPTURE"] = str(capture)
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", "--tasks-file", str(tasks)],
+        env,
+    )
+    state = _state_dir(result.stdout)
+    _wait_for_status(state, env, "FAILED")
+    text = capture.read_text()
+    assert "train_thinking-off.json" not in text
+    assert "bad_thinking-on.json" not in text
+    assert "good_thinking-off.json" in text
+    failures = (state / "failed_configs.tsv").read_text().splitlines()
+    assert failures[0].startswith("17\ttrain\t")
+    assert failures[1].startswith("23\teval\t")
+    assert len((state / "completed_configs").read_text().splitlines()) == 1
+
+
+def test_mixed_tasks_reject_invalid_or_colliding_work(tmp_path: Path) -> None:
+    config, env = _write_fixture(tmp_path)
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    out = tmp_path / "result.json"
+    row = f"eval\t-\t{checkpoint}\t{out}\tfalse\t-\n"
+    tasks = tmp_path / "tasks.tsv"
+    invalid = [
+        row + row,
+        row.replace("\tfalse\t", "\tfalse,false\t"),
+        row.replace("eval\t", "unknown\t"),
+        row.replace("\t-\n", "\t\n"),
+        row.replace(str(checkpoint), str(tmp_path / "missing")),
+        f"train\t{config}\t{checkpoint}\t{out}\tfalse\t-\n"
+        f"train\t{config}\t{checkpoint}\t{tmp_path / 'other.json'}\tfalse\t-\n",
+    ]
+    for content in invalid:
+        tasks.write_text(content)
+        result = _run(
+            ["--backend", "slurm", "--dry-run", "--tasks-file", str(tasks)],
+            env,
+            check=False,
+        )
+        assert result.returncode != 0, content
+    (tmp_path / "result_thinking-off.json").write_text("{}")
+    tasks.write_text(row)
+    result = _run(
+        ["--backend", "slurm", "--dry-run", "--tasks-file", str(tasks)],
+        env,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Existing or duplicate evaluation output" in result.stdout
+
+
+def test_mixed_tasks_slurm_export_preserves_dispatch_mode(tmp_path: Path) -> None:
+    _, env = _write_fixture(tmp_path)
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    tasks = tmp_path / "tasks.tsv"
+    tasks.write_text(
+        f"eval\t-\t{checkpoint}\t{tmp_path / 'result.json'}\tfalse\t-\n"
+    )
+    bin_dir = Path(env["HOME"]) / ".local/bin"
+    sbatch = bin_dir / "sbatch"
+    sbatch.write_text(
+        '#!/usr/bin/env bash\n'
+        '[[ "$GCW_MIXED_TASK_MODE" == 1 ]] || exit 31\n'
+        '[[ "$EVAL_AFTER_TRAIN" == 1 ]] || exit 32\n'
+        "printf '999\\n'\n"
+    )
+    sbatch.chmod(0o755)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    result = _run(["--backend", "slurm", "--tasks-file", str(tasks)], env)
+    assert "Submitted array job 999" in result.stdout
+
+
+def test_mixed_tasks_multiple_workers_claim_each_row_once(tmp_path: Path) -> None:
+    capture = tmp_path / "uv-args"
+    _, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"\nsleep 0.1',
+    )
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    tasks = tmp_path / "tasks.tsv"
+    tasks.write_text("".join(
+        f"eval\t-\t{checkpoint}\t{tmp_path / f'result-{i}.json'}\tfalse\t-\n"
+        for i in range(4)
+    ))
+    env["UV_CAPTURE"] = str(capture)
+    result = _run(
+        ["--backend", "local", "--workers", "2", "--local-gpus", "0,1",
+         "--tasks-file", str(tasks)],
+        env,
+    )
+    state = _state_dir(result.stdout)
+    _wait_for_status(state, env, "2 succeeded")
+    completed = (state / "completed_configs").read_text().splitlines()
+    assert len(completed) == len(set(completed)) == 4
+    assert sum(" gcw eval " in line for line in capture.read_text().splitlines()) == 4
+
+
+def test_mixed_tasks_defer_checkpoint_validation_only_for_afterok(tmp_path: Path) -> None:
+    _, env = _write_fixture(tmp_path)
+    tasks = tmp_path / "tasks.tsv"
+    tasks.write_text(
+        f"eval\t-\t{tmp_path / 'future/checkpoint-2000'}\t"
+        f"{tmp_path / 'result.json'}\tfalse,true\ttheoremqa\n"
+    )
+    for dependency, accepted in [("afterok:123", True), ("afterany:123", False), ("", False)]:
+        env["DEPENDENCY"] = dependency
+        result = _run(
+            ["--backend", "slurm", "--dry-run", "--tasks-file", str(tasks)],
+            env,
+            check=False,
+        )
+        assert (result.returncode == 0) == accepted, result.stdout
+        if accepted:
+            assert "--dependency=afterok:123" in result.stdout
+
+    env.update({
+        "GCW_ARRAY_MODE": "worker",
+        "GCW_MIXED_TASK_MODE": "1",
+        "CONFIG_LIST": str(tasks),
+        "STATE_DIR": str(tmp_path),
+    })
+    result = _run([], env, check=False)
+    assert result.returncode != 0
+    assert "future/checkpoint-2000" in result.stdout
+    assert (tmp_path / "failed_configs.tsv").exists()

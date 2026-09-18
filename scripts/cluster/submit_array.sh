@@ -44,6 +44,7 @@ EVAL_MAX_BATCH_SIZE="${EVAL_MAX_BATCH_SIZE:-64}"
 EVAL_CHECKPOINT_STEP="${EVAL_CHECKPOINT_STEP:-}"
 EVAL_THINKING_MODES="${EVAL_THINKING_MODES:-}"
 GCW_EVAL_TASK_MODE="${GCW_EVAL_TASK_MODE:-0}"
+GCW_MIXED_TASK_MODE="${GCW_MIXED_TASK_MODE:-0}"
 GENERATION_PROCESS_EVERY="${GENERATION_PROCESS_EVERY:-}"
 EVAL_HEAD_SELECTION_METHOD="${EVAL_HEAD_SELECTION_METHOD:-}"
 GCW_EVAL_SKIP_TASKS="${GCW_EVAL_SKIP_TASKS:-theoremqa}"
@@ -67,7 +68,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   scripts/cluster/submit_array.sh [--backend auto|slurm|local] [--workers N] [--local-gpus LIST]
-                                  [--configs-file FILE | --eval-tasks-file FILE]
+                                  [--configs-file FILE | --eval-tasks-file FILE | --tasks-file FILE]
                                   [--dry-run] [CONFIG ...]
   scripts/cluster/submit_array.sh status STATE_DIR
   scripts/cluster/submit_array.sh cancel [--force] STATE_DIR
@@ -80,6 +81,8 @@ Options:
   --configs-file FILE  File containing one config path per line. Blank lines and # comments are ignored.
   --eval-tasks-file FILE
                        Tab-separated CHECKPOINT, OUTPUT, and THINKING rows for eval-only workers.
+  --tasks-file FILE    Six TSV fields: ACTION, CONFIG, CHECKPOINT, OUTPUT_BASE, THINKING_MODES,
+                       SKIP_TASKS. ACTION is train or eval; use - for no CONFIG or SKIP_TASKS.
   --dry-run            Print the submission plan without starting workers.
 
 Common environment overrides:
@@ -179,6 +182,7 @@ write_slurm_environment() {
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP" \
     "EVAL_THINKING_MODES=$EVAL_THINKING_MODES" \
     "GCW_EVAL_TASK_MODE=$GCW_EVAL_TASK_MODE" \
+    "GCW_MIXED_TASK_MODE=$GCW_MIXED_TASK_MODE" \
     "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY" \
     "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD" \
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS" \
@@ -371,7 +375,7 @@ run_eval_modes() {
     else
       suffix="off"
     fi
-    run_eval "$checkpoint" "${out%.json}_thinking-${suffix}.json" "$mode"
+    run_eval "$checkpoint" "${out%.json}_thinking-${suffix}.json" "$mode" || return $?
   done
 }
 
@@ -381,7 +385,7 @@ run_eval_manifest() {
     if [[ -z "$manifest_checkpoint" ]]; then
       continue
     fi
-    run_eval_modes "$manifest_checkpoint" "$manifest_out"
+    run_eval_modes "$manifest_checkpoint" "$manifest_out" || return $?
   done < "$manifest"
 }
 
@@ -535,8 +539,117 @@ claim_next_config() {
   ) 200>"$LOCK_FILE"
 }
 
+run_mixed_task() {
+  local action config checkpoint out modes skip_tasks mode suffix target
+  local -a thinking_modes
+  local EVAL_ONLY=0 EVAL_AFTER_TRAIN=1 EVAL_THINKING_MODES
+  local CHECKPOINT OUT GCW_EVAL_SKIP_TASKS
+
+  IFS=$'\t' read -r action config checkpoint out modes skip_tasks <<< "$1"
+  EVAL_THINKING_MODES="$modes"
+  CHECKPOINT="$checkpoint"
+  OUT="$out"
+  GCW_EVAL_SKIP_TASKS="$skip_tasks"
+  if [[ "$skip_tasks" == "-" ]]; then
+    GCW_EVAL_SKIP_TASKS=""
+  fi
+  IFS=',' read -r -a thinking_modes <<< "$modes"
+  for mode in "${thinking_modes[@]}"; do
+    suffix=off
+    [[ "$mode" != "true" ]] || suffix=on
+    target="${out%.json}_thinking-${suffix}.json"
+    if [[ -e "$target" ]]; then
+      echo "Refusing to overwrite existing evaluation output: $target" >&2
+      return 1
+    fi
+  done
+  echo "=== Task action=$action config=$config checkpoint=$checkpoint thinking=$modes skip_tasks=$skip_tasks ==="
+  if [[ "$action" == "train" ]]; then
+    run_one_config "$config" || return $?
+  else
+    require_path "$checkpoint"
+    prepare_worker_environment
+    export GCW_EVAL_SKIP_TASKS
+    worker_uv_run_eval python scripts/cluster/check_cuda_env.py || return $?
+    run_eval_modes "$checkpoint" "$out" || return $?
+  fi
+}
+
+write_mixed_task_list() {
+  local list_path="$1" tasks_file="$2"
+  local line action config checkpoint out modes skip_tasks mode suffix target key
+  local line_number=0
+  local -a thinking_modes
+  local -A outputs=() training_configs=()
+
+  : > "$list_path"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line_number=$((line_number + 1))
+    [[ ! "$line" =~ ^[[:space:]]*($|#) ]] || continue
+    if ! awk -F '\t' 'NF != 6 {exit 1} {for (i=1;i<=NF;i++) if ($i == "") exit 1}' <<< "$line"; then
+      echo "Invalid mixed task on line $line_number: expected six nonempty TSV fields" >&2
+      return 1
+    fi
+    IFS=$'\t' read -r action config checkpoint out modes skip_tasks <<< "$line"
+    case "$action" in
+      train)
+        require_path "$config"
+        key="$(realpath "$config")"
+        if [[ -n "${training_configs[$key]:-}" ]]; then
+          echo "Duplicate training config on line $line_number: $config" >&2
+          return 1
+        fi
+        training_configs[$key]=1
+        ;;
+      eval)
+        if [[ "$config" != "-" ]]; then
+          echo "Evaluation task CONFIG must be - on line $line_number" >&2
+          return 1
+        fi
+        if [[ "$BACKEND" != "slurm" || ! "$DEPENDENCY" =~ ^afterok:[0-9]+(:[0-9]+)*$ ]]; then
+          require_path "$checkpoint"
+        fi
+        ;;
+      *)
+        echo "Invalid mixed task action on line $line_number: $action" >&2
+        return 1
+        ;;
+    esac
+    case "$modes" in
+      false|true|false,true|true,false) ;;
+      *)
+        echo "Invalid thinking modes on line $line_number: $modes" >&2
+        return 1
+        ;;
+    esac
+    if [[ "$out" != *.json || "$checkpoint" == "-" ]]; then
+      echo "Mixed tasks require a checkpoint path and .json output base on line $line_number" >&2
+      return 1
+    fi
+    IFS=',' read -r -a thinking_modes <<< "$modes"
+    for mode in "${thinking_modes[@]}"; do
+      suffix=off
+      [[ "$mode" != "true" ]] || suffix=on
+      target="${out%.json}_thinking-${suffix}.json"
+      key="$(realpath -m "$target")"
+      if [[ -e "$target" || -n "${outputs[$key]:-}" ]]; then
+        echo "Existing or duplicate evaluation output on line $line_number: $target" >&2
+        return 1
+      fi
+      outputs[$key]=1
+    done
+    printf '%s\n' "$line" >> "$list_path"
+  done < "$tasks_file"
+  if [[ ! -s "$list_path" ]]; then
+    echo "No mixed tasks provided in $tasks_file" >&2
+    return 1
+  fi
+}
+
 run_claimed_item() {
-  if [[ "$GCW_EVAL_TASK_MODE" == "1" ]]; then
+  if [[ "$GCW_MIXED_TASK_MODE" == "1" ]]; then
+    run_mixed_task "$1"
+  elif [[ "$GCW_EVAL_TASK_MODE" == "1" ]]; then
     run_one_eval_task "$1"
   else
     run_one_config "$1"
@@ -876,6 +989,7 @@ start_local_worker() {
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP"
     "EVAL_THINKING_MODES=$EVAL_THINKING_MODES"
     "GCW_EVAL_TASK_MODE=$GCW_EVAL_TASK_MODE"
+    "GCW_MIXED_TASK_MODE=$GCW_MIXED_TASK_MODE"
     "GENERATION_PROCESS_EVERY=$GENERATION_PROCESS_EVERY"
     "EVAL_HEAD_SELECTION_METHOD=$EVAL_HEAD_SELECTION_METHOD"
     "GCW_EVAL_SKIP_TASKS=$GCW_EVAL_SKIP_TASKS"
@@ -1120,7 +1234,7 @@ cancel_main() {
 }
 
 launcher_main() {
-  local configs_file="" eval_tasks_file="" dry_run=0 state_dir config_list workers_arg
+  local configs_file="" eval_tasks_file="" tasks_file="" dry_run=0 state_dir config_list workers_arg
   local alloc_gpus export_file
   local args=()
 
@@ -1155,6 +1269,14 @@ launcher_main() {
         eval_tasks_file="${2:-}"
         if [[ -z "$eval_tasks_file" ]]; then
           echo "--eval-tasks-file requires a path" >&2
+          exit 1
+        fi
+        shift 2
+        ;;
+      --tasks-file)
+        tasks_file="${2:-}"
+        if [[ -z "$tasks_file" ]]; then
+          echo "--tasks-file requires a path" >&2
           exit 1
         fi
         shift 2
@@ -1194,6 +1316,19 @@ launcher_main() {
   positive_int EVAL_GPUS "$EVAL_GPUS"
   validate_eval_batching
   validate_eval_thinking_modes
+  if [[ -n "$tasks_file" ]]; then
+    if [[ -n "$configs_file" || -n "$eval_tasks_file" || "${#args[@]}" -gt 0 ]]; then
+      echo "--tasks-file cannot be combined with other task inputs" >&2
+      return 1
+    fi
+    if [[ "$EVAL_ONLY" == "1" || -n "$EVAL_CHECKPOINT_STEP" || -n "${CHECKPOINT:-}" || -n "${OUT:-}" || "$EVAL_SUITE" == "fineweb" ]]; then
+      echo "--tasks-file owns checkpoint and train/eval selection and requires a generative evaluation suite" >&2
+      return 1
+    fi
+    require_path "$tasks_file"
+    GCW_MIXED_TASK_MODE=1
+    EVAL_AFTER_TRAIN=1
+  fi
   if [[ -n "$eval_tasks_file" ]]; then
     if [[ -n "$configs_file" || "${#args[@]}" -gt 0 ]]; then
       echo "--eval-tasks-file cannot be combined with configs" >&2
@@ -1273,7 +1408,9 @@ launcher_main() {
   fi
   mkdir -p "$state_dir"
   config_list="$state_dir/configs.txt"
-  if [[ -n "$eval_tasks_file" ]]; then
+  if [[ -n "$tasks_file" ]]; then
+    write_mixed_task_list "$config_list" "$tasks_file"
+  elif [[ -n "$eval_tasks_file" ]]; then
     write_eval_task_list "$config_list" "$eval_tasks_file"
   else
     write_config_list "$config_list" "$configs_file" "${args[@]}"
