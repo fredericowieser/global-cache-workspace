@@ -20,6 +20,7 @@ GROUP_LABELS = {
     "latent_kv": "KV latent change",
     "latent_linear": "Linear latent change",
     "kv": "Proposed KV change",
+    "linear_kv": "Pre-writer linear KV change",
     "linear_state": "Proposed linear-state change",
 }
 

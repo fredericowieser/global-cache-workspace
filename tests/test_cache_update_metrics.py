@@ -108,7 +108,13 @@ def test_observation_preserves_model_and_records_each_step(
         assert len(row["steps"]) == 4
         for step in row["steps"]:
             assert set(step["metrics"]) == (
-                {"latent_kv", "kv", "latent_linear", "linear_state"}
+                {
+                    "latent_kv",
+                    "kv",
+                    "latent_linear",
+                    "linear_kv",
+                    "linear_state",
+                }
                 if linear
                 else {"latent_kv", "kv"}
             )
@@ -444,8 +450,16 @@ def test_linear_contributions_match_actual_writer_matrices(writer):
     )
     dim = processor.block.linear_state_adapter.output_dim
     proposals = [torch.randn(2, 2, dim), torch.randn(2, 2, dim)]
+    unchanged_kv = proposals[-1].clone()
+    if writer == "gated_delta":
+        unchanged_kv[..., -2:] += 5
+    proposals.append(unchanged_kv)
+    adapter = processor.block.linear_state_adapter
+    kv_dim = adapter.linear_key_dim + adapter.linear_value_dim
+    previous_kv = torch.zeros(2, 2, kv_dim)
     previous = cache.linear_states[0][0]
     expected = []
+    expected_kv = []
     for step, raw in enumerate(proposals, 1):
         observer.step_index = step
         with torch.no_grad():
@@ -466,10 +480,30 @@ def test_linear_contributions_match_actual_writer_matrices(writer):
                     1,
                 )
             )
+            kv = raw[..., :kv_dim]
+            kv_norms = (kv - previous_kv).norm(dim=-1)
+            expected_kv.append(
+                torch.stack(
+                    [
+                        kv_norms.min(1).values,
+                        kv_norms.max(1).values,
+                        kv_norms.mean(1),
+                        kv_norms.std(1, correction=0),
+                    ],
+                    1,
+                )
+            )
             observer.linear(raw)
             previous = proposed
+            previous_kv = kv
     rows = batch.rows()
-    for step in (1, 2):
+    for step in (1, 2, 3):
+        actual_kv = torch.tensor(
+            [row[f"1:{step}:linear_kv"]["sum"] for row in rows]
+        )
+        torch.testing.assert_close(actual_kv, expected_kv[step - 1])
+        if step == 3:
+            assert torch.count_nonzero(actual_kv) == 0
         actual = torch.tensor(
             [row[f"1:{step}:linear_state"]["sum"] for row in rows]
         )

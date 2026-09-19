@@ -59,7 +59,10 @@ Each solver step records min, max, mean, and population standard deviation
 across head magnitudes, then averages each statistic across processor
 applications for that example. Metrics cover both latent changes and proposed
 KV/linear-state cache changes, before writeback gates and including solver
-step-size scaling. See [the metric definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
+step-size scaling. The `linear_kv` group also measures projected linear key/value
+changes before normalization and the outer-product or gated-delta transform;
+it excludes gated-delta gate and decay scalars. Existing sidecars do not contain
+this new group, so collect fresh evaluations for complete coverage. See [the metric definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
 
 ### Plot update magnitudes
 

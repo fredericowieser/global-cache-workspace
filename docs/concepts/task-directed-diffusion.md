@@ -183,10 +183,13 @@ and provides the following groups under `metrics`:
 | `latent_kv` | L2 norm of that solver step's actual change to the KV latent vector |
 | `latent_linear` | The same for a linear-state latent vector |
 | `kv` | L2 norm of the change in the proposed KV update since the preceding solver step |
+| `linear_kv` | L2 norm of the change in the concatenated projected linear key/value vector, before key normalization and the outer-product or gated-delta transform |
 | `linear_state` | Frobenius norm of the change in the proposed linear-state matrix update since the preceding solver step |
 
 The solver's step-size multiplier is included. Final writeback gates are excluded.
-Key normalization and the linear writer's own dynamics are included. In
+For `linear_state`, key normalization and the linear writer's own dynamics
+are included. `linear_kv` measures raw projected keys and values only;
+gated-delta beta logits and decay inputs are excluded from its norm. In
 `gated_delta` mode, configuration disables the outer linear writeback gate;
 the writer's internal sigmoid and decay dynamics remain included. KV norms
 use the concatenated key/value vector, or just the value vector for value-only
@@ -222,7 +225,9 @@ The sidecar schema is `gcw.cache_update_metrics.v1`. Evaluation results contain
 suites) with the path, aggregation definition, completion flag, example count,
 and per-task content hashes. Resume checks these hashes before reusing completed
 tasks. A previous evaluation without diagnostics cannot resume into one that
-requires them.
+requires them. The additive `linear_kv` group is absent from older sidecars
+and already completed tasks reused on resume. Use a fresh evaluation destination
+to collect it for every episode; the plotting script includes it when present.
 
 Answer NLL publishes the sidecar before its exclusive result receipt. If the
 receipt write fails before publication, the newly created sidecar is removed

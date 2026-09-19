@@ -186,9 +186,15 @@ class DiffusionUpdateObservation:
         self.previous_kv = raw
 
     def linear(self, raw: torch.Tensor) -> None:
+        raw = raw.detach()
         adapter = self.block.linear_state_adapter
+        kv_dim = adapter.linear_key_dim + adapter.linear_value_dim
+        change = raw[..., :kv_dim].float()
+        if self.previous_linear_raw is not None:
+            change = change - self.previous_linear_raw[..., :kv_dim].float()
+        self.record("linear_kv", change.norm(dim=-1))
         if self.processor.config.linear_state_update_mode == "outer_product":
-            key, value = raw.detach().split(
+            key, value = raw.split(
                 [adapter.linear_key_dim, adapter.linear_value_dim], dim=-1
             )
             # Match the writer's rounding before measuring in FP32.
@@ -199,6 +205,7 @@ class DiffusionUpdateObservation:
                 outer_difference_norm(key, value, self.previous_linear_factors),
             )
             self.previous_linear_factors = (key, value)
+            self.previous_linear_raw = raw
             return
         magnitudes = []
         offset = 0
@@ -223,4 +230,4 @@ class DiffusionUpdateObservation:
             )
             magnitudes.append((proposed - old).flatten(2).norm(dim=-1))
         self.record("linear_state", torch.cat(magnitudes, dim=1))
-        self.previous_linear_raw = raw.detach()
+        self.previous_linear_raw = raw
