@@ -107,17 +107,33 @@ def test_observation_preserves_model_and_records_each_step(
     for row in rows:
         assert len(row["steps"]) == 4
         for step in row["steps"]:
-            assert set(step["metrics"]) == (
-                {
-                    "latent_kv",
-                    "kv",
-                    "latent_linear",
-                    "linear_kv",
-                    "linear_state",
-                }
-                if linear
-                else {"latent_kv", "kv"}
-            )
+            groups = {"latent_kv", "key", "value"}
+            for stream in ("key", "value"):
+                groups.update(
+                    {
+                        f"{stream}_direction_to_original",
+                        f"{stream}_cache_direction_from_original",
+                    }
+                )
+            if linear:
+                groups.update(
+                    {
+                        "latent_linear",
+                        "linear_key",
+                        "linear_value",
+                        "linear_state",
+                    }
+                )
+            if step["solver_step"] > 1:
+                groups.update(
+                    f"{stream}_direction_change"
+                    for stream in (
+                        ("key", "value", "linear_key", "linear_value")
+                        if linear
+                        else ("key", "value")
+                    )
+                )
+            assert set(step["metrics"]) == groups
             for metric in step["metrics"].values():
                 assert metric["applications"] == (3 if linear else 1)
                 assert 0 <= metric["min"] <= metric["mean"] <= metric["max"]
@@ -136,7 +152,11 @@ def test_consecutive_readouts_include_bias_once_and_exclude_gate():
         block.out_proj.bias.copy_(torch.tensor([2.0, 0.0, 0.0]))
     batch = UpdateBatch(1, "cpu")
     observer = DiffusionUpdateObservation(
-        batch, SimpleNamespace(block=block), None, [], batch.active
+        batch,
+        SimpleNamespace(block=block, config=SimpleNamespace(update_stream="v")),
+        None,
+        [],
+        batch.active,
     )
     initial = torch.zeros(1, 2, 3)
     first = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 2.0, 0.0]]])
@@ -146,8 +166,8 @@ def test_consecutive_readouts_include_bias_once_and_exclude_gate():
         observer.step(first, second, initial, final=True)
         observer.kv(block.out_proj(second))
     row = batch.rows()[0]
-    assert row["1:1:kv"]["sum"][1] == pytest.approx(3.0)
-    assert row["1:2:kv"]["sum"] == pytest.approx([1.0, 3.0, 2.0, 1.0])
+    assert row["1:1:value"]["sum"][1] == pytest.approx(3.0)
+    assert row["1:2:value"]["sum"] == pytest.approx([1.0, 3.0, 2.0, 1.0])
     assert row["1:2:latent_kv"]["sum"] == pytest.approx([1.0, 3.0, 2.0, 1.0])
 
 
@@ -156,14 +176,14 @@ def test_averages_statistics_across_applications_and_options(tmp_path):
     with diagnostics.batch([("task", "one", "option0")]):
         batch = UPDATE_BATCH.get()
         for magnitudes in ([1.0, 3.0], [5.0, 9.0]):
-            batch.add(1, 1, "kv", torch.tensor([magnitudes]), batch.active)
+            batch.add(1, 1, "value", torch.tensor([magnitudes]), batch.active)
     with diagnostics.batch([("task", "one", "option1")]):
         batch = UPDATE_BATCH.get()
-        batch.add(1, 1, "kv", torch.tensor([[3.0, 3.0]]), batch.active)
+        batch.add(1, 1, "value", torch.tensor([[3.0, 3.0]]), batch.active)
     diagnostics.finish()
     row = json.loads((tmp_path / "metrics.jsonl").read_text())
     assert row["request_count"] == 2
-    assert row["steps"][0]["metrics"]["kv"] == pytest.approx(
+    assert row["steps"][0]["metrics"]["value"] == pytest.approx(
         {
             "min": 3.0,
             "max": 5.0,
@@ -196,7 +216,7 @@ def test_padding_failed_batches_and_no_application_rows(tmp_path):
         )
     }
     assert rows["short"]["steps"] == []
-    assert rows["long"]["steps"][0]["metrics"]["kv"]["applications"] == 2
+    assert rows["long"]["steps"][0]["metrics"]["value"]["applications"] == 2
 
 
 def test_external_iterations_and_value_only_writeback(tmp_path):
@@ -213,6 +233,14 @@ def test_external_iterations_and_value_only_writeback(tmp_path):
         (step["external_iteration"], step["solver_step"])
         for step in row["steps"]
     ] == [(i, j) for i in (1, 2) for j in range(1, 5)]
+    for step in row["steps"]:
+        groups = set(step["metrics"])
+        assert groups == {
+            "latent_kv",
+            "value",
+            "value_direction_to_original",
+            "value_cache_direction_from_original",
+        } | ({"value_direction_change"} if step["solver_step"] > 1 else set())
 
 
 def test_sidecar_resume_authentication_and_target_validation(tmp_path):
@@ -455,11 +483,12 @@ def test_linear_contributions_match_actual_writer_matrices(writer):
         unchanged_kv[..., -2:] += 5
     proposals.append(unchanged_kv)
     adapter = processor.block.linear_state_adapter
+    assert adapter.linear_key_dim != adapter.linear_value_dim
     kv_dim = adapter.linear_key_dim + adapter.linear_value_dim
     previous_kv = torch.zeros(2, 2, kv_dim)
     previous = cache.linear_states[0][0]
     expected = []
-    expected_kv = []
+    expected_kv = {"linear_key": [], "linear_value": []}
     for step, raw in enumerate(proposals, 1):
         observer.step_index = step
         with torch.no_grad():
@@ -481,29 +510,56 @@ def test_linear_contributions_match_actual_writer_matrices(writer):
                 )
             )
             kv = raw[..., :kv_dim]
-            kv_norms = (kv - previous_kv).norm(dim=-1)
-            expected_kv.append(
-                torch.stack(
-                    [
-                        kv_norms.min(1).values,
-                        kv_norms.max(1).values,
-                        kv_norms.mean(1),
-                        kv_norms.std(1, correction=0),
-                    ],
-                    1,
+            for name, channels in [
+                ("linear_key", slice(None, adapter.linear_key_dim)),
+                ("linear_value", slice(adapter.linear_key_dim, None)),
+            ]:
+                kv_norms = (kv - previous_kv)[..., channels].norm(dim=-1)
+                expected_kv[name].append(
+                    torch.stack(
+                        [
+                            kv_norms.min(1).values,
+                            kv_norms.max(1).values,
+                            kv_norms.mean(1),
+                            kv_norms.std(1, correction=0),
+                        ],
+                        1,
+                    )
                 )
-            )
             observer.linear(raw)
             previous = proposed
             previous_kv = kv
     rows = batch.rows()
     for step in (1, 2, 3):
-        actual_kv = torch.tensor(
-            [row[f"1:{step}:linear_kv"]["sum"] for row in rows]
-        )
-        torch.testing.assert_close(actual_kv, expected_kv[step - 1])
-        if step == 3:
-            assert torch.count_nonzero(actual_kv) == 0
+        for name in expected_kv:
+            actual_kv = torch.tensor(
+                [row[f"1:{step}:{name}"]["sum"] for row in rows]
+            )
+            torch.testing.assert_close(actual_kv, expected_kv[name][step - 1])
+            if step == 3:
+                assert torch.count_nonzero(actual_kv) == 0
+                assert all(
+                    f"1:{step}:{name}_direction_change" not in row
+                    for row in rows
+                )
+            elif step == 2:
+                channels = (
+                    slice(None, adapter.linear_key_dim)
+                    if name == "linear_key"
+                    else slice(adapter.linear_key_dim, kv_dim)
+                )
+                distances = 1 - F.cosine_similarity(
+                    (proposals[1] - proposals[0])[..., channels],
+                    proposals[0][..., channels],
+                    dim=-1,
+                )
+                actual_direction = torch.tensor(
+                    [
+                        row[f"1:2:{name}_direction_change"]["sum"][2]
+                        for row in rows
+                    ]
+                )
+                torch.testing.assert_close(actual_direction, distances.mean(1))
         actual = torch.tensor(
             [row[f"1:{step}:linear_state"]["sum"] for row in rows]
         )
@@ -565,7 +621,7 @@ def test_generation_excludes_finished_rows(tmp_path, monkeypatch, fast):
         map(json.loads, (tmp_path / "metrics.jsonl").read_text().splitlines())
     )
     assert rows[0]["steps"] == []
-    assert rows[1]["steps"][0]["metrics"]["kv"]["applications"] == 2
+    assert rows[1]["steps"][0]["metrics"]["value"]["applications"] == 2
 
 
 def test_lm_eval_options_sorting_and_oom_retry(tmp_path, monkeypatch):
@@ -619,7 +675,7 @@ def test_lm_eval_options_sorting_and_oom_retry(tmp_path, monkeypatch):
         )
     }
     assert rows["9"]["request_count"] == 2
-    assert rows["9"]["steps"][0]["metrics"]["kv"]["applications"] == 2
+    assert rows["9"]["steps"][0]["metrics"]["value"]["applications"] == 2
     assert rows["8"]["steps"] == []
 
 
@@ -634,7 +690,9 @@ def test_distributed_padding_duplicates_are_not_counted(tmp_path, monkeypatch):
     assert len(set(keys)) == 1
     with diagnostics.batch(keys):
         batch = UPDATE_BATCH.get()
-        batch.add(1, 1, "kv", torch.tensor([[1.0], [2.0], [3.0]]), batch.active)
+        batch.add(
+            1, 1, "value", torch.tensor([[1.0], [2.0], [3.0]]), batch.active
+        )
     monkeypatch.setattr(module.dist, "is_initialized", lambda: True)
     monkeypatch.setattr(module.dist, "get_world_size", lambda: 2)
     monkeypatch.setattr(module.dist, "get_rank", lambda: 0)
@@ -646,8 +704,8 @@ def test_distributed_padding_duplicates_are_not_counted(tmp_path, monkeypatch):
     diagnostics.finish()
     row = json.loads((tmp_path / "metrics.jsonl").read_text())
     assert row["request_count"] == 1
-    assert row["steps"][0]["metrics"]["kv"]["applications"] == 1
-    assert row["steps"][0]["metrics"]["kv"]["mean"] == 1
+    assert row["steps"][0]["metrics"]["value"]["applications"] == 1
+    assert row["steps"][0]["metrics"]["value"]["mean"] == 1
 
 
 def test_answer_nll_real_checkpoint_sidecar(tmp_path, monkeypatch):
@@ -769,3 +827,295 @@ def test_fixed_diffusion_fullgraph_remains_compilable():
             compiled(state, state, field),
             module.deterministic_recurrence(state, state, field),
         )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_cosine_distances_and_undefined_vectors(dtype):
+    left = torch.tensor(
+        [
+            [1, 0],
+            [0, 2],
+            [-3, 0],
+            [0, 0],
+            [1e-13, 0],
+            [2e-12, 0],
+            [1, 0],
+            [1, 0],
+            [0.3, 0.7],
+        ],
+        dtype=dtype,
+    ).unsqueeze(1)
+    right = torch.tensor(
+        [
+            [2, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [0, 0],
+            [1e-13, 0],
+            [0.3, 0.7],
+        ],
+        dtype=dtype,
+    ).unsqueeze(1)
+    batch = UpdateBatch(len(left), "cpu")
+    observer = DiffusionUpdateObservation(
+        batch, SimpleNamespace(block=None), None, [], batch.active
+    )
+    observer.step_index = 2
+    observer.direction("key_direction_change", left, right)
+    rows = batch.rows()
+    for index, expected in [(0, 0), (1, 1), (2, 2), (5, 0), (8, 0)]:
+        metric = rows[index]["1:2:key_direction_change"]
+        assert metric["sum"] == pytest.approx([expected] * 3 + [0], abs=1e-7)
+        assert metric["valid_head_observations"] == 1
+        assert metric["applications"] == metric["heads"] == 1
+    for index in (3, 4, 6, 7):
+        assert rows[index] == {}
+
+
+@pytest.mark.parametrize("value_only", [False, True])
+def test_attention_contributions_and_original_comparisons(value_only):
+    original = torch.tensor([[[2.0, 0.0, 0.0, 3.0]]])
+    proposals = [
+        torch.tensor([[[1.0, 0.0, 0.0, -2.0]]]),
+        torch.tensor([[[1.0, 2.0, 4.0, -2.0]]]),
+    ]
+    processor = SimpleNamespace(
+        block=None,
+        config=SimpleNamespace(update_stream="v" if value_only else "kv"),
+    )
+    batch = UpdateBatch(1, "cpu")
+    observer = DiffusionUpdateObservation(
+        batch, processor, None, [], batch.active, original
+    )
+    for index, proposal in enumerate(proposals, 1):
+        observer.step_index = index
+        observer.kv(proposal[..., 2:] if value_only else proposal)
+    row = batch.rows()[0]
+    for name, channels in [("key", slice(0, 2)), ("value", slice(2, 4))]:
+        if value_only and name == "key":
+            assert not any(":key" in group for group in row)
+            continue
+        previous = torch.zeros_like(proposals[0][..., channels])
+        for step, proposal in enumerate(proposals, 1):
+            projected = proposal[..., channels]
+            contribution = projected - previous
+            baseline = original[..., channels]
+            magnitude = contribution.norm().item()
+            assert row[f"1:{step}:{name}"]["sum"] == pytest.approx(
+                [magnitude] * 3 + [0]
+            )
+            for suffix, vector in [
+                ("direction_to_original", contribution),
+                ("cache_direction_from_original", baseline + projected),
+            ]:
+                expected = (
+                    1 - F.cosine_similarity(vector, baseline, dim=-1).item()
+                )
+                assert row[f"1:{step}:{name}_{suffix}"]["sum"] == pytest.approx(
+                    [expected] * 3 + [0]
+                )
+            previous = projected
+        assert f"1:1:{name}_direction_change" not in row
+        assert row[f"1:2:{name}_direction_change"]["sum"] == pytest.approx(
+            [1, 1, 1, 0]
+        )
+        cumulative_distance = (
+            1
+            - F.cosine_similarity(
+                proposals[1][..., channels], proposals[0][..., channels], dim=-1
+            ).item()
+        )
+        assert cumulative_distance != pytest.approx(1)
+
+
+def test_direction_aggregation_uses_defined_heads_and_applications(tmp_path):
+    metrics = CacheUpdateMetrics(make_model(), tmp_path / "metrics.jsonl")
+    for request, comparisons in [
+        (
+            "0",
+            [
+                ([0.0, 2.0, 99.0], [True, True, False]),
+                ([1.0, 99.0, 99.0], [True, False, False]),
+                ([99.0, 99.0, 99.0], [False, False, False]),
+            ],
+        ),
+        ("1", [([2.0, 99.0, 99.0], [True, False, False])]),
+    ]:
+        with metrics.batch(
+            [("task", "one", request), ("task", "finished", request)]
+        ):
+            batch = UPDATE_BATCH.get()
+            batch.active[1] = False
+            for distances, valid in comparisons:
+                batch.add(
+                    1,
+                    2,
+                    "key_direction_change",
+                    torch.tensor([distances, distances]),
+                    batch.active,
+                    torch.tensor([valid, valid]),
+                )
+            batch.add(
+                1,
+                2,
+                "value_direction_change",
+                torch.zeros(2, 3),
+                batch.active,
+                torch.zeros(2, 3, dtype=torch.bool),
+            )
+    metrics.finish()
+    rows = {
+        row["example_id"]: row
+        for row in map(
+            json.loads, (tmp_path / "metrics.jsonl").read_text().splitlines()
+        )
+    }
+    assert rows["finished"]["steps"] == []
+    assert rows["one"]["schema"] == "gcw.cache_update_metrics.v2"
+    groups = rows["one"]["steps"][0]["metrics"]
+    assert set(groups) == {"key_direction_change"}
+    assert groups["key_direction_change"] == pytest.approx(
+        {
+            "min": 1,
+            "max": 5 / 3,
+            "mean": 4 / 3,
+            "std": 1 / 3,
+            "heads": 3,
+            "applications": 3,
+            "valid_head_observations": 4,
+        }
+    )
+    assert rows["one"]["request_count"] == 2
+
+
+def test_v1_sidecar_and_metadata_cannot_resume(tmp_path):
+    path = tmp_path / "metrics.jsonl"
+    model = make_model()
+    path.write_text(
+        json.dumps({"schema": "gcw.cache_update_metrics.v1"}) + "\n"
+    )
+    with pytest.raises(ValueError, match="incompatible"):
+        CacheUpdateMetrics(model, path, resume=True)
+    path.write_text("")
+    with pytest.raises(ValueError, match="resume policy differs"):
+        CacheUpdateMetrics(model, path, resume=True).validate_resume(
+            {
+                "gcw_runtime": {
+                    "task": {
+                        "cache_update_metrics": {
+                            "schema": "gcw.cache_update_metrics.v1",
+                            "path": str(path),
+                        }
+                    }
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize("unrope", [False, True])
+def test_original_frontier_coordinates_and_external_iteration_reset(
+    tmp_path, monkeypatch, unrope
+):
+    from gcw.models.cache_processors.ops import rotate_cache_keys
+    from gcw.models.cache_processors.update_metrics import UPDATE_OBSERVER
+
+    model = make_model(
+        linear=True, unrope_keys=unrope, iterations=2, iteration_mode="external"
+    )
+    processor = model.cache_processor
+    cache = _scheduled_cache()
+    incoming_keys = cache.keys[0][:, :, -1:, :].clone()
+    if unrope:
+        incoming_keys = rotate_cache_keys(
+            incoming_keys.unsqueeze(0),
+            torch.full((2, 1), 2),
+            theta=processor.rope_theta,
+            rotary_style=processor.rotary_style,
+            rotary_dim=processor.rotary_dim,
+            inverse=True,
+        ).squeeze(0)
+        assert not torch.allclose(incoming_keys, cache.keys[0][:, :, -1:, :])
+    expected_frontier = torch.cat(
+        [incoming_keys.squeeze(2), cache.values[0][:, :, -1, :]], dim=-1
+    )
+    frontiers, outputs, proposals = [], [], []
+
+    def capture_frontier(_module, args):
+        observer = UPDATE_OBSERVER.get()
+        merged = args[0]
+        assert observer.original.data_ptr() == merged[:, :, -1, :].data_ptr()
+        assert not observer.original.requires_grad
+        assert observer.previous_kv is observer.previous_kv_change is None
+        assert (
+            observer.previous_linear_raw
+            is observer.previous_linear_change
+            is None
+        )
+        frontiers.append(observer.original.clone())
+        proposals.append([])
+
+    def capture_output(_module, _args, output):
+        outputs.append(output[0].clone())
+
+    observe = DiffusionUpdateObservation.kv
+
+    def capture_proposal(observer, raw):
+        proposals[-1].append(raw.detach().float().clone())
+        observe(observer, raw)
+
+    monkeypatch.setattr(DiffusionUpdateObservation, "kv", capture_proposal)
+    handles = [
+        processor.block.register_forward_pre_hook(capture_frontier),
+        processor.block.register_forward_hook(capture_output),
+    ]
+    diagnostics = CacheUpdateMetrics(model, tmp_path / "metrics.jsonl")
+    try:
+        with diagnostics.batch([("task", "0", "0"), ("task", "1", "0")]):
+            processor(cache)
+    finally:
+        for handle in handles:
+            handle.remove()
+    assert len(frontiers) == 2
+    torch.testing.assert_close(frontiers[0], expected_frontier)
+    torch.testing.assert_close(frontiers[1], outputs[0])
+    diagnostics.finish()
+    rows = list(
+        map(json.loads, (tmp_path / "metrics.jsonl").read_text().splitlines())
+    )
+    for iteration, (frontier, readouts) in enumerate(
+        zip(frontiers, proposals), 1
+    ):
+        previous = torch.zeros_like(readouts[0])
+        assert len(readouts) == 4
+        for step, proposal in enumerate(readouts, 1):
+            for name, channels in [
+                ("key", slice(0, 4)),
+                ("value", slice(4, 8)),
+            ]:
+                baseline = frontier[..., channels]
+                for suffix, vector in [
+                    (
+                        "direction_to_original",
+                        (proposal - previous)[..., channels],
+                    ),
+                    (
+                        "cache_direction_from_original",
+                        baseline + proposal[..., channels],
+                    ),
+                ]:
+                    expected = 1 - F.cosine_similarity(vector, baseline, dim=-1)
+                    for index, row in enumerate(rows):
+                        metrics = row["steps"][(iteration - 1) * 4 + step - 1][
+                            "metrics"
+                        ]
+                        actual = metrics[f"{name}_{suffix}"]
+                        assert actual["mean"] == pytest.approx(
+                            expected[index].item(), abs=2e-7
+                        )
+                        assert actual["valid_head_observations"] == 1
+                        if step == 1:
+                            assert f"{name}_direction_change" not in metrics
+            previous = proposal

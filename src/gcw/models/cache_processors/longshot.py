@@ -259,7 +259,10 @@ class GlobalCacheProcessor(CacheProcessorBase):
         batch_metrics = UPDATE_BATCH.get() if not self.training else None
         observation = (
             batch_metrics.application(
-                self, cache, linear_inputs.specs if linear_inputs else []
+                self,
+                cache,
+                linear_inputs.specs if linear_inputs else [],
+                merged[:, :, -1, :],
             )
             if batch_metrics is not None
             else nullcontext()

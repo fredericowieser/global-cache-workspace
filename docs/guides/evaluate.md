@@ -41,7 +41,7 @@ For a cache-processor checkpoint, `--generation-process-every N` overrides the p
 ## Longshot diffusion update metrics
 
 Add `--cache-update-metrics` to a native evaluation command to write per-example
-update magnitudes beside its results, using the name
+update magnitudes and directions beside its results, using the name
 `<results-stem>.cache-update-metrics.jsonl`. Use
 `--cache-update-metrics PATH` for an explicit destination. The option requires
 an enabled Longshot diffusion processor.
@@ -56,15 +56,23 @@ required, and results originally produced without metrics cannot be resumed with
 metrics enabled; use a fresh evaluation destination.
 
 Each solver step records min, max, mean, and population standard deviation
-across head magnitudes, then averages each statistic across processor
-applications for that example. Metrics cover both latent changes and proposed
-KV/linear-state cache changes, before writeback gates and including solver
-step-size scaling. The `linear_kv` group also measures projected linear key/value
-changes before normalization and the outer-product or gated-delta transform;
-it excludes gated-delta gate and decay scalars. Existing sidecars do not contain
-this new group, so collect fresh evaluations for complete coverage. See [the metric definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
+across heads, then averages each statistic across contributing processor
+applications for that example. Attention and linear keys and values have
+separate magnitude and contribution-direction groups. Attention groups also
+measure contribution direction relative to the original cache and rotation of
+the proposed cache. Measurements precede writeback gates and include solver
+step-size scaling; linear key/value measurements also precede normalization
+and writer transforms, excluding gate and decay scalars.
 
-### Plot update magnitudes
+Undefined cosine comparisons (either norm at most `1e-12`) are excluded, and
+entirely undefined groups are omitted. Direction records retain the full
+`heads` population, count contributing `applications`, and report
+`valid_head_observations` across applications and requests. New sidecars use
+`gcw.cache_update_metrics.v2`; resume rejects v1 sidecars and requires a fresh
+evaluation destination. Historical v1 files remain plottable. See [the metric
+definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
+
+### Plot update magnitudes and directions
 
 Pass the metrics JSONL sidecar (rather than the benchmark score JSON) to:
 
@@ -73,6 +81,12 @@ python scripts/plot_cache_update_metrics.py \
   results/<run>.cache-update-metrics.jsonl \
   --out results/<run>.cache-update-metrics.png
 ```
+
+By default, `--quantity both` produces one figure containing all available
+magnitude and direction groups, with appropriate units per row. Use
+`--quantity magnitude` or `--quantity direction` to select one quantity;
+requesting an unavailable quantity reports an error. Historical v1 files show
+their recorded combined magnitude groups.
 
 The figure has one row per available metric group and columns for head min,
 mean, max, and population standard deviation. The x axis is the **solver step**,
@@ -89,8 +103,9 @@ subset. External iterations remain separate lines. Empty episodes and absent
 step/group observations are omitted rather than treated as zero; the figure
 reports the contributing-count range. Each panel has its own y scale to keep
 small signals visible. Missing linear-state groups are omitted automatically.
-The default output replaces `.jsonl` with `.png`; `--out` also supports PDF or
-SVG. Only the existing NumPy and Matplotlib dependencies are needed.
+The default output replaces `.jsonl` with `.png` for `both` or `magnitude`,
+and with `.direction.png` for `direction`; `--out` also supports PDF or SVG.
+Only the existing NumPy and Matplotlib dependencies are needed.
 
 ## Generation stopping
 

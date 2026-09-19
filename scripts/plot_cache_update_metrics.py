@@ -19,10 +19,32 @@ STATISTICS = ("min", "mean", "max", "std")
 GROUP_LABELS = {
     "latent_kv": "KV latent change",
     "latent_linear": "Linear latent change",
+    "key": "Proposed key change",
+    "value": "Proposed value change",
+    "linear_key": "Pre-writer linear key change",
+    "linear_value": "Pre-writer linear value change",
     "kv": "Proposed KV change",
     "linear_kv": "Pre-writer linear KV change",
     "linear_state": "Proposed linear-state change",
 }
+
+DIRECTION_SUFFIXES = (
+    "_direction_change",
+    "_direction_to_original",
+    "_cache_direction_from_original",
+)
+for _stream in ("key", "value", "linear_key", "linear_value"):
+    _label = _stream.replace("_", " ").capitalize()
+    GROUP_LABELS[f"{_stream}_direction_change"] = (
+        f"{_label} contribution rotation"
+    )
+    if not _stream.startswith("linear_"):
+        GROUP_LABELS[f"{_stream}_direction_to_original"] = (
+            f"{_label} contribution vs original"
+        )
+        GROUP_LABELS[f"{_stream}_cache_direction_from_original"] = (
+            f"{_label} proposed cache rotation"
+        )
 
 
 def load_metrics(path: Path, tasks: list[str] | None = None) -> tuple:
@@ -36,7 +58,10 @@ def load_metrics(path: Path, tasks: list[str] | None = None) -> tuple:
                 continue
             try:
                 row = json.loads(line)
-                if row["schema"] != "gcw.cache_update_metrics.v1":
+                if row["schema"] not in {
+                    "gcw.cache_update_metrics.v1",
+                    "gcw.cache_update_metrics.v2",
+                }:
                     raise ValueError("unsupported metrics schema")
                 task = row["task"]
                 if tasks and task not in tasks:
@@ -68,7 +93,7 @@ def load_metrics(path: Path, tasks: list[str] | None = None) -> tuple:
                         )
                         if not np.isfinite(values).all() or (values < 0).any():
                             raise ValueError(
-                                "magnitudes must be finite and nonnegative"
+                                "measurements must be finite and nonnegative"
                             )
                         if metrics["applications"] <= 0:
                             raise ValueError("applications must be positive")
@@ -82,7 +107,23 @@ def load_metrics(path: Path, tasks: list[str] | None = None) -> tuple:
     return dict(samples), dict(task_counts), empty
 
 
-def plot_metrics(samples: dict, task_counts: dict, empty: int, title: str):
+def plot_metrics(
+    samples: dict,
+    task_counts: dict,
+    empty: int,
+    title: str,
+    quantity: str = "both",
+):
+    if quantity not in {"both", "magnitude", "direction"}:
+        raise ValueError(f"unknown quantity: {quantity}")
+    samples = {
+        key: values
+        for key, values in samples.items()
+        if quantity == "both"
+        or key[0].endswith(DIRECTION_SUFFIXES) == (quantity == "direction")
+    }
+    if not samples:
+        raise ValueError(f"no {quantity} metrics in the selected episodes")
     present = {key[0] for key in samples}
     groups = [group for group in GROUP_LABELS if group in present]
     groups += sorted(present - GROUP_LABELS.keys())
@@ -126,7 +167,15 @@ def plot_metrics(samples: dict, task_counts: dict, empty: int, title: str):
             ax.set_title(f"{GROUP_LABELS.get(group, group)} · {stat}")
             if row_index == 0:
                 ax.set_title(f"{column_titles[column]}\n{ax.get_title()}")
-            ax.set_ylabel("Magnitude")
+            ax.set_ylabel(
+                "Cosine distance (unitless)"
+                if group.endswith(DIRECTION_SUFFIXES)
+                else (
+                    "Magnitude (Frobenius norm)"
+                    if group == "linear_state"
+                    else "Magnitude (L2 norm)"
+                )
+            )
             ax.grid(alpha=0.2)
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
             ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 4))
@@ -151,23 +200,35 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path, help="Cache-update metrics JSONL")
     parser.add_argument(
-        "--out", type=Path, help="Output image (default: input path with .png)"
+        "--out",
+        type=Path,
+        help="Output image (default: .png, or .direction.png for direction-only)",
     )
     parser.add_argument(
         "--task",
         action="append",
         help="Task to include; repeat for multiple tasks",
     )
-    parser.add_argument("--title", default="Diffusion update magnitudes")
+    parser.add_argument(
+        "--quantity",
+        choices=("both", "magnitude", "direction"),
+        default="both",
+        help="Measurements to plot (default: both)",
+    )
+    parser.add_argument("--title", default="Diffusion update diagnostics")
     args = parser.parse_args()
-    output = args.out or args.results.with_suffix(".png")
+    output = args.out or args.results.with_suffix(
+        ".direction.png" if args.quantity == "direction" else ".png"
+    )
     if output.resolve() == args.results.resolve():
         parser.error("output must not overwrite the input")
     try:
         samples, task_counts, empty = load_metrics(args.results, args.task)
+        fig = plot_metrics(
+            samples, task_counts, empty, args.title, args.quantity
+        )
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    fig = plot_metrics(samples, task_counts, empty, args.title)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output, dpi=180)
     plt.close(fig)

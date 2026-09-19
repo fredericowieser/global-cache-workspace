@@ -17,7 +17,7 @@ import torch.distributed as dist
 from gcw.models.cache_processors.update_metrics import UPDATE_BATCH, UpdateBatch
 from gcw.runtime import atomic_write_json
 
-SCHEMA = "gcw.cache_update_metrics.v1"
+SCHEMA = "gcw.cache_update_metrics.v2"
 
 
 class CacheUpdateMetrics:
@@ -214,6 +214,11 @@ class CacheUpdateMetrics:
                     a + b for a, b in zip(total["sum"], value["sum"])
                 ]
                 total["applications"] += value["applications"]
+                if "valid_head_observations" in value:
+                    total["valid_head_observations"] = (
+                        total.get("valid_head_observations", 0)
+                        + value["valid_head_observations"]
+                    )
         for (task, example), record in examples.items():
             steps: dict[tuple[int, int], dict[str, Any]] = {}
             for key, value in sorted(record["values"].items()):
@@ -237,6 +242,10 @@ class CacheUpdateMetrics:
                     "applications": count,
                     "heads": value["heads"],
                 }
+                if "valid_head_observations" in value:
+                    item["metrics"][name]["valid_head_observations"] = value[
+                        "valid_head_observations"
+                    ]
             self.completed[(task, example)] = {
                 "schema": SCHEMA,
                 "task": task,

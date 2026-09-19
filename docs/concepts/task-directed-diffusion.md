@@ -178,39 +178,65 @@ Each JSONL record identifies one task and example and contains a `steps` list.
 Each entry identifies `external_iteration` and `solver_step` (both start at 1)
 and provides the following groups under `metrics`:
 
-| Group | Magnitude for one head |
+Let $p_s$ be the cumulative ungated projected proposal at solver step $s$,
+with $p_0 = 0$, and let $d_s = p_s - p_{s-1}$ be that step's contribution.
+Keys and values are measured separately.
+
+| Group | Measurement for one head |
 | --- | --- |
 | `latent_kv` | L2 norm of that solver step's actual change to the KV latent vector |
 | `latent_linear` | The same for a linear-state latent vector |
-| `kv` | L2 norm of the change in the proposed KV update since the preceding solver step |
-| `linear_kv` | L2 norm of the change in the concatenated projected linear key/value vector, before key normalization and the outer-product or gated-delta transform |
+| `key`, `value` | L2 norm of $d_s$ for attention keys or values |
+| `linear_key`, `linear_value` | L2 norm of $d_s$ for projected linear keys or values, before normalization and writer transforms |
 | `linear_state` | Frobenius norm of the change in the proposed linear-state matrix update since the preceding solver step |
+| `key_direction_change`, `value_direction_change` | $1 - \cos(d_s, d_{s-1})$, starting at step 2 |
+| `linear_key_direction_change`, `linear_value_direction_change` | The same for projected linear keys or values |
+| `key_direction_to_original`, `value_direction_to_original` | $1 - \cos(d_s, \mathrm{original})$ |
+| `key_cache_direction_from_original`, `value_cache_direction_from_original` | $1 - \cos(\mathrm{original} + p_s, \mathrm{original})$ |
+
+Cosine distance is unitless: 0 means aligned, 1 orthogonal, and 2 opposite.
+Distances use FP32 arithmetic with similarity clamped to $[-1, 1]$.
+Comparisons with either vector norm at most $10^{-12}$ are undefined and
+excluded. Original attention vectors come from the already gathered frontier,
+in the proposal's coordinate system; when `unrope_keys` is enabled, original
+keys are unrotated too. Each processor application, including each external
+iteration, starts a new contribution history and uses its own incoming frontier.
 
 The solver's step-size multiplier is included. Final writeback gates are excluded.
 For `linear_state`, key normalization and the linear writer's own dynamics
-are included. `linear_kv` measures raw projected keys and values only;
-gated-delta beta logits and decay inputs are excluded from its norm. In
+are included. Linear key/value magnitudes and directions use only raw projected
+keys and values, excluding gated-delta beta logits and decay inputs. In
 `gated_delta` mode, configuration disables the outer linear writeback gate;
-the writer's internal sigmoid and decay dynamics remain included. KV norms
-use the concatenated key/value vector, or just the value vector for value-only
-writeback. All destination heads across the relevant layers are included;
-attention selection does not restrict this population. Absent linear states
-produce no linear metric groups.
+the writer's internal sigmoid and decay dynamics remain included in `linear_state`.
+Value-only writeback emits only the attention `value` measurements, alongside
+latent and any linear measurements. All destination heads across the relevant
+layers are included; attention selection does not restrict this population.
+Absent linear states produce no linear metric groups.
 
 For cache contributions, the first step is compared against a zero update;
 subsequent steps are compared against the preceding decoded proposal. Any
 projection bias therefore belongs to the first step. For the linear writer,
 each proposal is decoded against the same incoming recurrent state. Intermediate
 proposals are only measured; the real cache is still written once at the end.
-The measured contributions add up to the final ungated proposal.
+The measured contributions add up to the final ungated proposal. Step direction
+change compares consecutive contributions, not consecutive cumulative proposals.
 
 Every processor application produces a min, max, mean, and population standard
-deviation across per-head magnitudes. Each example's record then averages
-**each statistic separately** across applications. For example, if two
-applications have head magnitudes `[1, 3]` and `[5, 9]`, the reported values are
-`min=3`, `max=6`, `mean=4.5`, and `std=1.5`. The maximum is the average of the
-two maxima, not the largest magnitude encountered. Single-head standard
-deviation is zero. Each group also records `heads` and `applications`.
+deviation across per-head measurements. Each example's record then averages
+**each statistic separately** across contributing applications. For example, if
+two applications have head magnitudes `[1, 3]` and `[5, 9]`, the reported values
+are `min=3`, `max=6`, `mean=4.5`, and `std=1.5`. The maximum is the average of
+the two maxima, not the largest magnitude encountered. Single-head standard
+deviation is zero.
+
+For directions, each application's statistics use only defined comparisons.
+Applications with no defined comparisons do not contribute; entirely undefined
+groups are omitted. `heads` remains the full head population, while `applications`
+counts contributing applications. Direction groups additionally record
+`valid_head_observations`, the total number of defined head comparisons across
+those applications and all requests for the example. Thus applications retain
+equal weight even when their counts of defined heads differ. Magnitude
+aggregation is unchanged and includes zero magnitudes.
 
 Applications during prompt processing and generation are combined. Finished
 generation rows and padded input tails do not contribute. Multiple-choice
@@ -220,14 +246,16 @@ one evaluated token-sequence row. An example with no processor applications has
 an empty `steps` list. Batch retries discard unsuccessful observations;
 distributed harness padding requests are deduplicated.
 
-The sidecar schema is `gcw.cache_update_metrics.v1`. Evaluation results contain
-`cache_update_metrics` metadata (under each task's `gcw_runtime` for lm-eval
-suites) with the path, aggregation definition, completion flag, example count,
-and per-task content hashes. Resume checks these hashes before reusing completed
-tasks. A previous evaluation without diagnostics cannot resume into one that
-requires them. The additive `linear_kv` group is absent from older sidecars
-and already completed tasks reused on resume. Use a fresh evaluation destination
-to collect it for every episode; the plotting script includes it when present.
+The sidecar schema is `gcw.cache_update_metrics.v2`. It replaces the combined
+`kv` and `linear_kv` groups with separate key/value measurements. Evaluation
+results contain `cache_update_metrics` metadata (under each task's `gcw_runtime`
+for lm-eval suites) with the path, aggregation definition, completion flag,
+example count, and per-task content hashes. Resume checks these hashes before
+reusing completed tasks and rejects v1 sidecars or metadata. Use a fresh
+evaluation destination to collect v2 measurements; evaluations without
+diagnostics also cannot resume into one that requires them. Historical v1
+sidecars remain readable by the plotting script, which plots their recorded
+combined groups without inventing separate measurements or directions.
 
 Answer NLL publishes the sidecar before its exclusive result receipt. If the
 receipt write fails before publication, the newly created sidecar is removed
@@ -242,12 +270,16 @@ retrying. An existing receipt and its referenced sidecar must be kept together.
 
 Diagnostics add one KV/linear readout pair for each intermediate solver step and
 reuse the existing final readout. Four steps therefore add three readout pairs.
+Direction diagnostics reuse those projections, retaining the previous contribution
+alongside the previous proposal. Original attention KVs use a detached view of
+the gathered frontier; no full-cache copies are made. Additional vector storage
+is independent of sequence length.
 The outer-product writer's matrix-difference norms are calculated from factors
 without allocating full matrices. The gated-delta writer additionally evaluates
 the proposed state transitions, one layer at a time. Summaries accumulate on the
 device and transfer at batch boundaries. Wall time and memory overhead depend
-on the writer, head dimensions, and solver depth; these metrics measure update
-magnitude, not whether the updates improve predictions.
+on the writer, head dimensions, and solver depth; these metrics describe update
+magnitude and direction, not whether the updates improve predictions.
 
 ## References
 
