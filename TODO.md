@@ -208,3 +208,29 @@ TODO in `_resolve_cache_update_metrics` in `src/gcw/cli.py`, adjust its default-
 tests, and restore opt-in wording in `docs/guides/evaluate.md`. Keep the existing
 explicit `--cache-update-metrics` support. Do not rerun completed evaluations just
 for logging.
+
+## Additional small-model diffusion metric evaluations in array 427
+
+Appended four evaluation-only tasks to the end of the live shared queue on
+2026-09-18, at the user's request. They repeat evaluation to collect diffusion
+update metrics, using separate outputs and the existing step-2000 checkpoints.
+No training is repeated, no workers are restarted, and no new array is submitted.
+
+| Diffusion checkpoint | Evaluation modes | New output base under `results/` |
+| --- | --- | --- |
+| Llama-1B head128 | off | `llama32_1b_fair_campaign_v1_diffusion_adapter22m_seed24_head128_final_paper7_update_metrics.json` |
+| Qwen-2B | off, on (separate tasks) | `qwen35_2b_fair_campaign_v1_diffusion_adapter22m_seed24_final_paper7_update_metrics.json` |
+| Llama-3B head128 | off | `llama32_3b_fair_campaign_v1_diffusion_pct015_seed24_head128_final_paper7_update_metrics.json` |
+
+Output bases gain `_thinking-off.json` or `_thinking-on.json`; each evaluation
+also writes the corresponding `.cache-update-metrics.jsonl` sidecar. All four
+use the full six-task Paper7 suite, auto batch size with maximum 64, and the
+existing 2048/4096 generation caps. Keep the temporary diffusion logging default
+until these extra evaluations finish.
+
+Array 427 now has **23 tasks** (the original 19 plus these four). Its live manifest
+is `slurm_out/gcw-restart-1gpu_20260918_180337_1744858/configs.txt`; the same directory
+contains `configs.before-metrics-reruns.txt`, `metrics-reruns-added.tsv`, and
+`metrics-reruns-audit.json`. Original submission manifests remain historical
+snapshots. The appended tasks are claimed after the original tasks have been
+claimed; they may overlap with slower original evaluations still running.
