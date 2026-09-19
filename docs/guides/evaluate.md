@@ -61,6 +61,34 @@ applications for that example. Metrics cover both latent changes and proposed
 KV/linear-state cache changes, before writeback gates and including solver
 step-size scaling. See [the metric definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
 
+### Plot update magnitudes
+
+Pass the metrics JSONL sidecar (rather than the benchmark score JSON) to:
+
+```bash
+python scripts/plot_cache_update_metrics.py \
+  results/<run>.cache-update-metrics.jsonl \
+  --out results/<run>.cache-update-metrics.png
+```
+
+The figure has one row per available metric group and columns for head min,
+mean, max, and population standard deviation. The x axis is the **solver step**,
+not a generated-token or training step. Each line averages the already logged
+per-episode statistics with equal episode weight; longer episodes do not gain
+extra weight from their application counts. Shading shows the 25th–75th
+percentiles across episodes, not a confidence interval or head standard
+deviation. In particular, the `std` column averages the logged within-head
+standard deviations; it is not the spread across episodes.
+
+All tasks are pooled by default, so tasks with more episodes contribute more.
+Use `--task gsm8k_openmath` to select a task, repeating `--task` to combine a
+subset. External iterations remain separate lines. Empty episodes and absent
+step/group observations are omitted rather than treated as zero; the figure
+reports the contributing-count range. Each panel has its own y scale to keep
+small signals visible. Missing linear-state groups are omitted automatically.
+The default output replaces `.jsonl` with `.png`; `--out` also supports PDF or
+SVG. Only the existing NumPy and Matplotlib dependencies are needed.
+
 ## Generation stopping
 
 Generation stops at any configured EOS/end-of-turn token and pads finished rows
