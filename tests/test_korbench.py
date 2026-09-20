@@ -356,7 +356,10 @@ def test_native_longshot_generation_smoke(enabled):
     assert (calls > 0) is enabled
 
 
-def test_harness_group_generation_scoring_and_samples(prepared, tmp_path):
+@pytest.mark.parametrize("response_prefix", ["", "[[999]]</think>"])
+def test_harness_group_generation_scoring_and_samples(
+    prepared, tmp_path, response_prefix
+):
     import shutil
     from lm_eval import evaluator
     from lm_eval.api.model import LM
@@ -385,7 +388,9 @@ def test_harness_group_generation_scoring_and_samples(prepared, tmp_path):
                 assert request.args[0] == request.doc["prompt"]
                 assert "max_gen_toks" not in request.args[1]
                 assert request.args[1]["gcw_require_full_prompt"] is True
-            return [request.doc["answer"] for request in requests]
+            return [
+                response_prefix + request.doc["answer"] for request in requests
+            ]
 
     manager = TaskManager(include_path=str(task_root), include_defaults=False)
     result = evaluator.evaluate(
@@ -403,3 +408,62 @@ def test_harness_group_generation_scoring_and_samples(prepared, tmp_path):
         assert result["results"][task]["accuracy,none"] == 1.0
         assert len(result["samples"][task]) == 2
         assert result["samples"][task][0]["extracted_answer"] is not None
+
+
+@pytest.mark.parametrize("category", korbench.CATEGORIES)
+@pytest.mark.parametrize(
+    "response,expected",
+    [
+        ("[[999]]</think>[[24]]", 1.0),
+        ("<think>[[your answer]]</think>[[24]] then [[999]]", 1.0),
+        ("[[24]]</think>[[999]]", 0.0),
+        ("<think>[[24]]", 1.0),
+        ("[[24]]", 1.0),
+    ],
+)
+def test_scoring_discards_only_completed_thinking(category, response, expected):
+    doc = {
+        "category": category,
+        "rule_id": "6" if category == "puzzle" else "1",
+        "idx": "1",
+        "answer": "[[24]]",
+        "real_life_answer": "[[999]]",
+    }
+    assert korbench.process_results(doc, [response])["accuracy"] == expected
+    sample = {"doc": doc, "filtered_resps": [response], "resps": [[response]]}
+    korbench.annotate_results({"samples": {f"korbench_{category}": [sample]}})
+    assert sample["extracted_answer"] == extract_answer(
+        response.split("</think>", 1)[-1],
+        "puzzle" if category == "puzzle" else "basic",
+    )
+    assert sample["filtered_resps"] == [response]
+    assert sample["resps"] == [[response]]
+
+
+def test_empty_final_answer_and_counterfactual_use_same_preprocessing():
+    doc = {
+        "category": "counterfactual",
+        "rule_id": "1",
+        "idx": "1",
+        "answer": "[[C]]",
+        "real_life_answer": "[[A]]",
+    }
+    assert korbench.process_results(doc, ["[[C]]</think>"]) == {
+        "accuracy": 0.0,
+        "parse_failure": 1.0,
+        "real_life_answer_rate": 0.0,
+    }
+    assert korbench.process_results(doc, ["[[C]]</think>[[A]]"]) == {
+        "accuracy": 0.0,
+        "parse_failure": 0.0,
+        "real_life_answer_rate": 1.0,
+    }
+    assert korbench.process_results(doc, ["[[A]]</think>[[C]]"]) == {
+        "accuracy": 1.0,
+        "parse_failure": 0.0,
+        "real_life_answer_rate": 0.0,
+    }
+    assert (
+        korbench.scoring_protocol()["response_preprocessing"]
+        == "after_first_think_close_or_full_response"
+    )

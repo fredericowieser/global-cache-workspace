@@ -20,7 +20,7 @@ SOURCES = json.loads(
     Path(__file__).with_name("korbench_sources.json").read_text()
 )
 REVISION = SOURCES["revision"]
-PROTOCOL = "gcw.korbench.zero_shot.v1"
+PROTOCOL = "gcw.korbench.zero_shot.v2"
 DEFAULT_DATA = Path("data/eval-data/korbench")
 
 
@@ -183,7 +183,7 @@ def load_dataset(category: str, **metadata):
 
 
 def process_results(doc: dict, results: list[str]) -> dict[str, float]:
-    response = results[0]
+    response = results[0].split("</think>", 1)[-1]
     category = doc["category"]
     extracted = extract_answer(
         response, "puzzle" if category == "puzzle" else "basic"
@@ -218,23 +218,34 @@ def annotate_results(results: dict) -> None:
         for sample in samples:
             doc = sample["doc"]
             sample["extracted_answer"] = extract_answer(
-                sample["filtered_resps"][0],
+                sample["filtered_resps"][0].split("</think>", 1)[-1],
                 "puzzle" if doc["category"] == "puzzle" else "basic",
             )
 
 
-def evaluation_protocol(config: EvalConfig) -> dict:
-    task_root = Path("configs/tasks/korbench")
+def scoring_protocol() -> dict:
     return {
         "name": PROTOCOL,
-        "source_revision": REVISION,
-        "prepared_sha256": SOURCES["prepared"],
+        "response_preprocessing": "after_first_think_close_or_full_response",
         "scorer_sha256": hashlib.sha256(
             Path(__file__).with_name("korbench_scoring.py").read_bytes()
         ).hexdigest(),
         "adapter_sha256": hashlib.sha256(
             Path(__file__).read_bytes()
         ).hexdigest(),
+        "scoring_dependencies": {
+            package: version(package)
+            for package in ("sympy", "antlr4-python3-runtime", "lm-eval")
+        },
+    }
+
+
+def evaluation_protocol(config: EvalConfig) -> dict:
+    task_root = Path("configs/tasks/korbench")
+    return {
+        **scoring_protocol(),
+        "source_revision": REVISION,
+        "prepared_sha256": SOURCES["prepared"],
         "max_new_tokens": config.default_max_new_tokens,
         "mode": "zero-shot",
         "task_sha256": {
@@ -242,10 +253,6 @@ def evaluation_protocol(config: EvalConfig) -> dict:
             for path in sorted(
                 [*task_root.glob("*.yaml"), task_root / "utils.py"]
             )
-        },
-        "scoring_dependencies": {
-            package: version(package)
-            for package in ("sympy", "antlr4-python3-runtime", "lm-eval")
         },
     }
 

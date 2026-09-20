@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=martin_dev
-#SBATCH --partition=agent-xlong,agent-xlong-15
+#SBATCH --partition=main
 #SBATCH --gres=gpu:1
 #SBATCH --time=1-00:00:00
 
@@ -17,7 +17,7 @@ if [[ -f "${LOCAL_ENV}" ]]; then
   set +a
 fi
 
-DISCORD_WEBHOOK_URL="${TUNNEL_DISCORD_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
 
 json_escape() {
   local value="${1}"

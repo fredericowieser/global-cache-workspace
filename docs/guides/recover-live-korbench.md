@@ -70,16 +70,23 @@ They are analysis artifacts, not automatic generation-resume checkpoints.
 
 ## Score saved responses without sudo
 
-Use the repository's evaluation environment and the same pinned scorer as the
-campaign:
+Use the repository's evaluation environment. The underlying pinned comparison
+rules must match the campaign; the current GCW response preprocessing is applied
+and recorded separately:
 
 ```bash
 .venv/bin/python scripts/analysis/recover_live_korbench.py score \
   /shared/path/snapshots/*.partial.json
 ```
 
-Scoring writes a sibling `.partial.scored.json` with per-example scores and
-per-category means/counts. Repeated captures overlap: select one snapshot per
+Scoring now writes a sibling `.partial.scored-v2.json` with per-example scores,
+per-category means/counts, and a `scoring_protocol` block. It strips everything
+through the first `</think>` if present, otherwise scoring the response unchanged.
+The original responses, campaign manifest, and any older `.partial.scored.json`
+files are preserved. Existing files are reused only if both their source hash and
+scoring protocol match. The worker wrapper applies this default on every run.
+
+Repeated captures overlap: select one snapshot per
 model/thinking condition, normally the latest or the one with most completed
 responses. Do not concatenate snapshots or average their scores together.
 Partial populations depend on prompt-length grouping, so report their counts

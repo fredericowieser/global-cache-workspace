@@ -494,26 +494,29 @@ def matching_processes(manifest, selected_pid=None):
 
 
 def score(path):
-    from gcw.evaluation.korbench import process_results
-    from gcw.evaluation import korbench_scoring
+    from gcw.evaluation.korbench import process_results, scoring_protocol
 
     source = path.read_bytes()
     digest = hashlib.sha256(source).hexdigest()
     payload = json.loads(source)
     if payload.get("schema") != "gcw.live_korbench_recovery.v1":
         raise RecoveryError("Unrecognized recovery snapshot")
-    scorer_digest = hashlib.sha256(
-        Path(korbench_scoring.__file__).read_bytes()
-    ).hexdigest()
+    protocol = scoring_protocol()
+    scorer_digest = protocol["scorer_sha256"]
     expected = payload["campaign_manifest"]["protocol"]["scorer_sha256"]
     if scorer_digest != expected:
         raise RecoveryError("Scorer differs from the campaign's pinned scorer")
-    destination = path.with_name(path.stem + ".scored.json")
+    version = protocol["name"].rsplit(".", 1)[-1]
+    destination = path.with_name(path.stem + f".scored-{version}.json")
     if destination.exists():
         previous = json.loads(destination.read_text())
         if previous.get("source_sha256") != digest:
             raise RecoveryError(
                 "Existing scored snapshot refers to different input"
+            )
+        if previous.get("scoring_protocol") != protocol:
+            raise RecoveryError(
+                "Existing scored snapshot uses a different scoring protocol"
             )
         print(f"Already scored: {destination}", flush=True)
         return
@@ -539,6 +542,7 @@ def score(path):
     }
     payload["source_sha256"] = digest
     payload["scorer_sha256"] = scorer_digest
+    payload["scoring_protocol"] = protocol
     atomic_json(destination, payload)
     print(
         json.dumps(
