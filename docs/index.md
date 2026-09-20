@@ -36,6 +36,7 @@ guides/training-and-resume
 guides/resume-training
 guides/evaluation-conversion-analysis
 guides/evaluate
+guides/recover-live-korbench
 guides/inspect-runs
 guides/add-a-backbone
 guides/add-a-cache-processor

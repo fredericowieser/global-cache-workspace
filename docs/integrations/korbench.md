@@ -131,3 +131,10 @@ its permissive string normalisations and symbolic fallback. Attribution is in
 No trained-checkpoint evaluation or GPU timing pilot has been run. See the
 [reasoning-transfer proposal](../experiments/reasoning-transfer.md) for the
 scientific motivation and provisional runtime estimates.
+
+## Recovering already-running evaluations
+
+For jobs started before incremental logging was available, see
+[live KOR-Bench recovery](../guides/recover-live-korbench.md). The recovery tool
+reads completed responses and available diffusion metrics from a briefly paused
+worker process and saves them to shared storage without restarting evaluation.
