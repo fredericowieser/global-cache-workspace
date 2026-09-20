@@ -6,6 +6,7 @@ import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 from urllib.request import urlopen
@@ -20,7 +21,7 @@ SOURCES = json.loads(
     Path(__file__).with_name("korbench_sources.json").read_text()
 )
 REVISION = SOURCES["revision"]
-PROTOCOL = "gcw.korbench.zero_shot.v2"
+PROTOCOL = "gcw.korbench.zero_shot.v3"
 DEFAULT_DATA = Path("data/eval-data/korbench")
 
 
@@ -182,8 +183,21 @@ def load_dataset(category: str, **metadata):
     return DatasetDict({"test": Dataset.from_list(rows)})
 
 
+def scoring_response(response: str) -> str:
+    response = response.split("</think>", 1)[-1]
+    for pattern in (
+        r"\[\[.*?\]\]",
+        r"\$\\boxed\{.*?\}\$",
+        r"\[.*?\]",
+    ):
+        matches = list(re.finditer(pattern, response, re.DOTALL))
+        if matches:
+            return matches[-1].group(0)
+    return response
+
+
 def process_results(doc: dict, results: list[str]) -> dict[str, float]:
-    response = results[0].split("</think>", 1)[-1]
+    response = scoring_response(results[0])
     category = doc["category"]
     extracted = extract_answer(
         response, "puzzle" if category == "puzzle" else "basic"
@@ -218,7 +232,7 @@ def annotate_results(results: dict) -> None:
         for sample in samples:
             doc = sample["doc"]
             sample["extracted_answer"] = extract_answer(
-                sample["filtered_resps"][0].split("</think>", 1)[-1],
+                scoring_response(sample["filtered_resps"][0]),
                 "puzzle" if doc["category"] == "puzzle" else "basic",
             )
 
@@ -227,6 +241,7 @@ def scoring_protocol() -> dict:
     return {
         "name": PROTOCOL,
         "response_preprocessing": "after_first_think_close_or_full_response",
+        "answer_selection": "last_complete_match_with_existing_format_precedence",
         "scorer_sha256": hashlib.sha256(
             Path(__file__).with_name("korbench_scoring.py").read_bytes()
         ).hexdigest(),

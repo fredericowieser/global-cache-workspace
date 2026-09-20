@@ -59,7 +59,7 @@ Tasks inherit GCW's generation limits: 2,048 new tokens with thinking disabled
 and 4,096 with thinking enabled, including both thinking and the final answer.
 EOS still stops generation early. These differ from the upstream 2,000-token
 default. The task-group runtime metadata records the effective cap and
-`gcw.korbench.zero_shot.v2`; record thinking-enabled conditions separately.
+`gcw.korbench.zero_shot.v3`; record thinking-enabled conditions separately.
 Overlong prompts fail instead of silently removing rule text. The loaded model's
 context limit must accommodate the complete formatted prompt; no checkpoint
 configuration is changed by this integration.
@@ -110,20 +110,26 @@ weight identities. Use immutable checkpoints for comparisons.
 
 Scoring first removes everything through the first `</think>` marker, when
 present. Responses without that marker are scored unchanged, including responses
-with an unfinished thinking trace. First-match answer extraction then applies to
-the remaining text. Accuracy, parse failures, counterfactual real-life-answer
+with an unfinished thinking trace. The last complete answer is then selected
+from the remaining text, retaining the existing format priority: double brackets
+`[[...]]`, then `$\boxed{...}$`, then single brackets. Puzzles still require double
+brackets. A trailing incomplete answer is ignored; an empty last complete answer
+fails parsing instead of falling back to an earlier answer. Accuracy, parse failures, counterfactual real-life-answer
 rates, and logged `extracted_answer` all use this same preprocessing. Raw and
 filtered response strings remain intact in the sample logs.
 
-This is protocol `gcw.korbench.zero_shot.v2`, with
-`response_preprocessing: after_first_think_close_or_full_response` recorded in
-metadata. Earlier v1 scores included bracketed placeholders and intermediate
-answers from thinking traces. Existing evaluations retain their loaded code;
-recovered responses can be rescored under v2 without regenerating answers.
+This is protocol `gcw.korbench.zero_shot.v3`, with
+`response_preprocessing: after_first_think_close_or_full_response` and
+`answer_selection: last_complete_match_with_existing_format_precedence` recorded
+in metadata. Earlier v1 scores included thinking traces; v2 removed completed
+thinking but still selected the first answer. V3 handles later corrections and
+formatting examples in both thinking modes. Existing evaluations retain their
+loaded code; recovered responses can be rescored under v3 without regenerating
+answers. Gold-answer parsing retains its original semantics.
 
 The scorer follows the pinned [upstream implementation](https://github.com/KOR-Bench/KOR-Bench/blob/bb8194dff8e51e2e2247cf62aa9932c3d57d53d7/eval/eval_utils.py),
-including category/rule/question exceptions and first-match answer extraction
-after GCW's thinking-trace preprocessing.
+for category/rule/question comparisons. GCW selects the final complete answer
+after thinking-trace preprocessing before passing it to those comparison rules.
 Arithmetic puzzles use restricted arithmetic parsing rather than Python `eval`.
 Missing/empty answers fail explicitly; these are documented GCW deviations for
 malformed responses. Other upstream comparison rules remain unchanged, including

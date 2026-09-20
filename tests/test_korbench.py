@@ -356,7 +356,9 @@ def test_native_longshot_generation_smoke(enabled):
     assert (calls > 0) is enabled
 
 
-@pytest.mark.parametrize("response_prefix", ["", "[[999]]</think>"])
+@pytest.mark.parametrize(
+    "response_prefix", ["", "[[999]]</think>", "[[999]] then "]
+)
 def test_harness_group_generation_scoring_and_samples(
     prepared, tmp_path, response_prefix
 ):
@@ -415,7 +417,7 @@ def test_harness_group_generation_scoring_and_samples(
     "response,expected",
     [
         ("[[999]]</think>[[24]]", 1.0),
-        ("<think>[[your answer]]</think>[[24]] then [[999]]", 1.0),
+        ("<think>[[your answer]]</think>[[24]] then [[999]]", 0.0),
         ("[[24]]</think>[[999]]", 0.0),
         ("<think>[[24]]", 1.0),
         ("[[24]]", 1.0),
@@ -433,7 +435,7 @@ def test_scoring_discards_only_completed_thinking(category, response, expected):
     sample = {"doc": doc, "filtered_resps": [response], "resps": [[response]]}
     korbench.annotate_results({"samples": {f"korbench_{category}": [sample]}})
     assert sample["extracted_answer"] == extract_answer(
-        response.split("</think>", 1)[-1],
+        korbench.scoring_response(response),
         "puzzle" if category == "puzzle" else "basic",
     )
     assert sample["filtered_resps"] == [response]
@@ -467,3 +469,60 @@ def test_empty_final_answer_and_counterfactual_use_same_preprocessing():
         korbench.scoring_protocol()["response_preprocessing"]
         == "after_first_think_close_or_full_response"
     )
+
+
+@pytest.mark.parametrize("category", korbench.CATEGORIES)
+@pytest.mark.parametrize(
+    "response,expected",
+    [
+        ("The format is [[answer]]. Final: [[24]]", 1.0),
+        ("[[999]] corrected to [[24]]", 1.0),
+        ("[[24]] corrected to [[999]]", 0.0),
+        ("[[999]]</think>[[777]] then [[24]]", 1.0),
+        ("[[24]] then an incomplete [[999", 1.0),
+        ("[[24]] then [[]]", 0.0),
+        ("[[24]] then [[\n999\n]]", 0.0),
+    ],
+)
+def test_last_complete_answer_across_categories(category, response, expected):
+    doc = {
+        "category": category,
+        "rule_id": "6" if category == "puzzle" else "1",
+        "idx": "1",
+        "answer": "[[24]]",
+        "real_life_answer": "[[999]]",
+    }
+    scores = korbench.process_results(doc, [response])
+    assert scores["accuracy"] == expected
+    if category == "counterfactual" and "corrected to [[999]]" in response:
+        assert scores["real_life_answer_rate"] == 1.0
+    sample = {"doc": doc, "filtered_resps": [response]}
+    korbench.annotate_results({"samples": {f"korbench_{category}": [sample]}})
+    assert sample["extracted_answer"] == extract_answer(
+        korbench.scoring_response(response),
+        "puzzle" if category == "puzzle" else "basic",
+    )
+    assert sample["filtered_resps"] == [response]
+
+
+def test_last_answer_preserves_format_precedence_and_gold_interpretation():
+    assert (
+        korbench.scoring_response(r"$\boxed{1}$ then $\boxed{24}$")
+        == r"$\boxed{24}$"
+    )
+    assert korbench.scoring_response("[1] then [24]") == "[24]"
+    assert (
+        korbench.scoring_response(r"[[24]] then $\boxed{999}$ and [777]")
+        == "[[24]]"
+    )
+    doc = {
+        "category": "puzzle",
+        "rule_id": "6",
+        "idx": "51",
+        "answer": "[[24]] then [[999]]",
+    }
+    assert (
+        korbench.process_results(doc, ["[[999]] then [[24]]"])["accuracy"]
+        == 1.0
+    )
+    assert korbench.process_results(doc, ["[24]"])["accuracy"] == 0.0

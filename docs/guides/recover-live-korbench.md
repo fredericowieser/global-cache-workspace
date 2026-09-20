@@ -79,11 +79,14 @@ and recorded separately:
   /shared/path/snapshots/*.partial.json
 ```
 
-Scoring now writes a sibling `.partial.scored-v2.json` with per-example scores,
+Scoring now writes a sibling `.partial.scored-v3.json` with per-example scores,
 per-category means/counts, and a `scoring_protocol` block. It strips everything
-through the first `</think>` if present, otherwise scoring the response unchanged.
-The original responses, campaign manifest, and any older `.partial.scored.json`
-files are preserved. Existing files are reused only if both their source hash and
+through the first `</think>` if present, then selects the last complete answer
+with the existing format priority (`[[...]]`, boxed math, then single brackets).
+Puzzles still require double brackets. Without a thinking marker, the same
+last-answer rule applies to the whole response.
+The original responses, campaign manifest, and older `.partial.scored.json` and
+`.partial.scored-v2.json` files are preserved. Existing files are reused only if both their source hash and
 scoring protocol match. The worker wrapper applies this default on every run.
 
 Repeated captures overlap: select one snapshot per

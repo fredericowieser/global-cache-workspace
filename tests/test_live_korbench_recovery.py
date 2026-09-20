@@ -364,7 +364,8 @@ def test_score_recovered_korbench_and_preserve_raw_snapshot(tmp_path):
                 "task": "korbench_operation",
                 "doc_id": 0,
                 "doc": doc,
-                "response": "[[your answer]]</think>" + doc["answer"],
+                "response": "[[your answer]]</think>[[999]] then "
+                + doc["answer"],
             }
         ],
     }
@@ -373,15 +374,18 @@ def test_score_recovered_korbench_and_preserve_raw_snapshot(tmp_path):
     original = path.read_bytes()
     legacy = tmp_path / "run.partial.scored.json"
     legacy.write_text('{"legacy": true}')
+    previous = tmp_path / "run.partial.scored-v2.json"
+    previous.write_text('{"v2": true}')
     recovery.score(path)
     assert legacy.read_text() == '{"legacy": true}'
-    scored = json.loads((tmp_path / "run.partial.scored-v2.json").read_text())
+    assert previous.read_text() == '{"v2": true}'
+    scored = json.loads((tmp_path / "run.partial.scored-v3.json").read_text())
     assert scored["partial_scores"]["korbench_operation"] == {
         "count": 1,
         "accuracy": 1.0,
         "parse_failure": 0.0,
     }
-    assert scored["scoring_protocol"]["name"] == "gcw.korbench.zero_shot.v2"
+    assert scored["scoring_protocol"]["name"] == "gcw.korbench.zero_shot.v3"
     assert scored["samples"][0]["response"] == payload["samples"][0]["response"]
     recovery.score(path)
     assert path.read_bytes() == original

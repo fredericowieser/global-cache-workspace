@@ -7,7 +7,9 @@ https://github.com/KOR-Bench/KOR-Bench
 
 Licensed under Apache-2.0; see KOR-Bench-LICENSE. GCW changes include restricted
 arithmetic evaluation, explicit malformed-answer rejection, and refactoring the
-single-question grading branches. Mixed and multi-round protocols are excluded.
+single-question grading branches. The GCW evaluation adapter additionally removes
+completed thinking traces and selects the last complete answer before invoking
+these comparison rules. Mixed and multi-round protocols are excluded.
 Dataset preparation downloads and verifies the original zero-shot templates and
 data from the same revision; prompts retain their original wording.
 
