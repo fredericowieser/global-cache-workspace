@@ -88,6 +88,11 @@ magnitude and direction groups, with appropriate units per row. Use
 requesting an unavailable quantity reports an error. Historical v1 files show
 their recorded combined magnitude groups.
 
+Shared notation and aggregation definitions appear at the top of each figure.
+Matching key and value rows are grouped under a horizontal divider and a shared
+equation caption. Subplot titles identify the stream and statistic, keeping the
+metric definition beside the panels it describes.
+
 The figure has one row per available metric group and columns for head min,
 mean, max, and population standard deviation. The x axis is the **solver step**,
 not a generated-token or training step. Each line averages the already logged

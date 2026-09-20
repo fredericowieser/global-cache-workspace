@@ -125,20 +125,131 @@ def plot_metrics(
     if not samples:
         raise ValueError(f"no {quantity} metrics in the selected episodes")
     present = {key[0] for key in samples}
-    groups = [group for group in GROUP_LABELS if group in present]
-    groups += sorted(present - GROUP_LABELS.keys())
+    section_definitions = [
+        (
+            ("latent_kv", "latent_linear"),
+            r"KV / Linear latent change — $\|z_s-z_{s-1}\|_2$: internal solver-step change.",
+        ),
+        (
+            ("key", "value", "kv"),
+            r"Key / Value contribution magnitude — $\|\Delta u_s\|_2$: this step's additional attention cache update.",
+        ),
+        (
+            ("linear_key", "linear_value", "linear_kv"),
+            r"Linear Key / Value contribution magnitude — $\|\Delta f_s\|_2$: this step's factor change before the writer.",
+        ),
+        (
+            ("linear_state",),
+            r"Linear-state update magnitude — $\|M_s-M_{s-1}\|_F$: this step's change to the proposed matrix update.",
+        ),
+        (
+            ("key_direction_change", "value_direction_change"),
+            r"Key / Value contribution rotation — $D(\Delta u_s,\Delta u_{s-1})$: consecutive update directions ($s\geq2$).",
+        ),
+        (
+            ("key_direction_to_original", "value_direction_to_original"),
+            r"Key / Value contribution vs original — $D(\Delta u_s,c_0)$: current update versus original cache.",
+        ),
+        (
+            ("key_cache_direction_from_original", "value_cache_direction_from_original"),
+            r"Key / Value proposed cache rotation — $D(c_s,c_0)$: accumulated cache rotation.",
+        ),
+        (
+            ("linear_key_direction_change", "linear_value_direction_change"),
+            r"Linear Key / Value contribution rotation — $D(\Delta f_s,\Delta f_{s-1})$: consecutive factor-update directions ($s\geq2$).",
+        ),
+    ]
+    sections = [
+        ([group for group in members if group in present], caption)
+        for members, caption in section_definitions
+        if any(group in present for group in members)
+    ]
+    known = {group for members, _ in sections for group in members}
+    sections.extend(([group], group) for group in sorted(present - known))
+    groups = [group for members, _ in sections for group in members]
     iterations = sorted({key[1] for key in samples})
     steps = sorted({key[2] for key in samples})
     counts = [len(values) for values in samples.values()]
-    fig, axes = plt.subplots(
-        len(groups),
-        len(STATISTICS),
-        figsize=(16, 2.8 * len(groups) + 1.5),
-        sharex=True,
-        squeeze=False,
-        layout="constrained",
+    task_summary = ", ".join(
+        f"{task}: {count:,}" for task, count in sorted(task_counts.items())
     )
-    column_titles = ("Head minimum", "Head mean", "Head maximum", "Head std")
+    header_lines = [
+        title,
+        f"{sum(task_counts.values()):,} examples ({empty:,} empty); "
+        f"n per point: {min(counts):,}–{max(counts):,}",
+        task_summary,
+        r"SHARED NOTATION (separate for each stream/head): $s$ = solver step; $c_0$ = original attention cache.",
+        r"$u_s$ = accumulated proposed update; $\Delta u_s=u_s-u_{s-1}$; $c_s=c_0+u_s$; $u_0=0$.",
+        r"$f_s$ = proposed linear key/value factor before the writer; $\Delta f_s=f_s-f_{s-1}$; $f_0=0$.",
+    ]
+    if any(not group.endswith(DIRECTION_SUFFIXES) for group in groups):
+        header_lines.extend([
+            r"$z_s$ = diffusion latent; $M_s$ = proposed matrix update after the writer's transformation; $M_0=0$.",
+            r"$\|\cdot\|_2$ = vector L2 norm; $\|\cdot\|_F$ = matrix Frobenius norm.",
+        ])
+    if any(group.endswith(DIRECTION_SUFFIXES) for group in groups):
+        header_lines.extend([
+            r"$D(a,b)=1-\frac{a^\top b}{\|a\|_2\|b\|_2}$: 0 = aligned, 1 = perpendicular, 2 = opposite.",
+            "Direction comparisons exclude vectors with norm at or below 1e-12.",
+        ])
+    header_lines.extend([
+        "COLUMNS: head minimum / mean / maximum / std. dev., averaged over applications within each example.",
+        "LINE: equal-weight mean across examples. BAND: example 25th–75th percentiles. X AXIS: solver step s.",
+    ])
+    header_height = 0.27 * len(header_lines) + 0.25
+    row_height = 2.8
+    caption_height = 0.4
+    figure_height = header_height + row_height * len(groups) + caption_height * len(sections) + 0.15
+    fig = plt.figure(figsize=(16, figure_height))
+    fig.text(
+        0.5,
+        1 - 0.15 / figure_height,
+        "\n".join(header_lines),
+        ha="center",
+        va="top",
+        fontsize=11,
+        linespacing=1.65,
+    )
+    axes = []
+    offset = header_height
+    for members, caption in sections:
+        divider_y = 1 - offset / figure_height
+        fig.add_artist(plt.Line2D(
+            [0.025, 0.985], [divider_y, divider_y],
+            transform=fig.transFigure, color="0.65", linewidth=0.8,
+        ))
+        fig.text(
+            0.5,
+            1 - (offset + 0.12) / figure_height,
+            caption,
+            ha="center",
+            va="top",
+            fontsize=12,
+        )
+        offset += caption_height
+        for group in members:
+            row = []
+            for column in range(len(STATISTICS)):
+                row.append(fig.add_axes(
+                    [
+                        0.065 + column * 0.24,
+                        1 - (offset + row_height - 0.48) / figure_height,
+                        0.185,
+                        (row_height - 0.78) / figure_height,
+                    ],
+                    sharex=axes[0][0] if axes else (row[0] if row else None),
+                ))
+            axes.append(row)
+            offset += row_height
+    axes = np.asarray(axes)
+    column_titles = ("Minimum", "Mean", "Maximum", "Std. dev.")
+    stream_labels = {
+        "latent_kv": "KV latent",
+        "latent_linear": "Linear latent",
+        "kv": "KV",
+        "linear_kv": "Linear KV",
+        "linear_state": "Linear state",
+    }
     for row_index, group in enumerate(groups):
         for column, stat in enumerate(STATISTICS):
             ax = axes[row_index, column]
@@ -164,9 +275,11 @@ def plot_metrics(
                     label=f"External iteration {iteration}",
                 )
                 ax.fill_between(steps, low, high, color=color, alpha=0.18)
-            ax.set_title(f"{GROUP_LABELS.get(group, group)} · {stat}")
-            if row_index == 0:
-                ax.set_title(f"{column_titles[column]}\n{ax.get_title()}")
+            stream = group
+            for suffix in DIRECTION_SUFFIXES:
+                stream = stream.removesuffix(suffix)
+            label = stream_labels.get(stream, stream.replace("_", " ").capitalize())
+            ax.set_title(f"{label} · {column_titles[column]}")
             ax.set_ylabel(
                 "Cosine distance (unitless)"
                 if group.endswith(DIRECTION_SUFFIXES)
@@ -179,20 +292,9 @@ def plot_metrics(
             ax.grid(alpha=0.2)
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
             ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 4))
-            if row_index == len(groups) - 1:
-                ax.set_xlabel("Solver step")
+            ax.set_xlabel("Solver step")
     if len(iterations) > 1:
         axes[0, 0].legend(fontsize="small")
-    task_summary = ", ".join(
-        f"{task}: {count:,}" for task, count in sorted(task_counts.items())
-    )
-    fig.suptitle(
-        f"{title}\n"
-        "Line: equal-episode mean; shading: episode 25th–75th percentiles\n"
-        f"{sum(task_counts.values()):,} episodes ({empty:,} empty); "
-        f"n per point: {min(counts):,}–{max(counts):,}\n{task_summary}",
-        fontsize=11,
-    )
     return fig
 
 
