@@ -1,5 +1,13 @@
 # TODO list 
 
+## Evaluation orchestration refactor
+
+- [ ] Unify the evaluation loops in `src/gcw/evaluation/paper7.py` and
+  `src/gcw/evaluation/core.py`. Express Paper7's chat/plain prompting and protocol
+  metadata as per-task settings, preserving corrected Paper7 scores and explicit
+  `paper7-legacy` compatibility. Share sample logging, diffusion metrics, and
+  resume handling across suites; verify protocol parity before switching Paper7.
+
 ## TODO 1: Fred's checkpoints that need to be (re-)evaluated
 * all following checkpoints need to be (re-)evaluated on paper7 suite with the latest evaluation settings and metrics.
 * max new tokens for generation should be set to 2048 without thinking and 4096 with thinking
@@ -234,3 +242,191 @@ contains `configs.before-metrics-reruns.txt`, `metrics-reruns-added.tsv`, and
 `metrics-reruns-audit.json`. Original submission manifests remain historical
 snapshots. The appended tasks are claimed after the original tasks have been
 claimed; they may overlap with slower original evaluations still running.
+
+## Paper performance table update — approved and entered (2026-09-20)
+
+**Approved by the user and entered into `src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results_and_Discussion.tex`.** The proposal and source tables below are retained as the review record. All 33 previously populated row/mode token entries were independently recomputed and matched at displayed precision. The 20 approved row mappings (29 new mode evaluations) are now entered; original populated scores are preserved. The two missing 27B on-mode final JSONs were rechecked and remain absent. No additional modes were added. Earlier restart completion columns above are historical submission snapshots; this section audits the results now available.
+
+### Proposed scope
+
+- 20 affected model/method rows: fill or extend 15 existing rows and add five missing baseline/variant rows. There are **29 newly reportable mode evaluations**, plus three already-entered off evaluations shown for context (Qwen-2B Longshot/diffusion and Qwen-4B BT).
+- **No populated performance cells need replacement under this proposal.** In particular, the current Llama-3B LoRA/BT/BGT and Qwen-4B BT-off cells already match the resized `pct015` runs exactly. Earlier fixed-22M checkpoints are not their current table sources.
+- Preserve the existing 27B contextual-scalar and contextual-vector Longshot rows. The new static-scalar/rank1 and Longshot+LoRA experiments differ in architecture/training; add explicitly labelled rows rather than silently replacing them.
+- Keep the original performance evaluations for the small diffusion models. List the four additional logging evaluations separately below; do not count repeated evaluation of one checkpoint as another model.
+- Two mode evaluations still lack final score JSON: **27B native thinking on** and **27B contextual-vector diffusion rank1 thinking on**. Leave those modes blank; sidecars/progress are not completed benchmark results.
+
+### Source and validation conventions
+
+`A` = `/shared/gwt/checkpoints/martin/results/` (relocated completed results). `W` = `/opt/soperator-home/martin/global-cache-workspace/results/`. Each source below identifies the exact final JSON. Config names are relative to `configs/experiments/`. Trained checkpoints are the config output directory plus `/checkpoint` for small models or `/checkpoint-2000` for 27B; moved small-model runs live beneath `/shared/gwt/checkpoints/martin/runs/experiments/`. All 24 active trained configurations in the restart tables have saved step 2000 checkpoints (including rows already reported). Failed superseded configs are excluded.
+
+Every selected result was checked for `paper7_mixed_prompt_v2`, all expected score fields and sample counts, thinking mode, chat generation / plain option-likelihood settings, and generation caps 2048 off / 4096 on. Full suite: GSM8K 1319, SVAMP 300, GSM8K-Hard 1319, TheoremQA 800, LogiQA 651, Gaokao 351. Trained 27B omits TheoremQA. Mean tokens = sum of response tokens / sum of generated responses, not a mean of task means. Scores/averages use unrounded source values before display rounding.
+
+### Exact proposed row mapping
+
+| ID | Model | Method | Completed modes | Proposed table action | Training config |
+| --- | --- | --- | --- | --- | --- |
+| R01 | llama32_1b | Pretrained instruct | off | Fill blank row | Native pretrained checkpoint; no training |
+| R02 | llama32_1b | Longshot | off | Fill blank row | `llama32_1b_fair_campaign_v1_longshot_adapter22m_seed24.yaml` |
+| R03 | llama32_1b | Diffusion Longshot | off | Fill blank row | `llama32_1b_fair_campaign_v1_diffusion_adapter22m_seed24.yaml` |
+| R04 | llama32_3b | Pretrained instruct | off | Fill blank row | Native pretrained checkpoint; no training |
+| R05 | llama32_3b | Longshot | off | Fill blank row | `llama32_3b_fair_campaign_v1_longshot_pct015_seed24.yaml` |
+| R06 | llama32_3b | Diffusion Longshot | off | Fill blank row | `llama32_3b_fair_campaign_v1_diffusion_pct015_seed24.yaml` |
+| R07 | qwen35_2b | Pretrained instruct | off, on | Add missing baseline row | Native pretrained checkpoint; no training |
+| R08 | qwen35_2b | Longshot | off, on | Add on; retain existing off | `qwen35_2b_fair_campaign_v1_longshot_adapter22m_seed24.yaml` |
+| R09 | qwen35_2b | Diffusion Longshot | off, on | Add on; retain existing off | `qwen35_2b_fair_campaign_v1_diffusion_adapter22m_seed24.yaml` |
+| R10 | qwen35_4b | Pretrained instruct | off, on | Fill blank row | Native pretrained checkpoint; no training |
+| R11 | qwen35_4b | LoRA | off, on | Fill blank row | `qwen35_4b_fair_campaign_v1_lora_pct015_seed24.yaml` |
+| R12 | qwen35_4b | BT | off, on | Add on; retain existing off | `qwen35_4b_fair_campaign_v1_bt_pct015_seed24.yaml` |
+| R13 | qwen35_4b | BGT | off, on | Fill blank row | `qwen35_4b_fair_campaign_v1_bgt_pct015_seed24.yaml` |
+| R14 | qwen35_4b | Longshot | off, on | Fill blank row | `qwen35_4b_fair_campaign_v1_longshot_pct015_seed24.yaml` |
+| R15 | qwen35_4b | Diffusion Longshot | off, on | Fill blank row | `qwen35_4b_fair_campaign_v1_diffusion_pct015_seed24.yaml` |
+| R16 | qwen35_27b | Pretrained instruct | off | Add missing baseline row; on incomplete | Native pretrained checkpoint; no training |
+| R17 | qwen35_27b | Longshot (static scalar, rank1) | off, on | Add separate variant row; retain scalar/vector rows | `qwen35_27b_instruct_longshot_fair_gate_rank1_seed24.yaml` |
+| R18 | qwen35_27b | Diffusion Longshot (static scalar, rank1) | off, on | Fill blank diffusion row; label variant explicitly | `qwen35_27b_instruct_diffusion_longshot_fair_gate_rank1_seed24.yaml` |
+| R19 | qwen35_27b | Longshot (vector) + LoRA | off, on | Add separate combined-method row | `qwen35_27b_instruct_longshot_contextual_vector_outer_product_magnitude_lora_batch16_retry_seed24.yaml` |
+| R20 | qwen35_27b | Diffusion Longshot (contextual vector, rank1) | off | Add separate variant row; on incomplete | `qwen35_27b_instruct_longshot_contextual_vector_outer_product_magnitude_diffusion_rank1_retry_seed24.yaml` |
+
+Native checkpoint identities: Llama-1B `/shared/gwt/models/llama32-1b-native-92131767`; Llama-3B `/shared/gwt/models/llama32-3b-native-0cb88a4f`; Qwen-2B `/shared/gwt/models/qwen35-2b-native-15852e8c`; Qwen-4B `/shared/gwt/models/qwen35_4b/tf_base`; Qwen-27B `/shared/gwt/models/qwen35_27b/tf_base`.
+
+### Scores ready for entry
+
+Accuracy and math average are percentages. This review table shows the mean over **all available tasks**, so the native 27B row below is initially six-task; see its explicit comparability decision below. Token totals are millions.
+
+| ID / mode | GSM8K | SVAMP | GSM-Hd | ThmQA | LogiQA | Gaokao | Math avg. | Mean tokens | Total (M) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| R01 off | 43.37 | 63.33 | 12.81 | 11.25 | 30.41 | 27.07 | 31.37 | 260.9 | 0.975 |
+| R02 off | 38.82 | 60.67 | 10.61 | 8.75 | 29.19 | 25.93 | 28.99 | 337.8 | 1.263 |
+| R03 off | 42.53 | 59.67 | 10.99 | 12.25 | 30.11 | 27.92 | 30.58 | 426.6 | 1.595 |
+| R04 off | 69.90 | 78.00 | 24.26 | 15.38 | 29.34 | 31.05 | 41.32 | 265.1 | 0.991 |
+| R05 off | 67.85 | 82.00 | 22.67 | 11.00 | 29.49 | 28.21 | 40.20 | 307.8 | 1.150 |
+| R06 off | 70.13 | 83.67 | 23.73 | 21.50 | 29.03 | 29.06 | 42.85 | 308.0 | 1.151 |
+| R07 off | 66.94 | 84.33 | 38.21 | 21.38 | 31.03 | 33.62 | 45.92 | 623.3 | 2.330 |
+| R07 on | 34.50 | 53.67 | 11.14 | 14.75 | 31.03 | 33.62 | 29.78 | 3643.9 | 13.621 |
+| R08 off | 65.73 | 82.67 | 39.35 | 26.75 | 28.73 | 31.34 | 45.76 | 351.7 | 1.315 |
+| R08 on | 73.69 | 84.00 | 41.62 | 26.62 | 28.73 | 31.34 | 47.67 | 1202.9 | 4.496 |
+| R09 off | 67.32 | 80.67 | 39.27 | 25.50 | 28.57 | 32.48 | 45.64 | 340.9 | 1.274 |
+| R09 on | 68.54 | 78.33 | 37.98 | 24.88 | 28.57 | 32.48 | 45.13 | 1023.3 | 3.825 |
+| R10 off | 80.21 | 88.67 | 51.86 | 29.50 | 35.33 | 34.19 | 53.29 | 629.0 | 2.351 |
+| R10 on | 64.52 | 73.67 | 30.55 | 14.75 | 35.33 | 34.19 | 42.17 | 2979.2 | 11.136 |
+| R11 off | 86.43 | 89.67 | 52.08 | 39.25 | 36.41 | 39.03 | 57.14 | 275.2 | 1.029 |
+| R11 on | 86.88 | 91.00 | 53.30 | 42.12 | 36.41 | 39.03 | 58.12 | 425.9 | 1.592 |
+| R12 off | 73.84 | 89.00 | 45.34 | 35.88 | 34.10 | 31.62 | 51.63 | 364.6 | 1.363 |
+| R12 on | 47.84 | 50.00 | 24.26 | 20.12 | 34.10 | 31.62 | 34.66 | 3268.4 | 12.217 |
+| R13 off | 80.36 | 86.67 | 48.07 | 35.12 | 33.79 | 32.19 | 52.70 | 320.8 | 1.199 |
+| R13 on | 57.39 | 67.00 | 31.01 | 31.00 | 33.79 | 32.19 | 42.06 | 2359.9 | 8.821 |
+| R14 off | 83.40 | 86.67 | 51.55 | 35.12 | 34.10 | 37.61 | 54.74 | 280.9 | 1.050 |
+| R14 on | 86.88 | 89.67 | 51.63 | 36.00 | 34.10 | 37.61 | 55.98 | 771.5 | 2.884 |
+| R15 off | 82.18 | 87.67 | 49.81 | 35.00 | 33.49 | 39.03 | 54.53 | 310.1 | 1.159 |
+| R15 on | 83.93 | 89.33 | 50.27 | 33.88 | 33.49 | 39.03 | 54.99 | 522.3 | 1.952 |
+| R16 off | 84.23 | 91.33 | 54.74 | 32.12 | 39.94 | 59.54 | 60.32 | 594.2 | 2.221 |
+| R17 off | 87.72 | 90.00 | 54.13 | — | 45.62 | 55.56 | 66.61 | 217.0 | 0.638 |
+| R17 on | 90.14 | 93.67 | 55.72 | — | 45.62 | 55.56 | 68.14 | 348.9 | 1.025 |
+| R18 off | 86.73 | 91.00 | 54.74 | — | 43.63 | 52.71 | 65.76 | 211.5 | 0.621 |
+| R18 on | 88.63 | 92.00 | 55.65 | — | 43.63 | 52.71 | 66.52 | 268.8 | 0.790 |
+| R19 off | 89.92 | 91.00 | 55.34 | — | 43.78 | 58.12 | 67.63 | 197.6 | 0.581 |
+| R19 on | 90.60 | 92.67 | 56.03 | — | 43.78 | 58.12 | 68.24 | 222.1 | 0.653 |
+| R20 off | 88.02 | 93.00 | 55.04 | — | 40.86 | 50.71 | 65.53 | 209.0 | 0.614 |
+
+**27B native comparability decision:** its off evaluation includes TheoremQA (32.12%), unlike every trained 27B row. Six-task average / four-task token statistics are 60.32%, 594.2, 2.221M as above. For comparisons with trained 27B, the five-task average excluding TheoremQA is **65.96%**, and the three-task token mean/total are **465.8 / 1.369M**. Proposed paper treatment: report its available TheoremQA score, but use the common five-task average and three-task token statistics throughout the 27B block, with an explicit caption exception. This requires approval along with the rows; do not silently mix six-task and five-task averages.
+
+### Exact result files
+
+- R01 off: `A/llama32_1b_pretrained_instruct_native_paper7_thinking-off.json`
+- R02 off: `A/llama32_1b_fair_campaign_v1_longshot_adapter22m_seed24_head128_final_paper7_thinking-off.json`
+- R03 off: `A/llama32_1b_fair_campaign_v1_diffusion_adapter22m_seed24_head128_final_paper7_thinking-off.json`
+- R04 off: `A/llama32_3b_pretrained_instruct_native_paper7_thinking-off.json`
+- R05 off: `A/llama32_3b_fair_campaign_v1_longshot_pct015_seed24_head128_final_paper7_thinking-off.json`
+- R06 off: `A/llama32_3b_fair_campaign_v1_diffusion_pct015_seed24_head128_final_paper7_thinking-off.json`
+- R07 off: `A/qwen35_2b_pretrained_instruct_native_paper7_thinking-off.json`
+- R07 on: `W/qwen35_2b_pretrained_instruct_native_paper7_thinking-on.json`
+- R08 off: `A/qwen35_2b_fair_campaign_v1_longshot_adapter22m_seed24_final_paper7_thinking-off.json`
+- R08 on: `A/qwen35_2b_fair_campaign_v1_longshot_adapter22m_seed24_final_paper7_thinking-on.json`
+- R09 off: `A/qwen35_2b_fair_campaign_v1_diffusion_adapter22m_seed24_final_paper7_thinking-off.json`
+- R09 on: `A/qwen35_2b_fair_campaign_v1_diffusion_adapter22m_seed24_final_paper7_thinking-on.json`
+- R10 off: `A/qwen35_4b_pretrained_instruct_native_paper7_thinking-off.json`
+- R10 on: `W/qwen35_4b_pretrained_instruct_native_paper7_thinking-on.json`
+- R11 off: `A/qwen35_4b_fair_campaign_v1_lora_pct015_seed24_final_paper7_thinking-off.json`
+- R11 on: `A/qwen35_4b_fair_campaign_v1_lora_pct015_seed24_final_paper7_thinking-on.json`
+- R12 off: `A/qwen35_4b_fair_campaign_v1_bt_pct015_seed24_final_paper7_thinking-off.json`
+- R12 on: `A/qwen35_4b_fair_campaign_v1_bt_pct015_seed24_final_paper7_thinking-on.json`
+- R13 off: `A/qwen35_4b_fair_campaign_v1_bgt_pct015_seed24_final_paper7_thinking-off.json`
+- R13 on: `A/qwen35_4b_fair_campaign_v1_bgt_pct015_seed24_final_paper7_thinking-on.json`
+- R14 off: `A/qwen35_4b_fair_campaign_v1_longshot_pct015_seed24_final_paper7_thinking-off.json`
+- R14 on: `A/qwen35_4b_fair_campaign_v1_longshot_pct015_seed24_final_paper7_thinking-on.json`
+- R15 off: `A/qwen35_4b_fair_campaign_v1_diffusion_pct015_seed24_final_paper7_thinking-off.json`
+- R15 on: `A/qwen35_4b_fair_campaign_v1_diffusion_pct015_seed24_final_paper7_thinking-on.json`
+- R16 off: `W/qwen35_27b_pretrained_instruct_native_paper7_thinking-off.json`
+- R17 off: `W/qwen35_27b_instruct_longshot_fair_gate_rank1_seed24_step2000_paper7_thinking-off.json`
+- R17 on: `W/qwen35_27b_instruct_longshot_fair_gate_rank1_seed24_step2000_paper7_thinking-on.json`
+- R18 off: `W/qwen35_27b_instruct_diffusion_longshot_fair_gate_rank1_seed24_step2000_paper7_thinking-off.json`
+- R18 on: `W/qwen35_27b_instruct_diffusion_longshot_fair_gate_rank1_seed24_step2000_paper7_thinking-on.json`
+- R19 off: `W/qwen35_27b_instruct_longshot_contextual_vector_outer_product_magnitude_lora_batch16_retry_seed24_step2000_paper7_thinking-off.json`
+- R19 on: `W/qwen35_27b_instruct_longshot_contextual_vector_outer_product_magnitude_lora_batch16_retry_seed24_step2000_paper7_thinking-on.json`
+- R20 off: `W/qwen35_27b_instruct_longshot_contextual_vector_outer_product_magnitude_diffusion_rank1_retry_seed24_step2000_paper7_thinking-off.json`
+
+### Old versus new configuration comparison
+
+#### Resized small models: what has already been replaced, and what remains blank
+
+Old model configs were read from `/shared/gwt/checkpoints/fred/fair-campaign-v1/<model>-<method>-seed24-legacy/checkpoint/config.json`; new configs were checked against their saved checkpoint `config.json`. Below, widths refer to the cache processor, not the backbone. Parameter counts are new-config expected adapter counts, not fresh measurements.
+
+| Model / method | Exact old → new model changes | New adapter count | Current paper status |
+| --- | --- | --- | --- |
+| Llama-3B LoRA | rank/alpha 15/15 → 28/28; same seven projection targets | 42,549,248 | Already entered; retain |
+| Llama-3B BT | hidden 96 → 144; intermediate 320 → 512 | 42,245,084 | Already entered; retain |
+| Llama-3B BGT | hidden 168 → 288; intermediate 1600 → 3136 | 42,273,569 | Already entered; retain |
+| Llama-3B diffusion | hidden 672 → 896; intermediate 2688 → 3984; processor attention/KV heads 3 → 7; selected cache heads (`topk_heads`) 3 → 224 | 42,301,056 | Blank; fill with R06 |
+| Qwen-4B LoRA | rank/alpha 11/11 → 26/26; same 12 projection targets | 52,755,456 | Blank; fill with R11 |
+| Qwen-4B BT | hidden 192 → 288; intermediate 896 → 1728 | 53,303,560 | Off already entered; add on (R12) |
+| Qwen-4B BGT | hidden 384 → 672; intermediate 2240 → 4320 | 53,610,657 | Blank; fill with R13 |
+| Qwen-4B diffusion | hidden 192 → 384; intermediate 1248 → 3776; selected attention heads 3 → 32; selected linear heads 72 → 768; gate init -5 → -2 | 53,527,680 | Blank; fill with R15 |
+
+For the BT/BGT/diffusion Llama-3B and Qwen-4B rows above, saved model configs also change `processor_generation_mode: windowed → post_prefill_relative` and `legacy_bottleneck_generate: null → true`. These are not size-only changes. All target approximately 1.5% of **non-embedding** backbone parameters. The new configs retain seed 24, 2000 steps, 512-token training sequences, 65,536 tokens per optimizer step, learning rate 1e-4, answer-only training with thinking disabled, and the historical 128K OpenMath dataset. Physical training batch settings can differ; they do not change the configured token batch.
+
+Further diffusion/routing comparisons:
+
+- Llama-1B legacy diffusion → R03: hidden 672 → 640, intermediate 2720 → 2936, processor attention/KV heads 3 → 5, selected cache heads 3 → 128. New expected adapter count 22,018,048. The current paper cell is blank; this does not replace an existing score.
+- Qwen-2B legacy diffusion → R09: selected attention heads 3 → 12 and selected linear heads 72 → 288; other saved model fields match. The current paper off scores already come from the new configuration, so only on is added.
+- The `head128` suffix denotes processor attention head dimension: 640/5 = 128 for Llama-1B and 896/7 = 128 for Llama-3B. It does **not** mean 128 selected cache heads for Llama-3B: its `topk_heads` is 224. The old Llama-1B `_superseded_head224` runs use a different processor shape and remain excluded.
+- New Longshot expected adapter counts: Llama-1B 22,018,049; Llama-3B 42,301,057; Qwen-2B 22,131,841; Qwen-4B 53,527,681. The corresponding diffusion configs use four deterministic inference solver steps and scheduled four-step training (noise scale 0.1, horizon 50, refinement gate init -4). Longshot uses learned output scale; diffusion uses fixed-one output scale. Small Longshot checkpoints omit the explicit `output_scale_mode` field, which resolves to the existing `learned` default; this is not a changed checkpoint.
+
+#### 27B variants: do not conflate the gates or replace existing rows
+
+- **R17 Longshot static-scalar/rank1 vs the currently entered Longshot (vector):** `update_gate_type: contextual_vector → static_scalar`; `live_rank1_linear_writer: absent/false → true`; `out_proj_init: absent/normal → zero`; `output_scale_mode` is explicitly `learned` (same default as the old config). Both use the same 896-wide / 3584-intermediate / seven-layer processor, seven attention/KV heads, 16 selected attention heads and 576 selected linear heads, process every 64 tokens, topk 32, magnitude routing, and outer-product updates. Dataset, optimizer and training batch settings match. The existing Longshot (scalar) uses **contextual_scalar**, also distinct from static_scalar. Proposed: retain both contextual rows and add R17.
+- **R18 fair-gate diffusion vs R17 fair-gate Longshot:** same static-scalar gate and live rank1 writer; switches `output_scale_mode: learned → fixed_one` and adds diffusion: four scheduled training / deterministic inference solver steps, time conditioning, eta/conditioning scale 1, noise 0.1, refinement gate init -4, horizon 50. Fill the currently blank diffusion row with an explicit static-scalar/rank1 label.
+- **R19 Longshot (vector) + LoRA vs current Longshot (vector):** adds rank-32/alpha-32/dropout-0 LoRA on `q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj,in_proj_qkv,in_proj_z,in_proj_b,in_proj_a,out_proj`; `trainable: cache_processor → lora_and_cache_processor`, `freeze_backbone: true → false`, `save_cache_processor_only: true → false`, physical batch 32 → 16. Base weights remain outside the selected LoRA+processor trainable set. This is a combined method, not a replacement for standalone LoRA or processor-only Longshot. Compared to the failed original **combined** config, its only execution-setting change is batch 32 → 16 (plus output/W&B name); total batch remains 65,536 tokens.
+- **R20 contextual-vector diffusion rank1 retry vs failed original diffusion:** only model-setting change is `live_rank1_linear_writer: absent/false → true` (plus output/W&B identity). Both retain contextual-vector gating and zero output projection initialization, four scheduled/deterministic diffusion steps and the same training settings. Compared with R18, R20 uses contextual-vector instead of static-scalar gating; R18 explicitly fixes output scale to one. These are two distinct trained checkpoints. R20 off is complete; on is not yet reportable.
+- The four new 27B configs all train from the same native backbone, seed 24, step 2000, sequence length 512, LR 1e-4, total batch 65,536 tokens, and OpenMathInstruct-2 rows 128000–255999. All four saved checkpoints were checked at step 2000. Retry labels do not indicate resumed training; restart notes specify fresh training.
+
+### Repeated diffusion evaluations for logging — explicit source choice
+
+Proposed: keep the original performance JSONs listed above. These extra evaluations reused the same step-2000 checkpoint and requested Paper7/mode settings with auto batching up to 64; no training config changed. The later evaluation processes used newer code and collected update metrics. Small score changes are observed; their cause has not been established by this audit. Do not attribute them to improved training or select individual cells from whichever run scores higher.
+
+| Model / mode | Original → logging rerun scores (GSM8K, SVAMP, GSM-Hd, ThmQA, LogiQA, Gaokao) | Original → rerun avg.; mean tokens; total M |
+| --- | --- | --- |
+| llama32_1b off | 42.53, 59.67, 10.99, 12.25, 30.11, 27.92 → 42.61, 60.00, 11.22, 13.00, 30.11, 27.92 | 30.58; 426.6; 1.595 → 30.81; 427.7; 1.599 |
+| qwen35_2b off | 67.32, 80.67, 39.27, 25.50, 28.57, 32.48 → 67.32, 80.67, 39.27, 25.50, 28.57, 32.48 | 45.64; 340.9; 1.274 → 45.64; 340.9; 1.274 |
+| qwen35_2b on | 68.54, 78.33, 37.98, 24.88, 28.57, 32.48 → 68.54, 78.33, 37.98, 24.88, 28.57, 32.48 | 45.13; 1023.3; 3.825 → 45.13; 1023.3; 3.825 |
+| llama32_3b off | 70.13, 83.67, 23.73, 21.50, 29.03, 29.06 → 70.43, 83.67, 23.81, 21.12, 29.03, 29.06 | 42.85; 308.0; 1.151 → 42.85; 306.1; 1.144 |
+
+Logging rerun files are the corresponding original filenames with `_update_metrics` inserted immediately before `_thinking-...`. Llama-1B is under `A`; Qwen-2B off/on and Llama-3B are under `W`. Qwen-2B scores and displayed token figures match exactly; the Llama figures differ as shown. If the user prefers the newest logging evaluations as the performance sources, replace each entire evaluation consistently, including token columns; do not mix cells.
+
+### Reconciliation and approval checklist
+
+- [x] Approve the 20 row mappings and score sources above; retain original small diffusion performance evaluations.
+- [x] Approve separate 27B static-scalar, contextual-vector diffusion and Longshot+LoRA labels/rows, keeping existing contextual-scalar/vector Longshot rows.
+- [x] Approve the common five-task / three-generation-task 27B aggregation with native TheoremQA shown separately, and update the caption accordingly.
+- [x] Once approved, recheck the two missing final JSONs before editing; report any newly completed mode for review rather than silently extending the approved list.
+
+Already represented and retained: Llama-1B SFT/LoRA/BT/BGT, Llama-3B SFT and resized LoRA/BT/BGT, Qwen-2B SFT/LoRA/BT/BGT and Longshot/diffusion off, Qwen-4B SFT and resized BT off, and 27B SFT/LoRA/BT/BGT/contextual-scalar/contextual-vector Longshot off/on. No Llama thinking-on results, intentionally stopped seed 25, failed superseded 27B configs, old head224 Llama runs, or historical 32K-cap evaluations are proposed. All active restart-table configs and eight native-mode tasks are accounted for by proposed, retained, or still-incomplete entries.
+
+### Final paper table selection (2026-09-20)
+
+At the user's request, removed the exploratory average-excluding-TheoremQA
+column and retained the original average definition. For 27B, retain only
+static-scalar/rank1 Longshot (R17) and Diffusion Longshot (R18), alongside
+pretrained instruct, SFT, LoRA, BT, and BGT. Removed contextual-scalar
+Longshot, contextual-vector Longshot, Longshot+LoRA (R19), and contextual-vector
+rank1 diffusion (R20) from the paper table. The earlier review remains a
+historical record; its recommendation to include those variants is superseded.
+Result files and configs are retained.
