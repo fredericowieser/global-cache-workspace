@@ -64,6 +64,11 @@ Overlong prompts fail instead of silently removing rule text. The loaded model's
 context limit must accommodate the complete formatted prompt; no checkpoint
 configuration is changed by this integration.
 
+Generation progress prints completed requests out of 1,250, generated tokens,
+and elapsed time at batch boundaries, at most once per minute plus the start and
+finish. It does not write progress files; see
+[live generation progress](../guides/evaluate.md#live-generation-progress).
+
 ## Results and scoring
 
 The output includes category and size-weighted overall `accuracy,none` and
@@ -80,6 +85,16 @@ raw/filtered responses, gold targets, and per-example metrics; KOR-Bench also ad
 `extracted_answer`. Existing runtime summaries retain response lengths, cap hits,
 processor calls, memory, and elapsed time. Generation tokens are not logged
 individually. Sample logging is opt-in and can substantially enlarge results.
+
+With `--log-samples --out results/run.json`, each successful batch also saves
+request outputs under `results/run.partial-samples/`, with a separate journal per
+process/attempt. Records include source documents, responses, generation lengths,
+and collected diffusion metrics. Writes are flushed and synced once per batch;
+completed responses survive interruption without waiting for the whole group.
+Put `--out` on shared storage to preserve them across node shutdown. These are
+raw outputs for offline scoring, not automatic generation-resume checkpoints.
+See [prediction logging](../guides/evaluate.md#kor-bench-and-prediction-logging)
+for the format, interruption handling, and a KOR-Bench scoring example.
 
 For native Longshot diffusion checkpoints, the CLI currently enables cache update
 metrics automatically when `--out` is supplied, including for KOR-Bench. Explicit

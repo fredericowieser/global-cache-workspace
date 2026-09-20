@@ -277,3 +277,4 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `enable_thinking` | `bool` | `False` |
 | `cache_update_metrics_path` | `str \| None` | `None` |
 | `log_samples` | `bool` | `False` |
+| `partial_samples_dir` | `str \| None` | `None` |

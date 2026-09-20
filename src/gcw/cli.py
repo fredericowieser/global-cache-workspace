@@ -536,6 +536,11 @@ def dispatch(args: argparse.Namespace) -> None:
                 "checkpoint": args.checkpoint,
                 "config": EvalConfig(
                     log_samples=args.log_samples,
+                    partial_samples_dir=(
+                        str(Path(args.out).with_suffix(".partial-samples"))
+                        if args.log_samples and args.out
+                        else None
+                    ),
                     cache_update_metrics_path=metrics_path,
                     batch_size=args.batch_size,
                     max_batch_size=args.max_batch_size,

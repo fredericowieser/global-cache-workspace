@@ -38,6 +38,25 @@ neither option.
 
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
+## Live generation progress
+
+The lm-eval-backed suites (`all`, `math`, `general`, `korbench`, `tasks`,
+`paper7`, and `paper7-legacy`) print generation progress at the start, on
+completion, and at the first completed batch after each 60-second interval.
+Progress reporting does not write files.
+
+Each line reports the rank, task names, completed/total requests, generated tokens
+from completed responses, and elapsed time. Counts cover the current generation
+call on that rank; another call starts new counters. For KOR-Bench's standard
+single-GPU protocol, 1,250 requests represent 1,250 questions. Failed OOM attempts
+do not advance progress. Tokens exclude EOS and matched stop sequences and
+include thinking tokens. Distributed counts can include harness padding.
+
+Updates occur at batch boundaries, so a long batch can leave the log unchanged
+for longer than a minute. Finishing generation does not mean scoring or the
+entire suite has finished. Multiple-choice likelihood work is not included.
+Already-running processes retain their loaded code.
+
 ## KOR-Bench and prediction logging
 
 The `gcw eval korbench` suite evaluates all five categories with the native model
@@ -45,10 +64,73 @@ adapter.
 See [KOR-Bench](../integrations/korbench.md) for pinned data preparation, scoring,
 and runnable commands. Its tasks inherit GCW's generation limits and reject truncated prompts.
 
-Add `--log-samples` to `all`, `math`, `general`, `korbench`, or `tasks` to retain per-example
-harness predictions and task configurations in output and partial-result JSON.
-The default remains aggregate-only. Changing logging or recorded sample-evaluation
-settings requires a fresh partial-result destination.
+Add `--log-samples` to `all`, `math`, `general`, `korbench`, or `tasks` to retain
+per-example harness predictions and task configurations in the final output and
+existing task-level partial-result JSON. The default remains aggregate-only.
+Changing logging or recorded sample-evaluation settings requires a fresh
+partial-result destination.
+
+With `--log-samples --out results/run.json`, completed request outputs are also
+saved incrementally under `results/run.partial-samples/`. Use an output path on
+shared storage if the samples must survive node shutdown. Without `--out`, the
+journal directory defaults to `data/eval-runs/partial-samples/`. Library callers
+can choose `EvalConfig.partial_samples_dir`. Each process prints its journal path
+and creates a unique JSONL file, including its rank in the filename. Restarts
+create new files and preserve previous attempts.
+
+The first line records the schema (`gcw.partial_samples.v1`), evaluation settings,
+rank, and model/protocol information. Subsequent lines contain completed requests:
+
+- `task`, `example_id`, `request_id`, `doc_id`, source `doc`, and prompt/arguments;
+- the raw adapter `response`, before harness filters and scoring;
+- generation token counts, effective cap, and termination reason, when applicable;
+- per-request diffusion metric sums and observation counts, when metrics are enabled.
+
+Generation and likelihood outputs are appended after each successful batch,
+then flushed and synced once per batch. Failed OOM attempts produce no sample
+records. No per-token writes or additional model forwards are needed. A write
+failure stops evaluation rather than silently losing samples. The batch in
+flight at interruption is not saved; interruption during a write can leave an
+incomplete last line, which readers should discard. Retain all preceding complete
+lines. The journal header is also synced when the file is created.
+
+These files preserve outputs for offline analysis; they do not automatically
+resume generation or contain final harness scores. Full harness samples and
+aggregate scores are still produced normally when evaluation finishes. Partial
+populations are not random: batches group requests by prompt length. Report the
+completed count and categories, and do not label partial accuracy as a full
+benchmark score.
+
+Within one journal, `call` distinguishes adapter calls and `request_index`
+distinguishes repeated/padded inputs. Join `(task, example_id)` to final samples'
+`(task, str(doc_id))`, and retain `request_id` for multiple choices/repeats. Do not
+combine separate attempts as if they were independent examples. Embedded
+`cache_update_metrics.values` uses the collector's raw per-request representation:
+keys are `external_iteration:solver_step:metric`, and `sum` holds the accumulated
+`[min, max, mean, std]` statistics. Divide by `applications` for per-application
+averages. For multiple requests per example, sum each statistic and its
+application count before dividing; do not average request means equally. These
+values are saved with their response, even if the final metrics sidecar has not
+been written.
+
+For example, KOR-Bench's saved documents and raw responses can be scored offline
+with the same GCW scorer (use the same code version as the evaluation):
+
+```python
+import json
+from pathlib import Path
+from gcw.evaluation.korbench import process_results
+
+path = Path("results/run.partial-samples/<attempt>.rank-0.jsonl")
+with path.open() as stream:
+    for line in stream:
+        if not line.endswith("\n"):
+            break  # interrupted final write
+        row = json.loads(line)
+        if row["type"] == "sample" and row["task"].startswith("korbench_"):
+            scores = process_results(row["doc"], [row["response"]])
+            print(row["task"], row["example_id"], scores)
+```
 
 ## Longshot diffusion update metrics
 

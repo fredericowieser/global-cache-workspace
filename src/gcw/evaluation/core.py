@@ -236,6 +236,15 @@ def run_task_groups(
                     )
     if config.cache_update_metrics_path:
         lm.update_metrics.validate_resume(merged)
+    lm.sample_protocol = {**sample_protocol, "runs": runs}
+    if config.log_samples and any(
+        name == "korbench" or name.startswith("korbench_")
+        for tasks, _ in runs
+        for name in tasks
+    ):
+        from gcw.evaluation.korbench import evaluation_protocol
+
+        lm.sample_protocol["benchmark"] = evaluation_protocol(config)
     evaluation_timer = EvaluationTimer.from_results(merged, evaluation_started)
     _write_progress(_new_progress(runs, resume=partial is not None), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
@@ -315,6 +324,9 @@ def run_task_groups(
             runtime["diffusion_field_evaluations"] = field_evaluations
         if config.log_samples:
             runtime["sample_protocol"] = sample_protocol
+            journal = getattr(lm, "partial_samples", None)
+            if journal is not None:
+                runtime["partial_samples_directory"] = str(journal.path.parent)
         if any(name.startswith("korbench_") for name in out.get("results", {})):
             from gcw.evaluation.korbench import (
                 annotate_results,

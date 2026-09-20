@@ -638,6 +638,8 @@ def test_lm_eval_options_sorting_and_oom_retry(tmp_path, monkeypatch):
         model,
         Tokenizer(),
         EvalConfig(
+            log_samples=True,
+            partial_samples_dir=str(tmp_path / "partials"),
             batch_size="auto",
             max_batch_size=4,
             cache_update_metrics_path=str(tmp_path / "metrics.jsonl"),
@@ -667,6 +669,15 @@ def test_lm_eval_options_sorting_and_oom_retry(tmp_path, monkeypatch):
 
     monkeypatch.setattr(model, "forward", fail_large)
     assert len(lm.loglikelihood(requests)) == 3
+    partial = [
+        json.loads(line)
+        for line in lm.partial_samples.path.read_text().splitlines()
+    ][1:]
+    assert [(row["example_id"], row["request_id"]) for row in partial] == [
+        ("8", "0:0"), ("9", "0:0"), ("9", "1:0")
+    ]
+    assert all(row["request_type"] == "loglikelihood" for row in partial)
+    assert all("cache_update_metrics" in row for row in partial)
     lm.update_metrics.finish()
     rows = {
         row["example_id"]: row

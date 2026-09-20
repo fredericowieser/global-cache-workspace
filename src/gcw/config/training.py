@@ -405,6 +405,7 @@ class EvalConfig:
     enable_thinking: bool = False
     cache_update_metrics_path: str | None = None
     log_samples: bool = False
+    partial_samples_dir: str | None = None
 
     def __post_init__(self) -> None:
         if self.batch_size != "auto" and (
@@ -430,6 +431,11 @@ class EvalConfig:
             raise ValueError(
                 "cache_update_metrics_path must be a nonempty string"
             )
+        if self.partial_samples_dir is not None and (
+            not isinstance(self.partial_samples_dir, str)
+            or not self.partial_samples_dir.strip()
+        ):
+            raise ValueError("partial_samples_dir must be a nonempty string")
         if self.enable_thinking and not self.apply_chat_template:
             raise ValueError(
                 "enable_thinking requires apply_chat_template=True"

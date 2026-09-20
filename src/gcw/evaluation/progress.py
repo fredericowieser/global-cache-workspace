@@ -11,6 +11,37 @@ import time
 import warnings
 
 
+class GenerationProgress:
+    def __init__(self, keys: list[tuple[str, str, str]]):
+        self.started = time.monotonic()
+        self.last_logged = self.started
+        self.tasks = sorted({key[0] for key in keys})
+        self.total = len(keys)
+        self.completed = 0
+        self.tokens = 0
+        self._print()
+
+    def advance(self, keys: list[tuple[str, str, str]], tokens: int) -> None:
+        self.completed += len(keys)
+        self.tokens += tokens
+        if (
+            self.completed == self.total
+            or time.monotonic() - self.last_logged >= 60
+        ):
+            self._print()
+
+    def _print(self) -> None:
+        elapsed = time.monotonic() - self.started
+        rank = int(os.environ.get("RANK", "0"))
+        print(
+            f"Generation progress [rank {rank}; {', '.join(self.tasks)}]: "
+            f"{self.completed}/{self.total} requests, "
+            f"{self.tokens} generated tokens, {elapsed:.1f}s elapsed",
+            flush=True,
+        )
+        self.last_logged = time.monotonic()
+
+
 class IncompatiblePartialResultsError(ValueError):
     pass
 
