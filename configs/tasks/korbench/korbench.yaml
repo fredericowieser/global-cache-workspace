@@ -1,0 +1,16 @@
+group: korbench
+task:
+  - korbench_operation
+  - korbench_logic
+  - korbench_cipher
+  - korbench_puzzle
+  - korbench_counterfactual
+aggregate_metric_list:
+  - metric: accuracy
+    aggregation: mean
+    weight_by_size: true
+  - metric: parse_failure
+    aggregation: mean
+    weight_by_size: true
+metadata:
+  version: 1

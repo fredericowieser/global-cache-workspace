@@ -38,6 +38,8 @@ EVAL_UV_EXTRAS="${EVAL_UV_EXTRAS:---extra gpu --extra eval --extra qwen35}"
 EVAL_AFTER_TRAIN="${EVAL_AFTER_TRAIN:-1}"
 EVAL_ONLY="${EVAL_ONLY:-0}"
 EVAL_SUITE="${EVAL_SUITE:-paper7}"
+EVAL_LOG_SAMPLES="${EVAL_LOG_SAMPLES:-0}"
+EVAL_APPLY_CHAT_TEMPLATE="${EVAL_APPLY_CHAT_TEMPLATE:-}"
 EVAL_GPUS="${EVAL_GPUS:-1}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 EVAL_MAX_BATCH_SIZE="${EVAL_MAX_BATCH_SIZE:-64}"
@@ -91,6 +93,7 @@ Common environment overrides:
   EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, EVAL_MAX_BATCH_SIZE, OUT_DIR
   EVAL_THINKING_MODES (comma-separated true/false values)
+  EVAL_LOG_SAMPLES (0 or 1), EVAL_APPLY_CHAT_TEMPLATE (true or false)
   EVAL_CHECKPOINT_STEP, GENERATION_PROCESS_EVERY
   EVAL_HEAD_SELECTION_METHOD
   KEEP_STEP_CHECKPOINTS, KEEP_STEP_CHECKPOINT_EVERY
@@ -133,7 +136,7 @@ validate_eval_batching() {
     return
   fi
   case "$EVAL_SUITE" in
-    paper7|paper7-legacy|all|math|general|tasks) ;;
+    paper7|paper7-legacy|all|math|general|korbench|tasks) ;;
     *)
       echo "EVAL_BATCH_SIZE=auto is not supported for $EVAL_SUITE evaluation" >&2
       exit 1
@@ -177,6 +180,8 @@ write_slurm_environment() {
     "EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN" \
     "EVAL_ONLY=$EVAL_ONLY" \
     "EVAL_SUITE=$EVAL_SUITE" \
+    "EVAL_LOG_SAMPLES=$EVAL_LOG_SAMPLES" \
+    "EVAL_APPLY_CHAT_TEMPLATE=$EVAL_APPLY_CHAT_TEMPLATE" \
     "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE" \
     "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE" \
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP" \
@@ -316,6 +321,13 @@ run_eval() {
   local gcw_args=(eval "$EVAL_SUITE" --checkpoint "$checkpoint")
 
   validate_eval_batching
+
+  if [[ "$EVAL_LOG_SAMPLES" == "1" ]]; then
+    gcw_args+=(--log-samples)
+  fi
+  if [[ -n "$EVAL_APPLY_CHAT_TEMPLATE" ]]; then
+    gcw_args+=(--apply-chat-template "$EVAL_APPLY_CHAT_TEMPLATE")
+  fi
 
   if [[ -n "${LIMIT:-}" && "$EVAL_SUITE" != "fineweb" ]]; then
     gcw_args+=(--limit "$LIMIT")
@@ -984,6 +996,8 @@ start_local_worker() {
     "EVAL_AFTER_TRAIN=$EVAL_AFTER_TRAIN"
     "EVAL_ONLY=$EVAL_ONLY"
     "EVAL_SUITE=$EVAL_SUITE"
+    "EVAL_LOG_SAMPLES=$EVAL_LOG_SAMPLES"
+    "EVAL_APPLY_CHAT_TEMPLATE=$EVAL_APPLY_CHAT_TEMPLATE"
     "EVAL_BATCH_SIZE=$EVAL_BATCH_SIZE"
     "EVAL_MAX_BATCH_SIZE=$EVAL_MAX_BATCH_SIZE"
     "EVAL_CHECKPOINT_STEP=$EVAL_CHECKPOINT_STEP"
@@ -1316,6 +1330,26 @@ launcher_main() {
   positive_int EVAL_GPUS "$EVAL_GPUS"
   validate_eval_batching
   validate_eval_thinking_modes
+  case "$EVAL_LOG_SAMPLES" in
+    0) ;;
+    1)
+      case "$EVAL_SUITE" in
+        all|math|general|korbench|tasks) ;;
+        *) echo "EVAL_LOG_SAMPLES is not supported for $EVAL_SUITE" >&2; return 1 ;;
+      esac
+      ;;
+    *) echo "EVAL_LOG_SAMPLES must be 0 or 1" >&2; return 1 ;;
+  esac
+  case "$EVAL_APPLY_CHAT_TEMPLATE" in
+    "") ;;
+    true|false)
+      case "$EVAL_SUITE" in
+        all|math|general|korbench|tasks|paper7|paper7-legacy) ;;
+        *) echo "EVAL_APPLY_CHAT_TEMPLATE is not supported for $EVAL_SUITE" >&2; return 1 ;;
+      esac
+      ;;
+    *) echo "EVAL_APPLY_CHAT_TEMPLATE must be true or false" >&2; return 1 ;;
+  esac
   if [[ -n "$tasks_file" ]]; then
     if [[ -n "$configs_file" || -n "$eval_tasks_file" || "${#args[@]}" -gt 0 ]]; then
       echo "--tasks-file cannot be combined with other task inputs" >&2

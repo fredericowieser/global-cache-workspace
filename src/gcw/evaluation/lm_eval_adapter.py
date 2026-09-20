@@ -606,6 +606,9 @@ class GCWEvalLM(TemplateLM):
                 prompt,
                 self.max_length,
                 add_special_tokens=self.add_special_tokens_for_generate,
+                require_full_prompt=bool(
+                    kwargs.get("gcw_require_full_prompt", False)
+                ),
             )
             groups.setdefault((len(ids), max_new, until), []).append((i, ids))
 
@@ -690,6 +693,9 @@ class GCWEvalLM(TemplateLM):
                     prompt,
                     self.max_length,
                     add_special_tokens=self.add_special_tokens_for_generate,
+                    require_full_prompt=bool(
+                        kwargs.get("gcw_require_full_prompt", False)
+                    ),
                 ),
                 dtype=torch.long,
                 device=device,

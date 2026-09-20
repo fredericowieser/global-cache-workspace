@@ -1,0 +1,18 @@
+include: _common.yaml
+task: korbench_counterfactual
+dataset_kwargs:
+  category: counterfactual
+metadata:
+  version: 1
+  source_revision: bb8194dff8e51e2e2247cf62aa9932c3d57d53d7
+  data_sha256: 885148d2f0dd3326ddd050223b6c81a4f899b6f98ececdb4742b797e07c20406
+metric_list:
+  - metric: accuracy
+    aggregation: mean
+    higher_is_better: true
+  - metric: parse_failure
+    aggregation: mean
+    higher_is_better: false
+  - metric: real_life_answer_rate
+    aggregation: mean
+    higher_is_better: false

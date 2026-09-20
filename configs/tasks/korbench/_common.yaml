@@ -1,0 +1,19 @@
+custom_dataset: !function utils.load_dataset
+test_split: test
+output_type: generate_until
+doc_to_text: "{{prompt}}"
+doc_to_target: "{{answer}}"
+num_fewshot: 0
+process_results: !function utils.process_results
+generation_kwargs:
+  until: []
+  do_sample: false
+  temperature: 0.0
+  gcw_require_full_prompt: true
+metric_list:
+  - metric: accuracy
+    aggregation: mean
+    higher_is_better: true
+  - metric: parse_failure
+    aggregation: mean
+    higher_is_better: false

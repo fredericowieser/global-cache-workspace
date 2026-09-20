@@ -38,6 +38,18 @@ neither option.
 
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
+## KOR-Bench and prediction logging
+
+The `gcw eval korbench` suite evaluates all five categories with the native model
+adapter.
+See [KOR-Bench](../integrations/korbench.md) for pinned data preparation, scoring,
+and runnable commands. Its tasks inherit GCW's generation limits and reject truncated prompts.
+
+Add `--log-samples` to `all`, `math`, `general`, `korbench`, or `tasks` to retain per-example
+harness predictions and task configurations in output and partial-result JSON.
+The default remains aggregate-only. Changing logging or recorded sample-evaluation
+settings requires a fresh partial-result destination.
+
 ## Longshot diffusion update metrics
 
 Add `--cache-update-metrics` to a native evaluation command to write per-example

@@ -1,0 +1,23 @@
+{
+  "files": {
+    "config/prompt/zero-shot.yaml": "4d35e8060aa66167b9d405e13024632df92d8b4ccfa0a0da710a0945b55f9d98",
+    "data/cipher/rule.jsonl": "a37e7d581cba5563fb501e4593c0bedebbd1dde960c1b8df8c787f223373796c",
+    "data/cipher/sample.jsonl": "071d99669c9650a900029d752cc77b233ced51772179cb279a0f10355781834c",
+    "data/counterfactual/rule.jsonl": "085551b90bf65a6c5099083f770effd78aff062edfe395c0f052741bae60f1fd",
+    "data/counterfactual/sample.jsonl": "111ff495b3ec7e01859c29fe546c57a80c0d7e744c684b34531e63fdae97687f",
+    "data/logic/rule.jsonl": "dbd5799c9bc00a1cdfc65666e1c967b7b772391091fd82205dfcdc86d66bbef3",
+    "data/logic/sample.jsonl": "7a68e511c2d33dff22bec59aab959c19726ad6b1a68304fdfd833b8c4a1990e4",
+    "data/operation/rule.jsonl": "6deeb083bc1f015f137f1dc8aecc3098265e236c9e2bcbfc6c7bb79bfaac3b9f",
+    "data/operation/sample.jsonl": "8c62c2f5da05aa7fe5582e1b75a1e930c3baf2ef05bce832e1aef64fbfda4aae",
+    "data/puzzle/rule.jsonl": "6e4e21d8f59e61e366e423e4b9135dd23ff877a2f614f64d876fca5e20e88401",
+    "data/puzzle/sample.jsonl": "6e6b7463c64788ff83d17ff2e898939c033c3c34e21426ba0330219459a2c12c"
+  },
+  "prepared": {
+    "cipher": "6af4ad5aa73c9a1358fec96b1ada120b53b24f68dcffdc6c4615d0b49886a980",
+    "counterfactual": "885148d2f0dd3326ddd050223b6c81a4f899b6f98ececdb4742b797e07c20406",
+    "logic": "8c9051bee856b8f5353eae812808ee63786cf5e08631a9e039d7fc1e206361cb",
+    "operation": "83261899d0d2a1356d29719c430691c537a61090d3e27544a4888b205e4255ba",
+    "puzzle": "fb5560bc75a6a76ac9d8b72bb702ae0c0a40d57184165d5f8c573bf490714cc9"
+  },
+  "revision": "bb8194dff8e51e2e2247cf62aa9932c3d57d53d7"
+}

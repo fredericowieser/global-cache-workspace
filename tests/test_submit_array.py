@@ -815,3 +815,56 @@ def test_mixed_tasks_defer_checkpoint_validation_only_for_afterok(tmp_path: Path
     assert result.returncode != 0
     assert "future/checkpoint-2000" in result.stdout
     assert (tmp_path / "failed_configs.tsv").exists()
+
+
+def test_korbench_workers_log_samples_with_ordered_thinking_modes(tmp_path):
+    capture = tmp_path / "uv-args"
+    _, env = _write_fixture(
+        tmp_path, uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"'
+    )
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    tasks = tmp_path / "tasks.tsv"
+    tasks.write_text(
+        f"eval\t-\t{checkpoint}\t{tmp_path / 'korbench.json'}\tfalse,true\t-\n"
+    )
+    env.update({
+        "EVAL_SUITE": "korbench",
+        "EVAL_LOG_SAMPLES": "1",
+        "EVAL_APPLY_CHAT_TEMPLATE": "true",
+        "EVAL_UV_EXTRAS": "--no-sync",
+        "UV_CAPTURE": str(capture),
+    })
+    result = _run(
+        ["--backend", "local", "--local-gpus", "GPU-test", "--tasks-file", str(tasks)],
+        env,
+    )
+    _wait_for_status(_state_dir(result.stdout), env, "SUCCEEDED")
+    invocations = [
+        shlex.split(line)
+        for line in capture.read_text().splitlines()
+        if " gcw eval " in f" {line} "
+    ]
+    assert len(invocations) == 2
+    for args, mode in zip(invocations, ["false", "true"], strict=True):
+        assert args[args.index("eval") + 1] == "korbench"
+        assert "--tasks" not in args
+        assert args[args.index("--apply-chat-template") + 1] == "true"
+        assert args[args.index("--enable-thinking") + 1] == mode
+        assert "--log-samples" in args
+        assert "--no-sync" in args
+
+
+def test_custom_benchmark_submission_rejects_invalid_options(tmp_path):
+    config, env = _write_fixture(tmp_path)
+    for options, message in [
+        ({"EVAL_LOG_SAMPLES": "1"}, "not supported for paper7"),
+        ({"EVAL_LOG_SAMPLES": "true"}, "must be 0 or 1"),
+        ({"EVAL_APPLY_CHAT_TEMPLATE": "1"}, "must be true or false"),
+    ]:
+        result = _run(
+            ["--backend", "slurm", "--dry-run", str(config)],
+            {**env, **options}, check=False,
+        )
+        assert result.returncode != 0
+        assert message in result.stdout

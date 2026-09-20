@@ -38,7 +38,7 @@ def test_chat_eval_parser_can_enable_thinking():
     assert args.enable_thinking is True
 
 
-@pytest.mark.parametrize("suite", ["all", "math", "general", "tasks"])
+@pytest.mark.parametrize("suite", ["all", "math", "general", "korbench", "tasks"])
 def test_standard_eval_parser_exposes_boolean_thinking_config(suite):
     base = ["eval", suite, "--hf-model", "model"]
     if suite == "tasks":
@@ -480,3 +480,27 @@ def test_diffusion_metrics_default_requires_processor_and_destination(tmp_path):
     assert cli._resolve_cache_update_metrics(args).endswith(".cache-update-metrics.jsonl")
     args.out = None
     assert cli._resolve_cache_update_metrics(args) is None
+
+
+@pytest.mark.parametrize("thinking", [False, True])
+def test_korbench_suite_dispatches_shared_evaluator(monkeypatch, thinking):
+    from gcw.evaluation import core
+
+    captured = {}
+
+    def run_tasks(tasks, **kwargs):
+        captured.update(tasks=tasks, **kwargs)
+        return {}
+
+    monkeypatch.setattr(core, "run_tasks", run_tasks)
+    monkeypatch.setattr(core, "is_main_process", lambda: False)
+    cli.main([
+        "eval", "korbench", "--hf-model", "model",
+        "--apply-chat-template", "true", "--enable-thinking", str(thinking).lower(),
+        "--batch-size", "auto", "--log-samples",
+    ])
+    assert captured["tasks"] == ["korbench"]
+    assert captured["hf_model"] == "model"
+    assert captured["config"].log_samples
+    assert captured["config"].enable_thinking is thinking
+    assert captured["config"].default_max_new_tokens == (4096 if thinking else 2048)

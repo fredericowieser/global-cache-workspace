@@ -127,12 +127,22 @@ def truncate_context_continuation(
 
 
 def encode_generate_prompt(
-    tokenizer, prompt: str, max_length: int, *, add_special_tokens: bool = False
+    tokenizer,
+    prompt: str,
+    max_length: int,
+    *,
+    add_special_tokens: bool = False,
+    require_full_prompt: bool = False,
 ) -> list[int]:
     try:
         ids = tokenizer.encode(prompt, add_special_tokens=add_special_tokens)
     except TypeError:
         ids = tokenizer.encode(prompt)
+    if require_full_prompt and len(ids) > max_length:
+        raise ValueError(
+            f"Evaluation prompt has {len(ids)} tokens but context allows {max_length}; "
+            "this task requires the complete prompt"
+        )
     return ids[-max_length:]
 
 

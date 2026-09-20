@@ -163,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--head-selection-method", choices=["random"], default=None
         )
         legacy.add_argument("--out", default=None)
-    for suite in ("all", "math", "general", "tasks"):
+    for suite in ("all", "math", "general", "korbench", "tasks"):
         command = eval_sub.add_parser(suite)
         target = command.add_mutually_exclusive_group(required=True)
         target.add_argument("--checkpoint")
@@ -199,6 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if suite == "tasks":
             command.add_argument("--tasks", nargs="+", required=True)
+        command.add_argument("--log-samples", action="store_true")
         command.add_argument("--out", default=None)
     chat = eval_sub.add_parser("chat")
     target = chat.add_mutually_exclusive_group(required=True)
@@ -534,6 +535,7 @@ def dispatch(args: argparse.Namespace) -> None:
             common = {
                 "checkpoint": args.checkpoint,
                 "config": EvalConfig(
+                    log_samples=args.log_samples,
                     cache_update_metrics_path=metrics_path,
                     batch_size=args.batch_size,
                     max_batch_size=args.max_batch_size,
@@ -548,8 +550,11 @@ def dispatch(args: argparse.Namespace) -> None:
                 "diffusion_eval_solver_steps": args.diffusion_eval_solver_steps,
             }
             results = (
-                run_tasks(args.tasks, **common)
-                if args.suite == "tasks"
+                run_tasks(
+                    ["korbench"] if args.suite == "korbench" else args.tasks,
+                    **common,
+                )
+                if args.suite in {"korbench", "tasks"}
                 else runners[args.suite](**common)
             )
         if not is_main_process():
@@ -573,6 +578,7 @@ def dispatch(args: argparse.Namespace) -> None:
         )
         record.append_log(f"completed evaluation suite {args.suite}")
         summary = json.loads(text)
+        summary.pop("samples", None)
         if args.suite in {"chat", "gsm8k-reproduction", "answer-nll"}:
             summary = {
                 key: value for key, value in summary.items() if key != "rows"

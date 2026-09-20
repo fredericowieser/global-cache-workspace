@@ -153,19 +153,47 @@ def _validate_partial_results(
     payload: dict, runs: list[tuple[list[str], int]]
 ) -> dict:
     expected_keys = set(_empty_eval_results())
-    if set(payload) != expected_keys or any(
-        not isinstance(payload[key], dict) for key in expected_keys
+    optional_keys = {"samples", "configs"}
+    if (
+        not expected_keys <= set(payload)
+        or set(payload) - expected_keys - optional_keys
+        or any(not isinstance(value, dict) for value in payload.values())
     ):
         raise ValueError("authenticated partial results schema differs")
     requested = {task for tasks, _fewshot in runs for task in tasks}
-    for section in ("results", "groups"):
-        for task in payload[section]:
+    for section in ("results", "groups", "samples", "configs"):
+        for task in payload.get(section, {}):
             if not any(
                 task == requested_task or task.startswith(f"{requested_task}_")
                 for requested_task in requested
             ):
                 raise ValueError(
                     f"authenticated partial results contain unexpected task: {task}"
+                )
+    if "samples" in payload:
+        if "configs" not in payload:
+            raise ValueError("Partial sample results lack task configurations")
+        for task, samples in payload["samples"].items():
+            if not isinstance(samples, list) or not all(
+                isinstance(sample, dict) for sample in samples
+            ):
+                raise ValueError("Partial samples must be lists of records")
+        for task, counts in payload["n-samples"].items():
+            if task not in payload["samples"] or task not in payload["configs"]:
+                raise ValueError(
+                    f"Partial results lack samples/configuration for {task}"
+                )
+            samples = payload["samples"][task]
+            identities = [
+                (sample["doc_id"], sample["filter"]) for sample in samples
+            ]
+            if (
+                len(set(identities)) != len(identities)
+                or len({doc_id for doc_id, _ in identities})
+                != counts["effective"]
+            ):
+                raise ValueError(
+                    f"Partial sample population differs for {task}"
                 )
     runtime = payload["gcw_runtime"]
     required_runtime_fields = {

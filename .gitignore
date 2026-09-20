@@ -66,3 +66,6 @@ Thumbs.db
 
 # Agents
 .hermes/
+
+# Prepared KOR-Bench evaluation records
+data/eval-data/korbench/

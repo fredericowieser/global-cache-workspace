@@ -50,6 +50,7 @@ experiments/gcw-dev2k
 experiments/qwen35-ablations
 experiments/qwen35-headline
 experiments/smollm-matched-total
+experiments/reasoning-transfer
 experiments/future
 ```
 
@@ -60,6 +61,7 @@ experiments/future
 integrations/weights-and-biases
 integrations/hugging-face
 integrations/lm-evaluation-harness
+integrations/korbench
 integrations/slurm
 ```
 

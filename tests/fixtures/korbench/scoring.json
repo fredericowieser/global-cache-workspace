@@ -1,0 +1,1007 @@
+{
+  "source_revision": "bb8194dff8e51e2e2247cf62aa9932c3d57d53d7",
+  "source": "KOR-Bench eval/results/0923_main/evaluation_Qwen2.5-7B-Instruct_*_zero-shot.jsonl.json",
+  "expected_labels": "Recomputed with pinned eval/eval_utils.py and pinned data; not historical stored labels.",
+  "cases": [
+    {
+      "category": "operation",
+      "idx": "1",
+      "rule_id": "1",
+      "answer": "[[24]]",
+      "response": "[[24]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "11",
+      "rule_id": "2",
+      "answer": "[[55]]",
+      "response": "[[20]]",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "21",
+      "rule_id": "3",
+      "answer": "[[16]]",
+      "response": "[[[[2*2*3+5-1]]]]",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "31",
+      "rule_id": "4",
+      "answer": "[[5]]",
+      "response": "[[5]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "41",
+      "rule_id": "5",
+      "answer": "[[13]]",
+      "response": "[[13]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "51",
+      "rule_id": "6",
+      "answer": "[[7]]",
+      "response": "[[8]]",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "61",
+      "rule_id": "7",
+      "answer": "[[18]]",
+      "response": "First, we compute \\(3♀5\\):\n\n\\[\n3♀5 = \\frac{3+5}{2} = \\frac{8}{2} = 4\n\\]\n\nNext, we use this result to compute \\((3♀5)♂2\\), which is now \\(4♂2\\):\n\n\\[\n4♂2 = 4 \\times 4 + 2 = 16 + 2 = 18\n\\]\n\nThus, the final answer is:\n\n[[18]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "71",
+      "rule_id": "8",
+      "answer": "[[18]]",
+      "response": "First, let's compute the value of \\(4①2\\):\n\n\\[4①2 = \\sqrt{4} + 2^2 = 2 + 4 = 6.\\]\n\nNext, we use the result to compute \\(9②6\\):\n\n\\[9②6 = \\sqrt{9} \\times 6 = 3 \\times 6 = 18.\\]\n\nTherefore, the final answer is: [[18]].",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "81",
+      "rule_id": "9",
+      "answer": "[[5]]",
+      "response": "[[5]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "91",
+      "rule_id": "10",
+      "answer": "[[10/3]]",
+      "response": "[[[[\\log_{8}{2} + \\log_{2}{8}]غياب الحساب المادي لضمان الالتزام بالعملية المعطاة]]]\n\nTo provide the numerical answer while adhering to the instruction of writing fractions in 'a/b' format and not using decimals:\n\n\\(\\log_{8}{2} = \\frac{1}{3}\\)\n\\(\\log_{2}{8} = 3\\)\n\nSo, the answer is: [[1/3 + 3]], which can be simplified to [[10/3]].",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "101",
+      "rule_id": "11",
+      "answer": "[[1]]",
+      "response": "[[[[3^2] - [2^3]]]]",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "111",
+      "rule_id": "12",
+      "answer": "[[6]]",
+      "response": "[[[[2^2 + \\sqrt{2*2}] = [4 + 2] = [6]]]]",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "121",
+      "rule_id": "13",
+      "answer": "[[5+5i]]",
+      "response": "[[9+5i]]",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "132",
+      "rule_id": "14",
+      "answer": "[[-5+4i]]",
+      "response": "First, let's compute 2◎3 and 2◎2 using the given operation rule a◎b = (a + bi)^2.\n\n#### Computing 2◎3:\n\\[2◎3 = (2 + 3i)^2\\]\n\n\\[= (2 + 3i)(2 + 3i)\\]\n\n\\[= 4 + 6i + 6i + 9i^2\\]\n\n\\[= 4 + 12i + 9(-1)\\] (since \\(i^2 = -1\\))\n\n\\[= 4 + 12i - 9\\]\n\n\\[= -5 + 12i\\]\n\nSo, 2◎3 = -5 + 12i.\n\n#### Computing 2◎2:\n\\[2◎2 = (2 + 2i)^2\\]\n\n\\[= (2 + 2i)(2 + 2i)\\]\n\n\\[= 4 + 4i + 4i + 4i^2\\]\n\n\\[= 4 + 8i + 4(-1)\\] (since \\(i^2 = -1\\))\n\n\\[= 4 + 8i - 4\\]\n\n\\[= 8i\\]\n\nSo, 2◎2 = 8i.\n\n#### Subtracting the Results:\nLet's now calculate (2◎3) − (2◎2):\n\n\\[(2◎3) − (2◎2) = (-5 + 12i) − 8i\\]\n\n\\[= -5 + 12i - 8i\\]\n\n\\[= -5 + 4i\\]\n\nHence, the final answer is [[-5 + 4i]].",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "142",
+      "rule_id": "15",
+      "answer": "[[1]]",
+      "response": "To compute \\(f△g\\) given the functions \\(f(x) = e^x\\) and \\(g(x) = \\ln(x)\\), we follow the definition of the custom operation \\(f△g = (f(g(x)))'\\).\n\nFirst, we substitute \\(g(x) = \\ln(x)\\) into \\(f(x) = e^x\\):\n\n\\[f(g(x)) = e^{\\ln(x)}.\\]\n\nSince \\(e^{\\ln(x)} = x\\) (for \\(x > 0\\)), we have:\n\n\\[f(g(x)) = x.\\]\n\nNext, we need to compute the derivative of \\(f(g(x)) = x\\) with respect to \\(x\\):\n\n\\[\\frac{d}{dx}(x) = 1.\\]\n\nTherefore, the result of \\(f△g\\) is:\n\n[[1]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "151",
+      "rule_id": "16",
+      "answer": "[[2x+\\cos(x)]]",
+      "response": "To compute \\( f□g \\), we need to find the derivatives of \\( f(x) \\) and \\( g(x) \\).\n\nGiven:\n\\[ f(x) = x^2 \\]\n\\[ g(x) = \\sin(x) \\]\n\nThe derivatives are:\n\\[ f'(x) = 2x \\]\n\\[ g'(x) = \\cos(x) \\]\n\nAccording to the operation rule:\n\\[ f□g = f'(x) + g'(x) \\]\n\nSubstituting the derivatives, we get:\n\\[ f□g = 2x + \\cos(x) \\]\n\nThus, the answer is:\n[[\\[2x + \\cos(x)\\]]]",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "161",
+      "rule_id": "17",
+      "answer": "[[x^2-\\sin(x)]]",
+      "response": "To compute \\( f▽g \\) for the given functions, we first need to find \\( f(x) \\) and \\( g''(x) \\).\n\nGiven:\n\\[ f(x) = x^2 \\]\n\\[ g(x) = \\sin(x) \\]\n\nFirst, let's find the second derivative of \\( g(x) \\):\n\\[ g'(x) = \\cos(x) \\]\n\\[ g''(x) = -\\sin(x) \\]\n\nNow, we apply the operation \\( f▽g \\):\n\\[ f▽g = f(x) + g''(x) \\]\n\\[ f▽g = x^2 + (-\\sin(x)) \\]\n\\[ f▽g = x^2 - \\sin(x) \\]\n\nThus, the answer in LaTeX format is:\n[[x^2 - \\sin(x)]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "171",
+      "rule_id": "18",
+      "answer": "[[{1,2,4,5}]]",
+      "response": "[[{1,2,4,5}]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "181",
+      "rule_id": "19",
+      "answer": "[[8]]",
+      "response": "To compute 1★3 using the given operation rule, we need to evaluate the integral \\(\\int_{1}^{3} 2x \\, dx\\).\n\nFirst, find the antiderivative of \\(2x\\):\n\\[\n\\int 2x \\, dx = x^2 + C\n\\]\n\nNext, apply the limits of integration from 1 to 3:\n\\[\n\\left[ x^2 \\right]_{1}^{3} = 3^2 - 1^2 = 9 - 1 = 8\n\\]\n\nThus, the result is:\n\\[\n\\boxed{[[8]]}\n\\]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "191",
+      "rule_id": "20",
+      "answer": "[[14]]",
+      "response": "To compute 1●3 using the given operation rule, we follow these steps:\n\n1. **Identify the function and limits**:\n   - The function is \\( f(x) = 2x \\).\n   - The limits of integration are from 1 to 3.\n\n2. **Evaluate the integral**:\n   - We need to calculate \\( \\int_{1}^{3} 2x \\, dx \\).\n   - The antiderivative of \\( 2x \\) is \\( x^2 \\), so we evaluate \\( x^2 \\) from 1 to 3:\n     \\[\n     \\int_{1}^{3} 2x \\, dx = \\left[ x^2 \\right]_1^3 = 3^2 - 1^2 = 9 - 1 = 8.\n     \\]\n\n3. **Add the constant**:\n   - According to the operation rule, we need to add 6 to the result of the integral:\n     \\[\n     8 + 6 = 14.\n     \\]\n\nThus, the answer is [[14]].",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "201",
+      "rule_id": "21",
+      "answer": "[[4]]",
+      "response": "[[4]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "211",
+      "rule_id": "22",
+      "answer": "[[2x+\\cos(x)]]",
+      "response": "To compute \\( f■g \\) using the given operation rule, we first need to find the partial derivatives of \\( f \\) and \\( g \\) with respect to \\( x \\).\n\nGiven:\n\\[ f(x, y) = x^2 + y \\]\n\\[ g(x, y) = \\sin x + \\cos y \\]\n\nWe compute the partial derivatives with respect to \\( x \\):\n\\[ \\frac{\\partial f}{\\partial x} = 2x \\]\n\\[ \\frac{\\partial g}{\\partial x} = \\cos x \\]\n\nNow, according to the operation rule \\( f■g = \\frac{\\partial f}{\\partial x} + \\frac{\\partial g}{\\partial x} \\), we substitute the partial derivatives:\n\\[ f■g = 2x + \\cos x \\]\n\nThus, the answer in LaTeX format is:\n\\[ [[2x + \\cos x]] \\]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "221",
+      "rule_id": "23",
+      "answer": "[[((1,2),(9,64))]]",
+      "response": "The operation A&B is defined as the element-by-element power operation, which means for each element in matrix A, we raise it to the power of the corresponding element in matrix B. Given:\n\n\\[ A =\n\\begin{pmatrix}\n  1 & 2 \\\\\n  3 & 4\n\\end{pmatrix},\n\\quad\nB =\n\\begin{pmatrix}\n  0 & 1 \\\\\n  2 & 3\n\\end{pmatrix}\n\\]\n\nWe compute each element of the resulting matrix as follows:\n\n- For the element in the first row and first column: \\(1^0 = 1\\)\n- For the element in the first row and second column: \\(2^1 = 2\\)\n- For the element in the second row and first column: \\(3^2 = 9\\)\n- For the element in the second row and second column: \\(4^3 = 64\\)\n\nThus, the resulting matrix A&B is:\n\n\\[\n\\begin{pmatrix}\n  1 & 2 \\\\\n  9 & 64\n\\end{pmatrix}\n\\]\n\nIn the required format, the answer is:\n\n[[[(1,2),(9,64)]]]",
+      "expected": true
+    },
+    {
+      "category": "operation",
+      "idx": "231",
+      "rule_id": "24",
+      "answer": "[[((1,2),(3,4))]]",
+      "response": "The answer is [[[ (1,2),(2,4) ]]].",
+      "expected": false
+    },
+    {
+      "category": "operation",
+      "idx": "241",
+      "rule_id": "25",
+      "answer": "[[((17,22),(27,32))]]",
+      "response": "To compute \\( A \\€ B \\) using the given operation rule \\( A€B = 2A + 3B \\), we need to perform the following steps:\n\n1. Compute \\( 2A \\).\n2. Compute \\( 3B \\).\n3. Add the results from steps 1 and 2.\n\nFirst, let's find \\( 2A \\):\n\n\\[ A = \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix} \\]\n\\[ 2A = 2 \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix} = \\begin{pmatrix} 2 \\cdot 1 & 2 \\cdot 2 \\\\ 2 \\cdot 3 & 2 \\cdot 4 \\end{pmatrix} = \\begin{pmatrix} 2 & 4 \\\\ 6 & 8 \\end{pmatrix} \\]\n\nNext, let's find \\( 3B \\):\n\n\\[ B = \\begin{pmatrix} 5 & 6 \\\\ 7 & 8 \\end{pmatrix} \\]\n\\[ 3B = 3 \\begin{pmatrix} 5 & 6 \\\\ 7 & 8 \\end{pmatrix} = \\begin{pmatrix} 3 \\cdot 5 & 3 \\cdot 6 \\\\ 3 \\cdot 7 & 3 \\cdot 8 \\end{pmatrix} = \\begin{pmatrix} 15 & 18 \\\\ 21 & 24 \\end{pmatrix} \\]\n\nNow, add \\( 2A \\) and \\( 3B \\):\n\n\\[ 2A + 3B = \\begin{pmatrix} 2 & 4 \\\\ 6 & 8 \\end{pmatrix} + \\begin{pmatrix} 15 & 18 \\\\ 21 & 24 \\end{pmatrix} = \\begin{pmatrix} 2+15 & 4+18 \\\\ 6+21 & 8+24 \\end{pmatrix} = \\begin{pmatrix} 17 & 22 \\\\ 27 & 32 \\end{pmatrix} \\]\n\nSo the final answer based on the given operation rule is:\n\n\\[\n\\begin{pmatrix} 17 & 22 \\\\ 27 & 32 \\end{pmatrix}\n\\]\n\nExpressed in the requested format:\n\n[[(17,22),(27,32)]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "1",
+      "rule_id": "1",
+      "answer": "[[p1&p2];[p3||p4];[(p3&~p4)||(~p3&p4)]]",
+      "response": "[[p1&p2];[p3||p4];[~(p3&p4)&~(~p3&~p4)]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "11",
+      "rule_id": "2",
+      "answer": "[[(!(!p∣q))∣r]]",
+      "response": "[[ (!p | q) | r ]].",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "21",
+      "rule_id": "3",
+      "answer": "[[pairedconjunctiveterms:¬p^¬q^r,¬p^q^r];[denoted:m1∨m3]]",
+      "response": "[[paired conjunctive terms:m1, m3]; [denoted:(¬p∧¬q∧r)∨(¬p∧q∧r)]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "31",
+      "rule_id": "4",
+      "answer": "[[B]]",
+      "response": "[[Implausible]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "41",
+      "rule_id": "5",
+      "answer": "[[I,O];[+,-];[-,+]]",
+      "response": "[[I, O]; [+, -]; [-, +]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "51",
+      "rule_id": "6",
+      "answer": "[[F(4)⇒F(2)];[G(5,4)⇒G(4,6)]]",
+      "response": "[[Ex(F(x) & x = 2); Ex(G(x, x) & x = 4)]; [Ax(G(5, x) ⇒ G(x, 6))]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "61",
+      "rule_id": "7",
+      "answer": "[[x+y=x*y]]",
+      "response": "[.FJ((x′ + y′), (x′ * y′))]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "71",
+      "rule_id": "8",
+      "answer": "[[B];[D];[C];[A]]",
+      "response": "[[B];[D];[C];[A]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "81",
+      "rule_id": "9",
+      "answer": "[[Someproductsarenon-top-grade.]]",
+      "response": "[Some products are not non-top-grade.]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "91",
+      "rule_id": "10",
+      "answer": "[[I];[AAA]]",
+      "response": "[[I];[AII]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "101",
+      "rule_id": "11",
+      "answer": "[[!$p]]",
+      "response": "[[!#p]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "111",
+      "rule_id": "12",
+      "answer": "[[§p∧‽q]]",
+      "response": "[§p, ¬‽q]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "121",
+      "rule_id": "13",
+      "answer": "[[Hp];[Ap]]",
+      "response": "[[A¬p; Hp];[G¬p; Fp]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "131",
+      "rule_id": "14",
+      "answer": "[[B]]",
+      "response": "[[B]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "141",
+      "rule_id": "15",
+      "answer": "[[[c1;c2]φ]]",
+      "response": "[[c1; c2]φ]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "151",
+      "rule_id": "16",
+      "answer": "[[A]]",
+      "response": "[[B]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "161",
+      "rule_id": "17",
+      "answer": "[[A]]",
+      "response": "[[C]]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "171",
+      "rule_id": "18",
+      "answer": "[[A]]",
+      "response": "[[A]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "181",
+      "rule_id": "19",
+      "answer": "[[100%]]",
+      "response": "[[100%]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "191",
+      "rule_id": "20",
+      "answer": "[[A]]",
+      "response": "[[A]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "201",
+      "rule_id": "21",
+      "answer": "[[A]]",
+      "response": "[[A]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "211",
+      "rule_id": "22",
+      "answer": "[[C]]",
+      "response": "[C!]",
+      "expected": false
+    },
+    {
+      "category": "logic",
+      "idx": "221",
+      "rule_id": "23",
+      "answer": "[[A]]",
+      "response": "[A]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "231",
+      "rule_id": "24",
+      "answer": "[[A]]",
+      "response": "[[A]]",
+      "expected": true
+    },
+    {
+      "category": "logic",
+      "idx": "241",
+      "rule_id": "25",
+      "answer": "[[A]]",
+      "response": "[[D]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "1",
+      "rule_id": "1",
+      "answer": "[[N]]",
+      "response": "[[S]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "11",
+      "rule_id": "2",
+      "answer": "[[3]]",
+      "response": "[[3]]",
+      "expected": true
+    },
+    {
+      "category": "cipher",
+      "idx": "21",
+      "rule_id": "3",
+      "answer": "[[4^3]]",
+      "response": "[[4^3]]",
+      "expected": true
+    },
+    {
+      "category": "cipher",
+      "idx": "31",
+      "rule_id": "4",
+      "answer": "[[22]]",
+      "response": "[[22]]",
+      "expected": true
+    },
+    {
+      "category": "cipher",
+      "idx": "41",
+      "rule_id": "5",
+      "answer": "[[E]]",
+      "response": "[[N]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "51",
+      "rule_id": "6",
+      "answer": "[[C]]",
+      "response": "[[R]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "61",
+      "rule_id": "7",
+      "answer": "[[K]]",
+      "response": "[[B]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "71",
+      "rule_id": "8",
+      "answer": "[[E]]",
+      "response": "[[P]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "81",
+      "rule_id": "9",
+      "answer": "[[Z]]",
+      "response": "[[S]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "91",
+      "rule_id": "10",
+      "answer": "[[R]]",
+      "response": "[[M]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "101",
+      "rule_id": "11",
+      "answer": "[[PF]]",
+      "response": "[[BE]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "111",
+      "rule_id": "12",
+      "answer": "[[4785]]",
+      "response": "[[../-/.-]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "121",
+      "rule_id": "13",
+      "answer": "[[NU]]",
+      "response": "[[BU]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "131",
+      "rule_id": "14",
+      "answer": "[[848898898]]",
+      "response": "[[147]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "141",
+      "rule_id": "15",
+      "answer": "[[GT]]",
+      "response": "[[MA]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "151",
+      "rule_id": "16",
+      "answer": "[[B*I*V*K*C*]]",
+      "response": "[[BI#*VKC]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "161",
+      "rule_id": "17",
+      "answer": "[[P#X#L#E#M#]]",
+      "response": "[[PXELM]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "171",
+      "rule_id": "18",
+      "answer": "[[######WH###FI###]]",
+      "response": "[[WHFI]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "181",
+      "rule_id": "19",
+      "answer": "[[AF]]",
+      "response": "[[AF]]",
+      "expected": true
+    },
+    {
+      "category": "cipher",
+      "idx": "191",
+      "rule_id": "20",
+      "answer": "[[GAKOVDL]]",
+      "response": "[[KDGALV$]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "201",
+      "rule_id": "21",
+      "answer": "[[11010011]]",
+      "response": "[[01010101]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "211",
+      "rule_id": "22",
+      "answer": "[[2B9C9986938C9784]]",
+      "response": "[[0A00]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "221",
+      "rule_id": "23",
+      "answer": "[[233]]",
+      "response": "[[175]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "231",
+      "rule_id": "24",
+      "answer": "[[852]]",
+      "response": "[[156]]",
+      "expected": false
+    },
+    {
+      "category": "cipher",
+      "idx": "241",
+      "rule_id": "25",
+      "answer": "[[36]]",
+      "response": "[[65]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "1",
+      "rule_id": "1",
+      "answer": "[[nine ten nine eight ten]]",
+      "response": "The provided rule and question seem to have a misunderstanding, as none of the words \"feminine\", \"kindergarten\", \"canine\", \"overweight\", \"threaten\" end in a number. According to the rule, there should be a common number at the end of all the words. Since no such common number exists in these words, there is no valid answer based on the given rule and set of words.\n\nHowever, if we strictly apply the rule as given, the answer would be in the form of double square brackets containing the numbers found at the end of the words. Since no numbers are found, the answer would be:\n\n[[ ]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "13",
+      "rule_id": "2",
+      "answer": "[[tion]]",
+      "response": "[[tion]]",
+      "expected": true
+    },
+    {
+      "category": "puzzle",
+      "idx": "21",
+      "rule_id": "3",
+      "answer": "[[pea ape]]",
+      "response": "[[PEE PAE]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "31",
+      "rule_id": "4",
+      "answer": "[[appel pepla]]",
+      "response": "[[leaf]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "41",
+      "rule_id": "5",
+      "answer": "[[S=9,E=5,N=6,D=7,M=1,O=0,R=8,Y=2]]",
+      "response": "To solve the puzzle SEND+MORE=MONEY, we need to assign each letter a unique digit from 0-9 while adhering to the rules provided. Let's break down the problem:\n\n1. **Understand the letters**: S, E, N, D, M, O, R, Y\n2. **Carry-over logic**: Since S+M must start with M, S must be 1, and there must be a carry-over of 1 to the next column.\n3. **Setting S and M**:\n   - S must be 9 or more to generate a carry, but since we are dealing with typical 4 and 5 digit numbers, S must be 9.\n   - Let M be a digit from 1-9.\n4. **Setting other letters**:\n   - Since S is 9, E + O must start with O, which implies there is a carry of 1 from the addition of N + R.\n   - N + R + 1 (carry) must start with N, so R must be 8 (since N cannot be 0 and we need a carry).\n   - Now, E + O must be 9 because of the carry from the previous column.\n   - O must be less than E, and considering the above constraints, let's assume E = 5, O = 0.\n5. **Assigning remaining digits**:\n   - D + E (with carry) should give Y, so if D + 5 = 10 + Y, Y = 5 - 1 + 1 = 4.\n   - Now, we have D = 7 (since 7 + 5 = 12, 2 is carry and Y is 2, but 2 is not a valid digit, so we need to adjust).\n   - N = 6, because N + R (8) + 1 = N + 1, which implies N must be 5, so Y = 1.\n6. **Validation**:\n   - 1095 + 826 = 1921.\n\nThus, the assignment is:\n\n[[S=9,E=5,N=6,D=7,M=8,O=0,R=8,Y=1]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "51",
+      "rule_id": "6",
+      "answer": "[[4]]",
+      "response": "[[3]]\n\nExplanation:\n- Start with \"MOM\"\n- Change the first letter to D: \"DOM\"\n- Change the second letter to A: \"DAM\"\n- Change the third letter to D: \"DAD\"\n\nThis takes 3 steps in total.",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "61",
+      "rule_id": "7",
+      "answer": "[[1683 Vlietmolen Van Dijk,1706 Doesmolen De Jong,1729 Zemelmolen Visser,1752 Westmolen Jansen]]",
+      "response": "[[1683 Visser De Jong],[1706 Visser De Jong],[1729 Visser De Jong],[1752 Van Dijk Van Dijk]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "71",
+      "rule_id": "8",
+      "answer": "[[PUCCINI (4,13)(10,13)\nCHOPIN (6,1)(11,1)\nRAVEL (6,6)(10,6)]]",
+      "response": "[[PUCCINI (2,9)(2,3) \nCHOPIN (6,9)(6,5) \nRAVEL (5,1)(5,7)]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "81",
+      "rule_id": "9",
+      "answer": "[[6+2*3-2=10]]",
+      "response": "To solve the equation `?+?*?-?=10` using the given puzzle rule, we need to find values for the question marks that satisfy the equation. We will follow the normal order of operations (PEMDAS/BODMAS: Parentheses/Brackets, Exponents/Orders, Multiplication and Division (from left to right), Addition and Subtraction (from left to right)).\n\nLet's try to find a feasible solution step by step:\n\n1. Assume the structure of the equation: `? + ? * ? - ? = 10`\n2. Test different values for each question mark, ensuring we follow the order of operations.\n\nLet's try with the values: `5 + 2 * 3 - 6 = 10`\n\nBreaking it down:\n- According to the order of operations, we first perform the multiplication: `2 * 3 = 6`\n- Then we substitute back into the equation: `5 + 6 - 6`\n- Finally, we perform the addition and subtraction from left to right: `5 + 6 = 11`, and `11 - 6 = 5`\n\nThis does not equal 10, so let's try another combination.\n\nLet's try: `3 + 4 * 2 - 2 = 10`\n\nBreaking it down:\n- First, perform the multiplication: `4 * 2 = 8`\n- Substitute back into the equation: `3 + 8 - 2`\n- Perform the addition and subtraction from left to right: `3 + 8 = 11`, and `11 - 2 = 9`\n\nThis also does not equal 10. Let's try another combination.\n\nLet's try: `4 + 3 * 4 - 8 = 10`\n\nBreaking it down:\n- First, perform the multiplication: `3 * 4 = 12`\n- Substitute back into the equation: `4 + 12 - 8`\n- Perform the addition and subtraction from left to right: `4 + 12 = 16`, and `16 - 8 = 8`\n\nThis does not equal 10 either. Let's try: `6 + 2 * 3 - 4 = 10`\n\nBreaking it down:\n- First, perform the multiplication: `2 * 3 = 6`\n- Substitute back into the equation: `6 + 6 - 4`\n- Perform the addition and subtraction from left to right: `6 + 6 = 12`, and `12 - 4 = 8`\n\nThis still does not equal 10. Let's try: `8 + 1 * 1 - 7 = 10`\n\nBreaking it down:\n- First, perform the multiplication: `1 * 1 = 1`\n- Substitute back into the equation: `8 + 1 - 7`\n- Perform the addition and subtraction from left to right: `8 + 1 = 9`, and `9 - 7 = 2`\n\nThis does not equal 10. Let's try: `7 + 2 * 3 - 5 = 10`\n\nBreaking it down:\n- First, perform the multiplication: `2 * 3 = 6`\n- Substitute back into the equation: `7 + 6 - 5`\n- Perform the addition and subtraction from left to right: `7 + 6 = 13`, and `13 - 5 = 8`\n\nThis is close but not 10. Let's try: `9 + 1 * 1 - 0 = 10`\n\nBreaking it down:\n- First, perform the multiplication: `1 * 1 = 1`\n- Substitute back into the equation: `9 + 1 - 0`\n- Perform the addition and subtraction from left to right: `9 + 1 = 10`, and `10 - 0 = 10`\n\nThis equals 10, so a feasible solution is:\n[[9 + 1 * 1 - 0 = 10]]",
+      "expected": true
+    },
+    {
+      "category": "puzzle",
+      "idx": "91",
+      "rule_id": "10",
+      "answer": "[[(9+5-2)×2]]",
+      "response": "[[9 * (5 - 2) + 2]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "101",
+      "rule_id": "11",
+      "answer": "[[12 6 2 4,8 1 5 4,7 9 3 11]]",
+      "response": "To solve the puzzle, we need to fill in the blanks with the numbers in such a way that the sum of each row and column matches the given sums. Let's go through the grid step-by-step:\n\nGiven grid:\n```\nX  6  X  4  23\n8  X  X  X  24\nX  X  3  X  31\n21  15  19  23\n```\n\n### Step 1: Identify and fill in known values.\n\nFirst, fill in the known values (pre-filled numbers) and identify any values that can be derived directly.\n\n- For the first row, the sum is 23. We have 6 and 4, so we need 13 more:\n  - First row: 13 6 13-6-4 4 23\n\n- The last row is already given.\n- The first column already has 8, so for the third row, we need 21 - 8 = 13.\n\nRevised grid:\n```\n13  6  3  4  23\n8  X  X  X  24\n13  X  3  X  31\n21  15  19  23\n```\n\n### Step 2: Calculate and fill in remaining values.\n\n- For the second row: 8 + X1 + X2 + X3 + 24 = sum for the second row.\n- The sum for the fourth row is 21 + 15 + 19 + 23 = 78.\n\n### Step 3: Iterate and fill in values based on known sums.\n\nLet's fill in the 2nd row by 24 with the remaining numbers:\n\n- The second column: 1 + X1 = 14, so X1 = 7.\n- The third and fourth columns need to sum up to the remaining values.\n\nRevised grid:\n```\n13 6 3 4 23\n8  7 X4 X5 24\n13 X6 3 X7 31\n21 15 19 23\n```\n\n- For the third row: 13 + X6 + 3 + X7 + 31 = sum for the third row.\n- For the third column: 6 + X6 + 3 + X8 + X9 = sum for the third column.\n- The fourth column: 4 + X4 + X8 + X10 = sum for the fourth column.\n\nBased on the remaining sums, we iterate to find the exact values:\n\nAfter solving and ensuring all conditions are met:\n\nFinal grid:\n```\n10  6  9  4  23\n8  7 10 11 24\n13  5  3 17 31\n21 15 19 23\n```\n\nThus, the filled grid in required format is:\n```\n[[10 6 9 4 23]\n [8 7 10 11 24]\n [13 5 3 17 31]\n [21 15 19 23]]\n```",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "111",
+      "rule_id": "12",
+      "answer": "[[X X X 1,1 X 1 1,1 1 X 1,1 1 1 X]]",
+      "response": "To solve this puzzle, we'll follow the given rule carefully. The grid is 5x4, and the goal is to have the sum of the weights of the black cells in each row and column match the provided numbers.\n\n### Step-by-Step Solution:\n\n1. **Understanding the Column Weights:**\n   - Each column's black cell's weight increases by 1 from the top down (i.e., the topmost cell in column 1 weighs 1, next is 2, then 3, and so on).\n\n2. **Understanding the Row Weights:**\n   - Each row's black cell's weight increases by 1 from left to right (i.e., the leftmost cell in row 1 weighs 1, next is 2, then 3, and so on).\n\n3. **Interpreting the Given Numbers:**\n   - Column sums (from right to left):\n     1. Column 1: 9\n     2. Column 2: 7\n     3. Column 3: 6\n     4. Column 4: 6\n   - Row sums (from top to bottom):\n     1. Row 1: 4\n     2. Row 2: 8\n     3. Row 3: 7\n     4. Row 4: 6\n\n4. **Formulating the Solution:**\n\n   Let's start by filling the cells based on the column sums.\n\n   - **Column 1:**\n     - Top 9 (3rd row)\n     - 2nd row: (10 - 9) = 1 (2nd row)\n     - 3rd row: (11 - 9) = 2 (3rd row)\n     - 4th row: (12 - 9) = 3 (4th row)\n\n   - **Column 2:**\n     - 1st row: (8 - 7) = 1 (1st row)\n     - 3rd row: (10 - 8) = 2 (3rd row)\n     - 4th row: (12 - 8) = 4 (4th row)\n\n   - **Column 3:**\n     - 1st row: (7 - 6) = 1 (1st row)\n     - 2nd row: (9 - 6) = 3 (2nd row)\n     - 3rd row: (10 - 6) = 4 (3rd row)\n\n   - **Column 4:**\n     - 1st row: (6 - 6) = 0 (0th row)\n     - 2nd row: (8 - 6) = 2 (2nd row)\n     - 3rd row: (9 - 6) = 3 (3rd row)\n     - 4th row: (10 - 6) = 4 (4th row)\n\n5. **Verifying the Row Sums:**\n   - Row 1: 1 + 1 + 1 + 0 = 4\n   - Row 2: 1 + 2 + 3 + 2 = 8\n   - Row 3: 1 + 3 + 4 + 3 = 11 (incorrect, must be 7)\n   - Correcting Row 3:\n     - 1st row: 1\n     - 2nd row: 2\n     - 3rd row: 4 and 2 (4th and 3rd columns)\n     - 4th row: 3 (3rd column)\n\n   - Row 4: 0 + 2 + 3 + 4 = 9 (incorrect, must be 6)\n   - Correcting Row 4:\n     - 1st row: 0\n     - 2nd row: 2\n     - 3rd row: 3\n     - 4th row: 1 and 2 (4th and 1st columns)\n\n### Final Grid:\n```\n1 1 1 0\n1 2 3 2\n1 3 4 2\n0 2 3 1\n```\n\nWrapping the final answer in double square brackets:\n[[1 1 1 0 1 2 3 2 1 3 4 2 0 2 3 1]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "121",
+      "rule_id": "13",
+      "answer": "[[21 22 23 30 31 36 37 40 41,20 25 24 29 32 35 38 39 42,19 26 27 28 33 34 45 44 43,18 17 16 61 60 47 46 51 52,13 14 15 62 59 48 49 50 53,12 65 64 63 58 57 56 55 54,11 66 67 68 69 70 81 80 79,10 7 6 3 2 71 74 75 78,9 8 5 4 1 72 73 76 77]]",
+      "response": "To solve this puzzle, let's start by examining the given matrix and applying the rules provided:\n\n```\nX  X  X  X  X  X  X  X  X       \nX  25  X  29  X  35  X  39  X\nX  X  27  X  33  X  45  X  X\nX  17  X  X  X  X  X  51  X\nX  X  15  X  X  X  49  X  X\nX  65  X  X  X  X  X  55  X\nX  X  67  X  69  X  81  X  X\nX  7  X  3  X  71  X  75  X\nX  X  X  X  X  X  X  X  X\n```\n\nWe need to ensure that the numbers from 1 to 81 appear exactly once and are arranged horizontally or vertically.\n\n1. First, start with the number 25. It dictates where 26, 27, 28, and 29 must be. Since 27 is present vertically below 25, 26 must be to the left of 25.\n2. Using similar logic, we fill in the rest of the row and column around the known numbers, ensuring each number is used only once and fits the constraints.\n\nAfter filling in the gaps and checking for consistency, we get:\n\n```\n1  2  3  4  5  6  7  8  9       \n10 25 11 29 12 35 13 39 14\n15 27 28 33 26 45 30 40 16\n17 18 19 20 21 22 23 51 19\n24 34 36 37 38 49 46 50 22\n32 65 31 43 41 47 48 55 27\n42 67 44 69 68 81 70 76 28\n7  9  6  13  8  71 10 75 33\n2  16 17 23 18 57 53 56 45\n```\n\nHowever, upon closer inspection, we realize the sequence needs to be rebuilt to ensure all gaps are filled properly and numbers from 1 to 81 are used. Here's the corrected and filled grid:\n\n```\n1  2  3  4  5  6  7  8  9       \n10 25 11 29 12 35 13 39 14\n15 27 28 33 26 45 30 40 16\n17 18 19 20 21 22 23 51 19\n24 34 36 37 38 49 46 50 22\n32 65 31 43 41 47 48 55 27\n42 67 44 69 68 81 70 76 28\n7  9  6  13  8  71 10 75 33\n2  16 17 23 18 57 53 56 45\n```\n\nThe final solution is:\n\n[[1 2 3 4 5 6 7 8 9 10 25 11 29 12 35 13 39 14 15 27 28 33 26 45 30 40 16 17 18 19 20 21 22 23 51 19 24 34 36 37 38 49 46 50 22 32 65 31 43 41 47 48 55 27 42 67 44 69 68 81 70 76 28 7 9 6 13 8 71 10 75 33 2 16 17 23 18 57 53 56 45]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "131",
+      "rule_id": "14",
+      "answer": "[[4 A 1 A A,X A A A 3,X A 2 A X,X A X A X,A A A A A]]",
+      "response": "[[X X X A,X X X A,2 X X A,3 A A A,A A A A]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "141",
+      "rule_id": "15",
+      "answer": "[[9 6 5 7 8 1 2 4 3,1 4 7 9 2 3 8 5 6,3 8 2 6 4 5 9 1 7,2 7 1 5 9 6 4 3 8,6 3 4 1 7 8 5 9 2,5 9 8 2 3 4 6 7 1,4 1 6 8 5 7 3 2 9,8 5 9 3 1 2 7 6 4,7 2 3 4 6 9 1 8 5]]",
+      "response": "[[5 1 2 7 8 1 6 4 3,6 4 7 9 2 3 8 5 1,3 8 9 4 6 5 9 1 7,2 7 6 5 3 6 4 8 9,6 9 4 8 7 9 5 9 2,5 3 8 2 1 4 6 7 5,4 2 1 7 5 8 3 2 6,8 9 3 4 1 2 7 6 4,7 6 5 4 9 7 1 3 8]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "151",
+      "rule_id": "16",
+      "answer": "[[1 3 2 4,4 2 3 1,2 1 4 3,3 4 1 2]]",
+      "response": "To solve this puzzle, we need to fill a 4x4 grid according to the given rules. Let's break down the problem and solve it step by step.\n\n### Step 1: Understanding the Targets and Operators\n- (1,1)(1,2)(1,3):6+ => The sum of numbers in (1,1), (1,2), (1,3) is 6.\n- (1,4)(2,4):4* => The value of the number in (1,4) times the number in (2,4) is 4.\n- (2,3)(3,3)(3,4):36* => The value of the number in (2,3) times the number in (3,3) times the number in (3,4) is 36.\n- (2,1)(3,1):2÷ => The value of the number in (2,1) divided by the number in (3,1) is 2.\n- (4,3)(4,4):2÷ => The value of the number in (4,3) divided by the number in (4,4) is 2.\n- (2,2)(3,2):1- => The value of the number in (2,2) minus the number in (3,2) is 1.\n- (4,1)(4,2):1- => The value of the number in (4,1) minus the number in (4,2) is 1.\n\n### Step 2: Solving for the Grid\nLet's denote the cell coordinates as grid[y-1][x-1] for simplicity.\n- For (1,1)(1,2)(1,3):6+\n  - Possible combinations of (a, b, c) where a + b + c = 6 and a, b, c ∈ {1, 2, 3, 4}.\n  - One possible solution: (1, 2, 3)\n\n- For (1,4)(2,4):4*\n  - Possible combinations (d, e) where d * e = 4.\n  - Possible solution: (1, 4) or (2, 2)\n\n- For (2,3)(3,3)(3,4):36*\n  - Possible combinations (f, g, h) where f * g * h = 36.\n  - One possible solution: (3, 4, 3) or adjusted accordingly.\n\n- For (2,1)(3,1):2÷\n  - Possible combinations (i, j) where i / j = 2.\n  - Possible solution: (2, 1) or (4, 2)\n\n- For (4,3)(4,4):2÷\n  - Possible combinations (k, l) where k / l = 2.\n  - Possible solution: (2, 1) or (4, 2)\n\n- For (2,2)(3,2):1-\n  - Possible combinations (m, n) where m - n = 1.\n  - Possible solution: (2, 1) or (3, 2)\n\n- For (4,1)(4,2):1-\n  - Possible combinations (o, p) where o - p = 1.\n  - Possible solution: (2, 1) or (3, 2).\n\n### Step 3: Constructing the Grid\nAfter solving the individual region constraints, we need to ensure that the values are unique in each row and column.\n\nA possible solution:\n\n```\n3 2 1 4\n2 3 4 1\n4 1 3 2\n1 4 2 3\n```\n\n### Final Answer\n\n```[[3 2 1 4,2 3 4 1,4 1 3 2,1 4 2 3]]\n```",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "161",
+      "rule_id": "17",
+      "answer": "[[4 3 1 2,1 2 4 3,3 1 2 4,2 4 3 1]]",
+      "response": "To solve this puzzle, we will follow the rule and the constraints given:\n\n### Initial Grid:\n```\nX X X X\nX X X X\nX X 2 X\nX X X X\n```\n\n### Constraints:\n1. (1,3)<(1,4)\n2. (1,4)<(2,4)\n3. (2,4)<(3,4)\n4. (2,1)<(2,2)\n\nGiven the constraints, let's start filling in the grid. Since the numbers must be unique in each row and column, and there are increasing values from left to right and from top to bottom in the specified columns, we can start with the smallest possible numbers and work our way up.\n\n### Step-by-Step Filling:\n\n1. **First Row:**\n   - (1,3)<(1,4), so (1,3) must be 1 and (1,4) must be 2 since they are the smallest available numbers.\n\n2. **Second Row:**\n   - (1,4)<(2,4), so (2,4) must be 3.\n   - (2,1)<(2,2), and since 1 is already used in the first row, the smallest number for (2,1) can be 3 and for (2,2) can be 4.\n\n3. **Third Row:**\n   - (2,4)<(3,4), so (3,4) must be 4.\n   - Since all numbers in the third row must be unique and 2 is already placed, the remaining numbers are 1, 3, and 4. But 4 is already used, so (3,3) could be 1 and (3,1) could be 3.\n\n4. **Fourth Row:**\n   - For the fourth row, the remaining numbers are 1, 2, 3, and 4. We will place them such that all the rules are followed.\n\n### Final Filled Grid:\n```\n1 2 X 3\n4 5 X 6\nX X 2 X\n7 8 X X\n```\n\nTo confirm, we need to fill in the remaining squares ensuring all numbers from 1 to 8 are used exactly once in each row and column while satisfying the inequality constraints:\n\n### Final Solution:\n```\n1 2 5 3\n4 6 8 7\n9 10 2 11\n12 13 14 15\n```\n\nHowever, this does not fit the initial placeholders, let's correct our step-by-step and correctly:\n\n```\n1 2 4 3\n5 6 8 7\n9 10 2 11\n12 13 15 14\n```\n\nThus, the correct answer is:\n[[1 2 4 3,5 6 8 7,9 10 2 11,12 13 15 14]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "171",
+      "rule_id": "18",
+      "answer": "[[← 9 → → ↑ ↑ ↑ ↑,↑ ↓ ← ← 7 ↑ ↑ ↑,6 ↓ ↑ ↑ ↓ 2 ↑ ↑,↓ ↓ ↑ ↑ ↓ ↑ ↑ ↑,↓ ↓ ↑ ↑ ↓ 1 ↑ 7,↓ ↓ ↑ ↑ ↓ ← 8 ↓,↓ ↓ ↑ 6 → → ↓ ↓,↓ ← 9 → → → ↓ ↓]]",
+      "response": "To solve this puzzle, we need to place arrows according to the numbers in such a way that the arrows cover the exact number of blank squares as indicated and do not cross each other. Here’s the step-by-step solution with the rule applied:\n\n1. **First Row**:\n   - There is a 9 in the first row, which means we need to draw 9 arrows. Since the number 9 is in an empty cell, we can draw arrows from the numbers around it to cover all the blank squares. We can draw arrows as follows: 9 → ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓.\n   \n2. **Second Row**:\n   - We need to cover 7 arrows and no other numbers are directly connected to cover 7 cells. Thus, we can draw 7 arrows in a way that they do not overlap. We can use left arrows to cover the blank cells: 7 ← ← ← ← ← ← ←.\n\n3. **Third Row**:\n   - The 6 on this line needs to cover 6 cells. We can use up and right arrows: 6 ↑ ↑ ↑ ↑ ↑.\n   - The 2 needs to cover 2 cells and we use right and down arrows: 2 → →.\n\n4. **Fourth Row**:\n   - This row doesn’t have any given numbers, so there won’t be any arrows drawn in this row.\n\n5. **Fifth Row**:\n   - We need to cover 1 arrow with an arrow pointing down: 1 ↓.\n   - The 7 needs 7 arrows and it can be covered fully right: 7 → → → → → →.\n\n6. **Sixth Row**:\n   - The 8 needs to be covered with 8 arrows, which can be done using up and right arrows: 8 ↑ ↑ ↑ ↑ ↑ ↑ ↑.\n\n7. **Seventh Row**:\n   - The 6 needs 6 arrows, which can be done using right arrows: 6 → → → → →.\n   - The 9 requires 9 arrows which can be done with down arrows: 9 ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓.\n\nPutting it all together:\n[[9 → ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓, 7 ← ← ← ← ← ← ←, 6 ↑ ↑ ↑ ↑ ↑ 2 → →, \"\", 1 ↓ 7 → → → → → →, 8 ↑ ↑ ↑ ↑ ↑ ↑ ↑, 6 → → → → → 9 ↓ ↓ ↓ ↓ ↓ ↓ ↓ ↓]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "181",
+      "rule_id": "19",
+      "answer": "[[A(1,5)\nB(2,2)\nC(3,7)\nD(1,4)\nE(3,5)\nF(6,6)\nG(4,8)\nH(7,8)]]",
+      "response": "Let's apply the rule step by step to answer the puzzle correctly:\n\n1. **Understanding the Grid and Rule**: The grid is provided with partitions labeled by different letters (A, B, D, E, F, G, H). The rule specifies that each row, column, and partition must have exactly 1 star, and no stars can be adjacent to each other.\n\n2. **Place Stars in Each Row and Column**: We need to place exactly one star per row and per column without any two stars being adjacent, including diagonally.\n\n3. **Place Stars in Each Partition**: For each partition labeled by a letter, only one star can be placed, and it must comply with the adjacency rule.\n\nHere is the step-by-step solution:\n\n- **Row and Column Placement**:\n  - Row 1 (A): The only possible star is in column 1.\n  - Row 2 (B): The only possible star is in column 3.\n  - Row 3 (D): The only possible star is in column 2.\n  - Row 4 (D): The only possible star is in column 4.\n  - Row 5 (D): The only possible star is in column 6.\n  - Row 6 (D): The only possible star is in column 7.\n  - Row 7 (G): The only possible star is in column 8.\n  - Row 8 (G): The only possible star is in column 1.\n\n- **Partition Placement**:\n  - Partition A (A's): There is only one A in row 1 and column 1.\n  - Partition B (B's): There is only one B in row 2 and column 3.\n  - Partition D (D's): There are three D's in rows 3, 4, and 5. The only possible placements are in columns 2 (row 3), 4 (row 4), and 6 (row 5).\n  - Partition E (E's): There are two E's in rows 5, 6. The only possible placement is in column 7 (row 5), and the other in row 6.\n  - Partition F (F's): There are three F's in rows 5, 6, and 7. The only possible placement is in column 8 (row 5), and the other two in rows 6 and 7.\n  - Partition G (G's): There are four G's in rows 7 and 8. The only possible placement is in column 1 (row 8), and the other three in columns 1, 2, and 3 (row 7).\n  - Partition H (H's): There is only one H in row 8 and column 4.\n\n4. **Verification**:\n  - No adjacency violations: Each star is checked to ensure it is not adjacent to any other star, including diagonally.\n\nThe final placement looks like this:\n```\n[[A(1,1)\nB(2,3)\nC(3,2)\nD(4,4)\nC(5,6)\nC(6,7)\nC(7,8)]\n[G(8,1)\nH(8,4)]]\n```\n\nHowever, since we need to list coordinates of the stars in each region, we group them by region:\n\n- A: (1,1)\n- B: (2,3)\n- D: (3,2), (4,4), (5,6)\n- C: (6,7)\n- E: (7,7)\n- F: (7,8)\n- G: (8,1)\n- H: (8,4)\n\nWith the required order, we write it as:\n\n[[A(1,1)\nB(2,3)\nD(3,2)\nD(4,4)\nD(5,6)\nC(6,7)\nC(7,8)\nG(8,1)\nH(8,4)]]\n\nHowever, since the instruction demands writing them region-wise, and more than one coordinate exists within regions, the order is based on the rows first, then columns if rows are the same:\n\n[[A(1,1)\nB(2,3)\nC(6,7)\nD(3,2)(4,4)(5,6)\nC(7,8)\nG(8,1)\nH(8,4)]\n\nThis ensures that the answer respects the given rules and the alphabetical order of regions.",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "191",
+      "rule_id": "20",
+      "answer": "[[T C X X X C T C T X,X X X C X X X X X C,X X X T X X T C X T,X C T C T C X X X X,X X X T X X X T X X]]",
+      "response": "To solve the given puzzle, let's break down and apply the rules step by step.\n\nGiven matrix:\n```\nT X X X X X T X T X 3\nX X X X X X X X X X 2\nX X X T X X T X X T 1\nX X T X T X X X X X 3\nX X X T X X X T X X 1\n0 2 0 2 0 2 0 2 1 1\n```\n\n### Step-by-Step Solution:\n\n1. **First Row:**\n   - The first row has 3 tents, and the row constraint is 0. This means all tents must be in columns where the constraints indicate a location for a tent (i.e., 3 for this row).\n   - Possible positions are 1, 7, and 9. Placing tents here: `T X C X X X T C X X`.\n\n2. **Second Row:**\n   - The second row has 2 tents, and the row constraint is 2. This means the tents need to be in columns where the constraints provide a 2.\n   - The valid positions are 6 and 7: `X X X C X X X C X X`.\n\n3. **Third Row:**\n   - The third row has 1 tent, and the row constraint is 0. Valid position can be 4 or 10, but since 7 is already occupied, place tent at 4: `X X X T C X T X X T`.\n\n4. **Fourth Row:**\n   - The fourth row has 3 tents, and the row constraint is 2. Tent positions can be 1, 5, and 7: `X X T C T X X X X X`.\n\n5. **Fifth Row:**\n   - The fifth row has 1 tent, and the row constraint is 0. Valid positions can be 4 or 10, but since 7 is already occupied, place tent at 4: `X X X T C X X X T X X`.\n\nTo verify and align with puzzle constraints:\n- Row constraints:\n  - First row: 3 (okay)\n  - Second row: 2 (okay)\n  - Third row: 1 (okay)\n  - Fourth row: 3 (okay)\n  - Fifth row: 1 (okay)\n\n- Column constraints:\n  - First column: 2 (okay)\n  - Second column: 2 (okay)\n  - Third column: 2 (okay)\n  - Fourth column: 3 (okay)\n  - Fifth column: 2 (okay)\n  - Sixth column: 3 (okay)\n  - Seventh column: 3 (okay)\n  - Eighth column: 1 (okay)\n  - Ninth column: 2 (okay)\n  - Tenth column: 2 (okay)\n\nThe final solution matrix is:\n```[[T C X X X X T C X X],\n [X X X C X X X C X X],\n [X X X T C X T X X T],\n [X X T C T X X X X X],\n [X X X T C X X X T X X]]\n```",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "201",
+      "rule_id": "21",
+      "answer": "[[X 2 A 3 X,X A 3 A A,1 2 3 3 2,X X A X 2,1 A 2 A X]]",
+      "response": "To solve this puzzle, let's break down the rule and apply it step by step.\n\n### Analysis:\n\n1. The numbers in the grid indicate the number of mines around the square.\n2. X denotes a square that does not have a number, and we need to determine if it has a mine (marked as A) or is empty (X).\n3. We will use the information given by the numbers to deduce the locations of the mines.\n\n### Applying the Rule:\n\n#### Row 1:\n- 2 means there are 2 mines around it.\n- (1,3) and (1,4) should be mines because a 2 on the grid indicates 2 mines around it.\n- So, (1,3) and (1,4) are marked as A.\n\n```\nX 2 X 3 X\nX X 3 X X\n1 2 3 3 2\nX X X X 2\n1 X 2 X X\n```\n\n#### Row 2:\n- 3 means there are 3 mines around it.\n- (2,3) is already identified as a mine.\n- The other two mines around (2,3) are (1,3) and (2,4).\n- (2,2) and (2,5) are not mines because they don't contribute to the number 3.\n\n```\nX 2 X 3 A\nA A 3 A X\n1 2 3 3 2\nX X X X 2\n1 X 2 X X\n```\n\n#### Row 3:\n- 2 means there is 1 mine around (3,1) and 1 mine around (3,2).\n- (3,4) and (3,5) are not mines because they don't contribute to the numbers 2 and 2.\n\n```\nX 2 X 3 A\nA A 3 A X\nA 2 A 3 A\nX X X X 2\n1 X 2 X X\n```\n\n#### Row 4:\n- 2 means there is 1 mine around (4,2) and 1 mine around (4,5).\n- (4,1) and (4,3) are not mines because they don't contribute to the number 2.\n\n#### Row 5:\n- 2 means there is 1 mine around (5,2) and 1 mine around (5,3).\n- (5,1) and (5,4) are not mines because they don't contribute to the number 2.\n\n### Final Grid:\n```\nX 2 X 3 A\nA A 3 A X\nA 2 A 3 A\nX X A X 2\n1 X A X X\n```\n\n### Final Marked Grid:\n```\n[[X X X, A 2 2, 2 3 A]]\n```\n\nTherefore, the solution to the puzzle is:\n[[X X X, A 2 2, 2 3 A]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "211",
+      "rule_id": "22",
+      "answer": "[[1 2,0 3]]",
+      "response": "[[1 0 2,3 0 4]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "221",
+      "rule_id": "23",
+      "answer": "[[(1,2)(1,3),(1,4)(1,5),(2,1)(3,1),(4,2)(4,3),(3,5)(3,6),(5,1)(6,1),(6,3)(6,4),(5,6)(6,6)]]",
+      "response": "To solve this puzzle, let's follow the steps outlined in the puzzle rule and break down the grid accordingly:\n\n1. **Understand the regions and the rule**: Each region must have exactly 2 shaded cells covered by dominoes. Each domino consists of two adjacent cells.\n\n2. **Apply the rule to the grid**:\n   - **Region A** consists of the first three cells in the first column. We need to place a domino here. Let's place it from A1 to A2: A1A2.\n   - **Region B** covers the first four cells in the second column and the first two cells in the third column. We need to ensure we place exactly one domino in this region. Aligning it diagonally, we can place it from B2 to C1: B2C1 (however, since this is off the grid, we'll find an alternative). Placing it from B2 to B3: B2B3.\n   - **Region C** covers the last two cells in the last two columns of the first three rows. We need a domino: D3D4.\n   - **Region D** covers the last four cells in the second and third columns of the bottom four rows. We need two dominos here: D4D5, D5D6.\n   - **Region E** covers the first and second cells in the first four rows. We need two dominos here: E1E2, E3E4.\n   - **Region F** consists of the next two cells in the fourth column. We place the domino F4F5.\n   - **Region G** covers the first cell and the last two cells in the last three columns. We place the domino G1G2, G3G4.\n   - **Region H** covers the last two cells in the last three rows. Place the domino H4H5.\n\n3. **Verify the solution**: Ensure each region has exactly two shaded cells, and no dominoes touch each other except diagonally.\n\nHere's the corrected and final answer based on the grid:\n\n[[[(1,1)(1,2),(1,4)(1,5),(2,5)(3,5),(4,2)(4,3),(5,1)(5,2),(5,3)(5,4),(6,1)(6,2),(6,3)(6,4)]]]\n\nThis solution places all dominoes ensuring they cover exactly two cells per region without touching each other except diagonally.",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "231",
+      "rule_id": "24",
+      "answer": "[[A C T,0 A 0,0 T 0]]",
+      "response": "[[C A T]]",
+      "expected": false
+    },
+    {
+      "category": "puzzle",
+      "idx": "241",
+      "rule_id": "25",
+      "answer": "[[4 3 2 1,3 2 1 4,1 4 3 2,2 1 4 3]]",
+      "response": "Let's apply the puzzle rule to solve this step by step.\n\n### Step 1: Understand the Constraints\n- The grid is 4x4, so skyscrapers can have heights from 1 to 4.\n- Each row and column must have unique skyscraper heights.\n- The numbers on the sides indicate the number of visible skyscrapers when looking in that direction.\n\n### Step 2: Analyzing the First Row and First Column\n- The first row (numbers on top) is given as 1 2 3 2\n  - This means the first row must have the numbers 1, 2, 3, 2 in any order.\n- The first column (numbers on the left) is given as 1 2 2 2\n  - This means the first column must start with 1 and have three 2s somewhere.\n\n### Step 3: Filling in the Grid Based on Constraints\n- For the first row, since 3 cannot appear by itself, it must be followed by 1 or 4 (to block the 2 and 2).\n  - If 3 is in position 3, then 4 must be in position 4.\n  - Therefore, the first row could be [1 2 3 4].\n- For the first column, we already placed 1 at the top.\n  - Now, we need to place two 2s and one 3.\n  - Since the first row's third cell is 3, the third column's second row must be 2.\n  - This forces the rest of the first column to be [1 2 2 2].\n\n### Step 4: Continue Solving the Rest of the Grid\n- Based on the first row [1 2 3 4] and the filled first column, we can derive the rest.\n  - Since the second row's first column is 2 and it must see one building when looking right, the second column must be [4 1 3 2].\n  - This is because the 4 in the second row's second column would block the 1 in the second row's third column, and the 3 would block the 2.\n\nContinuing this process for the second and third rows:\n- Second row must be [2 1 4 3]\n- Third row must be [3 4 2 1]\n- Fourth row must be [4 3 1 2]\n\n### Final Grid:\n1 2 3 4  \n2 4 1 3  \n3 2 4 1  \n4 3 2 1\n\n### Step 5: Verify the Solution\n- Each column and row has unique numbers.\n- The numbers on the sides match the number of visible skyscrapers from the direction of the arrows.\n\n### Final Answer:\n[[1 2 3 4] [2 4 1 3] [3 2 4 1] [4 3 2 1]]",
+      "expected": false
+    },
+    {
+      "category": "counterfactual",
+      "idx": "1",
+      "rule_id": "1",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "11",
+      "rule_id": "2",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "21",
+      "rule_id": "3",
+      "answer": "[[C]]",
+      "response": "[[B]]",
+      "expected": false
+    },
+    {
+      "category": "counterfactual",
+      "idx": "31",
+      "rule_id": "4",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "41",
+      "rule_id": "5",
+      "answer": "[[B]]",
+      "response": "[[B]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "51",
+      "rule_id": "6",
+      "answer": "[[B]]",
+      "response": "[[B]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "61",
+      "rule_id": "7",
+      "answer": "[[D]]",
+      "response": "[[D]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "71",
+      "rule_id": "8",
+      "answer": "[[D]]",
+      "response": "[[D]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "81",
+      "rule_id": "9",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "91",
+      "rule_id": "10",
+      "answer": "[[D]]",
+      "response": "[[D]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "101",
+      "rule_id": "11",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "111",
+      "rule_id": "12",
+      "answer": "[[D]]",
+      "response": "[[D]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "121",
+      "rule_id": "13",
+      "answer": "[[D]]",
+      "response": "[[D]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "131",
+      "rule_id": "14",
+      "answer": "[[D]]",
+      "response": "[[D]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "141",
+      "rule_id": "15",
+      "answer": "[[B]]",
+      "response": "[[A]]",
+      "expected": false
+    },
+    {
+      "category": "counterfactual",
+      "idx": "151",
+      "rule_id": "16",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "161",
+      "rule_id": "17",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "171",
+      "rule_id": "18",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "181",
+      "rule_id": "19",
+      "answer": "[[C]]",
+      "response": "[[C]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "191",
+      "rule_id": "20",
+      "answer": "[[B]]",
+      "response": "[[B]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "201",
+      "rule_id": "21",
+      "answer": "[[A]]",
+      "response": "[[B]]",
+      "expected": false
+    },
+    {
+      "category": "counterfactual",
+      "idx": "211",
+      "rule_id": "22",
+      "answer": "[[B]]",
+      "response": "[[B]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "221",
+      "rule_id": "23",
+      "answer": "[[A]]",
+      "response": "[[A]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "231",
+      "rule_id": "24",
+      "answer": "[[B]]",
+      "response": "[[B]]",
+      "expected": true
+    },
+    {
+      "category": "counterfactual",
+      "idx": "241",
+      "rule_id": "25",
+      "answer": "[[D]]",
+      "response": "[[D]]",
+      "expected": true
+    }
+  ]
+}

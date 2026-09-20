@@ -36,3 +36,9 @@ Set `GPUS` for GPUs per worker and `EVAL_GPUS=1` for single-GPU evaluation.
 Leave `CPUS_PER_TASK`, `MEM`, `ARRAY_TIME`, and `PARTITION` unset to use Slurm
 defaults; clear inherited `SBATCH_*` resource overrides as well. Worker count
 and job dependencies do not prescribe CPU, memory, or time limits.
+
+For KOR-Bench, set `EVAL_SUITE=korbench`, `EVAL_APPLY_CHAT_TEMPLATE=true`
+for instruction models, and `EVAL_LOG_SAMPLES=1` to retain responses. Sample logging
+is supported for `all`, `math`, `general`, `korbench`, and `tasks`. These options
+propagate to both local and Slurm workers. Use `EVAL_UV_EXTRAS="--no-sync"` with a
+pre-synced environment to avoid dependency changes while workers run.

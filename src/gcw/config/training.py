@@ -404,6 +404,7 @@ class EvalConfig:
     apply_chat_template: bool = False
     enable_thinking: bool = False
     cache_update_metrics_path: str | None = None
+    log_samples: bool = False
 
     def __post_init__(self) -> None:
         if self.batch_size != "auto" and (
@@ -418,6 +419,8 @@ class EvalConfig:
             raise ValueError("limit must be a positive integer")
         if type(self.apply_chat_template) is not bool:
             raise ValueError("apply_chat_template must be boolean")
+        if type(self.log_samples) is not bool:
+            raise ValueError("log_samples must be boolean")
         if type(self.enable_thinking) is not bool:
             raise ValueError("enable_thinking must be boolean")
         if self.cache_update_metrics_path is not None and (
