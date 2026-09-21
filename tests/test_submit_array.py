@@ -868,3 +868,29 @@ def test_custom_benchmark_submission_rejects_invalid_options(tmp_path):
         )
         assert result.returncode != 0
         assert message in result.stdout
+
+
+def test_attach_eval_queue_preserves_existing_work(tmp_path: Path) -> None:
+    _, env = _write_fixture(tmp_path)
+    state = tmp_path / "existing"
+    state.mkdir()
+    row = "/checkpoint\t/already-completed.json\tfalse\n"
+    contents = {"configs.txt": row, "claimed_configs": row, "queue.lock": "",
+                "completed_configs": row}
+    for name, value in contents.items():
+        (state / name).write_text(value)
+    env["EVAL_ONLY"] = "1"
+    result = _run(["--backend", "slurm", "--dry-run", "--workers", "4",
+                   "--attach-eval-queue", str(state)], env)
+    assert f"Config list: {state}/configs.txt" in result.stdout
+    assert "--array=0-3" in result.stdout
+    for name, value in contents.items():
+        assert (state / name).read_text() == value
+    assert not list(state.glob("slurm-environment*"))
+    rejected = _run(["--backend", "slurm", "--dry-run",
+                     "--attach-eval-queue", str(state), "extra.yaml"], env, check=False)
+    assert rejected.returncode != 0
+    (state / "configs.txt").write_text("training.yaml\n")
+    rejected = _run(["--backend", "slurm", "--dry-run",
+                     "--attach-eval-queue", str(state)], env, check=False)
+    assert rejected.returncode != 0

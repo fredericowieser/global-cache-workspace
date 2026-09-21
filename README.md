@@ -200,3 +200,13 @@ uv run --extra cpu --group docs sphinx-build -W --keep-going -b html docs docs/_
 - `tests/`: unit, integration, provenance, and compatibility contracts.
 
 Local metric files are canonical. W&B mirrors them. Historical evidence keeps its original paths and identity schemas.
+
+### Add workers to an existing Slurm evaluation queue
+
+Reuse the original evaluation environment and run
+`scripts/cluster/submit_array.sh --backend slurm --workers 4 --attach-eval-queue /absolute/state/directory`
+with `EVAL_ONLY=1`. This submits four additional workers sharing the existing
+`configs.txt`, claim records, and queue lock. It preserves running work and queue
+order; it does not copy or reset the queue. Use the same suite, code snapshot,
+local dependency paths, batching, and generation settings as the original workers.
+This option supports three-column evaluation queues only.

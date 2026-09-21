@@ -580,3 +580,18 @@ Applied to live array **27071** at **2026-09-21 13:47 UTC**: 40 unstarted evalua
 OFF/ON means separate adjacent queue entries, without hard dependencies.
 The additions and backbone regrouping above are now live. The previous manifest, pending task list, and update receipt are saved under `slurm_out/korbench-v3-20260920/submit-array-migration/expanded-queue-20260921/`.
 Retain v3, 2048/4096 OFF/ON token caps, local dependencies and existing extras.
+
+
+### Additional shared-queue workers: 2026-09-21
+
+Added `submit_array.sh --attach-eval-queue STATE_DIR` for Slurm evaluation queues;
+24 launcher tests pass. It reuses the existing task list, claim records and lock.
+The attempted four-worker addition was rejected with `QOSMaxSubmitJobPerUserLimit`:
+normal QoS has MaxSubmitJobsPU=6, with five jobs already running. Submitted one
+additional 1-GPU worker as **27077**, sharing array 27071's queue and evaluation
+environment. Three further workers remain blocked by the submitted-job limit.
+Request a limit of at least 9 to accommodate eight shared-queue workers plus the
+old live Qwen-4B native ON worker temporarily (8 after that worker exits).
+No existing jobs were stopped or restarted. Submission wrapper and receipts:
+`slurm_out/korbench-v3-20260920/submit-array-migration/add-workers.sh`,
+`add-workers-submission.log`, and `add-one-worker-submission.log`.

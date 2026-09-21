@@ -83,6 +83,9 @@ Options:
   --configs-file FILE  File containing one config path per line. Blank lines and # comments are ignored.
   --eval-tasks-file FILE
                        Tab-separated CHECKPOINT, OUTPUT, and THINKING rows for eval-only workers.
+  --attach-eval-queue STATE_DIR
+                       Add Slurm eval workers to an existing queue without rewriting it.
+                       Requires EVAL_ONLY=1 and the same evaluation environment.
   --tasks-file FILE    Six TSV fields: ACTION, CONFIG, CHECKPOINT, OUTPUT_BASE, THINKING_MODES,
                        SKIP_TASKS. ACTION is train or eval; use - for no CONFIG or SKIP_TASKS.
   --dry-run            Print the submission plan without starting workers.
@@ -1248,7 +1251,7 @@ cancel_main() {
 }
 
 launcher_main() {
-  local configs_file="" eval_tasks_file="" tasks_file="" dry_run=0 state_dir config_list workers_arg
+  local configs_file="" eval_tasks_file="" tasks_file="" attach_queue="" dry_run=0 state_dir config_list workers_arg
   local alloc_gpus export_file
   local args=()
 
@@ -1285,6 +1288,10 @@ launcher_main() {
           echo "--eval-tasks-file requires a path" >&2
           exit 1
         fi
+        shift 2
+        ;;
+      --attach-eval-queue)
+        attach_queue="${2:?--attach-eval-queue requires a state directory}"
         shift 2
         ;;
       --tasks-file)
@@ -1428,12 +1435,32 @@ launcher_main() {
     return 1
   fi
 
+  if [[ -n "$attach_queue" ]]; then
+    if [[ "$BACKEND" != "slurm" || "$EVAL_ONLY" != "1" || -n "$configs_file$eval_tasks_file$tasks_file$EVAL_CHECKPOINT_STEP$EVAL_THINKING_MODES" || "${#args[@]}" -gt 0 ]]; then
+      echo "--attach-eval-queue requires Slurm, EVAL_ONLY=1, and no other task inputs or mode overrides" >&2
+      return 1
+    fi
+    attach_queue="$(cd "$attach_queue" && pwd -P)"
+    require_path "$attach_queue/configs.txt"
+    require_path "$attach_queue/claimed_configs"
+    require_path "$attach_queue/queue.lock"
+    if ! awk -F '\t' 'NF != 3 || ($3 != "true" && $3 != "false") { exit 1 }' "$attach_queue/configs.txt"; then
+      echo "Existing queue must contain three-column evaluation tasks" >&2
+      return 1
+    fi
+    GCW_EVAL_TASK_MODE=1
+    GCW_MIXED_TASK_MODE=0
+  fi
+
   alloc_gpus="$GPUS"
   if [[ ( "$EVAL_AFTER_TRAIN" == "1" || "$EVAL_ONLY" == "1" ) && "$EVAL_GPUS" -gt "$alloc_gpus" ]]; then
     alloc_gpus="$EVAL_GPUS"
   fi
 
-  if [[ "$BACKEND" == "slurm" ]]; then
+  if [[ -n "$attach_queue" ]]; then
+    state_dir="$attach_queue"
+    mkdir -p "$SLURM_LOG_DIR"
+  elif [[ "$BACKEND" == "slurm" ]]; then
     mkdir -p "$SLURM_STATE_ROOT" "$SLURM_LOG_DIR"
     state_dir="$SLURM_STATE_ROOT/${JOB_NAME}_$(date +%Y%m%d_%H%M%S)_$$"
   else
@@ -1442,7 +1469,9 @@ launcher_main() {
   fi
   mkdir -p "$state_dir"
   config_list="$state_dir/configs.txt"
-  if [[ -n "$tasks_file" ]]; then
+  if [[ -n "$attach_queue" ]]; then
+    echo "Attaching workers to existing queue: $state_dir"
+  elif [[ -n "$tasks_file" ]]; then
     write_mixed_task_list "$config_list" "$tasks_file"
   elif [[ -n "$eval_tasks_file" ]]; then
     write_eval_task_list "$config_list" "$eval_tasks_file"
@@ -1456,7 +1485,7 @@ launcher_main() {
   fi
 
   workers_arg="0-$((ARRAY_WORKERS - 1))"
-  export_file="$state_dir/slurm-environment"
+  export_file="$(mktemp "$state_dir/slurm-environment.XXXXXX")"
   write_slurm_environment "$export_file" "$config_list" "$state_dir"
   chmod 600 "$export_file"
   load_environment_file "$export_file"
