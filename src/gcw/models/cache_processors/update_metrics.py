@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from contextlib import contextmanager
 from collections.abc import Iterator, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn.functional as F
@@ -16,6 +16,20 @@ UPDATE_BATCH: ContextVar[UpdateBatch | None] = ContextVar(
 UPDATE_OBSERVER: ContextVar[DiffusionUpdateObservation | None] = ContextVar(
     "update_observer", default=None
 )
+
+
+@contextmanager
+def generation_update_metrics() -> Iterator[None]:
+    batch = UPDATE_BATCH.get()
+    if batch is None:
+        yield
+        return
+    previous_phase = batch.phase
+    batch.phase = "prefill"
+    try:
+        yield
+    finally:
+        batch.phase = previous_phase
 
 
 def outer_difference_norm(
@@ -49,10 +63,11 @@ class UpdateBatch:
             else None
         )
         self.totals: dict[
-            tuple[int, int, str],
+            tuple[str, int, int, str],
             tuple[torch.Tensor, torch.Tensor, int, torch.Tensor | None],
         ] = {}
         self.external_iteration = 1
+        self.phase: Literal["prefill", "decoding"] = "prefill"
 
     @contextmanager
     def application(
@@ -99,7 +114,7 @@ class UpdateBatch:
             ).sqrt()
         values = torch.stack([minimum, maximum, mean, std], dim=1)
         values = torch.where(active[:, None], values, 0)
-        key = (iteration, step, name)
+        key = (self.phase, iteration, step, name)
         if key not in self.totals:
             self.totals[key] = (
                 torch.zeros_like(values),
@@ -156,7 +171,7 @@ class UpdateBatch:
             rows, totals, counts, valid_counts, strict=True
         ):
             for (
-                ((iteration, step, name), (_, _, heads, valid)),
+                ((phase, iteration, step, name), (_, _, heads, valid)),
                 total,
                 count,
                 defined,
@@ -168,15 +183,14 @@ class UpdateBatch:
                 strict=True,
             ):
                 if count:
-                    row[f"{iteration}:{step}:{name}"] = {
+                    key = f"{phase}:{iteration}:{step}:{name}"
+                    row[key] = {
                         "sum": total,
                         "applications": count,
                         "heads": heads,
                     }
                     if valid is not None:
-                        row[f"{iteration}:{step}:{name}"][
-                            "valid_head_observations"
-                        ] = defined
+                        row[key]["valid_head_observations"] = defined
         return rows
 
 

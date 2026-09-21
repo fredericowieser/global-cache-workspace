@@ -47,7 +47,11 @@ for _stream in ("key", "value", "linear_key", "linear_value"):
         )
 
 
-def load_metrics(path: Path, tasks: list[str] | None = None) -> tuple:
+def load_metrics(
+    path: Path, tasks: list[str] | None = None, phase: str = "combined"
+) -> tuple:
+    if phase not in {"combined", "prefill", "decoding"}:
+        raise ValueError(f"unknown phase: {phase}")
     samples = defaultdict(list)
     episodes = set()
     task_counts = defaultdict(int)
@@ -61,19 +65,33 @@ def load_metrics(path: Path, tasks: list[str] | None = None) -> tuple:
                 if row["schema"] not in {
                     "gcw.cache_update_metrics.v1",
                     "gcw.cache_update_metrics.v2",
+                    "gcw.cache_update_metrics.v3",
                 }:
                     raise ValueError("unsupported metrics schema")
                 task = row["task"]
                 if tasks and task not in tasks:
                     continue
+                if (
+                    phase != "combined"
+                    and row["schema"] != "gcw.cache_update_metrics.v3"
+                ):
+                    raise ValueError(
+                        "phase-specific metrics require a v3 sidecar; "
+                        "historical sidecars contain only combined metrics"
+                    )
+                steps = (
+                    row["steps"]
+                    if phase == "combined"
+                    else row["phase_steps"][phase]
+                )
                 identity = (task, row["example_id"])
                 if identity in episodes:
                     raise ValueError(f"duplicate episode {identity}")
                 episodes.add(identity)
                 task_counts[task] += 1
-                empty += not row["steps"]
+                empty += not steps
                 seen = set()
-                for step in row["steps"]:
+                for step in steps:
                     iteration = step["external_iteration"]
                     index = step["solver_step"]
                     if any(
@@ -318,16 +336,29 @@ def main() -> None:
         help="Measurements to plot (default: both)",
     )
     parser.add_argument("--title", default="Diffusion update diagnostics")
-    args = parser.parse_args()
-    output = args.out or args.results.with_suffix(
-        ".direction.png" if args.quantity == "direction" else ".png"
+    parser.add_argument(
+        "--phase",
+        choices=("combined", "prefill", "decoding"),
+        default="combined",
+        help="Application phase to plot (default: combined)",
     )
+    args = parser.parse_args()
+    suffix = ".direction.png" if args.quantity == "direction" else ".png"
+    if args.phase != "combined":
+        suffix = f".{args.phase}{suffix}"
+    output = args.out or args.results.with_suffix(suffix)
     if output.resolve() == args.results.resolve():
         parser.error("output must not overwrite the input")
     try:
-        samples, task_counts, empty = load_metrics(args.results, args.task)
+        samples, task_counts, empty = load_metrics(
+            args.results, args.task, args.phase
+        )
         fig = plot_metrics(
-            samples, task_counts, empty, args.title, args.quantity
+            samples,
+            task_counts,
+            empty,
+            f"{args.title} ({args.phase})",
+            args.quantity,
         )
     except (OSError, ValueError) as error:
         parser.error(str(error))

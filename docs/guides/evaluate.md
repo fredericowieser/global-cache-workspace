@@ -106,10 +106,15 @@ distinguishes repeated/padded inputs. Join `(task, example_id)` to final samples
 `(task, str(doc_id))`, and retain `request_id` for multiple choices/repeats. Do not
 combine separate attempts as if they were independent examples. Embedded
 `cache_update_metrics.values` uses the collector's raw per-request representation:
-keys are `external_iteration:solver_step:metric`, and `sum` holds the accumulated
-`[min, max, mean, std]` statistics. Divide by `applications` for per-application
+new records set `cache_update_metrics.schema` to `gcw.cache_update_metrics.v3`
+and use keys
+`phase:external_iteration:solver_step:metric`, where phase is `prefill` or
+`decoding`. Historical records without a diagnostic schema use
+`external_iteration:solver_step:metric` for combined measurements. `sum` holds
+the accumulated `[min, max, mean, std]` statistics. Divide by `applications` for per-application
 averages. For multiple requests per example, sum each statistic and its
-application count before dividing; do not average request means equally. These
+application count before dividing; do not average request means equally.
+For combined measurements, also sum across phases before dividing. These
 values are saved with their response, even if the final metrics sidecar has not
 been written.
 
@@ -162,8 +167,14 @@ Undefined cosine comparisons (either norm at most `1e-12`) are excluded, and
 entirely undefined groups are omitted. Direction records retain the full
 `heads` population, count contributing `applications`, and report
 `valid_head_observations` across applications and requests. New sidecars use
-`gcw.cache_update_metrics.v2`; resume rejects v1 sidecars and requires a fresh
-evaluation destination. Historical v1 files remain plottable. See [the metric
+`gcw.cache_update_metrics.v3`: `steps` contains the combined measurements and
+`phase_steps.prefill` / `phase_steps.decoding` contain the separate views.
+Prefill includes the completed-prompt cache update before generated tokens enter
+the cache; subsequent updates are decoding. Teacher-forced evaluations count
+entirely as prefill. Empty phases have empty lists. Combined statistics are
+weighted by contributing application counts, not equal-weight phase averages.
+Resume rejects v1/v2 sidecars and requires a fresh evaluation destination.
+Historical v1/v2 files remain plottable in combined mode. See [the metric
 definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
 
 ### Plot update magnitudes and directions
@@ -175,6 +186,13 @@ python scripts/plot_cache_update_metrics.py \
   results/<run>.cache-update-metrics.jsonl \
   --out results/<run>.cache-update-metrics.png
 ```
+
+Use `--phase prefill` or `--phase decoding` to select one phase; the default
+`--phase combined` preserves the aggregate view. Phase-specific plots require
+v3 sidecars and use `.prefill.png` or `.decoding.png` by default (or
+`.prefill.direction.png` / `.decoding.direction.png` for direction-only plots).
+The selected phase appears in the figure title. An empty selected phase reports
+that no update metrics are available.
 
 By default, `--quantity both` produces one figure containing all available
 magnitude and direction groups, with appropriate units per row. Use

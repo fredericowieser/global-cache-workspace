@@ -238,24 +238,64 @@ those applications and all requests for the example. Thus applications retain
 equal weight even when their counts of defined heads differ. Magnitude
 aggregation is unchanged and includes zero magnitudes.
 
-Applications during prompt processing and generation are combined. Finished
-generation rows and padded input tails do not contribute. Multiple-choice
-examples combine applications from all their answer-option requests, weighted
+Every metric is reported for prefill, decoding, and their combination. Prefill
+includes processing supplied tokens and any update on the completed prompt
+cache before generated tokens enter it. In generation, the update at
+`generated_idx == 0` therefore belongs to prefill even though it runs inside
+the decoding loop. Subsequent updates belong to decoding. Teacher-forced
+option likelihood, Answer NLL, and bits-per-byte evaluations contribute only
+to prefill, including their supplied answer tokens.
+
+Phase-specific sums and application counts are accumulated separately; combined
+statistics add those sums and counts before dividing. They do not average the
+two phase means equally. The same direction-validity exclusions apply within
+each phase. Measurements and head reductions run only once per application;
+only the small accumulators are separated, without retaining token histories.
+
+Finished generation rows and padded input tails do not contribute.
+Multiple-choice examples combine applications from all their answer-option
+requests, weighted
 by application count, and record the number of requests. A FineWeb example is
 one evaluated token-sequence row. An example with no processor applications has
 an empty `steps` list. Batch retries discard unsuccessful observations;
 distributed harness padding requests are deduplicated.
 
-The sidecar schema is `gcw.cache_update_metrics.v2`. It replaces the combined
-`kv` and `linear_kv` groups with separate key/value measurements. Evaluation
-results contain `cache_update_metrics` metadata (under each task's `gcw_runtime`
-for lm-eval suites) with the path, aggregation definition, completion flag,
-example count, and per-task content hashes. Resume checks these hashes before
-reusing completed tasks and rejects v1 sidecars or metadata. Use a fresh
-evaluation destination to collect v2 measurements; evaluations without
-diagnostics also cannot resume into one that requires them. Historical v1
-sidecars remain readable by the plotting script, which plots their recorded
-combined groups without inventing separate measurements or directions.
+The sidecar schema is `gcw.cache_update_metrics.v3`. Each example retains
+`steps` as its combined view and adds `phase_steps.prefill` and
+`phase_steps.decoding`, each using the same step and metric format. Both phase
+lists are always present; a phase with no contributing applications has an
+empty list. For example, a teacher-forced record has this structure:
+
+```json
+{
+  "schema": "gcw.cache_update_metrics.v3",
+  "task": "example",
+  "example_id": "0",
+  "request_count": 1,
+  "steps": [{"external_iteration": 1, "solver_step": 1, "metrics": {
+    "value": {"min": 1, "max": 3, "mean": 2, "std": 1,
+              "applications": 1, "heads": 2}
+  }}],
+  "phase_steps": {
+    "prefill": [{"external_iteration": 1, "solver_step": 1, "metrics": {
+      "value": {"min": 1, "max": 3, "mean": 2, "std": 1,
+                "applications": 1, "heads": 2}
+    }}],
+    "decoding": []
+  }
+}
+```
+
+Evaluation results contain `cache_update_metrics` metadata (under each task's
+`gcw_runtime` for lm-eval suites) with the path, aggregation definition,
+completion flag, example count, and per-task content hashes. Resume checks
+these hashes before reusing completed tasks and rejects v1/v2 sidecars or
+metadata because their phase breakdown cannot be recovered. Use a fresh
+evaluation destination to collect v3 measurements; evaluations without
+diagnostics also cannot resume into one that requires them. Historical v1/v2
+sidecars remain readable by the plotting script for combined plots; v1 retains
+its recorded combined key/value groups without inventing separate measurements
+or directions. Phase-specific plots require v3.
 
 Answer NLL publishes the sidecar before its exclusive result receipt. If the
 receipt write fails before publication, the newly created sidecar is removed

@@ -108,7 +108,11 @@ def test_partial_samples_survive_interruption_and_oom(
     assert not (tmp_path / "metrics.jsonl").exists()
     if metrics_enabled:
         for i, row in enumerate(rows):
-            values = row["cache_update_metrics"]["values"]["1:0:value"]
+            assert (
+                row["cache_update_metrics"]["schema"]
+                == "gcw.cache_update_metrics.v3"
+            )
+            values = row["cache_update_metrics"]["values"]["prefill:1:0:value"]
             assert values["applications"] == 1
             assert values["sum"] == [float(i + 1)] * 3 + [0.0]
     else:

@@ -105,6 +105,7 @@ def test_observation_preserves_model_and_records_each_step(
         for line in (tmp_path / "updates.jsonl").read_text().splitlines()
     ]
     for row in rows:
+        assert row["phase_steps"] == {"prefill": row["steps"], "decoding": []}
         assert len(row["steps"]) == 4
         for step in row["steps"]:
             groups = {"latent_kv", "key", "value"}
@@ -166,16 +167,24 @@ def test_consecutive_readouts_include_bias_once_and_exclude_gate():
         observer.step(first, second, initial, final=True)
         observer.kv(block.out_proj(second))
     row = batch.rows()[0]
-    assert row["1:1:value"]["sum"][1] == pytest.approx(3.0)
-    assert row["1:2:value"]["sum"] == pytest.approx([1.0, 3.0, 2.0, 1.0])
-    assert row["1:2:latent_kv"]["sum"] == pytest.approx([1.0, 3.0, 2.0, 1.0])
+    assert row["prefill:1:1:value"]["sum"][1] == pytest.approx(3.0)
+    assert row["prefill:1:2:value"]["sum"] == pytest.approx(
+        [1.0, 3.0, 2.0, 1.0]
+    )
+    assert row["prefill:1:2:latent_kv"]["sum"] == pytest.approx(
+        [1.0, 3.0, 2.0, 1.0]
+    )
 
 
 def test_averages_statistics_across_applications_and_options(tmp_path):
     diagnostics = CacheUpdateMetrics(make_model(), tmp_path / "metrics.jsonl")
     with diagnostics.batch([("task", "one", "option0")]):
         batch = UPDATE_BATCH.get()
-        for magnitudes in ([1.0, 3.0], [5.0, 9.0]):
+        for phase, magnitudes in [
+            ("prefill", [1.0, 3.0]),
+            ("decoding", [5.0, 9.0]),
+        ]:
+            batch.phase = phase
             batch.add(1, 1, "value", torch.tensor([magnitudes]), batch.active)
     with diagnostics.batch([("task", "one", "option1")]):
         batch = UPDATE_BATCH.get()
@@ -183,6 +192,28 @@ def test_averages_statistics_across_applications_and_options(tmp_path):
     diagnostics.finish()
     row = json.loads((tmp_path / "metrics.jsonl").read_text())
     assert row["request_count"] == 2
+    prefill = row["phase_steps"]["prefill"][0]["metrics"]["value"]
+    decoding = row["phase_steps"]["decoding"][0]["metrics"]["value"]
+    assert prefill == pytest.approx(
+        {
+            "min": 2,
+            "max": 3,
+            "mean": 2.5,
+            "std": 0.5,
+            "applications": 2,
+            "heads": 2,
+        }
+    )
+    assert decoding == pytest.approx(
+        {
+            "min": 5,
+            "max": 9,
+            "mean": 7,
+            "std": 2,
+            "applications": 1,
+            "heads": 2,
+        }
+    )
     assert row["steps"][0]["metrics"]["value"] == pytest.approx(
         {
             "min": 3.0,
@@ -216,6 +247,7 @@ def test_padding_failed_batches_and_no_application_rows(tmp_path):
         )
     }
     assert rows["short"]["steps"] == []
+    assert rows["short"]["phase_steps"] == {"prefill": [], "decoding": []}
     assert rows["long"]["steps"][0]["metrics"]["value"]["applications"] == 2
 
 
@@ -296,6 +328,10 @@ def test_metrics_and_scoring_without_distributed_support(tmp_path, monkeypatch):
     )
     assert observed == baseline
     assert metrics.finish()["record_count"] == 4
+    for row in map(
+        json.loads, (tmp_path / "metrics.jsonl").read_text().splitlines()
+    ):
+        assert row["phase_steps"] == {"prefill": row["steps"], "decoding": []}
 
 
 def test_task_digests_preserve_schema_and_resume_across_runs(tmp_path):
@@ -533,13 +569,13 @@ def test_linear_contributions_match_actual_writer_matrices(writer):
     for step in (1, 2, 3):
         for name in expected_kv:
             actual_kv = torch.tensor(
-                [row[f"1:{step}:{name}"]["sum"] for row in rows]
+                [row[f"prefill:1:{step}:{name}"]["sum"] for row in rows]
             )
             torch.testing.assert_close(actual_kv, expected_kv[name][step - 1])
             if step == 3:
                 assert torch.count_nonzero(actual_kv) == 0
                 assert all(
-                    f"1:{step}:{name}_direction_change" not in row
+                    f"prefill:1:{step}:{name}_direction_change" not in row
                     for row in rows
                 )
             elif step == 2:
@@ -555,13 +591,13 @@ def test_linear_contributions_match_actual_writer_matrices(writer):
                 )
                 actual_direction = torch.tensor(
                     [
-                        row[f"1:2:{name}_direction_change"]["sum"][2]
+                        row[f"prefill:1:2:{name}_direction_change"]["sum"][2]
                         for row in rows
                     ]
                 )
                 torch.testing.assert_close(actual_direction, distances.mean(1))
         actual = torch.tensor(
-            [row[f"1:{step}:linear_state"]["sum"] for row in rows]
+            [row[f"prefill:1:{step}:linear_state"]["sum"] for row in rows]
         )
         torch.testing.assert_close(
             actual, expected[step - 1], atol=2e-6, rtol=2e-5
@@ -622,6 +658,12 @@ def test_generation_excludes_finished_rows(tmp_path, monkeypatch, fast):
     )
     assert rows[0]["steps"] == []
     assert rows[1]["steps"][0]["metrics"]["value"]["applications"] == 2
+    assert rows[0]["phase_steps"] == {"prefill": [], "decoding": []}
+    for phase in ("prefill", "decoding"):
+        assert (
+            rows[1]["phase_steps"][phase][0]["metrics"]["value"]["applications"]
+            == 1
+        )
 
 
 def test_lm_eval_options_sorting_and_oom_retry(tmp_path, monkeypatch):
@@ -688,6 +730,8 @@ def test_lm_eval_options_sorting_and_oom_retry(tmp_path, monkeypatch):
     assert rows["9"]["request_count"] == 2
     assert rows["9"]["steps"][0]["metrics"]["value"]["applications"] == 2
     assert rows["8"]["steps"] == []
+    for row in rows.values():
+        assert row["phase_steps"] == {"prefill": row["steps"], "decoding": []}
 
 
 def test_distributed_padding_duplicates_are_not_counted(tmp_path, monkeypatch):
@@ -767,6 +811,8 @@ def test_answer_nll_real_checkpoint_sidecar(tmp_path, monkeypatch):
         == baseline["scheduled_field_evaluations"]
     )
     assert observed["cache_update_metrics"]["record_count"] == 2
+    for row in map(json.loads, path.read_text().splitlines()):
+        assert row["phase_steps"] == {"prefill": row["steps"], "decoding": []}
     assert len(path.read_text().splitlines()) == 2
     assert (
         len(
@@ -878,7 +924,7 @@ def test_cosine_distances_and_undefined_vectors(dtype):
     observer.direction("key_direction_change", left, right)
     rows = batch.rows()
     for index, expected in [(0, 0), (1, 1), (2, 2), (5, 0), (8, 0)]:
-        metric = rows[index]["1:2:key_direction_change"]
+        metric = rows[index]["prefill:1:2:key_direction_change"]
         assert metric["sum"] == pytest.approx([expected] * 3 + [0], abs=1e-7)
         assert metric["valid_head_observations"] == 1
         assert metric["applications"] == metric["heads"] == 1
@@ -915,7 +961,7 @@ def test_attention_contributions_and_original_comparisons(value_only):
             contribution = projected - previous
             baseline = original[..., channels]
             magnitude = contribution.norm().item()
-            assert row[f"1:{step}:{name}"]["sum"] == pytest.approx(
+            assert row[f"prefill:1:{step}:{name}"]["sum"] == pytest.approx(
                 [magnitude] * 3 + [0]
             )
             for suffix, vector in [
@@ -925,14 +971,14 @@ def test_attention_contributions_and_original_comparisons(value_only):
                 expected = (
                     1 - F.cosine_similarity(vector, baseline, dim=-1).item()
                 )
-                assert row[f"1:{step}:{name}_{suffix}"]["sum"] == pytest.approx(
-                    [expected] * 3 + [0]
-                )
+                assert row[f"prefill:1:{step}:{name}_{suffix}"][
+                    "sum"
+                ] == pytest.approx([expected] * 3 + [0])
             previous = projected
-        assert f"1:1:{name}_direction_change" not in row
-        assert row[f"1:2:{name}_direction_change"]["sum"] == pytest.approx(
-            [1, 1, 1, 0]
-        )
+        assert f"prefill:1:1:{name}_direction_change" not in row
+        assert row[f"prefill:1:2:{name}_direction_change"][
+            "sum"
+        ] == pytest.approx([1, 1, 1, 0])
         cumulative_distance = (
             1
             - F.cosine_similarity(
@@ -960,7 +1006,10 @@ def test_direction_aggregation_uses_defined_heads_and_applications(tmp_path):
         ):
             batch = UPDATE_BATCH.get()
             batch.active[1] = False
-            for distances, valid in comparisons:
+            for index, (distances, valid) in enumerate(comparisons):
+                batch.phase = (
+                    "prefill" if request == "0" and index == 0 else "decoding"
+                )
                 batch.add(
                     1,
                     2,
@@ -985,7 +1034,7 @@ def test_direction_aggregation_uses_defined_heads_and_applications(tmp_path):
         )
     }
     assert rows["finished"]["steps"] == []
-    assert rows["one"]["schema"] == "gcw.cache_update_metrics.v2"
+    assert rows["one"]["schema"] == "gcw.cache_update_metrics.v3"
     groups = rows["one"]["steps"][0]["metrics"]
     assert set(groups) == {"key_direction_change"}
     assert groups["key_direction_change"] == pytest.approx(
@@ -1000,13 +1049,33 @@ def test_direction_aggregation_uses_defined_heads_and_applications(tmp_path):
         }
     )
     assert rows["one"]["request_count"] == 2
+    for phase, expected in [
+        (
+            "prefill",
+            {"min": 0, "max": 2, "mean": 1, "std": 1, "applications": 1},
+        ),
+        (
+            "decoding",
+            {"min": 1.5, "max": 1.5, "mean": 1.5, "std": 0, "applications": 2},
+        ),
+    ]:
+        groups = rows["one"]["phase_steps"][phase][0]["metrics"]
+        assert set(groups) == {"key_direction_change"}
+        assert groups["key_direction_change"] == pytest.approx(
+            {
+                **expected,
+                "heads": 3,
+                "valid_head_observations": 2,
+            }
+        )
 
 
-def test_v1_sidecar_and_metadata_cannot_resume(tmp_path):
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+def test_old_sidecar_and_metadata_cannot_resume(tmp_path, schema):
     path = tmp_path / "metrics.jsonl"
     model = make_model()
     path.write_text(
-        json.dumps({"schema": "gcw.cache_update_metrics.v1"}) + "\n"
+        json.dumps({"schema": f"gcw.cache_update_metrics.{schema}"}) + "\n"
     )
     with pytest.raises(ValueError, match="incompatible"):
         CacheUpdateMetrics(model, path, resume=True)
@@ -1017,7 +1086,7 @@ def test_v1_sidecar_and_metadata_cannot_resume(tmp_path):
                 "gcw_runtime": {
                     "task": {
                         "cache_update_metrics": {
-                            "schema": "gcw.cache_update_metrics.v1",
+                            "schema": f"gcw.cache_update_metrics.{schema}",
                             "path": str(path),
                         }
                     }
@@ -1130,3 +1199,111 @@ def test_original_frontier_coordinates_and_external_iteration_reset(
                         if step == 1:
                             assert f"{name}_direction_change" not in metrics
             previous = proposal
+
+
+def test_phase_accumulators_remain_bounded_and_transfer_only_at_end(
+    monkeypatch,
+):
+    batch = UpdateBatch(2, "cpu")
+    values = torch.tensor([[1.0, 3.0], [5.0, 9.0]])
+    original_cpu = torch.Tensor.cpu
+    transfers = []
+
+    def cpu(tensor, *args, **kwargs):
+        transfers.append(tensor.shape)
+        return original_cpu(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "cpu", cpu)
+    for _ in range(100):
+        for phase in ("prefill", "decoding"):
+            batch.phase = phase
+            batch.add(1, 1, "value", values, batch.active)
+    assert not transfers
+    assert len(batch.totals) == 2
+    assert (
+        sum(
+            t.numel()
+            for entry in batch.totals.values()
+            for t in entry
+            if isinstance(t, torch.Tensor)
+        )
+        == 20
+    )
+    for row in batch.rows():
+        assert set(row) == {"prefill:1:1:value", "decoding:1:1:value"}
+        assert all(value["applications"] == 100 for value in row.values())
+    assert len(transfers) == 3
+
+
+@pytest.mark.parametrize("fast", [False, True])
+@pytest.mark.parametrize("linear", [False, True])
+def test_generation_combined_matches_unsplit_measurements(
+    tmp_path, monkeypatch, fast, linear
+):
+    model = make_model(linear=linear, iterations=2, iteration_mode="external")
+    model.config.cache_processor.generation_process_every = 1
+    generate = model.generate_fast if fast else model.generate
+    tokens = torch.ones(2, 4, dtype=torch.long)
+    baseline = generate(tokens, 4)
+    diagnostics = CacheUpdateMetrics(model, tmp_path / "metrics.jsonl")
+    unsplit = UpdateBatch(2, "cpu")
+    readouts = []
+    original_kv = DiffusionUpdateObservation.kv
+
+    def kv(observer, raw):
+        if observer.active.any():
+            readouts.append(
+                (observer.batch.phase, observer.iteration, observer.step_index)
+            )
+        return original_kv(observer, raw)
+
+    monkeypatch.setattr(DiffusionUpdateObservation, "kv", kv)
+    with diagnostics.batch([("task", "0", "0"), ("task", "1", "0")]):
+        batch = UPDATE_BATCH.get()
+        add = batch.add
+
+        def record(*args, **kwargs):
+            unsplit.add(*args, **kwargs)
+            add(*args, **kwargs)
+
+        monkeypatch.setattr(batch, "add", record)
+        actual = generate(tokens, 4)
+    assert torch.equal(actual, baseline)
+    diagnostics.finish()
+    rows = list(
+        map(json.loads, (tmp_path / "metrics.jsonl").read_text().splitlines())
+    )
+    assert {phase for phase, _, _ in readouts} == {"prefill", "decoding"}
+    for row, reference in zip(rows, unsplit.rows(), strict=True):
+        assert all(row["phase_steps"].values())
+        for step in row["steps"]:
+            for name, metric in step["metrics"].items():
+                key = f"prefill:{step['external_iteration']}:{step['solver_step']}:{name}"
+                expected = reference[key]
+                count = expected["applications"]
+                assert metric == pytest.approx(
+                    {
+                        **dict(
+                            zip(
+                                ("min", "max", "mean", "std"),
+                                [value / count for value in expected["sum"]],
+                            )
+                        ),
+                        "applications": count,
+                        "heads": expected["heads"],
+                        **(
+                            {
+                                "valid_head_observations": expected[
+                                    "valid_head_observations"
+                                ]
+                            }
+                            if "valid_head_observations" in expected
+                            else {}
+                        ),
+                    },
+                    abs=1e-6,
+                )
+        applications = sum(
+            step["metrics"]["value"]["applications"] for step in row["steps"]
+        )
+        assert len(readouts) == applications

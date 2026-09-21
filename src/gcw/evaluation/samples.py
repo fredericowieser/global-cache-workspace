@@ -11,6 +11,7 @@ from typing import Any, Sequence
 from uuid import uuid4
 
 from gcw.config import EvalConfig
+from gcw.evaluation.update_metrics import SCHEMA
 
 
 class PartialSamples:
@@ -86,6 +87,7 @@ class PartialSamples:
                 row["generation"] = generation[offset]
             if metrics.path is not None:
                 row["cache_update_metrics"] = {
+                    "schema": SCHEMA,
                     "aggregation": "per_request_sums_of_per_application_head_statistics",
                     "values": metrics.requests[key],
                 }

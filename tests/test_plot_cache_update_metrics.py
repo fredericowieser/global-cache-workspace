@@ -181,3 +181,86 @@ def test_cli_v1_unavailable_direction_error(tmp_path, monkeypatch, capsys):
     assert error.value.code == 2
     assert "no direction metrics" in capsys.readouterr().err
     assert not path.with_suffix(".direction.png").exists()
+
+
+@pytest.mark.parametrize(
+    "phase,mean", [("combined", 2), ("prefill", 1), ("decoding", 3)]
+)
+def test_v3_selects_phase(tmp_path, phase, mean):
+    path = tmp_path / "metrics.jsonl"
+    write_v2_metrics(path)
+    row = json.loads(path.read_text())
+    row["schema"] = "gcw.cache_update_metrics.v3"
+    row["phase_steps"] = {}
+    for name, value in [("prefill", 1), ("decoding", 3)]:
+        steps = json.loads(json.dumps(row["steps"]))
+        for step in steps:
+            step["metrics"]["value"]["mean"] = value
+        row["phase_steps"][name] = steps
+    empty = {
+        **row,
+        "example_id": "empty",
+        "steps": [],
+        "phase_steps": {"prefill": [], "decoding": []},
+    }
+    path.write_text("\n".join(map(json.dumps, [row, empty])))
+    samples, counts, empty_count = load_metrics(path, phase=phase)
+    assert samples[("value", 1, 1)][0][1] == mean
+    assert counts == {"example": 2}
+    assert empty_count == 1
+    row["phase_steps"]["decoding"] = []
+    path.write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="no update metrics"):
+        load_metrics(path, phase="decoding")
+
+
+@pytest.mark.parametrize("schema", ["v1", "v2"])
+@pytest.mark.parametrize("phase", ["prefill", "decoding"])
+def test_historical_phase_selection_is_rejected(tmp_path, schema, phase):
+    path = tmp_path / "metrics.jsonl"
+    write_v2_metrics(path)
+    row = json.loads(path.read_text())
+    row["schema"] = f"gcw.cache_update_metrics.{schema}"
+    path.write_text(json.dumps(row))
+    with pytest.raises(
+        ValueError, match="phase-specific metrics require a v3 sidecar"
+    ):
+        load_metrics(path, phase=phase)
+
+
+@pytest.mark.parametrize("phase", ["prefill", "decoding"])
+@pytest.mark.parametrize("quantity", ["both", "direction"])
+def test_phase_cli_output_and_title(tmp_path, monkeypatch, phase, quantity):
+    from scripts import plot_cache_update_metrics as module
+
+    path = tmp_path / "metrics.jsonl"
+    write_v2_metrics(path)
+    row = json.loads(path.read_text())
+    row["schema"] = "gcw.cache_update_metrics.v3"
+    row["phase_steps"] = {"prefill": row["steps"], "decoding": row["steps"]}
+    path.write_text(json.dumps(row))
+    plot = module.plot_metrics
+    titles = []
+
+    def record_title(samples, counts, empty, title, quantity):
+        titles.append(title)
+        return plot(samples, counts, empty, title, quantity)
+
+    monkeypatch.setattr(module, "plot_metrics", record_title)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "plot_cache_update_metrics.py",
+            str(path),
+            "--phase",
+            phase,
+            "--quantity",
+            quantity,
+        ],
+    )
+    module.main()
+    assert titles == [f"Diffusion update diagnostics ({phase})"]
+    suffix = (
+        f".{phase}" + (".direction" if quantity == "direction" else "") + ".png"
+    )
+    assert path.with_suffix(suffix).stat().st_size > 0

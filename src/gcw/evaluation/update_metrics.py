@@ -17,7 +17,7 @@ import torch.distributed as dist
 from gcw.models.cache_processors.update_metrics import UPDATE_BATCH, UpdateBatch
 from gcw.runtime import atomic_write_json
 
-SCHEMA = "gcw.cache_update_metrics.v2"
+SCHEMA = "gcw.cache_update_metrics.v3"
 
 
 class CacheUpdateMetrics:
@@ -177,6 +177,59 @@ class CacheUpdateMetrics:
                     self.path.unlink()
             raise
 
+    @staticmethod
+    def _merge_values(target: dict[str, Any], values: dict[str, Any]) -> None:
+        for key, value in values.items():
+            total = target.setdefault(
+                key,
+                {
+                    "sum": [0.0] * 4,
+                    "applications": 0,
+                    "heads": value["heads"],
+                },
+            )
+            if total["heads"] != value["heads"]:
+                raise ValueError(
+                    "cache update metrics head population changed across requests"
+                )
+            total["sum"] = [a + b for a, b in zip(total["sum"], value["sum"])]
+            total["applications"] += value["applications"]
+            if "valid_head_observations" in value:
+                total["valid_head_observations"] = (
+                    total.get("valid_head_observations", 0)
+                    + value["valid_head_observations"]
+                )
+
+    @staticmethod
+    def _steps(values: dict[str, Any]) -> list[dict[str, Any]]:
+        steps: dict[tuple[int, int], dict[str, Any]] = {}
+        for key, value in sorted(values.items()):
+            external, step, name = key.split(":")
+            item = steps.setdefault(
+                (int(external), int(step)),
+                {
+                    "external_iteration": int(external),
+                    "solver_step": int(step),
+                    "metrics": {},
+                },
+            )
+            count = value["applications"]
+            item["metrics"][name] = {
+                **dict(
+                    zip(
+                        ("min", "max", "mean", "std"),
+                        [x / count for x in value["sum"]],
+                    )
+                ),
+                "applications": count,
+                "heads": value["heads"],
+            }
+            if "valid_head_observations" in value:
+                item["metrics"][name]["valid_head_observations"] = value[
+                    "valid_head_observations"
+                ]
+        return [steps[key] for key in sorted(steps)]
+
     def finish(
         self, tasks: Sequence[str] | None = None
     ) -> dict[str, Any] | None:
@@ -197,61 +250,25 @@ class CacheUpdateMetrics:
                 (task, str(example)), {"requests": set(), "values": {}}
             )
             record["requests"].add(str(request))
-            for key, value in values.items():
-                total = record["values"].setdefault(
-                    key,
-                    {
-                        "sum": [0.0] * 4,
-                        "applications": 0,
-                        "heads": value["heads"],
-                    },
-                )
-                if total["heads"] != value["heads"]:
-                    raise ValueError(
-                        "cache update metrics head population changed across requests"
-                    )
-                total["sum"] = [
-                    a + b for a, b in zip(total["sum"], value["sum"])
-                ]
-                total["applications"] += value["applications"]
-                if "valid_head_observations" in value:
-                    total["valid_head_observations"] = (
-                        total.get("valid_head_observations", 0)
-                        + value["valid_head_observations"]
-                    )
+            self._merge_values(record["values"], values)
         for (task, example), record in examples.items():
-            steps: dict[tuple[int, int], dict[str, Any]] = {}
-            for key, value in sorted(record["values"].items()):
-                external, step, name = key.split(":")
-                item = steps.setdefault(
-                    (int(external), int(step)),
-                    {
-                        "external_iteration": int(external),
-                        "solver_step": int(step),
-                        "metrics": {},
-                    },
-                )
-                count = value["applications"]
-                item["metrics"][name] = {
-                    **dict(
-                        zip(
-                            ("min", "max", "mean", "std"),
-                            [x / count for x in value["sum"]],
-                        )
-                    ),
-                    "applications": count,
-                    "heads": value["heads"],
-                }
-                if "valid_head_observations" in value:
-                    item["metrics"][name]["valid_head_observations"] = value[
-                        "valid_head_observations"
-                    ]
+            phases: dict[str, dict[str, Any]] = {"prefill": {}, "decoding": {}}
+            for key, value in record["values"].items():
+                phase, metric = key.split(":", 1)
+                phases[phase][metric] = value
+            combined: dict[str, Any] = {}
+            for values in phases.values():
+                self._merge_values(combined, values)
             self.completed[(task, example)] = {
                 "schema": SCHEMA,
                 "task": task,
                 "example_id": example,
                 "request_count": len(record["requests"]),
-                "steps": [steps[key] for key in sorted(steps)],
+                "steps": self._steps(combined),
+                "phase_steps": {
+                    phase: self._steps(values)
+                    for phase, values in phases.items()
+                },
             }
         task_names = set(tasks or []) | {key[0] for key in examples}
         if not distributed or dist.get_rank() == 0:

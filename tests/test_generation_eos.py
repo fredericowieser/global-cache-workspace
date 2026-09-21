@@ -7,6 +7,7 @@ from gcw.models.backbones.gemma4.model import Gemma4TF
 from gcw.models.backbones.transformer import TF
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.model import LanguageModel
+from gcw.models.cache_processors.update_metrics import UPDATE_BATCH, UpdateBatch
 
 
 @pytest.fixture(
@@ -19,8 +20,16 @@ from gcw.models.model import LanguageModel
     ]
 )
 def scripted_generation(request, monkeypatch):
+    return _scripted_generation(request.param, monkeypatch)
+
+
+@pytest.fixture(params=["reference", "fast", "gemma-nonuniform"])
+def scripted_backbone_generation(request, monkeypatch):
+    return _scripted_generation(request.param, monkeypatch)
+
+
+def _scripted_generation(kind, monkeypatch):
     def build(script, sequence_len=4):
-        kind = request.param
         cls = Gemma4TF if kind == "gemma-nonuniform" else TF
         backbone = cls.__new__(cls)
         torch.nn.Module.__init__(backbone)
@@ -64,7 +73,7 @@ def scripted_generation(request, monkeypatch):
 
         def generate(prompt, max_new_tokens, **kwargs):
             if model is backbone:
-                kwargs["process_prefill_windows"] = False
+                kwargs.setdefault("process_prefill_windows", False)
             method = model.generate_fast if fast else model.generate
             return method(torch.tensor(prompt), max_new_tokens, **kwargs)
 
@@ -141,3 +150,108 @@ def test_stop_cannot_start_in_prompt(scripted_generation, sequence_len):
     )
     assert out.tolist() == [[7, 8, 4][-sequence_len:] + [5, 4, 5]]
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize(
+    "prefill_windows,cadence,expected",
+    [
+        (
+            True,
+            {"generation_process_every": 1},
+            [(2, "prefill"), (4, "prefill"), (5, "decoding"), (6, "decoding")],
+        ),
+        (
+            False,
+            {
+                "relative_generation_cadence": True,
+                "process_after_prefill": True,
+            },
+            [(4, "prefill"), (6, "decoding")],
+        ),
+        (False, {"relative_generation_cadence": True}, [(6, "decoding")]),
+        (
+            False,
+            {"generation_process_every": 2},
+            [(4, "prefill"), (6, "decoding")],
+        ),
+    ],
+)
+def test_update_phase_follows_cache_contents(
+    scripted_backbone_generation, prefill_windows, cadence, expected
+):
+    generate, calls = scripted_backbone_generation([[7]], sequence_len=8)
+    batch = UpdateBatch(1, "cpu")
+    batch.phase = "decoding"
+    observed = []
+
+    def processor(cache, **kwargs):
+        position = calls[-1][1] + calls[-1][0].shape[1]
+        if batch.active[0]:
+            observed.append((position, batch.phase))
+        batch.add(1, 1, "value", torch.ones(1, 1), batch.active)
+        return cache
+
+    token = UPDATE_BATCH.set(batch)
+    try:
+        generate(
+            [[1, 2, 3, 4]],
+            4,
+            processor=processor,
+            process_every=2,
+            process_prefill_windows=prefill_windows,
+            **cadence,
+        )
+        assert batch.phase == "decoding"
+    finally:
+        UPDATE_BATCH.reset(token)
+    assert observed == expected
+    assert sum(
+        value["applications"] for value in batch.rows()[0].values()
+    ) == len(expected)
+
+
+@pytest.mark.parametrize("cap", [0, 1])
+def test_update_phases_with_no_contributing_decode(
+    scripted_backbone_generation, cap
+):
+    generate, _ = scripted_backbone_generation([[7]], sequence_len=8)
+    batch = UpdateBatch(1, "cpu")
+
+    def processor(cache, **kwargs):
+        batch.add(1, 1, "value", torch.ones(1, 1), batch.active)
+        return cache
+
+    token = UPDATE_BATCH.set(batch)
+    try:
+        generate(
+            [[1, 2, 3, 4]],
+            cap,
+            processor=processor,
+            process_every=2,
+            process_prefill_windows=True,
+            generation_process_every=1,
+        )
+        assert batch.phase == "prefill"
+    finally:
+        UPDATE_BATCH.reset(token)
+    row = batch.rows()[0]
+    assert set(row) == {"prefill:1:1:value"}
+    assert row["prefill:1:1:value"]["applications"] == 1
+
+
+def test_generation_restores_phase_after_failure(scripted_backbone_generation):
+    generate, _ = scripted_backbone_generation([[7]])
+    batch = UpdateBatch(1, "cpu")
+
+    def processor(cache, **kwargs):
+        if batch.phase == "decoding":
+            raise RuntimeError("decode failed")
+        return cache
+
+    token = UPDATE_BATCH.set(batch)
+    try:
+        with pytest.raises(RuntimeError, match="decode failed"):
+            generate([[1]], 4, processor=processor, generation_process_every=1)
+        assert batch.phase == "prefill"
+    finally:
+        UPDATE_BATCH.reset(token)
