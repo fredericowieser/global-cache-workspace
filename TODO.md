@@ -430,3 +430,153 @@ Longshot, contextual-vector Longshot, Longshot+LoRA (R19), and contextual-vector
 rank1 diffusion (R20) from the paper table. The earlier review remains a
 historical record; its recommendation to include those variants is superseded.
 Result files and configs are retained.
+
+
+## KOR-Bench evaluation: paper-table checkpoint inventory
+
+Audited **2026-09-21 13:26 UTC** against all **35 paper-table rows** in
+`src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results_and_Discussion.tex`.
+**All 35 are available: 30 fully imported trained checkpoints (20 Martin, 10 Fred),
+plus five verified local native backbones. None are missing or partially imported.**
+
+This supersedes the September 20 inventory of 15 available, one incomplete, and
+19 missing. Newly verified imports needing KOR-Bench evaluation are the ten Fred
+checkpoints, Qwen3.5-2B Diffusion-Longshot, and Qwen3.5-27B BT, BGT, fair-gate
+Longshot, and fair-gate Diffusion-Longshot: **15 newly available trained checkpoints**.
+The existing evaluation queue and its completed results are tracked in the next
+section; availability here does not mean that an evaluation must be repeated.
+Qwen3.5-27B SFT thinking off remains excluded as already evaluated elsewhere.
+
+### Import verification
+
+- Fred copy job **27037** completed successfully at **2026-09-21 10:29:45 UTC**
+  (`slurm_out/copy-fred-nb-27037.log`). Its script uses `set -euo pipefail` and
+  prints the completion marker only after rsync succeeds.
+- Martin follow-up copy job **27070** completed successfully at
+  **2026-09-21 13:03:56 UTC** (`slurm_out/copy-martin-nb-27070.log`).
+- All 30 trained checkpoints have parseable config/training-state JSON and
+  recorded step **2000**. All checkpoint safetensors headers and contiguous data
+  offsets account for the entire file size; no transfer temporary files remain
+  inside these checkpoint directories.
+- All 20 Martin checkpoints match every expected file size in the three copied
+  migration manifests under `martin_nb/data/migrations/` (`20260919T120745Z`,
+  `20260920T171050Z`, `copy-20260920T205432Z`). Every supplied SHA256 was verified,
+  including the four newly imported 27B weight files. Files without a supplied
+  checksum were checked by size and safetensors boundaries, not a full weight hash.
+- Fred availability is established by successful rsync completion plus local
+  config/state/weight checks; no source checksum comparison is claimed.
+- The five native backbones are under `/mnt/jfs-01/shared/gcw/checkpoints/hf_native/`,
+  outside the two import roots. Their configs and safetensors boundaries were
+  rechecked. Local tokenizer/backbone mappings remain in
+  `slurm_out/korbench-v3-20260920/backbones.json`.
+
+Exact table variants are retained: Llama Longshot/diffusion use `head128`, resized
+3B/4B adapters use `pct015`, and 27B Longshot/diffusion use `fair_gate_rank1`.
+Older fixed-size adapters and contextual-vector/scalar alternatives are not substitutes.
+
+### Available checkpoint paths
+
+“Needs evaluation” identifies the 15 newly available checkpoints only. Other rows
+retain the existing campaign/result tracking; this audit does not enqueue work.
+
+| KOR-Bench task | Model | Method | Checkpoint path | Import status |
+| --- | --- | --- | --- | --- |
+| Existing campaign/results | Llama 3.2-1B | Pretrained instruct | `/mnt/jfs-01/shared/gcw/checkpoints/hf_native/llama32_1b/tf_base` | Local native backbone verified |
+| [ ] Needs evaluation | Llama 3.2-1B | SFT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/llama32_1b-sft-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| [ ] Needs evaluation | Llama 3.2-1B | LoRA | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/llama32_1b-lora-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| [ ] Needs evaluation | Llama 3.2-1B | BT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/llama32_1b-bt-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| [ ] Needs evaluation | Llama 3.2-1B | BGT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/llama32_1b-bgt-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| Existing campaign/results | Llama 3.2-1B | Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/llama32_1b_fair_campaign_v1_longshot_adapter22m_seed24_head128/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Llama 3.2-1B | Diffusion-Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/llama32_1b_fair_campaign_v1_diffusion_adapter22m_seed24_head128/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Llama 3.2-3B | Pretrained instruct | `/mnt/jfs-01/shared/gcw/checkpoints/hf_native/llama32_3b/tf_base` | Local native backbone verified |
+| [ ] Needs evaluation | Llama 3.2-3B | SFT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/llama32_3b-sft-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| Existing campaign/results | Llama 3.2-3B | LoRA | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/llama32_3b_fair_campaign_v1_lora_pct015_seed24/checkpoint` | Fully imported; step 2000; 6/6 manifest files verified |
+| Existing campaign/results | Llama 3.2-3B | BT | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/llama32_3b_fair_campaign_v1_bt_pct015_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Llama 3.2-3B | BGT | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/llama32_3b_fair_campaign_v1_bgt_pct015_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Llama 3.2-3B | Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/llama32_3b_fair_campaign_v1_longshot_pct015_seed24_head128/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Llama 3.2-3B | Diffusion-Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/llama32_3b_fair_campaign_v1_diffusion_pct015_seed24_head128/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Qwen3.5-2B | Pretrained instruct | `/mnt/jfs-01/shared/gcw/checkpoints/hf_native/qwen35_2b/tf_base` | Local native backbone verified |
+| [ ] Needs evaluation | Qwen3.5-2B | SFT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/qwen35_2b-sft-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| [ ] Needs evaluation | Qwen3.5-2B | LoRA | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/qwen35_2b-lora-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| [ ] Needs evaluation | Qwen3.5-2B | BT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/qwen35_2b-bt-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| [ ] Needs evaluation | Qwen3.5-2B | BGT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/qwen35_2b-bgt-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| Existing campaign/results | Qwen3.5-2B | Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_2b_fair_campaign_v1_longshot_adapter22m_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| [ ] Needs evaluation | Qwen3.5-2B | Diffusion-Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_2b_fair_campaign_v1_diffusion_adapter22m_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Qwen3.5-4B | Pretrained instruct | `/mnt/jfs-01/shared/gcw/checkpoints/hf_native/qwen35_4b/tf_base` | Local native backbone verified |
+| [ ] Needs evaluation | Qwen3.5-4B | SFT | `/mnt/jfs-01/shared/gcw/fred_nb/fair-campaign-v1/qwen35_4b-sft-seed24/checkpoint` | Fully imported; step 2000; successful copy and local checks verified |
+| Existing campaign/results | Qwen3.5-4B | LoRA | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_4b_fair_campaign_v1_lora_pct015_seed24/checkpoint` | Fully imported; step 2000; 6/6 manifest files verified |
+| Existing campaign/results | Qwen3.5-4B | BT | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_4b_fair_campaign_v1_bt_pct015_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Qwen3.5-4B | BGT | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_4b_fair_campaign_v1_bgt_pct015_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Qwen3.5-4B | Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_4b_fair_campaign_v1_longshot_pct015_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Qwen3.5-4B | Diffusion-Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_4b_fair_campaign_v1_diffusion_pct015_seed24/checkpoint` | Fully imported; step 2000; 7/7 manifest files verified |
+| Existing campaign/results | Qwen3.5-27B | Pretrained instruct | `/mnt/jfs-01/shared/gcw/checkpoints/hf_native/qwen35_27b/tf_base` | Local native backbone verified |
+| Existing campaign/results | Qwen3.5-27B | SFT | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_27b_instruct_sft_seed24/checkpoint-2000` | Fully imported; step 2000; 3/3 manifest files verified |
+| Existing campaign/results | Qwen3.5-27B | LoRA | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_27b_instruct_lora_seed24/checkpoint-2000` | Fully imported; step 2000; 3/3 manifest files verified |
+| [ ] Needs evaluation | Qwen3.5-27B | BT | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_27b_instruct_bt_seed24/checkpoint-2000` | Fully imported; step 2000; 3/3 manifest files verified |
+| [ ] Needs evaluation | Qwen3.5-27B | BGT | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_27b_instruct_bgt_seed24/checkpoint-2000` | Fully imported; step 2000; 3/3 manifest files verified |
+| [ ] Needs evaluation | Qwen3.5-27B | Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_27b_instruct_longshot_fair_gate_rank1_seed24/checkpoint-2000` | Fully imported; step 2000; 3/3 manifest files verified |
+| [ ] Needs evaluation | Qwen3.5-27B | Diffusion-Longshot | `/mnt/jfs-01/shared/gcw/martin_nb/runs/experiments/qwen35_27b_instruct_diffusion_longshot_fair_gate_rank1_seed24/checkpoint-2000` | Fully imported; step 2000; 3/3 manifest files verified |
+
+### Missing or incomplete imports
+
+None among the 35 paper-table checkpoints.
+
+## KOR-Bench v3 array: approved queue and native backbones
+
+Status: On 2026-09-21, transferred all 20 unstarted valid evaluations to **array 27071**, submitted through `scripts/cluster/submit_array.sh` with four workers and one GPU each. Old workers 0/2 exited after queue closure (cancellation was also requested); workers 1/3 retain only their active Qwen4B LoRA/native thinking-on evaluations and exit afterward. The old counter is 38, preventing further claims. Completed and active evaluations are excluded from the new manifest. Two new workers started immediately; two were pending `AssocGrpGRES` at verification. Order and separate adjacent thinking modes are preserved; v3, 2048/4096 token caps, local dependencies, and gpu/eval/qwen35 extras with --no-sync are retained. Manifest and receipt: `slurm_out/korbench-v3-20260920/submit-array-migration/`.
+
+User-approved scope: the 14 previously selected, fully imported trained checkpoints plus five native instruct backbones, with a later queue override made before the affected task was claimed: **skip Qwen3.5-27B LoRA thinking off and run Qwen3.5-27B SFT thinking on instead**. No additional newly imported trained checkpoints are added to this queue.
+
+Llama 3.2 uses thinking off only. Completed invalid Llama thinking-on results remain excluded. The former custom queue and its terminal guard rows are retired; pending work now belongs exclusively to array 27071.
+
+Protocol: `gcw.korbench.zero_shot.v3`, full 1,250-question suite, chat formatting, automatic batching up to 64, and sample logging. Maximum new tokens: **2048 off / 4096 on**, including reasoning and final answer. Runtime: `uv run --locked --no-sync --extra gpu --extra eval --extra qwen35`; conversion additionally selects `--extra convert`. Evaluation partition `agent-xlong` is explicit because the cluster has no default partition; its maximum/default job limit is five days. Each worker receives eight CPUs and 250000 MiB via the partition GPU defaults. Preparation used `agent-long`.
+
+Native backbones live in `/mnt/jfs-01/shared/gcw/checkpoints/hf_native/<model>/tf_base`. Existing Qwen-2B/4B models are reused; Llama-1B/3B and Qwen-27B were downloaded/converted from Hugging Face and verified complete before submission. Llama revisions are pinned to the imported checkpoints’ native sources. The original imported checkpoint files are preserved; evaluation views remap only backbone/tokenizer locations. Code and task definitions are snapshotted for this run.
+
+Run artifacts: `slurm_out/korbench-v3-20260920/`. `queue-order.json` records task order, `backbones.json` records native sources, `checkpoint-views.json` maps evaluation paths to original checkpoints, and `code-sha256.json` identifies the code snapshot. Final results and incremental sample logs go under its `results/` directory.
+
+| Live tasks | Model | Method |
+| --- | --- | --- |
+| 0 (off only; 1 invalid) | llama32_3b | lora |
+| 2 (off only; 3 invalid) | llama32_3b | pretrained_instruct |
+| 4 (off only; 5 invalid) | llama32_3b | longshot |
+| 6 (off only; 7 invalid) | llama32_3b | diffusion |
+| 8, 9 | qwen35_4b | lora |
+| 10, 11 | qwen35_4b | pretrained_instruct |
+| 12, 13 | qwen35_4b | longshot |
+| 14, 15 | qwen35_4b | diffusion |
+| 16 (off only) | llama32_3b | bt |
+| 17 (off only) | llama32_3b | bgt |
+| 18, 19 | qwen35_4b | bt |
+| 20, 21 | qwen35_4b | bgt |
+| 22 (off only) | llama32_1b | pretrained_instruct |
+| 23 (off only) | llama32_1b | longshot |
+| 24 (off only) | llama32_1b | diffusion |
+| 25, 26 | qwen35_2b | pretrained_instruct |
+| 27, 28 | qwen35_2b | longshot |
+| 29 (on only) | qwen35_27b | sft |
+| 30 (on only) | qwen35_27b | lora |
+| 31, 32 | qwen35_27b | pretrained_instruct |
+
+
+### Updated live KOR-Bench queue: 2026-09-21
+
+Exclude Qwen3.5-27B native, Longshot, and Diffusion-Longshot thinking OFF:
+these are already reported in the paper KOR-Bench table (averages 69.12,
+49.84, and 46.96). Native OFF was removed from the live array 27071 manifest
+under its queue lock after verifying it was unclaimed; the other two OFF runs
+were only proposed and were never added. Running evaluations remain untouched.
+
+Applied to live array **27071** at **2026-09-21 13:47 UTC**: 40 unstarted evaluations, with 15 newly added checkpoint views using the existing local backbone/tokenizer mappings. Updated `configs.txt` atomically under `queue.lock`, preserving both claimed entries and all running jobs. No array restart or resubmission.
+
+| Positions | Backbone | Ordered remaining evaluations |
+| --- | --- | --- |
+| 1–3 | Llama-3B | SFT OFF; BT OFF; BGT OFF |
+| 4–10 | Qwen-4B | SFT OFF/ON; diffusion ON; BT OFF/ON; BGT OFF/ON |
+| 11–17 | Llama-1B | Native; SFT; LoRA; Longshot; diffusion; BT; BGT — all OFF |
+| 18–31 | Qwen-2B | Native; SFT; LoRA; Longshot; diffusion; BT; BGT — each OFF/ON |
+| 32–40 | Qwen-27B | SFT ON; LoRA ON; native ON; Longshot ON; diffusion ON; BT OFF/ON; BGT OFF/ON |
+
+OFF/ON means separate adjacent queue entries, without hard dependencies.
+The additions and backbone regrouping above are now live. The previous manifest, pending task list, and update receipt are saved under `slurm_out/korbench-v3-20260920/submit-array-migration/expanded-queue-20260921/`.
+Retain v3, 2048/4096 OFF/ON token caps, local dependencies and existing extras.
