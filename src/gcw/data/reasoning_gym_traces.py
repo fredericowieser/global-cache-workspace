@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import groupby
+from math import gcd
 import re
 
 from gcw.data._vendor.reasoning_gym.algorithmic.ab import (
@@ -17,9 +17,9 @@ from gcw.data._vendor.reasoning_gym.algorithmic.string_manipulation import (
     StringManipulationConfig,
     StringManipulationDataset,
 )
-from gcw.data._vendor.reasoning_gym.algorithmic.string_splitting import (
-    StringSplittingConfig,
-    StringSplittingDataset,
+from gcw.data._vendor.reasoning_gym.algorithmic.base_conversion import (
+    BaseConversionConfig,
+    BaseConversionDataset,
 )
 from gcw.data._vendor.reasoning_gym.arithmetic.gcd import GCDConfig, GCDDataset
 from gcw.data._vendor.reasoning_gym.cognition.color_cube_rotation import (
@@ -35,18 +35,42 @@ FORMAT_INSTRUCTION = (
     "Then put only the final result inside <answer>...</answer> tags."
 )
 MAX_TRANSITIONS = 256
-SPLIT_DELTAS = (
-    (-1, 0, 0, 2, 1, 0),
-    (0, -2, 0, 1, 0, 0),
-    (0, 0, -2, 0, 1, 0),
-    (1, -1, -1, 0, 0, 0),
-    (0, 0, 0, -1, -1, 1),
-)
-SPLIT_RULES = ("A -> 2X + Y", "2B -> X", "2C -> Y", "B + C -> A", "X + Y -> Z")
 
 
 class AdmissionError(ValueError):
     """An expected, counted exclusion rather than a correctness failure."""
+
+
+@dataclass
+class BalancedGCDConfig(GCDConfig):
+    max_common_factor: int = 100
+    coprime_probability: float = 0.25
+
+    def validate(self):
+        super().validate()
+        if not (
+            self.min_numbers == self.max_numbers == 2
+            and 2 <= self.max_common_factor <= self.max_value // 10
+            and self.max_value - self.min_value >= 10 * self.max_common_factor
+            and 0 < self.coprime_probability < 1
+        ):
+            raise ValueError("Invalid balanced GCD configuration")
+
+
+class BalancedGCDDataset(GCDDataset):
+    def _generate_numbers(self, rng):
+        factor = (
+            1
+            if rng.random() < self.config.coprime_probability
+            else rng.randint(2, self.config.max_common_factor)
+        )
+        lower = (self.config.min_value + factor - 1) // factor
+        upper = self.config.max_value // factor
+        for _ in range(256):
+            a, b = (rng.randint(lower, upper) for _ in range(2))
+            if gcd(a, b) == 1:
+                return [factor * a, factor * b], factor
+        raise RuntimeError("Could not generate coprime GCD cofactors")
 
 
 class BoundedStringManipulationDataset(StringManipulationDataset):
@@ -69,11 +93,11 @@ TASKS = {
         BoundedStringManipulationDataset,
         StringManipulationConfig,
     ),
-    "string_splitting": (StringSplittingDataset, StringSplittingConfig),
+    "base_conversion": (BaseConversionDataset, BaseConversionConfig),
     "ab": (ABDataset, ABConfig),
     "color_cube_rotation": (ColorCubeRotationDataset, ColorCubeRotationConfig),
     "manipulate_matrix": (ManipulateMatrixDataset, ManipulateMatrixConfig),
-    "gcd": (GCDDataset, GCDConfig),
+    "gcd": (BalancedGCDDataset, BalancedGCDConfig),
 }
 TASK_CONFIGS = {
     "string_manipulation": dict(
@@ -82,8 +106,8 @@ TASK_CONFIGS = {
         min_num_rules=6,
         max_num_rules=12,
     ),
-    "string_splitting": dict(
-        min_initial_machines=0, max_initial_machines=64, max_iterations=256
+    "base_conversion": dict(
+        min_base=2, max_base=16, min_value=256, max_value=1048575
     ),
     "ab": dict(length=18),
     "color_cube_rotation": dict(min_rotations=2, max_rotations=8),
@@ -95,11 +119,11 @@ TASK_CONFIGS = {
         min_transforms=3,
         max_transforms=8,
     ),
-    "gcd": dict(min_numbers=2, max_numbers=4, min_value=10, max_value=100000),
+    "gcd": dict(min_numbers=2, max_numbers=2, min_value=10, max_value=100000),
 }
 FAMILIES = {
     "string_manipulation": "rewriting",
-    "string_splitting": "rewriting",
+    "base_conversion": "arithmetic",
     "ab": "rewriting",
     "color_cube_rotation": "spatial_tracking",
     "manipulate_matrix": "matrix_transformations",
@@ -232,65 +256,61 @@ def render_trace(task: str, dataset, entry: dict) -> Trace:
         )
         question += "\nFor an even-length string, the middle character means the right of the two middle characters."
         difficulty = {"initial_length": len(problem[0]), "rules": len(rules)}
-    elif task == "string_splitting":
+    elif task == "base_conversion":
         match = re.search(
-            r"Now, you have (\d+) machine A, (\d+) machine B, and (\d+) machine C",
+            r"Now, convert the (binary|hexadecimal|base-\d+) number "
+            r"([0-9a-f]+) to (binary|hexadecimal|base-\d+)",
             question,
         )
-        initial = [int(value) for value in match.groups()]
-        limit = int(
-            re.search(r"Apply the rules at most (\d+) times", question)[1]
+        if match is None:
+            raise ValueError("Unrecognised base conversion prompt")
+        source_name, source_repr, target_name = match.groups()
+        bases = {"binary": 2, "hexadecimal": 16}
+        source_base = bases.get(source_name) or int(
+            source_name.removeprefix("base-")
         )
-        state = initial + [0, 0, 0]
-        problem = [initial, limit]
+        target_base = bases.get(target_name) or int(
+            target_name.removeprefix("base-")
+        )
+        problem = [source_base, source_repr, target_base]
         lines.append(
-            "Use count order (A, B, C, X, Y, Z). Initial counts: "
-            + str(state)
-            + "."
+            f"Read the base-{source_base} digits from left to right, starting at 0."
         )
-        transitions = []
-        seen = {tuple(state)}
-        for _ in range(limit):
-            result = dataset._apply_rule(state[:])
-            if result == state:
-                termination = "no_applicable_rule"
-                break
-            if tuple(result) in seen:
-                termination = "repeated_state_discarded"
-                break
-            delta = tuple(b - a for a, b in zip(state, result))
-            rule = SPLIT_DELTAS.index(delta)
-            transitions.append((rule, result))
-            state = result
-            seen.add(tuple(state))
-        else:
-            termination = "iteration_limit"
-        for rule, group in groupby(transitions, key=lambda item: item[0]):
-            run = list(group)
+        value = 0
+        for character in source_repr:
+            digit = int(character, 36)
+            if digit >= source_base:
+                raise ValueError("Digit outside the source base")
+            updated = value * source_base + digit
             lines.append(
-                f"Apply rule {rule + 1} ({SPLIT_RULES[rule]}) {len(run)} "
-                f"time(s), checking priority from rule 1 after each application. "
-                f"Each application changes the counts by {SPLIT_DELTAS[rule]}. "
-                f"Counts become {run[-1][1]}."
+                f"Read {character!r} ({digit}): {value} * {source_base} + {digit} = {updated}."
             )
-        rendered_steps = len(lines) - 1
-        steps = len(transitions)
-        if termination == "no_applicable_rule":
+            value = updated
+            steps += 1
+        lines.append(
+            f"The decimal value is {value}. Divide repeatedly by {target_base} and record each remainder."
+        )
+        digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+        remaining = value
+        remainders = []
+        while remaining:
+            quotient, remainder = divmod(remaining, target_base)
             lines.append(
-                "A = 0, B < 2, C < 2, B and C are not both positive, and X and Y are not both positive. No rule applies; stop."
+                f"{remaining} = {target_base} * {quotient} + {remainder}; record digit {digits[remainder]!r}."
             )
-        elif termination == "iteration_limit":
-            lines.append(
-                f"The stated limit of {limit} applications has been reached; stop at the current counts."
-            )
-        else:
-            lines.append(
-                f"The next counts {result} repeat a previous state; discard the repeated state and stop."
-            )
-        final = " ".join(map(str, state))
+            remainders.append(digits[remainder])
+            remaining = quotient
+            steps += 1
+        final = "".join(reversed(remainders)) or "0"
+        lines.append(
+            f"The quotient is 0. Read the recorded digits in reverse order: {final}."
+        )
+        rendered_steps = steps
         difficulty = {
-            "initial_machine_total": sum(initial),
-            "iteration_limit": limit,
+            "source_base": source_base,
+            "target_base": target_base,
+            "source_digits": len(source_repr),
+            "target_digits": len(final),
         }
     elif task == "ab":
         program = (
@@ -402,6 +422,11 @@ def render_trace(task: str, dataset, entry: dict) -> Trace:
                 f'{index}. {op["instruction"].removeprefix("- ")}:\n{dataset._matrix_to_str(matrix)}'
             )
         final = dataset._matrix_to_str(matrix)
+        difficulty.update(
+            final_rows=len(matrix),
+            final_cols=len(matrix[0]) if matrix else 0,
+            distinct_cells=len({cell for row in matrix for cell in row}),
+        )
         lines.append(
             "All operations have been applied in the given order. The last matrix is the result."
         )

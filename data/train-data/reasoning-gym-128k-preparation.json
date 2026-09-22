@@ -1,40 +1,40 @@
 {
   "audit": {
-    "eos_only_truncated_rows": 4,
+    "eos_only_truncated_rows": 7,
     "method": "Stored admission token counts from checksum-verified source; target includes EOS; population standard deviation conditional on truncation",
-    "original_tokens_mean_truncated": 1808.5219384413883,
+    "original_tokens_mean_truncated": 1801.4406364749082,
     "prompt_only_rows": 0,
-    "removed_tokens_mean_truncated": 272.52193844138833,
-    "removed_tokens_std_truncated": 262.3695996501956,
+    "removed_tokens_mean_truncated": 265.4406364749082,
+    "removed_tokens_std_truncated": 254.62698945460127,
     "sequence_len": 1536,
-    "target_tokens_lost_percent": 0.8414186793567844,
-    "truncated_percent": 1.19296875,
-    "truncated_rows": 1527,
+    "target_tokens_lost_percent": 0.8810604723603815,
+    "truncated_percent": 1.2765624999999998,
+    "truncated_rows": 1634,
     "truncated_rows_by_task": {
-      "ab": 694,
+      "ab": 758,
+      "base_conversion": 0,
       "color_cube_rotation": 0,
       "gcd": 0,
       "manipulate_matrix": 0,
-      "string_manipulation": 833,
-      "string_splitting": 0
+      "string_manipulation": 876
     }
   },
-  "bytes": 341114494,
+  "bytes": 305184850,
   "file": "train.jsonl",
   "holdouts": {
     "test": {
-      "bytes": 15961284,
+      "bytes": 14264502,
       "file": "test.jsonl",
       "rows": 6000,
-      "sha256": "d53f5ee9a982d39637ea616253e9e53d99d199077c7a63e97d6849e5d17afab0",
-      "source_ids_sha256": "86598875eca9d9b239bd0f6c6dc3c8bc570798135e8327a628da1c2028cf6a2d"
+      "sha256": "30c1a327623b8666ade0cb0cca4bec6fac24e7c379d3d9a9d8e329c25dcc9113",
+      "source_ids_sha256": "79e60917814b8794a7785fdf0e8ab1ec733177ce1486aba198fb821393ee0253"
     },
     "validation": {
-      "bytes": 16040994,
+      "bytes": 14330670,
       "file": "validation.jsonl",
       "rows": 6000,
-      "sha256": "d38cf250d98881fdc2bbac559ee16afcf328b10f7b77191f2fb7c3849bdbe686",
-      "source_ids_sha256": "1831fb3acc0fb5d3db64741b3f2c8f6b559e7c597abd61293fe0f06d2ea2e383"
+      "sha256": "9606b5e8800b3a422c7e5f2d933cbb40f9c4e42e766e88a91fa19ec3d30d3bfc",
+      "source_ids_sha256": "4ca59156e7c0a787b3e577cf1ec9b8b159b046165388fc6a1d675d9ba606669b"
     }
   },
   "row_identity": "Original source_id and experiment_order retained; physical file order is subset order",
@@ -42,7 +42,7 @@
   "schema": "gcw.reasoning_gym.subset.v1",
   "seed": 24,
   "selection": "Uniform without replacement within task; proportional largest-remainder quotas with seeded tie-breaking; final seeded shuffle",
-  "sha256": "f992a31461c6074fa4de8dcee68ff13ebbf361dfc542c5d96da34ac0caf03c1d",
+  "sha256": "0df5686993b303b21310cb7b950ee8bd83b121b43b7dc4a213272344e67b1b53",
   "source": "data/train-data/reasoning-gym/train.jsonl",
   "source_format": {
     "final_answer_delimiter": "<answer>...</answer>",
@@ -53,17 +53,17 @@
     "sft_loss_scope": "answer_only",
     "truncation": "reject"
   },
-  "source_ids_sha256": "0e498d411bcd60cdc3406539419c39f9f53272ede71317ec3c52916706b2eb38",
-  "source_manifest_sha256": "299aaf6a1dde11660e7002a3e9a8341453e17737542e75da1d91d2f632e2cd17",
+  "source_ids_sha256": "05fab50899ddf8c1983d70f3d366da568307392adb6d0fc6b95b11dd1cd2d4a6",
+  "source_manifest_sha256": "d3721453a1080eed08ac79caa57ef3933fb33ea893eae0d11a3674d31c0c7d04",
   "source_rows": 700032,
-  "source_sha256": "0d951f835c9eb6e326bb286bdc2ec1ac0129b3958eb17b0c3fc3b86ad34dbbaa",
+  "source_sha256": "3dbf7c3b5364f144214a5a665f8c5f1143a3105e742c679a67868e2f08fed7a2",
   "task_counts": {
     "ab": 21333,
-    "color_cube_rotation": 21333,
-    "gcd": 21334,
-    "manipulate_matrix": 21333,
-    "string_manipulation": 21334,
-    "string_splitting": 21333
+    "base_conversion": 21333,
+    "color_cube_rotation": 21334,
+    "gcd": 21333,
+    "manipulate_matrix": 21334,
+    "string_manipulation": 21333
   },
   "tokenizer": "artifacts/tokenizers/Qwen3.5-2B",
   "tokenizer_identity_sha256": "5de890504409a3c030c22818ca38ba0469abe07935719b95139e2ef10319b02c"

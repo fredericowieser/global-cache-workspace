@@ -13,7 +13,11 @@ import random
 import sys
 import time
 
-from gcw.data._staging import dataset_staging
+from gcw.data._staging import (
+    PublishedDatasetCleanupError,
+    dataset_staging,
+    publish_dataset,
+)
 from gcw.data.reasoning_gym_traces import (
     AdmissionError,
     FAMILIES,
@@ -28,9 +32,19 @@ SCHEMA = "gcw.reasoning_gym.sft.v1"
 DEFAULT_ROWS = 700032
 SEED_STRIDE = 100_000_000
 SPLITS = ("train", "validation", "test")
+ADMISSION_POLICY = {
+    "manipulate_matrix": {
+        "min_final_rows": 2,
+        "min_final_cols": 2,
+        "min_final_cells": 6,
+        "min_productive_fraction": 0.75,
+        "require_nonconstant": True,
+    },
+    "gcd": {"min_divisions": 4},
+}
 VENDOR = Path(__file__).parent / "_vendor" / "reasoning_gym"
 VENDOR_SOURCES_SHA256 = (
-    "9daf8c84312b62925e68f534b817f017703911503a4d2ae90c032c99d3f2a33e"
+    "2fde036af72a453229953f387dab1dc0539e5178fff4c7d5ee051c050a820227"
 )
 
 
@@ -45,6 +59,28 @@ def _generate_batch(job):
             trace = render_trace(task, dataset, entry)
             if trace.steps < min_steps:
                 raise AdmissionError("insufficient_trace_depth")
+            if task == "manipulate_matrix":
+                policy = ADMISSION_POLICY[task]
+                shape = trace.difficulty
+                if (
+                    shape["final_rows"] < policy["min_final_rows"]
+                    or shape["final_cols"] < policy["min_final_cols"]
+                    or shape["final_rows"] * shape["final_cols"]
+                    < policy["min_final_cells"]
+                ):
+                    raise AdmissionError("matrix_final_size")
+                if shape["distinct_cells"] < 2:
+                    raise AdmissionError("matrix_constant_answer")
+                if (
+                    trace.steps
+                    < policy["min_productive_fraction"] * trace.rendered_steps
+                ):
+                    raise AdmissionError("matrix_unproductive_operations")
+            elif (
+                task == "gcd"
+                and trace.steps < ADMISSION_POLICY[task]["min_divisions"]
+            ):
+                raise AdmissionError("gcd_insufficient_divisions")
         except AdmissionError as exc:
             rejected[str(exc)] += 1
             continue
@@ -147,9 +183,10 @@ def prepare_dataset(
     workers: int = 1,
     batch_size: int = 256,
     tokenizer_source: str = "",
+    replace: bool = False,
 ) -> dict:
     output = Path(output)
-    if output.exists():
+    if output.exists() and not replace:
         raise FileExistsError(f"Dataset destination already exists: {output}")
     counts = dict(zip(SPLITS, (train_rows, validation_rows, test_rows)))
     if train_rows <= 0 or min(counts.values()) < 0:
@@ -199,6 +236,7 @@ def prepare_dataset(
         "requested_rows": counts,
         "sequence_length": sequence_length,
         "min_trace_steps": min_steps,
+        "admission_policy": ADMISSION_POLICY,
         "max_string_transitions": MAX_TRANSITIONS,
         "attempts_per_row": attempts_per_row,
         "batch_size": batch_size,
@@ -229,7 +267,7 @@ def prepare_dataset(
     seen_prompts, seen_problems = set(), set()
     executor = ProcessPoolExecutor(max_workers=workers) if workers > 1 else None
     try:
-        with dataset_staging(output.parent) as temporary:
+        with dataset_staging(output) as temporary:
             staging = Path(temporary) / "dataset"
             staging.mkdir()
             for split_index, (split, requested) in enumerate(counts.items()):
@@ -430,7 +468,9 @@ def prepare_dataset(
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            staging.rename(output)
+            publish_dataset(staging, output, replace=replace)
+    except PublishedDatasetCleanupError:
+        raise
     except Exception as exc:
         failure = output.with_name(output.name + ".failed.json")
         failure.write_text(
@@ -470,6 +510,11 @@ def main() -> None:
     parser.add_argument("--attempts-per-row", type=int, default=20)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Replace a prepared dataset only after the complete build succeeds",
+    )
     args = parser.parse_args()
     tokenizer = get_tokenizer("hf:" + args.tokenizer)
     manifest = prepare_dataset(
@@ -485,6 +530,7 @@ def main() -> None:
         workers=args.workers,
         batch_size=args.batch_size,
         tokenizer_source=args.tokenizer,
+        replace=args.replace,
     )
     print(
         json.dumps(

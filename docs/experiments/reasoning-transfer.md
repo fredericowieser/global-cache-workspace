@@ -118,7 +118,7 @@ category-level results rather than assuming uniform distance from training.
 **Current recommendation:** retain the six-task Reasoning Gym study as the next
 experiment, followed by PrOntoQA-OOD for controlled deductive generalisation and
 FineWeb for transfer from general text. The preference over PrOntoQA is modest:
-three of the six initial tasks involve rewriting, and the mixture primarily
+two of the six tasks involve rewriting, and the mixture primarily
 teaches execution rather than proof search. It is justified by the current
 objective of varying the reasoning training domain, not by an expectation of
 larger gains. Before scaling, verify that the prepared mixture contains enough

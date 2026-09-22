@@ -9,10 +9,11 @@ import pytest
 
 from gcw.data import reasoning_gym as preparation
 from gcw.data import reasoning_gym_traces as traces
+from gcw.data import _staging
 from gcw.data._vendor.reasoning_gym.algorithmic import (
     manipulate_matrix,
     string_manipulation,
-    string_splitting,
+    base_conversion,
 )
 from gcw.data._vendor.reasoning_gym.cognition.color_cube_rotation import (
     Color,
@@ -65,33 +66,35 @@ def test_nonterminating_string_generation_has_a_hard_bound():
 
 
 @pytest.mark.parametrize(
-    "initial,limit,answer,steps,termination",
+    "source_name,source_repr,target_name,answer",
     [
-        ((1, 1, 1), 20, "0 0 0 2 0 2", 5, "no_applicable_rule"),
-        ((2, 2, 0), 2, "0 2 0 4 2 0", 2, "iteration_limit"),
-        ((0, 0, 0), 20, "0 0 0 0 0 0", 0, "no_applicable_rule"),
+        ("hexadecimal", "1a3", "binary", "110100011"),
+        ("binary", "101101", "hexadecimal", "2d"),
+        ("base-7", "615", "base-3", "102100"),
     ],
 )
-def test_dismantling_priority_and_iteration_limits(
-    initial, limit, answer, steps, termination
+def test_base_conversion_replays_every_digit_and_division(
+    source_name, source_repr, target_name, answer
 ):
-    dataset = traces.create_dataset("string_splitting", seed=24, size=1)
+    dataset = traces.create_dataset("base_conversion", seed=24, size=1)
     entry = {
-        "question": string_splitting.QUESTION_TEMPLATE.format(
-            A_machine=initial[0],
-            B_machine=initial[1],
-            C_machine=initial[2],
-            max_iterations=limit,
+        "question": base_conversion.QUESTION_TEMPLATE.format(
+            source_name=source_name,
+            source_repr=source_repr,
+            target_name=target_name,
         ),
         "answer": answer,
-        "metadata": {},
+        "metadata": {"decimal_value": -1, "target_repr": "wrong"},
     }
-    trace = traces.render_trace("string_splitting", dataset, entry)
+    trace = traces.render_trace("base_conversion", dataset, entry)
     assert trace.final_answer == answer
-    assert trace.steps == steps
-    assert trace.termination == termination
-    if initial == (1, 1, 1):
-        assert "rule 5 (X + Y -> Z) 2 time(s)" in trace.solution
+    assert trace.steps == len(source_repr) + len(answer)
+    assert trace.rendered_steps == trace.steps
+    assert trace.solution.count("Read '") == len(source_repr)
+    assert trace.solution.count("record digit") == len(answer)
+    if source_repr == "1a3":
+        assert "1 * 16 + 10 = 26" in trace.solution
+        assert "419 = 2 * 209 + 1" in trace.solution
 
 
 @pytest.mark.parametrize(
@@ -206,6 +209,9 @@ def test_matrix_trace_renders_intermediate_matrices():
     assert "4 1\n5 2\n6 3" in trace.solution
     assert trace.final_answer == "4 1\n0 2\n6 3"
     assert trace.steps == 2
+    assert trace.difficulty["final_rows"] == 3
+    assert trace.difficulty["final_cols"] == 2
+    assert trace.difficulty["distinct_cells"] == 6
 
 
 def test_gcd_trace_uses_euclidean_divisions_and_reduces_all_numbers():
@@ -223,13 +229,93 @@ def test_gcd_trace_uses_euclidean_divisions_and_reduces_all_numbers():
     assert "Give only" not in trace.prompt
 
 
+def test_gcd_mixture_has_varied_answers_and_nontrivial_divisions():
+    from collections import Counter
+    from math import gcd
+
+    rows, rejected = preparation._generate_batch(
+        ("gcd", "train", 123456, 0, 4000, 2)
+    )
+    answers = Counter(row["final_answer"] for row in rows)
+    assert 0.20 < answers["1"] / len(rows) < 0.30
+    assert len(answers) == 100
+    assert all(row["trace_steps"] >= 4 for row in rows)
+    assert rejected["gcd_insufficient_divisions"] > 0
+    magnitude_bins = Counter()
+    coprime_bins = Counter()
+    for row in rows:
+        numbers = [
+            int(value)
+            for value in row["prompt"]
+            .split("numbers: ")[1]
+            .split(".")[0]
+            .split(", ")
+        ]
+        assert len(numbers) == 2
+        assert all(10 <= value <= 100000 for value in numbers)
+        assert gcd(*numbers) == int(row["final_answer"])
+        band = min(max(numbers) // 20000, 4)
+        magnitude_bins[band] += 1
+        coprime_bins[band] += row["final_answer"] == "1"
+    for band in (1, 2, 3, 4):
+        assert magnitude_bins[band] >= 100
+        assert 0.15 < coprime_bins[band] / magnitude_bins[band] < 0.38
+
+
+@pytest.mark.parametrize(
+    "answer,productive,operations,rejection",
+    [
+        ("2", 2, 7, "matrix_final_size"),
+        ("1 2\n3 4", 3, 3, "matrix_final_size"),
+        ("0 0 0\n0 0 0", 3, 3, "matrix_constant_answer"),
+        ("1 1 1\n1 1 1", 3, 3, "matrix_constant_answer"),
+        ("1 2 3\n4 5 6", 2, 3, "matrix_unproductive_operations"),
+        ("1 2 3\n4 5 6", 3, 4, None),
+    ],
+)
+def test_matrix_admission_rejects_degenerate_answers_and_noops(
+    monkeypatch, answer, productive, operations, rejection
+):
+    matrix = [row.split() for row in answer.splitlines()]
+    trace = traces.Trace(
+        "prompt",
+        "solution",
+        answer,
+        productive,
+        operations,
+        "completed",
+        [],
+        {
+            "final_rows": len(matrix),
+            "final_cols": len(matrix[0]),
+            "distinct_cells": len(set(answer.split())),
+        },
+    )
+    monkeypatch.setattr(preparation, "render_trace", lambda *args: trace)
+    rows, rejected = preparation._generate_batch(
+        ("manipulate_matrix", "train", 24, 0, 1, 2)
+    )
+    if rejection:
+        assert not rows
+        assert rejected == {rejection: 1}
+    else:
+        assert len(rows) == 1
+        assert not rejected
+
+
 @pytest.mark.parametrize("task", list(traces.TASKS))
 def test_seeded_reconstruction_does_not_use_hidden_solutions(task):
     dataset = traces.create_dataset(task, seed=123456, size=200)
     accepted = 0
     for index in range(200):
         entry = deepcopy(dataset[index])
-        for field in ("solution", "states", "result"):
+        for field in (
+            "solution",
+            "states",
+            "result",
+            "decimal_value",
+            "target_repr",
+        ):
             entry["metadata"][field] = "hidden result deliberately corrupted"
         try:
             trace = traces.render_trace(task, dataset, entry)
@@ -310,6 +396,44 @@ def test_preparation_is_reproducible_balanced_disjoint_and_sft_compatible(
         preparation.prepare_dataset(tmp_path / "a", tokenizer, **kwargs)
 
 
+def test_quality_audit_reads_prepared_prompts_and_reports_operation_mix(
+    tmp_path, monkeypatch
+):
+    from scripts import audit_reasoning_gym as audit
+
+    tokenizer = ByteChatTokenizer()
+    preparation.prepare_dataset(
+        tmp_path / "dataset",
+        tokenizer,
+        train_rows=60,
+        validation_rows=0,
+        test_rows=0,
+        sequence_length=12000,
+        tokenizer_source="fixture",
+    )
+    monkeypatch.setattr(audit, "get_tokenizer", lambda _: tokenizer)
+    report, quality = audit.audit_dataset(tmp_path / "dataset", [512, 12000])
+    rows = list(iter_jsonl(tmp_path / "dataset" / "train.jsonl"))
+    matrix_rows = [row for row in rows if row["task"] == "manipulate_matrix"]
+    operations = quality["matrix_transforms"]["operation_counts"]
+    assert sum(operations.values()) == sum(
+        row["rendered_steps"] for row in matrix_rows
+    )
+    assert "identity" not in operations
+    assert quality["matrix_transforms"]["candidate_probe"]["rows"] >= len(
+        matrix_rows
+    )
+    assert (
+        sum(
+            stats["rows"]
+            for name, stats in quality["gcd_magnitude_bins"].items()
+            if name.startswith("max_digits")
+        )
+        == 10
+    )
+    assert report["results"][-1]["truncated_rows"] == 0
+
+
 def test_overlong_dataset_fails_without_publishing_partial_data(tmp_path):
     output = tmp_path / "too-short"
     with pytest.raises(RuntimeError, match="undersized"):
@@ -328,6 +452,126 @@ def test_overlong_dataset_fails_without_publishing_partial_data(tmp_path):
         task["train"]["rejections"].get("over_context")
         for task in failure["report"]["tasks"].values()
     )
+
+
+def test_failed_regeneration_preserves_existing_dataset(tmp_path):
+    output = tmp_path / "dataset"
+    tokenizer = ByteChatTokenizer()
+    preparation.prepare_dataset(
+        output,
+        tokenizer,
+        train_rows=6,
+        validation_rows=0,
+        test_rows=0,
+        sequence_length=12000,
+    )
+    before = {path.name: path.read_bytes() for path in output.iterdir()}
+    with pytest.raises(RuntimeError, match="undersized"):
+        preparation.prepare_dataset(
+            output,
+            tokenizer,
+            train_rows=6,
+            validation_rows=0,
+            test_rows=0,
+            sequence_length=1,
+            attempts_per_row=2,
+            replace=True,
+        )
+    assert {path.name: path.read_bytes() for path in output.iterdir()} == before
+
+
+@pytest.mark.parametrize("replace", [False, True])
+@pytest.mark.parametrize("permanent", [False, True])
+def test_staging_cleanup_after_publication_does_not_report_failed_build(
+    tmp_path, monkeypatch, replace, permanent
+):
+    output = tmp_path / "dataset"
+    tokenizer = ByteChatTokenizer()
+    kwargs = dict(
+        train_rows=6,
+        validation_rows=0,
+        test_rows=0,
+        sequence_length=12000,
+        batch_size=16,
+    )
+    if replace:
+        previous = preparation.prepare_dataset(output, tokenizer, **kwargs)
+    remove = _staging.shutil.rmtree
+    attempts = []
+
+    def locked_staging(path):
+        if (path / "train.raw.jsonl").exists():
+            attempts.append(path)
+            if permanent or len(attempts) < 3:
+                raise PermissionError("locked by another process")
+        remove(path)
+
+    monkeypatch.setattr(_staging.shutil, "rmtree", locked_staging)
+    monkeypatch.setattr(_staging.time, "sleep", lambda _: None)
+    if permanent:
+        with pytest.raises(
+            _staging.PublishedDatasetCleanupError, match="staging directory"
+        ) as caught:
+            preparation.prepare_dataset(
+                output, tokenizer, seed=25, replace=replace, **kwargs
+            )
+        assert caught.value.output == output
+        assert caught.value.directory == attempts[-1]
+        assert caught.value.directory.exists()
+        assert isinstance(caught.value.__cause__, PermissionError)
+    else:
+        preparation.prepare_dataset(
+            output, tokenizer, seed=25, replace=replace, **kwargs
+        )
+        assert not attempts[-1].exists()
+    assert len(attempts) == 3
+    assert not output.with_name("dataset.failed.json").exists()
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["rows"] == 6
+    if replace:
+        assert manifest["dataset_sha256"] != previous["dataset_sha256"]
+    for split, stats in manifest["files"].items():
+        data = (output / f"{split}.jsonl").read_bytes()
+        assert hashlib.sha256(data).hexdigest() == stats["sha256"]
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_staging_cleanup_failure_preserves_actual_build_failure(
+    tmp_path, monkeypatch, replace
+):
+    output = tmp_path / "dataset"
+    tokenizer = ByteChatTokenizer()
+    kwargs = dict(train_rows=6, validation_rows=0, test_rows=0)
+    if replace:
+        preparation.prepare_dataset(
+            output, tokenizer, sequence_length=12000, **kwargs
+        )
+        before = {path.name: path.read_bytes() for path in output.iterdir()}
+    attempts = []
+
+    def locked_staging(path, parent):
+        attempts.append(path)
+        raise PermissionError("locked by another process")
+
+    monkeypatch.setattr(_staging, "_remove_directory", locked_staging)
+    with pytest.raises(RuntimeError, match="undersized") as caught:
+        preparation.prepare_dataset(
+            output,
+            tokenizer,
+            sequence_length=1,
+            attempts_per_row=2,
+            replace=replace,
+            **kwargs,
+        )
+    assert str(attempts[-1]) in str(caught.value.__cause__)
+    failure = json.loads(output.with_name("dataset.failed.json").read_text())
+    assert "undersized" in failure["error"]
+    if replace:
+        assert {
+            path.name: path.read_bytes() for path in output.iterdir()
+        } == before
+    else:
+        assert not output.exists()
 
 
 def test_same_input_with_different_cube_wording_is_deduplicated(
@@ -451,6 +695,7 @@ def test_pinned_tokenizer_batched_and_scalar_counts_match_sft():
         apply_chat_template = tokenizer.apply_chat_template
 
     lengths = preparation._lengths(tokenizer, rows)
+    assert {row["task"] for row in rows} == set(traces.TASKS)
     assert lengths == preparation._lengths(ScalarTokenizer(), rows)
     for row, (prompt, target) in zip(rows, lengths, strict=True):
         assert (prompt, target) == (row["prompt_tokens"], row["target_tokens"])

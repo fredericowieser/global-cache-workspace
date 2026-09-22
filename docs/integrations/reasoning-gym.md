@@ -32,7 +32,7 @@ Generate the full dataset:
 uv run --extra cpu --extra convert python scripts/prepare_reasoning_gym.py \
   --tokenizer artifacts/tokenizers/Qwen3.5-2B \
   --out-dir data/train-data/reasoning-gym \
-  --workers 4
+  --workers 4 --replace
 ```
 
 For a small check, use a different output directory and add
@@ -46,24 +46,25 @@ unrelated native puzzle dependencies such as `pycosat` on Windows.
 The upstream revision is
 [`49b07130b3fcd12f2d064bba7c43869543a0e7e7`](https://github.com/open-thought/reasoning-gym/tree/49b07130b3fcd12f2d064bba7c43869543a0e7e7).
 `SOURCES.json` records original and adapted file hashes and the import-only
-adaptations and removal of unused APIs. Generator, transition, and direct scorer
-logic is preserved. The upstream Apache-2.0 license and attribution notice ship
+adaptations and removal of unused APIs. Vendored generator, transition, and direct scorer
+logic is preserved; the GCW GCD wrapper supplies the number-sampling policy
+described below. The upstream Apache-2.0 license and attribution notice ship
 with the subset. The GCW wrapper bounds string rewriting at 256 transitions.
 The source manifest is itself hash-pinned, including hashes of package wiring,
 license, and notice files. Implementation and vendor files use LF line endings
-for portable hashes. Existing receipts retain the implementation hashes from
-their original build; later publication and audit fixes do not rewrite history.
+for portable hashes. Receipts record the implementation that generated the
+current files.
 
 ## Mixture and labels
 
 | Task | Generator settings | Worked solution |
 |---|---|---|
 | `string_manipulation` | String length 8 to 28; 6 to 12 sampled rules | First applicable rule, its position in the displayed list, and each new string; explicit termination |
-| `string_splitting` | Each initial machine count 0 to 64; at most 256 applications | Priority-ordered dismantling; consecutive applications of one rule are grouped with per-application deltas and resulting counts |
+| `base_conversion` | Different source/target bases from 2 to 16; values 256 to 1,048,575 | Accumulate the source digits into a decimal value; show every quotient/remainder division in the target base, then reverse the digits |
 | `ab` | 18 input tokens | Leftmost applicable pair, replacement, and resulting program |
 | `color_cube_rotation` | 2 to 8 rotations | All six face colours after each rotation, followed by the requested face |
-| `manipulate_matrix` | 3 to 6 initial rows and columns; 3 to 8 operations | Each operation and its resulting matrix |
-| `gcd` | 2 to 4 integers between 10 and 100,000 | Euclidean divisions, pairwise GCD reductions, and final GCD |
+| `manipulate_matrix` | 3 to 6 initial rows and columns; 3 to 8 operations; nonconstant final matrix with at least 6 cells and 2 rows/columns; at least 75% productive operations | Each operation and its resulting matrix |
+| `gcd` | Two integers from 10 to 100,000; 25% coprime candidates, otherwise a uniform common factor from 2 to 100; at least 4 divisions | Every Euclidean quotient/remainder division and the final GCD |
 
 Every admitted record has `prompt`, `answer`, and `final_answer`. The `answer`
 is the entire SFT target:
@@ -94,13 +95,12 @@ alone is not an independent proof of its semantics.
 
 ## Admission, splits, and provenance
 
-Admission requires at least two productive transitions (Euclidean divisions for
-GCD). Matrix operations that leave the matrix unchanged do not count towards
+Admission requires at least two productive transitions; GCD requires at least
+four Euclidean divisions. Matrix operations that leave the matrix unchanged do not count towards
 this minimum, although their intermediate state remains in the trace. Empty
 final answers, including completely cancelled AB programs, are explicitly
-excluded. Repeated string states are discarded according to the prompt; a
-dismantling iteration limit returns the current counts. Bounded string generation
-failures are counted as exclusions.
+excluded. Repeated string states are discarded according to the prompt;
+bounded string generation failures are counted as exclusions.
 
 Complete chat-rendered prompts and targets, including the end token, must fit
 4,096 tokens. No solution is truncated. Token counting uses the same prompt
@@ -127,19 +127,33 @@ tokenizer identity, runtime versions, requested and retained counts, all exclusi
 counts, difficulty histograms, length/depth statistics, and JSONL checksums.
 Effective seed intervals in the report are half-open: `[start, end)`.
 
-Preparation refuses an existing destination. Files are staged and the completed
-directory is published only after every quota is met. Failures leave a sibling
+Preparation refuses an existing destination unless `--replace` is supplied.
+Files are staged and the completed directory is published only after every
+quota is met. Replacement accepts only a recognised prepared dataset directory
+containing its data files and manifest, and removes the preceding files after
+successful publication. Use the same paths and flags on every machine.
+Failures leave a sibling
 `<output-name>.failed.json` diagnostic, rather than an apparently complete
 undersized dataset. Generated data and temporary staging directories are ignored
 by Git; the registry contains the small preparation receipt.
 Staging uses an ordinary sibling directory, so published directories inherit
 destination-parent permissions, subject to the operating system's ACL and umask.
 On a shared cluster, prepare beneath the intended shared dataset parent.
+Cleanup retries transient filesystem failures. If the superseded backup or
+staging directory remains locked after publication, the command exits with
+`PublishedDatasetCleanupError`, reporting the valid published dataset and the
+exact directory to remove after closing file handles. It does not write a
+build-failure diagnostic or silently leave a successful command with an
+undisclosed directory. If a build fails before publication, a staging cleanup
+failure preserves the original build error and reports the cleanup error as
+its cause.
 
 Validation and test measure **fresh instances from the same task distribution**.
-They are not harder-instance, composition, or family holdouts. Three tasks share
-the rewriting family, so half of the balanced mixture is rewriting. KOR-Bench
-is not used for generation, filtering, mixture tuning, or checkpoint selection.
+They are not harder-instance, composition, or family holdouts. Two tasks share
+the rewriting family and two involve arithmetic; those two families each
+contribute one third of the balanced mixture. Spatial tracking and matrix
+transformations each contribute one sixth. KOR-Bench is not used for generation,
+filtering, mixture tuning, or checkpoint selection.
 No transfer advantage or learning result is established by data preparation.
 
 ## Training configurations and checks
@@ -149,16 +163,17 @@ No transfer advantage or learning result is established by data preparation.
 Create the subset once from the prepared full training split:
 
 ```bash
-uv run --extra cpu python scripts/subset_reasoning_gym.py
+uv run --extra cpu python scripts/subset_reasoning_gym.py --replace
 ```
 
 This writes `data/train-data/reasoning-gym-128k/train.jsonl` and
-`manifest.json`, refusing an existing destination. It verifies the original
+`manifest.json`; `--replace` permits regeneration at that path. It verifies the
+full
 training file against its manifest, samples uniformly without replacement
 within each task using seed 24, and shuffles the selected rows once. Task quotas
 are proportional to the source counts, rounded by largest remainder with seeded
-tie-breaking. GCD and string manipulation each receive 21,334 rows; each other
-task receives 21,333. No length or difficulty filtering is applied.
+tie-breaking. Cube rotation and matrix manipulation each receive 21,334 rows;
+each other task receives 21,333. No length or difficulty filtering is applied.
 
 All configurations use the same frozen file. Changing the training seed does
 not change membership. Records retain their original `source_id` and
@@ -173,11 +188,11 @@ The optional `--sequence-len` argument sets the receipt's audit cap (default
 training configuration when auditing another context length.
 
 Use `configs/train/reasoning_gym/full_sft_128k.yaml`, `lora_128k.yaml`, or
-`longshot_128k.yaml`. These use the same original validation/test splits and
+`longshot_128k.yaml`. These use the same full validation/test splits and
 starting backbone as the full-data setting, with a 1,536-token training cap,
 microbatch size 16, global batch of 64 rows, and 2,000 optimizer steps for one
-pass. Output directories are separate from the full-data runs. The original
-4,096-token configurations remain available.
+pass. Output directories are separate from the full-data runs.
+The full-data configurations use 4,096 tokens.
 
 Microbatch size is per rank. Keep `global_batch_rows` at least
 `batch_size * world_size` and divisible by that product. Adjust `max_steps`
@@ -186,11 +201,12 @@ run, choosing a divisor of 128,000. For example, global batch 128 uses 1,000
 steps. Actual GPU memory fit and throughput still require qualification.
 
 Stored solutions remain complete. The loader truncates during training:
-1,527 rows (1.19297%) exceed 1,536 tokens, comprising 833 string-manipulation
-and 694 AB examples. Among truncated rows, original length averages 1,808.52
-tokens and removed length averages 272.52 tokens; both have population standard
-deviation 262.37. Four rows lose only EOS. No row becomes prompt-only, and
-0.84142% of target tokens are removed. Counts use the authenticated admission
+1,634 rows (1.27656%) exceed 1,536 tokens, comprising
+876 string-manipulation and 758 AB examples. Among truncated rows, original
+length averages 1,801.44 tokens and removed length averages
+265.44 tokens; both have population standard deviation 254.63.
+Seven rows lose only EOS. No row becomes prompt-only, and
+0.88106% of target tokens are removed. Counts use the authenticated admission
 token lengths for the pinned tokenizer and existing chat settings.
 
 ### Full training split
@@ -208,7 +224,7 @@ does not start from a separate maths-SFT checkpoint.
 The `validation_dataset` is used for SFT loss monitoring. All six templates
 evaluate the same **first 768 validation rows** every 500 optimizer steps:
 768 batches at microbatch size 1, or 48 batches at size 16. That fixed prefix
-contains 122 to 142 examples per task; it is not exactly stratified. The loader
+contains 119 to 141 examples per task; it is not exactly stratified. The loader
 uses `batch_size * eval_batches` rows, not the entire 6,000-row split. Keep that
 product fixed when changing microbatch size to preserve validation membership.
 The training context cap also applies during evaluation, so loss at 1,536 and
@@ -231,12 +247,19 @@ counting with actual SFT batches for all six shipped examples.
 ## Reproduce the analysis
 
 ```bash
+uv run --extra cpu --extra convert python scripts/verify_reasoning_gym.py
 uv run --extra cpu --extra convert python scripts/audit_reasoning_gym.py
 uv run --extra cpu --extra convert python scripts/audit_reasoning_gym.py \
   --split validation --out-dir data/analysis/reasoning-gym-validation
 ```
 
-The command verifies the source checksum, row count, per-task length totals,
+`verify_reasoning_gym.py` checks all split checksums, global deduplication,
+labels, seed isolation, and token counts, then regenerates 100 examples per
+task/split through the actual tokenizer and SFT loader. Only after these checks
+pass does it write the preparation receipt and six example rows.
+
+The truncation command verifies the source checksum, row count, per-task
+length totals,
 and tokenizer identity before writing reports. It checks actual SFT batches
 for every available task/cap/truncated-or-complete combination. Use
 `--sequence-lens 512 1024 1536 2048 4096` to select audit caps. Output includes
@@ -246,39 +269,61 @@ Published {download}`training truncation findings <../../data/analysis/reasoning
 and {download}`validation findings <../../data/analysis/reasoning-gym-validation/summary.md>`
 are retained in Git; the local NumPy length cache is unnecessary to reproduce them.
 
-## Pre-training review and limitations
+## Data-quality policy and interpretation
 
-The September 2026 review retained the frozen training file, fixed subset,
-holdouts, and labels. Publication, validation monitoring, audit commands, and
-provenance checks were improved without regenerating the data. Exact counts
-come from all prepared [training rows](../../data/analysis/reasoning-gym-truncation/quality.json)
-and [validation rows](../../data/analysis/reasoning-gym-validation/quality.json),
-rather than fresh generator samples.
+Matrix admission rejects constant or undersized answers and traces in which
+more than one quarter of operations leave the state unchanged. These conditions
+are checked in addition to trace depth. The renderer records final rows,
+columns, and distinct-cell count in `difficulty`; admission consumes these
+structural facts. This filtering also changes the operation mixture, especially
+by excluding crop-heavy sequences. The quality report records exact admitted
+per-transform operation counts and row frequencies, with an unfiltered sample
+of the first 4,000 candidates (or all candidates if fewer) from each split
+for comparison. Rotation angles share the `rotate` category; the initial
+identity instruction is excluded. In the training audit, crops account for
+10.45% of operations in the candidate sample and 1.33% of admitted operations.
 
-| Review points | Finding and decision |
-|---|---|
-| 1, validation size | Increased every template to the same 768-row prefix. This improves coverage but is still a sample and does not establish statistical reliability or answer accuracy. |
-| 2, public analysis | Kept the user's public analysis policy, including the math row-length evidence. Generated analysis may be retained as reproducible evidence. |
-| 3, audit reproduction | Added the script above; reproduced all published training truncation counts and statistics, within floating-point rounding. |
-| 4, production token counts | Added a pinned local Qwen tokenizer test comparing both counting paths against `sft_batch`, including EOS and target masking. |
-| 5, subset configurations | Tests now cover all six templates, exposure, cap, dataset paths, and validation row budget. There are three subset templates and three full-data templates. |
-| 6, matrix degeneracy | Training answers have one cell in 18.79%, at most four cells in 41.75%, and only zeros in 9.96%; 16.44% of rendered operations leave the state unchanged. Retained these valid solutions and their earlier intermediate states. A stricter size/nonzero admission policy would define a new dataset version. |
-| 7, GCD skew | `1` accounts for 49.13% of training and 49.8% of validation answers; `1` or `2` accounts for 74.18% of training. The supervised Euclidean divisions still vary. Retained the distribution; final-answer accuracy must be compared with the constant baseline. |
-| 8, dismantling input/output space | Training uses 116,672 of 274,625 possible initial triples (42.48%); all splits occupy 43.21%. A is always zero; B/C are zero in about 75%, Y in 91.79%. Exact-input dedup prevents overlap, not near-neighbour generalisation. This is an interpolation task. |
-| 9, grouped dismantling traces | Retained the documented arithmetic compression: mean 111.49 rule applications in 4.41 rendered groups. These are worked solutions, not supervision of every individual transition. Expanding them would materially change length and truncation statistics. |
-| 10, cube shortcuts | Ignoring rotations yields the correct queried colour on 21.32% of training and 19.4% of validation. Intermediate face states are supervised; final-colour accuracy alone is a weak metric. |
-| 11, clarifications | Retained uniform semantic clarifications. Their redundant tokens are already included in the length audit; making them conditional would change prompt identities and prepared bytes for little expected benefit. |
-| 12, publication permissions | Confirmed protected owner-restricted Windows ACLs despite sandbox readability. Restored parent inheritance on the existing full and subset folders and their files. Future staging inherits the destination parent instead of a private temporary-directory ACL. |
-| 13, subset audit cap | Added `--sequence-len`, default 1,536. Changing it only changes audit statistics. |
-| 14, portable provenance | LF-pinned implementation files and pinned the vendor source manifest plus package initialisers, license, and notice. Original receipts remain historical. |
-| 15, throughput | Kept full-data microbatch 1 as a memory-conservative template, pending target-GPU measurement. Increase it when memory permits and adjust `eval_batches` to retain the evaluation budget. Length bucketing was deferred because it changes training order and needs trainer-level qualification. |
-| 16, row size | Retained provenance alongside targets. A slim file or persisted index is an optimisation, not a correctness prerequisite; neither has a measured startup bottleneck here. |
-| 17, evaluation/format | No Reasoning Gym generation suite was added. Current monitoring measures target-token SFT loss, not final-answer accuracy. Full SFT and LoRA can change output style; Paper7 transfer and extraction success need actual generated-output evaluation. Frozen-backbone cache processors can also change generated behaviour. |
-| 18, transition bound | Current generation and rendering both admit exactly 256 transitions; added tests at 255, 256, and 257. No documentation correction to 255 was warranted. |
-| 19, memory/diagnostics | Retained full digest strings because this offline build fits the available environment. Failure reports for custom output names are covered by the dataset-directory `*.failed.json` ignore rule. |
+GCD generation samples a factor: 1 with probability 0.25, otherwise uniform
+from 2 to 100. For the actual factor `g`, each cofactor is drawn from
+`ceil(10 / g)` through `floor(100000 / g)`, rejecting pairs whose GCD is not 1,
+before multiplying both by `g`. Both branches therefore generate inputs in
+the same numeric interval, rather than giving coprime inputs a smaller range.
+The prompt and scorer are reused from the pinned GCD generator. Trace-depth admission and
+global deduplication can slightly alter the final coprime proportion; the exact
+label histogram is published in the analysis report. The prepared training
+split contains 26.08% coprime GCD pairs, with all 100 final GCD values represented.
+The coprime rate is 30.04% among 1,032 examples whose larger input has four
+digits and 26.04% among 115,635 examples with at least five digits. Only five
+examples have smaller maxima, so that bin is too small for a useful estimate.
+Matching input ranges removes the near-deterministic size shortcut; it does
+not imply exact statistical independence after admission.
+All admitted matrix answers satisfy the size, diversity, and productivity
+criteria. Base conversion has 115,445 distinct final answers in 116,672 training
+rows; different inputs may legitimately have the same final representation.
 
-These data are suitable for the intended worked-solution SFT experiment, with
-the limitations above. They do not constitute a difficult, shortcut-free
-reasoning benchmark. A future quality-filtered mixture should use a new output
-directory, preparation receipt, subset, and length audit instead of silently
-replacing this frozen experiment.
+Base conversion spans 15 source bases and 14 different target bases over
+1,048,320 possible values, giving 220,147,200 input combinations. Its worked
+solutions contain each digit accumulation and each division, without grouped
+transition shortcuts. All labels are reconstructed from the visible prompt.
+Base conversion and GCD share quotient/remainder arithmetic in their traces;
+the two tasks provide related arithmetic supervision, not independent reasoning
+families.
+
+The manifest records these generator settings and admission criteria. The
+[training distribution counts](../../data/analysis/reasoning-gym-truncation/quality.json)
+and [validation distribution counts](../../data/analysis/reasoning-gym-validation/quality.json)
+report final-answer diversity, GCD labels and coprime rates by input magnitude,
+matrix admission checks and operation frequencies, and the cube
+initial-colour baseline. Cube rotations can legitimately return the queried
+face to its initial colour; intermediate face states remain supervised.
+
+These are procedural worked-solution SFT data. Validation loss is measured on
+supervised target tokens, not final-answer accuracy. The six tasks do not
+establish broad reasoning transfer, harder-instance generalisation, or family
+holdout performance. Full SFT, LoRA, and cache processing can all change output
+behaviour; evaluate actual generated answers when measuring transfer.
+
+The full-data microbatch size of 1 is a memory-conservative template. Increase
+it when the target GPU permits, preserving global batch/exposure and the
+validation row budget. Length bucketing and compact training files are not
+implemented; rows retain provenance alongside targets.

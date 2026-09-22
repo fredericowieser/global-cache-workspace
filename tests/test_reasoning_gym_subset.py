@@ -85,6 +85,18 @@ def test_subset_audit_cap_does_not_change_selection(source, tmp_path):
         prepare_subset(source, tmp_path / "invalid", 12, 24, sequence_len=0)
 
 
+def test_subset_regenerates_in_place(source, tmp_path):
+    output = tmp_path / "subset"
+    first = prepare_subset(source, output, 12, 24)
+    second = prepare_subset(source, output, 12, 25, replace=True)
+    assert first["sha256"] != second["sha256"]
+    assert (
+        hashlib.sha256((output / "train.jsonl").read_bytes()).hexdigest()
+        == second["sha256"]
+    )
+    assert not list(tmp_path.glob(".reasoning-gym-*"))
+
+
 def test_subset_rejects_changed_source(source, tmp_path):
     with (source / "train.jsonl").open("ab") as handle:
         handle.write(

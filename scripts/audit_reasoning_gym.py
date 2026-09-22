@@ -10,6 +10,11 @@ import re
 import numpy as np
 
 from gcw.data.sft import sft_batch
+from gcw.data.reasoning_gym_traces import _matrix_operations
+from gcw.data._vendor.reasoning_gym.algorithmic.manipulate_matrix import (
+    ManipulateMatrixConfig,
+    ManipulateMatrixDataset,
+)
 from gcw.data.tokenizers import get_tokenizer
 
 
@@ -84,6 +89,10 @@ def audit_dataset(source: Path, caps: list[int], split: str = "train"):
     digest = hashlib.sha256()
     aggregates = defaultdict(Counter)
     quality = defaultdict(Counter)
+    answers = defaultdict(set)
+    gcd_magnitude = defaultdict(Counter)
+    matrix_operations = Counter()
+    matrix_rows_with_operation = Counter()
     with (source / expected["file"]).open("rb") as handle:
         for index, line in enumerate(handle):
             digest.update(line)
@@ -102,30 +111,77 @@ def audit_dataset(source: Path, caps: list[int], split: str = "train"):
                 rows=1, sequence_tokens=total, target_tokens=target
             )
             quality[task]["rows"] += 1
+            answers[task].add(row["final_answer"])
             for prefix in (24, 384, 768):
                 quality[task][f"rows_in_first_{prefix}"] += index < prefix
             for cap in caps:
                 examples.setdefault((task, cap, total > cap), row)
             if task == "gcd":
                 quality[task][f"answer_{row['final_answer']}"] += 1
+                quality[task]["below_four_divisions"] += row["trace_steps"] < 4
+                numbers = [
+                    int(value)
+                    for value in row["prompt"]
+                    .split("numbers: ")[1]
+                    .split(".")[0]
+                    .split(", ")
+                ]
+                larger = max(numbers)
+                digit_band = (
+                    "max_digits_le_3"
+                    if larger < 1000
+                    else "max_digits_4" if larger < 10000 else "max_digits_ge_5"
+                )
+                lower = min(larger // 10000, 9) * 10000
+                for band in (
+                    digit_band,
+                    f"max_input_{lower}_{lower + 9999 if lower < 90000 else 100000}",
+                ):
+                    gcd_magnitude[band]["rows"] += 1
+                    gcd_magnitude[band]["coprime_rows"] += (
+                        row["final_answer"] == "1"
+                    )
             elif task == "manipulate_matrix":
+                question = row["prompt"].split("\nRotations are clockwise.", 1)[
+                    0
+                ]
+                operations = Counter(
+                    op["transform"] for op in _matrix_operations(question)
+                )
+                matrix_operations.update(operations)
+                matrix_rows_with_operation.update(operations.keys())
+                if sum(operations.values()) != row["rendered_steps"]:
+                    raise ValueError(
+                        "Matrix operation counts disagree with the trace"
+                    )
                 cells = [int(value) for value in row["final_answer"].split()]
                 for limit in (1, 2, 4):
                     quality[task][f"final_cells_le_{limit}"] += (
                         len(cells) <= limit
                     )
                 quality[task]["all_zero"] += not any(cells)
+                quality[task]["constant_answer"] += len(set(cells)) < 2
+                shape = [
+                    line.split() for line in row["final_answer"].splitlines()
+                ]
+                quality[task]["undersized_answer"] += (
+                    len(shape) < 2 or len(shape[0]) < 2 or len(cells) < 6
+                )
+                quality[task]["below_productive_fraction"] += (
+                    row["trace_steps"] < 0.75 * row["rendered_steps"]
+                )
                 quality[task]["operations"] += row["rendered_steps"]
                 quality[task]["unchanged_operations"] += (
                     row["rendered_steps"] - row["trace_steps"]
                 )
-            elif task == "string_splitting":
-                for name, value in zip(
-                    "ABCXYZ", row["final_answer"].split(), strict=True
-                ):
-                    quality[task][f"{name}_zero"] += value == "0"
-                quality[task]["rule_applications"] += row["trace_steps"]
-                quality[task]["rendered_groups"] += row["rendered_steps"]
+            elif task == "base_conversion":
+                quality[task][
+                    f"source_base_{row['difficulty']['source_base']}"
+                ] += 1
+                quality[task][
+                    f"target_base_{row['difficulty']['target_base']}"
+                ] += 1
+                quality[task]["transitions"] += row["trace_steps"]
             elif task == "color_cube_rotation":
                 initial = {
                     side: color
@@ -191,12 +247,53 @@ def audit_dataset(source: Path, caps: list[int], split: str = "train"):
         ],
         "task_index_names": tasks,
     }
+    matrix_stats = manifest["tasks"]["manipulate_matrix"][split]
+    candidate_dataset = ManipulateMatrixDataset(
+        ManipulateMatrixConfig(**matrix_stats["generator_config"])
+    )
+    candidate_operations = Counter()
+    candidate_rows = Counter()
+    probe_rows = min(4000, matrix_stats["attempted"])
+    for index in range(probe_rows):
+        transforms = Counter(
+            op["transform"]
+            for op in candidate_dataset[index]["metadata"]["operations"]
+        )
+        candidate_operations.update(transforms)
+        candidate_rows.update(transforms.keys())
     quality_report = {
         "dataset_sha256": digest.hexdigest(),
         "split": split,
         "rows": len(lengths),
-        "method": "All checksum-verified rows; exact final-answer counts and stored trace statistics, without fresh generator sampling",
-        "tasks": dict(quality),
+        "method": "All checksum-verified rows for admitted-data statistics; a separately labelled deterministic matrix candidate probe supplies an unfiltered comparison",
+        "tasks": {
+            task: {**counts, "unique_answers": len(answers[task])}
+            for task, counts in quality.items()
+        },
+        "gcd_magnitude_bins": {
+            band: {
+                **counts,
+                "coprime_percent": 100
+                * counts["coprime_rows"]
+                / counts["rows"],
+            }
+            for band, counts in sorted(gcd_magnitude.items())
+        },
+        "matrix_transforms": {
+            "operation_counts": dict(sorted(matrix_operations.items())),
+            "rows_with_transform": dict(
+                sorted(matrix_rows_with_operation.items())
+            ),
+            "scope": "All admitted rows; initial identity instruction excluded. These counts reflect all admission filters, not the unfiltered generator distribution.",
+            "candidate_probe": {
+                "seed": candidate_dataset.seed,
+                "source_index_start": 0,
+                "rows": probe_rows,
+                "operation_counts": dict(sorted(candidate_operations.items())),
+                "rows_with_transform": dict(sorted(candidate_rows.items())),
+                "scope": "First candidates in this split's seed range, before admission; a sample rather than the full attempted population.",
+            },
+        },
     }
     return report, quality_report
 
@@ -254,7 +351,7 @@ def write_reports(output: Path, report: dict, quality: dict):
     lines.extend(
         [
             "",
-            "[Detailed statistics](report.json) include retained targets, EOS-only truncations, and per-task results. [Distribution counts](quality.json) include matrix degeneracy, GCD labels, dismantling outputs, and the cube initial-colour baseline.",
+            "[Detailed statistics](report.json) include retained targets, EOS-only truncations, and per-task results. [Distribution counts](quality.json) include matrix degeneracy, GCD labels, base-conversion bases, and the cube initial-colour baseline.",
             "",
             f"Source SHA-256: `{report['dataset_sha256']}`.",
             "",

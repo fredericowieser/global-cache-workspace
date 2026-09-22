@@ -6,3 +6,4 @@ src/gcw/data/_staging.py text eol=lf
 scripts/prepare_reasoning_gym.py text eol=lf
 scripts/subset_reasoning_gym.py text eol=lf
 scripts/audit_reasoning_gym.py text eol=lf
+scripts/verify_reasoning_gym.py text eol=lf

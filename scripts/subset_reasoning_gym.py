@@ -9,7 +9,7 @@ import random
 
 import numpy as np
 
-from gcw.data._staging import dataset_staging
+from gcw.data._staging import dataset_staging, publish_dataset
 
 
 def prepare_subset(
@@ -18,8 +18,10 @@ def prepare_subset(
     rows: int,
     seed: int,
     sequence_len: int = 1536,
+    *,
+    replace: bool = False,
 ):
-    if destination.exists():
+    if destination.exists() and not replace:
         raise FileExistsError(destination)
     if rows <= 0:
         raise ValueError("rows must be positive")
@@ -65,7 +67,7 @@ def prepare_subset(
         selected.extend(rng.sample(offsets[task], quotas[task]))
     rng.shuffle(selected)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with dataset_staging(destination.parent) as temporary:
+    with dataset_staging(destination) as temporary:
         staging = Path(temporary) / "subset"
         staging.mkdir()
         output = staging / "train.jsonl"
@@ -148,7 +150,7 @@ def prepare_subset(
             json.dumps(report, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        staging.rename(destination)
+        publish_dataset(staging, destination, replace=replace)
     return report
 
 
@@ -165,9 +167,15 @@ def main():
     parser.add_argument("--rows", type=int, default=128000)
     parser.add_argument("--seed", type=int, default=24)
     parser.add_argument("--sequence-len", type=int, default=1536)
+    parser.add_argument("--replace", action="store_true")
     args = parser.parse_args()
     report = prepare_subset(
-        args.source, args.out_dir, args.rows, args.seed, args.sequence_len
+        args.source,
+        args.out_dir,
+        args.rows,
+        args.seed,
+        args.sequence_len,
+        replace=args.replace,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 

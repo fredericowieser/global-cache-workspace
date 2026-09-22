@@ -9,6 +9,10 @@
       "adapted_sha256": "40c942a0284d8a3303cd44f3bbddb2ab6ca0622942188ec1e4a4956c0a5a3671",
       "upstream_sha256": "a232e9cbf1cc7fb20f913cca845504d808578866734e085c9cffda12636bab65"
     },
+    "algorithmic/base_conversion.py": {
+      "adapted_sha256": "63a000f9907ce442bbd8d36338afa892330d02d295f192bf04e7274f15d76446",
+      "upstream_sha256": "7d1a1564b6b9e462c73aba989bc572ee75a7d5bc5604637b181345ef94bb903e"
+    },
     "algorithmic/manipulate_matrix.py": {
       "adapted_sha256": "352f5575a56bccfe61c18eda5a4eb2c87c8a2d902038bf6719e3c906182caf19",
       "upstream_sha256": "7203c8ad02bb74fe52a91b88a9fcaca17647735a9d32acba09b04718a0458093"
@@ -16,10 +20,6 @@
     "algorithmic/string_manipulation.py": {
       "adapted_sha256": "82f785b99d66f122b33123735b1ea002119ce4f8808be9e5eeebe693eaf5ca9f",
       "upstream_sha256": "acd0355646b5a302cb1af04e4d39da4ff38b097c3489c3019a297a005d06d795"
-    },
-    "algorithmic/string_splitting.py": {
-      "adapted_sha256": "067bf21170e21f82cc6966083f62f05ae8da43d7505153b0757bec327b8d2610",
-      "upstream_sha256": "6589eb75c508270a8e095595f8c3bf6c2a4450207f980936e29cd2f663dea081"
     },
     "arithmetic/gcd.py": {
       "adapted_sha256": "68b05d7636954152dde08f4e6981384dc0b485b0b9f384148745454eb8d1da4d",
