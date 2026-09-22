@@ -1,0 +1,70 @@
+{
+  "audit": {
+    "eos_only_truncated_rows": 4,
+    "method": "Stored admission token counts from checksum-verified source; target includes EOS; population standard deviation conditional on truncation",
+    "original_tokens_mean_truncated": 1808.5219384413883,
+    "prompt_only_rows": 0,
+    "removed_tokens_mean_truncated": 272.52193844138833,
+    "removed_tokens_std_truncated": 262.3695996501956,
+    "sequence_len": 1536,
+    "target_tokens_lost_percent": 0.8414186793567844,
+    "truncated_percent": 1.19296875,
+    "truncated_rows": 1527,
+    "truncated_rows_by_task": {
+      "ab": 694,
+      "color_cube_rotation": 0,
+      "gcd": 0,
+      "manipulate_matrix": 0,
+      "string_manipulation": 833,
+      "string_splitting": 0
+    }
+  },
+  "bytes": 341114494,
+  "file": "train.jsonl",
+  "holdouts": {
+    "test": {
+      "bytes": 15961284,
+      "file": "test.jsonl",
+      "rows": 6000,
+      "sha256": "d53f5ee9a982d39637ea616253e9e53d99d199077c7a63e97d6849e5d17afab0",
+      "source_ids_sha256": "86598875eca9d9b239bd0f6c6dc3c8bc570798135e8327a628da1c2028cf6a2d"
+    },
+    "validation": {
+      "bytes": 16040994,
+      "file": "validation.jsonl",
+      "rows": 6000,
+      "sha256": "d38cf250d98881fdc2bbac559ee16afcf328b10f7b77191f2fb7c3849bdbe686",
+      "source_ids_sha256": "1831fb3acc0fb5d3db64741b3f2c8f6b559e7c597abd61293fe0f06d2ea2e383"
+    }
+  },
+  "row_identity": "Original source_id and experiment_order retained; physical file order is subset order",
+  "rows": 128000,
+  "schema": "gcw.reasoning_gym.subset.v1",
+  "seed": 24,
+  "selection": "Uniform without replacement within task; proportional largest-remainder quotas with seeded tie-breaking; final seeded shuffle",
+  "sha256": "f992a31461c6074fa4de8dcee68ff13ebbf361dfc542c5d96da34ac0caf03c1d",
+  "source": "data/train-data/reasoning-gym/train.jsonl",
+  "source_format": {
+    "final_answer_delimiter": "<answer>...</answer>",
+    "prompt_suffix": "",
+    "response_prefix": "",
+    "sft_chat_template": true,
+    "sft_enable_thinking": false,
+    "sft_loss_scope": "answer_only",
+    "truncation": "reject"
+  },
+  "source_ids_sha256": "0e498d411bcd60cdc3406539419c39f9f53272ede71317ec3c52916706b2eb38",
+  "source_manifest_sha256": "299aaf6a1dde11660e7002a3e9a8341453e17737542e75da1d91d2f632e2cd17",
+  "source_rows": 700032,
+  "source_sha256": "0d951f835c9eb6e326bb286bdc2ec1ac0129b3958eb17b0c3fc3b86ad34dbbaa",
+  "task_counts": {
+    "ab": 21333,
+    "color_cube_rotation": 21333,
+    "gcd": 21334,
+    "manipulate_matrix": 21333,
+    "string_manipulation": 21334,
+    "string_splitting": 21333
+  },
+  "tokenizer": "artifacts/tokenizers/Qwen3.5-2B",
+  "tokenizer_identity_sha256": "5de890504409a3c030c22818ca38ba0469abe07935719b95139e2ef10319b02c"
+}

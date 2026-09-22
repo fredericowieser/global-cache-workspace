@@ -61,6 +61,9 @@ The smoke program constructs TF and BGT, computes finite losses, admits Longshot
 
 ## Train
 
+To prepare procedural reasoning SFT data with worked solutions and labelled
+answers, see the [Reasoning Gym data pipeline](docs/integrations/reasoning-gym.md).
+
 Run a CPU smoke config:
 
 ```bash
@@ -200,6 +203,8 @@ uv run --extra cpu --group docs sphinx-build -W --keep-going -b html docs docs/_
 - `tests/`: unit, integration, provenance, and compatibility contracts.
 
 Local metric files are canonical. W&B mirrors them. Historical evidence keeps its original paths and identity schemas.
+Reproducible analysis findings under `data/analysis/` may be tracked, including
+the published truncation summaries, reports, and math row-length evidence.
 
 ### Add workers to an existing Slurm evaluation queue
 

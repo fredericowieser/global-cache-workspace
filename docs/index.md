@@ -64,6 +64,7 @@ integrations/weights-and-biases
 integrations/hugging-face
 integrations/lm-evaluation-harness
 integrations/korbench
+integrations/reasoning-gym
 integrations/slurm
 ```
 

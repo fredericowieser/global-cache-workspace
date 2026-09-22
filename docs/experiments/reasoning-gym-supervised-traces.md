@@ -1,8 +1,10 @@
 # Reasoning Gym supervised traces: implementation review
 
-**Status:** Proposal, with source inspection and local feasibility checks,
-2026-09-22. No GCW integration or training run has been completed. This review
-supports the priorities in [reasoning transfer](reasoning-transfer.md).
+**Status:** Offline preparation implemented, 2026-09-22. The six-task SFT
+pipeline, correctness tests, and three training templates are available in the
+[integration guide](../integrations/reasoning-gym.md). No training run has been
+completed. The source audit and planning estimates below are retained as the
+design rationale supporting [reasoning transfer](reasoning-transfer.md).
 
 ## Assessment and scope
 

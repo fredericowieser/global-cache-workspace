@@ -140,6 +140,7 @@ markers = [
 
 [tool.ruff]
 line-length = 80
+extend-exclude = ["src/gcw/data/_vendor"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -147,3 +148,4 @@ ignore_missing_imports = true
 
 [tool.black]
 line-length = 80
+extend-exclude = "/src/gcw/data/_vendor/"

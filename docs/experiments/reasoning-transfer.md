@@ -3,7 +3,8 @@
 **Status:** Living experiment note, updated 2026-09-22. Maths SFT followed by
 KOR-Bench evaluation has been reported as successful. Quantitative results and
 run references remain to be recorded here. [KOR-Bench integration](../integrations/korbench.md)
-is implemented; the next training studies below remain proposals.
+and the [six-task Reasoning Gym preparation pipeline](../integrations/reasoning-gym.md)
+are implemented; the next training studies below remain proposals.
 
 ## Motivation
 
@@ -206,11 +207,13 @@ loading and scoring. Actual response length matters more than the token cap.
 | ProofWriter | Proposed 2,000-question stratified subset of a specified test split; not the full release | 64–256 | **0.5–3.5 hours** |
 | Reasoning Gym | Proposed 10-task selection × 200 examples; not the entire library | 256–1,024 | **1–12 hours** |
 
-The rate assumption is informed by existing Paper7 `gcw_runtime` records:
-[2B diffusion](../../results/qwen35_2b_fair_campaign_v1_diffusion_adapter22m_seed24_final_paper7_update_metrics_thinking-off.json)
-produced about 142 output tokens/second on GSM8K and 119 on TheoremQA;
-[27B Longshot](../../results/qwen35_27b_instruct_longshot_fair_gate_rank1_seed24_step2000_paper7_thinking-off.json)
-produced about 111 on GSM8K and 44 on SVAMP. These are task totals divided by
+The rate assumption is informed by local Paper7 `gcw_runtime` records, which
+are not distributed with the documentation. The 2B diffusion record
+`results/qwen35_2b_fair_campaign_v1_diffusion_adapter22m_seed24_final_paper7_update_metrics_thinking-off.json`
+reported about 142 output tokens/second on GSM8K and 119 on TheoremQA. The 27B
+Longshot record
+`results/qwen35_27b_instruct_longshot_fair_gate_rank1_seed24_step2000_paper7_thinking-off.json`
+reported about 111 on GSM8K and 44 on SVAMP. These are task totals divided by
 elapsed task time, including overhead, not isolated decode speeds or matched
 hardware comparisons. The estimates are rounded extrapolations, not upper bounds.
 

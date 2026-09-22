@@ -1,0 +1,108 @@
+# Training template; see docs/integrations/reasoning-gym.md before launch.
+model:
+  variant: tf
+  family: qwen3_5
+  sequence_len: 262144
+  vocab_size: 248320
+  hidden_size: 2048
+  intermediate_size: 6144
+  num_layers: 24
+  num_heads: 8
+  num_kv_heads: 2
+  head_dim: 256
+  hidden_act: silu
+  rope_theta: 10000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  partial_rotary_factor: 0.25
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: 128
+  linear_value_head_dim: 128
+  linear_num_key_heads: 16
+  linear_num_value_heads: 16
+  layer_types:
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  processor_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  - 19
+  - 23
+  processor_generation_mode: windowed
+  lora: null
+  cache_processor: null
+  diffusion_processor: null
+  legacy_bottleneck_generate: false
+data:
+  kind: sft
+  dataset: data/train-data/reasoning-gym-128k/train.jsonl
+  validation_dataset: data/train-data/reasoning-gym/validation.jsonl
+  tokenizer: hf
+  tokenizer_source: artifacts/tokenizers/Qwen3.5-2B
+  sft_take_rows: 128000
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  prompt_suffix: ''
+  response_prefix: ''
+mode: sft
+seed: 24
+distributed: ddp
+freeze_backbone: false
+trainable: backbone
+backbone_checkpoint: artifacts/checkpoints/qwen35-2b-base-native
+output_dir: runs/reasoning-gym-128k/qwen35-2b-full_sft
+batch_size: 16
+sequence_len: 1536
+global_batch_rows: 64
+total_batch_size: 0
+max_steps: 2000
+learning_rate: 5.0e-06
+adam_beta2: 0.999
+warmup_steps: 100
+warmdown_ratio: 0.1
+weight_decay: 0.0
+grad_clip: 1.0
+precision: bf16_mixed
+loss_backend: reference
+save_cache_processor_only: false
+save_every: 1000
+save_final: true
+eval_every: 500
+eval_batches: 48
+wandb:
+  enabled: false
+metadata:
+  protocol: gcw.reasoning_gym.sft.v1
+  readiness: data_prepared_training_not_gpu_qualified
+  pretrained_source: Qwen/Qwen3.5-2B
+  pretrained_source_revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  prepared_training_rows: 128000
+  dataset_manifest: data/train-data/reasoning-gym-128k/manifest.json
+  subset_seed: 24

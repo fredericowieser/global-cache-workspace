@@ -43,7 +43,6 @@ data/runs/*
 !data/runs/.gitkeep
 data/results/*
 !data/results/.gitkeep
-data/analysis/*
 !data/analysis/.gitkeep
 
 # Large model and dataset artifacts
@@ -69,3 +68,9 @@ Thumbs.db
 
 # Prepared KOR-Bench evaluation records
 data/eval-data/korbench/
+
+# Prepared Reasoning Gym SFT records
+data/train-data/reasoning-gym/
+data/train-data/reasoning-gym-128k/
+data/train-data/.reasoning-gym-*/
+data/train-data/*.failed.json

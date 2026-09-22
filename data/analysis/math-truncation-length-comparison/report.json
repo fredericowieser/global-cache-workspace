@@ -1,0 +1,245 @@
+{
+  "source": {
+    "host": "lrc-alpha",
+    "path": "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl",
+    "skip_rows": 128000,
+    "slice_sha256": "df62346bf8689c1e08055157354fd41bbc1f44116511b07859ec5f8fe13a4c44",
+    "source_bytes": 1392578835,
+    "source_mtime_ns": 1782158438509663353,
+    "source_rows": 1000000,
+    "source_sha256": "576f26f134bb20d326c7812a44347a81699c4698dfaeacca1bea3a352abc696a",
+    "take_rows": 128000
+  },
+  "tokenizer": {
+    "repository": "Qwen/Qwen3.5-2B",
+    "local_source": "artifacts/tokenizers/Qwen3.5-2B",
+    "identity_sha256": "5de890504409a3c030c22818ca38ba0469abe07935719b95139e2ef10319b02c",
+    "files": {
+      "chat_template.jinja": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+      "config.json": "ed1c1723241f23f7f4e23430759cbd7dcfb4103cbdfe052bfe7626b57c2615b4",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+    }
+  },
+  "format": {
+    "sft_skip_rows": 128000,
+    "sft_take_rows": 128000,
+    "response_prefix": "\n",
+    "prompt_suffix": "",
+    "sft_chat_template": false,
+    "sft_enable_thinking": false,
+    "sft_loss_scope": "answer_only"
+  },
+  "standard_deviation": "Population standard deviation (ddof=0), conditional on truncation at the specified cap",
+  "source_length_table_sha256": "3c939061936069cfda785cf666b6f61b31b1ca2024df99400098eb7713150dad",
+  "results": [
+    {
+      "sequence_len": 512,
+      "rows": 128000,
+      "truncated_rows": 46532,
+      "truncated_percent": 36.353125,
+      "complete_rows": 81468,
+      "prompt_only_rows": 574,
+      "prompt_only_percent_all_rows": 0.4484375,
+      "prompt_only_percent_truncated_rows": 1.2335597008510273,
+      "eos_only_truncated_rows": 126,
+      "original_total_tokens_truncated_rows": {
+        "count": 46532,
+        "mean": 755.3926115361471,
+        "std": 203.16391644301655,
+        "median": 711.0,
+        "p95": 1094.0,
+        "min": 513,
+        "max": 6834,
+        "total": 35149929
+      },
+      "removed_total_tokens_truncated_rows": {
+        "count": 46532,
+        "mean": 243.39261153614717,
+        "std": 203.16391644301655,
+        "median": 199.0,
+        "p95": 582.0,
+        "min": 1,
+        "max": 6322,
+        "total": 11325545
+      },
+      "retained_answer_tokens_truncated_rows": {
+        "count": 46532,
+        "mean": 421.11607066105046,
+        "std": 78.19627539226025,
+        "median": 442.0,
+        "p95": 481.0,
+        "min": 0,
+        "max": 504,
+        "total": 19595373
+      },
+      "removed_answer_tokens_truncated_rows": {
+        "count": 46532,
+        "mean": 237.6826270093699,
+        "std": 180.07922391406277,
+        "median": 198.0,
+        "p95": 576.0,
+        "min": 1,
+        "max": 1158,
+        "total": 11059848
+      },
+      "lost_answer_token_percent": 21.74996700586921
+    },
+    {
+      "sequence_len": 1024,
+      "rows": 128000,
+      "truncated_rows": 4771,
+      "truncated_percent": 3.7273437499999997,
+      "complete_rows": 123229,
+      "prompt_only_rows": 141,
+      "prompt_only_percent_all_rows": 0.11015624999999998,
+      "prompt_only_percent_truncated_rows": 2.9553552714315656,
+      "eos_only_truncated_rows": 41,
+      "original_total_tokens_truncated_rows": {
+        "count": 4771,
+        "mean": 1145.8828337874659,
+        "std": 242.07622662669186,
+        "median": 1093.0,
+        "p95": 1360.0,
+        "min": 1025,
+        "max": 6834,
+        "total": 5467007
+      },
+      "removed_total_tokens_truncated_rows": {
+        "count": 4771,
+        "mean": 121.88283378746594,
+        "std": 242.07622662669186,
+        "median": 69.0,
+        "p95": 336.0,
+        "min": 1,
+        "max": 5810,
+        "total": 581503
+      },
+      "retained_answer_tokens_truncated_rows": {
+        "count": 4771,
+        "mean": 869.0333263466779,
+        "std": 212.96056243593787,
+        "median": 940.0,
+        "p95": 990.0,
+        "min": 0,
+        "max": 1012,
+        "total": 4146158
+      },
+      "removed_answer_tokens_truncated_rows": {
+        "count": 4771,
+        "mean": 96.6246070006288,
+        "std": 109.23413640669322,
+        "median": 69.0,
+        "p95": 279.5,
+        "min": 1,
+        "max": 1139,
+        "total": 460996
+      },
+      "lost_answer_token_percent": 0.9065809756009017
+    },
+    {
+      "sequence_len": 1536,
+      "rows": 128000,
+      "truncated_rows": 155,
+      "truncated_percent": 0.12109375,
+      "complete_rows": 127845,
+      "prompt_only_rows": 98,
+      "prompt_only_percent_all_rows": 0.0765625,
+      "prompt_only_percent_truncated_rows": 63.2258064516129,
+      "eos_only_truncated_rows": 0,
+      "original_total_tokens_truncated_rows": {
+        "count": 155,
+        "mean": 2257.909677419355,
+        "std": 596.4209313276174,
+        "median": 2306.0,
+        "p95": 2945.199999999998,
+        "min": 1542,
+        "max": 6834,
+        "total": 349976
+      },
+      "removed_total_tokens_truncated_rows": {
+        "count": 155,
+        "mean": 721.9096774193548,
+        "std": 596.4209313276173,
+        "median": 770.0,
+        "p95": 1409.199999999998,
+        "min": 6,
+        "max": 5298,
+        "total": 111896
+      },
+      "retained_answer_tokens_truncated_rows": {
+        "count": 155,
+        "mean": 207.15483870967742,
+        "std": 329.9348154963142,
+        "median": 0.0,
+        "p95": 862.599999999999,
+        "min": 0,
+        "max": 1482,
+        "total": 32109
+      },
+      "removed_answer_tokens_truncated_rows": {
+        "count": 155,
+        "mean": 321.1290322580645,
+        "std": 244.0137941547017,
+        "median": 252.0,
+        "p95": 788.2999999999996,
+        "min": 6,
+        "max": 1069,
+        "total": 49775
+      },
+      "lost_answer_token_percent": 0.09788602951117772
+    },
+    {
+      "sequence_len": 2048,
+      "rows": 128000,
+      "truncated_rows": 95,
+      "truncated_percent": 0.07421875,
+      "complete_rows": 127905,
+      "prompt_only_rows": 86,
+      "prompt_only_percent_all_rows": 0.0671875,
+      "prompt_only_percent_truncated_rows": 90.52631578947368,
+      "eos_only_truncated_rows": 0,
+      "original_total_tokens_truncated_rows": {
+        "count": 95,
+        "mean": 2604.2631578947367,
+        "std": 510.79960455258805,
+        "median": 2548.0,
+        "p95": 3106.0,
+        "min": 2068,
+        "max": 6834,
+        "total": 247405
+      },
+      "removed_total_tokens_truncated_rows": {
+        "count": 95,
+        "mean": 556.2631578947369,
+        "std": 510.7996045525881,
+        "median": 500.0,
+        "p95": 1058.0,
+        "min": 20,
+        "max": 4786,
+        "total": 52845
+      },
+      "retained_answer_tokens_truncated_rows": {
+        "count": 95,
+        "mean": 29.526315789473685,
+        "std": 117.72222811215283,
+        "median": 0.0,
+        "p95": 296.49999999999994,
+        "min": 0,
+        "max": 794,
+        "total": 2805
+      },
+      "removed_answer_tokens_truncated_rows": {
+        "count": 95,
+        "mean": 394.5052631578947,
+        "std": 245.83134456838326,
+        "median": 345.0,
+        "p95": 825.1999999999998,
+        "min": 20,
+        "max": 1069,
+        "total": 37478
+      },
+      "lost_answer_token_percent": 0.07370311630376532
+    }
+  ]
+}

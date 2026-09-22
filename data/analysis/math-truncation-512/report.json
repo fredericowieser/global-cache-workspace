@@ -1,0 +1,159 @@
+{
+  "source": {
+    "host": "lrc-alpha",
+    "path": "/mnt/jfs-01/shared/gcw/data/OpenMathInstruct-2/train.jsonl",
+    "skip_rows": 128000,
+    "slice_sha256": "df62346bf8689c1e08055157354fd41bbc1f44116511b07859ec5f8fe13a4c44",
+    "source_bytes": 1392578835,
+    "source_mtime_ns": 1782158438509663353,
+    "source_rows": 1000000,
+    "source_sha256": "576f26f134bb20d326c7812a44347a81699c4698dfaeacca1bea3a352abc696a",
+    "take_rows": 128000
+  },
+  "config": "configs/train/bottleneck_llm/qwen35_2b_instruct_longshot_from_sft_step2000_frozen_shared.yaml",
+  "tokenizer": {
+    "repository": "Qwen/Qwen3.5-2B",
+    "local_source": "artifacts/tokenizers/Qwen3.5-2B",
+    "identity_sha256": "5de890504409a3c030c22818ca38ba0469abe07935719b95139e2ef10319b02c",
+    "files": {
+      "chat_template.jinja": "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80",
+      "config.json": "ed1c1723241f23f7f4e23430759cbd7dcfb4103cbdfe052bfe7626b57c2615b4",
+      "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+      "tokenizer_config.json": "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c"
+    }
+  },
+  "format": {
+    "sft_skip_rows": 128000,
+    "sft_take_rows": 128000,
+    "response_prefix": "\n",
+    "prompt_suffix": "",
+    "sft_chat_template": false,
+    "sft_enable_thinking": false,
+    "sft_loss_scope": "answer_only"
+  },
+  "sequence_len": 512,
+  "rows": 128000,
+  "truncated_rows": 46532,
+  "truncated_percent": 36.353125,
+  "complete_rows": 81468,
+  "prompt_only_rows": 574,
+  "prompt_only_percent_all_rows": 0.4484375,
+  "prompt_only_percent_truncated_rows": 1.2335597008510273,
+  "eos_only_truncated_rows": 126,
+  "solution_content_truncated_rows": 46406,
+  "original_total_tokens_all_rows": {
+    "count": 128000,
+    "mean": 470.18321875,
+    "median": 409.0,
+    "p95": 984.0,
+    "p99": 1138.0,
+    "min": 57,
+    "max": 6834,
+    "total": 60183452
+  },
+  "original_total_tokens_truncated_rows": {
+    "count": 46532,
+    "mean": 755.3926115361471,
+    "median": 711.0,
+    "p95": 1094.0,
+    "p99": 1231.0,
+    "min": 513,
+    "max": 6834,
+    "total": 35149929
+  },
+  "removed_total_tokens_truncated_rows": {
+    "count": 46532,
+    "mean": 243.39261153614717,
+    "median": 199.0,
+    "p95": 582.0,
+    "p99": 719.0,
+    "min": 1,
+    "max": 6322,
+    "total": 11325545
+  },
+  "original_prompt_tokens_truncated_rows": {
+    "count": 46532,
+    "mean": 96.5939138657268,
+    "median": 70.0,
+    "p95": 233.0,
+    "p99": 566.3800000000047,
+    "min": 8,
+    "max": 6091,
+    "total": 4494708
+  },
+  "original_answer_tokens_truncated_rows": {
+    "count": 46532,
+    "mean": 658.7986976704203,
+    "median": 626.0,
+    "p95": 1003.0,
+    "p99": 1084.0,
+    "min": 53,
+    "max": 1563,
+    "total": 30655221
+  },
+  "retained_answer_tokens_truncated_rows": {
+    "count": 46532,
+    "mean": 421.11607066105046,
+    "median": 442.0,
+    "p95": 481.0,
+    "p99": 490.0,
+    "min": 0,
+    "max": 504,
+    "total": 19595373
+  },
+  "removed_answer_tokens_truncated_rows": {
+    "count": 46532,
+    "mean": 237.6826270093699,
+    "median": 198.0,
+    "p95": 576.0,
+    "p99": 682.0,
+    "min": 1,
+    "max": 1158,
+    "total": 11059848
+  },
+  "original_prompt_tokens_prompt_only_rows": {
+    "count": 574,
+    "mean": 974.8867595818815,
+    "median": 744.5,
+    "p95": 2203.0,
+    "p99": 2408.7899999999986,
+    "min": 512,
+    "max": 6091,
+    "total": 559585
+  },
+  "original_answer_tokens_all_rows": {
+    "count": 128000,
+    "mean": 397.2652578125,
+    "median": 336.0,
+    "p95": 893.0,
+    "p99": 1038.0,
+    "min": 42,
+    "max": 1563,
+    "total": 50849953
+  },
+  "retained_answer_tokens_all_rows": {
+    "count": 128000,
+    "mean": 310.8601953125,
+    "median": 325.0,
+    "p95": 472.0,
+    "p99": 485.0,
+    "min": 0,
+    "max": 504,
+    "total": 39790105
+  },
+  "lost_answer_token_percent": 21.74996700586921,
+  "verified_against_sft_batch": {
+    "truncated": 100,
+    "complete": 100,
+    "prompt_only": 100,
+    "eos_only": 100,
+    "prompt_boundary": 5
+  },
+  "elapsed_seconds": 26.89100000000326,
+  "definitions": {
+    "total_tokens": "Separately encoded prompt + newline-prefixed answer + EOS, matching sft_batch",
+    "truncated": "total_tokens > 512; includes examples losing only EOS",
+    "prompt_only": "prompt_tokens >= 512; exactly zero unmasked answer targets",
+    "average_removed_tokens": "Mean max(total_tokens - 512, 0), conditional on truncation"
+  }
+}
