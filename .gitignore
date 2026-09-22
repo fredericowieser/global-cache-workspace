@@ -43,6 +43,7 @@ data/runs/*
 !data/runs/.gitkeep
 data/results/*
 !data/results/.gitkeep
+data/analysis/local/*
 !data/analysis/.gitkeep
 
 # Large model and dataset artifacts
