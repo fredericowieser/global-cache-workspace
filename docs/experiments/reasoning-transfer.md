@@ -1,6 +1,9 @@
 # Reasoning transfer and novel-rule evaluation
 
-**Status:** Proposal — living experiment note, 2026-09-20. [KOR-Bench integration](../integrations/korbench.md) is implemented and smoke-tested; no trained-checkpoint runs have been completed for this proposal.
+**Status:** Living experiment note, updated 2026-09-22. Maths SFT followed by
+KOR-Bench evaluation has been reported as successful. Quantitative results and
+run references remain to be recorded here. [KOR-Bench integration](../integrations/korbench.md)
+is implemented; the next training studies below remain proposals.
 
 ## Motivation
 
@@ -47,6 +50,145 @@ extraction; “moderate” includes custom scoring or split construction.
 | **[ProofWriter](https://aclanthology.org/2021.findings-acl.317/)** | Conclusions and proofs derived from supplied natural-language facts and rules. | Training/evaluation data with proof annotations; supports studies of generalisation to greater proof depth. | **Low–moderate for answer accuracy; higher for proofs.** Flatten theory/question records, preserve open-/closed-world semantics and depth metadata, and score labels. Proof correctness needs a separate verifier. Group questions by theory when constructing splits. |
 | **[Reasoning Gym](https://github.com/open-thought/reasoning-gym)** | Procedural tasks across logic, algorithms, graphs, arithmetic, and other domains; not all involve unfamiliar rules. | Scalable generators, adjustable difficulty, and programmatic verifiers. Generated question–answer pairs can train with next-token loss; RL is not required. | **Low–moderate for selected tasks; moderate–high for broad coverage.** Freeze generated rows and metadata, add task definitions, and wrap upstream verifiers where exact match is insufficient. Task selection, dependency pinning, and family-level holdouts add work. |
 
+## Next-step priority: Reasoning Gym before FineWeb
+
+Prioritise **Reasoning Gym training followed by KOR-Bench and maths evaluation**
+for full fine-tuning, parameter-matched LoRA, and frozen-backbone Longshot. This
+directly tests whether a transfer advantage persists when all methods receive
+more varied procedural supervision, reducing dependence on the maths training
+domain. It complements the maths-to-KOR experiment rather than replacing it. The
+initial scope is now six tasks with deterministic worked solutions, as assessed
+in the [implementation review](reasoning-gym-supervised-traces.md). This is a
+selected procedural mixture, not broad coverage of the Reasoning Gym library.
+
+| Training and evaluation | Main question | Interpretation |
+|---|---|---|
+| Reasoning Gym → KOR-Bench and maths | Does Longshot transfer reasoning improvements better after diverse procedural reasoning training? | A consistent advantage across maths-only and broad reasoning training would strengthen the evidence beyond one source dataset. |
+| FineWeb → maths and KOR-Bench | Can Longshot acquire transferable reasoning improvements from general text without explicit reasoning supervision? | Strong transfer would support a broader claim, but weak transfer could reflect sparse reasoning signal, insufficient training, or the text mixture. |
+
+FineWeb remains a valuable complementary experiment. Its potentially broader
+positive result comes with a less diagnostic negative result. Prioritise it
+first only if the central claim becomes learning transferable reasoning without
+reasoning-specific supervision. General-text provenance alone does not establish
+absence of reasoning content or benchmark exposure.
+
+Broader Reasoning Gym training may bring the training distribution closer to
+KOR-Bench. The [task gallery](https://github.com/open-thought/reasoning-gym/blob/main/GALLERY.md)
+includes logic, ciphers, and puzzles. Describe the experiment initially as
+transfer from diverse procedural reasoning to KOR-Bench; audit overlap in rules
+and procedures before claiming transfer to unseen reasoning families. A dataset
+boundary alone does not establish that distinction.
+
+To isolate the effect of **training breadth**, add a narrow Reasoning Gym mixture
+with the same supervision format and budget. Comparing broad final-answer
+training with historical maths worked-solution training changes both breadth and
+supervision, so that comparison alone cannot attribute gains to breadth.
+
+## PrOntoQA as an alternative
+
+PrOntoQA is a strong alternative for controlled deductive generalisation. It
+does not replace the training-breadth objective of Reasoning Gym. The
+[upstream generator](https://github.com/asaparov/prontoqa) supplies questions
+with explicit reasoning chains. PrOntoQA-OOD extends the original restricted
+deductions to multiple inference rules and controls proof depth, width, and
+composition; this adds diversity within deduction rather than across procedural
+domains. See the [PrOntoQA-OOD paper](https://arxiv.org/abs/2305.15269).
+
+| Consideration | PrOntoQA / PrOntoQA-OOD | Selected Reasoning Gym mixture |
+|---|---|---|
+| Training coverage | Deduction in a controlled logical setting | Rewriting, state tracking, spatial transformations, and arithmetic |
+| Supervised targets | Generated proofs and answers | Deterministic execution traces and answers, rendered per task |
+| Generalisation controls | Proof depth, width, and held-out inference-rule compositions | Task-specific difficulty, operation compositions, and family holdouts |
+| Main scientific contribution | Systematic deduction and its transfer to external tasks | Transfer after more varied procedural supervision |
+| Implementation | Data conversion is straightforward; strict holdouts and proof checking need work | Six-task implementation estimated at 4–6 hours; broader coverage requires more work |
+
+PrOntoQA would provide a cleaner test of a specific generalisation ability.
+Evaluate on fresh instances, longer proofs, and unseen compositions as well as
+KOR-Bench and maths. Improvement on these controlled tests alongside external
+transfer would be more diagnostic than KOR-Bench accuracy alone. Gold proofs
+enable analysis of generated reasoning, but do not by themselves establish that
+the processor uses the same internal mechanism.
+
+PrOntoQA → KOR-Bench would complement maths → KOR-Bench by testing a second
+training domain. It would still be a relatively narrow-source transfer study,
+with a particularly close relationship to KOR-Bench's logic category. Inspect
+category-level results rather than assuming uniform distance from training.
+
+**Current recommendation:** retain the six-task Reasoning Gym study as the next
+experiment, followed by PrOntoQA-OOD for controlled deductive generalisation and
+FineWeb for transfer from general text. The preference over PrOntoQA is modest:
+three of the six initial tasks involve rewriting, and the mixture primarily
+teaches execution rather than proof search. It is justified by the current
+objective of varying the reasoning training domain, not by an expectation of
+larger gains. Before scaling, verify that the prepared mixture contains enough
+distinct, nontrivial, complete examples and that each method can learn it. If
+that requires expanding beyond the implementation budget, prefer PrOntoQA-OOD.
+Prioritise PrOntoQA immediately if systematic deduction becomes the central
+claim; prioritise FineWeb if learning without explicit reasoning supervision
+becomes central.
+
+## Reasoning Gym training setup
+
+Use Reasoning Gym initially as an **offline data generator** for the existing
+supervised training pipeline. Its [upstream interface](https://github.com/open-thought/reasoning-gym)
+supports configurable difficulty, weighted task mixtures, and records containing
+`question`, `answer`, and `metadata`. GCW's `src/gcw/data/sft.py` already accepts
+`question`/`answer` rows, and `src/gcw/data/training.py` loads JSONL. All three
+methods can consume identical frozen examples without a new model backend or
+an RL training loop.
+
+### Supervision choice
+
+- **Final answers:** the simplest initial dataset for tasks with valid targets.
+  Short answers provide fewer supervised computation steps than worked solutions
+  and may encourage shorter responses. A weak transfer result would therefore
+  need to be interpreted in light of the supervision choice.
+- **Worked solutions plus final answers:** closer to the maths-training setting,
+  and the recommended initial route. Selected generators retain intermediate
+  states or reusable operations, allowing deterministic traces without a teacher.
+  There is no uniform trace interface across the library. See the
+  [source audit and local checks](reasoning-gym-supervised-traces.md) for task
+  coverage, limits, and the remaining validation work.
+
+This choice concerns target content. GCW's `sft_loss_scope: answer_only` masks
+prompt tokens and can supervise either a final answer or an entire worked solution.
+Select and validate tasks explicitly: for example, the upstream
+[propositional-logic generator](https://github.com/open-thought/reasoning-gym/blob/main/reasoning_gym/logic/propositional_logic.py)
+returns `answer: None`, with an example conclusion in metadata and a verifier.
+Such tasks need an audited target-construction step or exclusion from the initial
+mixture.
+
+### Initial experiment design
+
+1. Start with the **six audited tasks** in the implementation review, with
+   deterministic worked solutions, controlled difficulty, and fixed mixture
+   weights. Freeze the generated JSONL and retain generator revision,
+   configuration, sample identities, and checksums. Expansion to 10–20 tasks is
+   a later option outside the initial implementation estimate.
+2. Start all methods from the same backbone checkpoint and use identical prepared
+   examples and comparable tuning budgets. If continuing from maths SFT, use the
+   same maths checkpoint for all methods. Match data exposure and report
+   supervised tokens and compute separately.
+3. Prepare fresh-instance validation for checkpoint selection and separate
+   held-out-family and harder-instance evaluations. Check duplicate prompts and
+   overlapping generator seed ranges: generators using `seed + index` can produce
+   overlapping samples even with different base seeds. Audit tokenised lengths
+   so GCW's sequence truncation does not remove complete targets.
+4. Add a small verifier-backed Reasoning Gym evaluation to establish that each
+   method learns the training tasks. Preserve metadata needed by the scorers and
+   distinguish fully correct solutions from partial reward.
+5. Keep KOR-Bench outside checkpoint and mixture selection. Report overall and
+   category gains over the starting backbone, with untouched-backbone and
+   processor-off controls. Retain maths evaluation to assess transfer back to the
+   original application, and use multiple training seeds where feasible.
+
+**Revised engineering estimate:** 4–6 hours for the six-task preparation path,
+correctness tests, split and length checks, three training configs, and
+documentation. This excludes training, GPU qualification, and a comprehensive
+new evaluation suite. The [implementation review](reasoning-gym-supervised-traces.md)
+separates observed feasibility from remaining work. Broad worked-solution
+coverage is not covered by this estimate.
+
 ## Estimated evaluation time
 
 **Planning estimates, not benchmark measurements:** per checkpoint, one decoding
@@ -82,7 +224,8 @@ Before budgeting a campaign, time a representative 50–100-question pilot per
 benchmark and model/processor setting, covering long prompts and hard cases.
 Scale by actual example count and response length. Multiply for checkpoints,
 seeds, thinking modes, and processor ablations; independent GPUs can reduce
-calendar time but not total GPU-hours. No pilot has been launched.
+calendar time but not total GPU-hours. The estimates above have not yet been
+updated with timings from the completed maths-to-KOR evaluation.
 
 ## Reuse in this codebase
 
@@ -120,15 +263,21 @@ See the [evaluation guide](../guides/evaluate.md) and
 
 ## Suggested sequence and open decisions
 
-1. Evaluate existing checkpoints on **KOR-Bench**, keeping it outside training and
-   checkpoint selection. This tests transfer from current maths adaptation.
-2. Run a controlled **PrOntoQA** study: train on short deductions, test fresh
-   instances, longer chains, held-out compositions, and premise-change pairs.
-   ProofWriter offers a complementary deduction benchmark.
-3. Expand to a selected **Reasoning Gym** training mixture with held-out task
-   families, plus the FineWeb/maths comparison. Retain maths evaluation to measure
-   transfer back to the original application.
+1. **Maths adaptation → KOR-Bench:** reported successful. Record quantitative
+   results, run references, and measured runtime before using them to size the
+   next campaign.
+2. **Reasoning Gym → KOR-Bench and maths:** the next priority for comparing transfer
+   after varied procedural supervision. Begin with the six-task trace mixture;
+   qualify data quality and learning before a large campaign, and include
+   Reasoning Gym validation and controlled holdouts.
+3. **PrOntoQA-OOD → controlled holdouts, KOR-Bench, and maths:** train on bounded
+   proof complexity, then test fresh instances, longer proofs, held-out
+   compositions, and premise-change pairs. ProofWriter offers a complementary
+   deduction benchmark.
+4. **FineWeb → maths and KOR-Bench:** a complementary test of transfer from
+   general-text training. A fixed maths/general mixture can follow as a separate
+   condition, but cannot isolate general-text transfer.
 
 Still to choose: backbone/processor variant, token/compute budget, training targets,
-precise splits, primary metric, seed count, and integration priority. Update this
+task mixture, precise splits, primary metric, and seed count. Update this
 note with pinned dataset versions and results as these are settled.

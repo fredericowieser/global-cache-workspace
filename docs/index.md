@@ -52,6 +52,7 @@ experiments/qwen35-ablations
 experiments/qwen35-headline
 experiments/smollm-matched-total
 experiments/reasoning-transfer
+experiments/reasoning-gym-supervised-traces
 experiments/future
 ```
 
