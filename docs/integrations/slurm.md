@@ -33,7 +33,7 @@ training batch.
 
 `--gpus N` defaults to one. For multiple GPUs the config must already specify
 DDP or FSDP; the probe uses `torchrun --standalone`. Run the controller once,
-outside torchrun. The Slurm wrapper requests one GPU by default; when using
+outside torchrun. The Slurm wrapper requests one GPU and six hours by default; when using
 more GPUs, set both the Slurm allocation and `--gpus` accordingly:
 
 ```bash
