@@ -1,18 +1,23 @@
 {
   "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
-  "source_sha256": "67d16984c1ff4e315de6908248797927ee5eb552f027ffa4ba183a74a8c5ee4a",
+  "source_sha256": "53ec6b0a01825d5067692baeb721316d2b054de6b16db5e4c8052897f0976e61",
   "options": [
+    "raw",
     "relative"
   ],
   "suites": [
-    "math_after_math",
-    "korbench_after_math",
+    "math_after_reasoning",
     "korbench_after_reasoning"
   ],
   "columns": 3,
   "layout": "bars",
+  "palette": null,
+  "adaptations": [],
   "omitted_backbones": {},
-  "format": "svg",
+  "formats": [
+    "svg",
+    "pdf"
+  ],
   "relative_statistic": "100 * (value / baseline_value - 1)",
   "relative_quantities": [
     "accuracy",

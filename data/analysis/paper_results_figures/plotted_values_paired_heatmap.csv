@@ -159,13 +159,13 @@ korbench_after_reasoning,Llama 3.2-3B,SFT,off,31.84,455.6,33.28,-4.3269230769230
 korbench_after_reasoning,Llama 3.2-3B,SFT,on,,,,,,
 korbench_after_reasoning,Llama 3.2-3B,LoRA,off,23.84,277.8,33.28,-28.365384615384613,407.1,-31.76123802505527
 korbench_after_reasoning,Llama 3.2-3B,LoRA,on,,,,,,
-korbench_after_reasoning,Llama 3.2-3B,BT,off,,,33.28,,407.1,
+korbench_after_reasoning,Llama 3.2-3B,BT,off,32.08,519.5,33.28,-3.60576923076924,407.1,27.6099238516335
 korbench_after_reasoning,Llama 3.2-3B,BT,on,,,,,,
 korbench_after_reasoning,Llama 3.2-3B,BGT,off,,,33.28,,407.1,
 korbench_after_reasoning,Llama 3.2-3B,BGT,on,,,,,,
-korbench_after_reasoning,Llama 3.2-3B,Longshot,off,,,33.28,,407.1,
+korbench_after_reasoning,Llama 3.2-3B,Longshot,off,33.44,390.2,33.28,0.48076923076922906,407.1,-4.151314173421772
 korbench_after_reasoning,Llama 3.2-3B,Longshot,on,,,,,,
-korbench_after_reasoning,Llama 3.2-3B,Diffusion Longshot,off,,,33.28,,407.1,
+korbench_after_reasoning,Llama 3.2-3B,Diffusion Longshot,off,12.88,1284.3,33.28,-61.29807692307692,407.1,215.47531319086218
 korbench_after_reasoning,Llama 3.2-3B,Diffusion Longshot,on,,,,,,
 korbench_after_reasoning,Qwen3.5-2B,Instruct,off,46.32,813.7,46.32,0.0,813.7,0.0
 korbench_after_reasoning,Qwen3.5-2B,Instruct,on,,,,,,
@@ -173,13 +173,13 @@ korbench_after_reasoning,Qwen3.5-2B,SFT,off,39.36,435.1,46.32,-15.02590673575129
 korbench_after_reasoning,Qwen3.5-2B,SFT,on,,,,,,
 korbench_after_reasoning,Qwen3.5-2B,LoRA,off,32.8,476.9,46.32,-29.188255613126092,813.7,-41.39117610913113
 korbench_after_reasoning,Qwen3.5-2B,LoRA,on,,,,,,
-korbench_after_reasoning,Qwen3.5-2B,BT,off,,,46.32,,813.7,
+korbench_after_reasoning,Qwen3.5-2B,BT,off,15.12,629.5,46.32,-67.35751295336787,813.7,-22.637335627381105
 korbench_after_reasoning,Qwen3.5-2B,BT,on,,,,,,
-korbench_after_reasoning,Qwen3.5-2B,BGT,off,,,46.32,,813.7,
+korbench_after_reasoning,Qwen3.5-2B,BGT,off,22.08,222.8,46.32,-52.33160621761659,813.7,-72.61890131498095
 korbench_after_reasoning,Qwen3.5-2B,BGT,on,,,,,,
 korbench_after_reasoning,Qwen3.5-2B,Longshot,off,31.28,633.5,46.32,-32.46977547495682,813.7,-22.145753963377167
 korbench_after_reasoning,Qwen3.5-2B,Longshot,on,,,,,,
-korbench_after_reasoning,Qwen3.5-2B,Diffusion Longshot,off,,,46.32,,813.7,
+korbench_after_reasoning,Qwen3.5-2B,Diffusion Longshot,off,3.6,644.3,46.32,-92.2279792746114,813.7,-20.818483470566562
 korbench_after_reasoning,Qwen3.5-2B,Diffusion Longshot,on,,,,,,
 korbench_after_reasoning,Qwen3.5-4B,Instruct,off,60.8,840.8,60.8,0.0,840.8,0.0
 korbench_after_reasoning,Qwen3.5-4B,Instruct,on,,,,,,
@@ -191,10 +191,52 @@ korbench_after_reasoning,Qwen3.5-4B,BT,off,41.2,842.0,60.8,-32.23684210526315,84
 korbench_after_reasoning,Qwen3.5-4B,BT,on,,,,,,
 korbench_after_reasoning,Qwen3.5-4B,BGT,off,50.48,846.7,60.8,-16.97368421052632,840.8,0.7017126546146724
 korbench_after_reasoning,Qwen3.5-4B,BGT,on,,,,,,
-korbench_after_reasoning,Qwen3.5-4B,Longshot,off,,,60.8,,840.8,
+korbench_after_reasoning,Qwen3.5-4B,Longshot,off,47.28,620.6,60.8,-22.236842105263154,840.8,-26.18934348239771
 korbench_after_reasoning,Qwen3.5-4B,Longshot,on,,,,,,
-korbench_after_reasoning,Qwen3.5-4B,Diffusion Longshot,off,,,60.8,,840.8,
+korbench_after_reasoning,Qwen3.5-4B,Diffusion Longshot,off,34.4,570.4,60.8,-43.42105263157895,840.8,-32.159847764034254
 korbench_after_reasoning,Qwen3.5-4B,Diffusion Longshot,on,,,,,,
+math_after_reasoning,Llama 3.2-1B,Instruct,off,35.4,178.1,35.4,0.0,178.1,0.0
+math_after_reasoning,Llama 3.2-1B,Instruct,on,,,,,,
+math_after_reasoning,Llama 3.2-1B,SFT,off,33.68,190.4,35.4,-4.85875706214689,178.1,6.906232453677719
+math_after_reasoning,Llama 3.2-1B,SFT,on,,,,,,
+math_after_reasoning,Llama 3.2-1B,LoRA,off,30.36,159.6,35.4,-14.237288135593218,178.1,-10.387422796181923
+math_after_reasoning,Llama 3.2-1B,LoRA,on,,,,,,
+math_after_reasoning,Llama 3.2-1B,BT,off,32.29,163.6,35.4,-8.78531073446328,178.1,-8.141493542953393
+math_after_reasoning,Llama 3.2-1B,BT,on,,,,,,
+math_after_reasoning,Llama 3.2-1B,BGT,off,28.03,178.3,35.4,-20.819209039548014,178.1,0.11229646266144311
+math_after_reasoning,Llama 3.2-1B,BGT,on,,,,,,
+math_after_reasoning,Llama 3.2-1B,Longshot,off,35.55,166.9,35.4,0.4237288135593209,178.1,-6.288601909039859
+math_after_reasoning,Llama 3.2-1B,Longshot,on,,,,,,
+math_after_reasoning,Llama 3.2-1B,Diffusion Longshot,off,16.97,460.9,35.4,-52.06214689265537,178.1,158.78719820325657
+math_after_reasoning,Llama 3.2-1B,Diffusion Longshot,on,,,,,,
+math_after_reasoning,Llama 3.2-3B,Instruct,off,46.51,196.6,46.51,0.0,196.6,0.0
+math_after_reasoning,Llama 3.2-3B,Instruct,on,,,,,,
+math_after_reasoning,Llama 3.2-3B,SFT,off,45.62,163.7,46.51,-1.9135669748441164,196.6,-16.734486266531036
+math_after_reasoning,Llama 3.2-3B,SFT,on,,,,,,
+math_after_reasoning,Llama 3.2-3B,LoRA,off,44.78,154.9,46.51,-3.719630187056544,196.6,-21.210579857578836
+math_after_reasoning,Llama 3.2-3B,LoRA,on,,,,,,
+math_after_reasoning,Llama 3.2-3B,BT,off,,,46.51,,196.6,
+math_after_reasoning,Llama 3.2-3B,BT,on,,,,,,
+math_after_reasoning,Llama 3.2-3B,BGT,off,,,46.51,,196.6,
+math_after_reasoning,Llama 3.2-3B,BGT,on,,,,,,
+math_after_reasoning,Llama 3.2-3B,Longshot,off,46.6,189.2,46.51,0.19350677273706207,196.6,-3.7639877924720233
+math_after_reasoning,Llama 3.2-3B,Longshot,on,,,,,,
+math_after_reasoning,Llama 3.2-3B,Diffusion Longshot,off,21.25,483.5,46.51,-54.310900881530856,196.6,145.93082400813836
+math_after_reasoning,Llama 3.2-3B,Diffusion Longshot,on,,,,,,
+math_after_reasoning,Qwen3.5-2B,Instruct,off,50.83,458.4,50.83,0.0,458.4,0.0
+math_after_reasoning,Qwen3.5-2B,Instruct,on,,,,,,
+math_after_reasoning,Qwen3.5-2B,SFT,off,46.48,157.8,50.83,-8.557938225457406,458.4,-65.57591623036649
+math_after_reasoning,Qwen3.5-2B,SFT,on,,,,,,
+math_after_reasoning,Qwen3.5-2B,LoRA,off,42.28,159.6,50.83,-16.820775132795585,458.4,-65.18324607329843
+math_after_reasoning,Qwen3.5-2B,LoRA,on,,,,,,
+math_after_reasoning,Qwen3.5-2B,BT,off,49.57,424.0,50.83,-2.478851072201449,458.4,-7.504363001745196
+math_after_reasoning,Qwen3.5-2B,BT,on,,,,,,
+math_after_reasoning,Qwen3.5-2B,BGT,off,48.6,411.6,50.83,-4.387172929372407,458.4,-10.209424083769624
+math_after_reasoning,Qwen3.5-2B,BGT,on,,,,,,
+math_after_reasoning,Qwen3.5-2B,Longshot,off,26.81,367.6,50.83,-47.25555774149125,458.4,-19.808027923211156
+math_after_reasoning,Qwen3.5-2B,Longshot,on,,,,,,
+math_after_reasoning,Qwen3.5-2B,Diffusion Longshot,off,14.92,980.8,50.83,-70.64725555774149,458.4,113.96160558464223
+math_after_reasoning,Qwen3.5-2B,Diffusion Longshot,on,,,,,,
 math_after_reasoning,Qwen3.5-4B,Instruct,off,58.05,489.2,58.05,0.0,489.2,0.0
 math_after_reasoning,Qwen3.5-4B,Instruct,on,,,,,,
 math_after_reasoning,Qwen3.5-4B,SFT,off,59.08,134.7,58.05,1.7743324720068898,489.2,-72.4652493867539
