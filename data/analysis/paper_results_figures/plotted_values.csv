@@ -195,3 +195,17 @@ korbench_after_reasoning,Qwen3.5-4B,Longshot,off,,,60.8,,840.8,
 korbench_after_reasoning,Qwen3.5-4B,Longshot,on,,,,,,
 korbench_after_reasoning,Qwen3.5-4B,Diffusion Longshot,off,,,60.8,,840.8,
 korbench_after_reasoning,Qwen3.5-4B,Diffusion Longshot,on,,,,,,
+math_after_reasoning,Qwen3.5-4B,Instruct,off,58.05,489.2,58.05,0.0,489.2,0.0
+math_after_reasoning,Qwen3.5-4B,Instruct,on,,,,,,
+math_after_reasoning,Qwen3.5-4B,SFT,off,59.08,134.7,58.05,1.7743324720068898,489.2,-72.4652493867539
+math_after_reasoning,Qwen3.5-4B,SFT,on,,,,,,
+math_after_reasoning,Qwen3.5-4B,LoRA,off,58.84,132.3,58.05,1.3608957795004484,489.2,-72.95584627964023
+math_after_reasoning,Qwen3.5-4B,LoRA,on,,,,,,
+math_after_reasoning,Qwen3.5-4B,BT,off,56.98,491.1,58.05,-1.8432385874246338,489.2,0.388389206868367
+math_after_reasoning,Qwen3.5-4B,BT,on,,,,,,
+math_after_reasoning,Qwen3.5-4B,BGT,off,56.39,505.2,58.05,-2.8596037898363402,489.2,3.2706459525756237
+math_after_reasoning,Qwen3.5-4B,BGT,on,,,,,,
+math_after_reasoning,Qwen3.5-4B,Longshot,off,,,58.05,,489.2,
+math_after_reasoning,Qwen3.5-4B,Longshot,on,,,,,,
+math_after_reasoning,Qwen3.5-4B,Diffusion Longshot,off,,,58.05,,489.2,
+math_after_reasoning,Qwen3.5-4B,Diffusion Longshot,on,,,,,,

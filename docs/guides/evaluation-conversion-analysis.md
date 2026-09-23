@@ -38,18 +38,19 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
 
 The script requires Matplotlib and NumPy from the project environment. It reads
 `src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex`
-and saves SVG figures with editable text, `plotted_values.csv`, and a source-hash
-manifest under `data/analysis/paper_results_figures/`. It does not modify the
-paper or run evaluations. Values retain the precision of the paper tables.
+and saves SVG figures with editable text, vector PDFs, `plotted_values.csv`,
+and a source-hash manifest under `data/analysis/paper_results_figures/`.
+Copy selected figures into the paper submodule when ready.
+The script does not edit LaTeX source or run evaluations. Values retain the
+precision of the paper tables.
 
 Use `--option raw` or `--option relative` to generate one option, `--columns 5`
 for a single row of backbone panels, and `--output-dir PATH` to save elsewhere.
 `--suite korbench_after_math` selects a single figure suite.
 `--source PATH` accepts another appendix with the same table labels and layout.
 
-Each option contains three figures: mathematical benchmark averages after
-mathematical adaptation, KOR-Bench after mathematical adaptation, and KOR-Bench
-following Reasoning Gym adaptation. Panels represent backbones; the x-axis shows
+Each option contains four figures: mathematical/LogiQA and KOR-Bench
+averages after mathematical adaptation and after Reasoning Gym adaptation. Panels represent backbones; the x-axis shows
 adaptation methods. Raw plots include the pretrained instruct baseline;
 relative plots omit its columns. Thinking-off
 accuracy uses filled bars; thinking-on accuracy uses overlapping, unfilled
@@ -61,7 +62,11 @@ change, `100 * (accuracy / pretrained_accuracy - 1)`, using the baseline for
 that backbone, evaluation suite, and thinking mode. Zero means unchanged
 accuracy; negative values indicate a decrease. In relative plots, response-token counts use the same percentage-change
 formula against pretrained response-token counts, matched by backbone and
-thinking mode. Both relative axes share the same scale and zero. Raw plots
+thinking mode. Relative bar plots use independent ranges for accuracy and
+token change, each including zero and shared across the figure's backbone
+panels. The left axis measures accuracy and the right axis measures tokens.
+The ranges expand as needed to align zero on both axes, preserving a single
+horizontal baseline while retaining independent scale factors. Raw plots
 retain absolute mean response-token counts. Missing results are omitted, not converted to zero; `N/A` marks
 methods without either thinking-mode result. A missing or zero baseline for a
 reported score or token count causes an error rather than an undefined relative value.
@@ -69,8 +74,9 @@ reported score or token count causes an error rather than an undefined relative 
 For the mathematical suite, accuracy averages all six table benchmarks,
 including LogiQA, whereas response tokens are pooled over the four generation
 tasks. For KOR-Bench, accuracy averages the five equally sized categories and
-response tokens average all 1,250 responses. Reasoning Gym currently has only
-thinking-off KOR-Bench results. These plots show aggregate point estimates
+response tokens average all 1,250 responses. The original three-suite views
+include thinking-off KOR-Bench results for Reasoning Gym; the paired-benchmark
+view below also reads its newly reported mathematical evaluations. These plots show aggregate point estimates
 without uncertainty intervals; raw per-example results are not inputs.
 
 ### Compact point plots
@@ -105,3 +111,127 @@ and aggregation: mathematical accuracy averages six benchmarks including
 LogiQA, while mathematical token means pool only the four generation tasks;
 KOR-Bench accuracy and token means cover all 1,250 questions. Positive accuracy
 change means higher accuracy; negative token change means shorter responses.
+
+### Alternative main-text layouts
+
+Three additional functions in the same script provide relative figure
+candidates. Select one with `--layout compact`, `--layout tradeoff`, or
+`--layout heatmap`, always together with `--option relative`. Each generates
+all three benchmark settings, or the suites selected with `--suite`, as
+`*_relative_<layout>.svg`, with its own `manifest_<layout>.json`. Existing
+figures are preserved.
+
+- `plot_compact()`: four backbone panels in a 2-by-2 grid, reusing the bar
+  plotting logic with shared legends, method labels only on the bottom row,
+  and separate percentage scales for accuracy bars (left) and token lines
+  (right), labelled on the outside of the grid. The
+  maths-trained settings omit Qwen3.5-2B only in this view; Reasoning Gym
+  retains all four reported backbones. This selection is recorded in the
+  manifest and must be disclosed in the paper caption.
+- `plot_tradeoff()`: accuracy change versus response-token change in one panel
+  per backbone, retaining all backbones. Colours identify methods; filled
+  circles and hollow triangles identify thinking off/on. A cross at the
+  origin marks instruct. The upper-left quadrant denotes higher accuracy
+  with fewer tokens. Limits are shared across panels; points are not jittered
+  or connected, so similar results can overlap.
+- `plot_heatmap()`: paired accuracy and token matrices, retaining all
+  backbones, with methods as rows and backbone/thinking combinations as
+  columns. Each panel has its own symmetric colour scale centred on zero.
+  Green denotes higher accuracy or fewer tokens; red denotes lower accuracy
+  or more tokens. Grey N/A cells mark unavailable evaluations. Thinking
+  modes without any reported adapted results for a backbone are omitted.
+  Cell text rounds changes to whole percentages, while colours and the CSV
+  retain full calculated precision. A displayed zero can therefore be a
+  small nonzero change. Caption labels should identify Llama as Llama 3.2
+  and Qwen as Qwen3.5, since the compact column headers omit family versions.
+
+All alternatives use the existing matched-mode pretrained baseline and
+aggregation definitions. They are candidates for review, not automatically
+inserted into the paper.
+
+### Paired-benchmark adaptation heatmaps
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout paired_heatmap --option relative
+```
+
+`plot_paired_heatmap()` generates two new figures,
+`mathematical_relative_paired_heatmap.svg` and
+`reasoning_relative_paired_heatmap.svg`. Each pairs mathematical/LogiQA accuracy
+with KOR-Bench accuracy, without token panels. Select one training setting with
+`--adaptation mathematical` or `--adaptation reasoning`; `--suite` does not
+apply to this view. Existing figures and data exports remain unchanged. This
+view writes `plotted_values_paired_heatmap.csv` and `manifest_paired_heatmap.json`.
+
+Both panels use the same method rows, backbone/thinking columns, and one
+symmetric terracotta/cream/forest-green scale centred on zero. The columns include every
+backbone and thinking mode with an available adapted accuracy in either
+benchmark; unavailable cells are grey and marked N/A. The common scale compares
+the sizes of changes across benchmarks, so small changes can appear pale.
+The paired view uses terracotta losses, forest-green gains, and a cream zero midpoint,
+with neutral grey missing cells. Family headers group the model sizes;
+lettered panel headings and a compact shared legend replace the repeated
+headline and footer. Numeric annotations are 7.5 pt at the native 7.2-inch
+width. These styling choices preserve the underlying values, linear symmetric
+colour limits, and zero midpoint. The adaptation setting belongs in the paper
+caption. Accuracy/token heatmaps use the same formatting, with separate colour
+scales and legends for each metric. Their token palette is reversed so that
+fewer tokens are green and more tokens are terracotta.
+
+The shared palette is defined in `HEATMAP_COLORS` near the top of
+`scripts/plot_paper_results.py`:
+`["#AC4035", "#E6AB8F", "#FCF6EA", "#A8C8A6", "#236548"]`.
+The experimental palette choices and their generated files have been removed.
+All heatmaps use this palette with the grouped-header layout and larger
+numbers. The script exports both SVG and PDF, with matching filenames.
+
+The reasoning-adaptation maths panel reads
+`tab:paper7-reasoning-gym-results`, including that table's pretrained baseline.
+These results currently cover Qwen3.5-4B with thinking disabled and average
+five tasks, excluding TheoremQA. The mathematical-adaptation maths panel
+averages six tasks including TheoremQA. Both include LogiQA, and the panel
+titles disclose the task counts. Each cell uses its own suite/backbone/thinking
+baseline; the five-task results are never normalised against the six-task
+pretrained average. This aggregation difference must remain explicit in the
+paper caption.
+
+The paper includes the SVG using `\includesvg`, with `inkscapelatex=false`
+to preserve its typography and `inkscapepath=svgdir` to keep generated vector
+PDFs beside the source. The local
+Tectonic build can reuse `mathematical_relative_paired_heatmap_svg-raw.pdf`
+without Inkscape; this is a vector conversion of the SVG, not a raster image.
+Regenerate figures in the analysis directory, then copy the selected SVG and
+its PDF into the paper. For the existing `\includesvg` setup, copy the PDF
+as `<figure-name>_svg-raw.pdf` to refresh the local build cache. The script
+exports a vector PDF directly, so a separate conversion is no longer needed
+for this workflow.
+Overleaf can regenerate the conversion through the `svg` package. With
+Inkscape installed, the conversion can also be refreshed explicitly:
+
+```bash
+inkscape figures/mathematical_relative_paired_heatmap.svg \
+  --export-area-page --export-type=pdf \
+  --export-filename=figures/mathematical_relative_paired_heatmap_svg-raw.pdf
+```
+
+The local conversion was produced using librsvg/Cairo because the Inkscape
+executable is unavailable here. Both formats retain the same source artwork.
+
+All four table-level suites, including mathematical/LogiQA transfer after
+reasoning adaptation, are available through `--layout heatmap --option relative`.
+The paper includes both paired accuracy heatmaps in the main text and all four
+accuracy/token heatmaps in the corresponding appendix subsections. The reasoning
+adaptation maths view averages five accuracy tasks and pools response lengths
+over three generation tasks, using that table’s matched instruct baseline.
+
+For example, refresh the mathematical-adaptation paired heatmap with:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout paired_heatmap --option relative
+cp data/analysis/paper_results_figures/mathematical_relative_paired_heatmap.svg \
+  src/Global-Cache-Workspace-Theory-ICLR-2027-/figures/
+cp data/analysis/paper_results_figures/mathematical_relative_paired_heatmap.pdf \
+  src/Global-Cache-Workspace-Theory-ICLR-2027-/figures/mathematical_relative_paired_heatmap_svg-raw.pdf
+```
