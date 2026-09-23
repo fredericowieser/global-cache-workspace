@@ -765,7 +765,11 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
     )
 
 
-def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
+@pytest.mark.parametrize("legacy_generate", [None, False, True])
+@pytest.mark.parametrize("processor_only", [False, True])
+def test_complete_model_initialization_loads_backbone_and_processor(
+    tmp_path, legacy_generate, processor_only
+):
     config = ModelConfig(
         variant="bgt",
         vocab_size=32,
@@ -775,6 +779,7 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
         num_heads=2,
         num_kv_heads=1,
         head_dim=8,
+        legacy_bottleneck_generate=legacy_generate,
         cache_processor=CacheProcessorConfig(
             hidden_size=8, intermediate_size=16, num_heads=1
         ),
@@ -784,7 +789,17 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
     with torch.no_grad():
         source.cache_processor.block.gate.fill_(0.75)
     checkpoint = tmp_path / "complete-model"
-    save_checkpoint(checkpoint, source, config)
+    backbone_checkpoint = tmp_path / "backbone"
+    save_checkpoint(
+        backbone_checkpoint, source.backbone, source.backbone.config
+    )
+    save_checkpoint(
+        checkpoint,
+        source,
+        config,
+        {"backbone_checkpoint": str(backbone_checkpoint)},
+        cache_processor_only=processor_only,
+    )
 
     target = build_model(config)
     target.init_weights()
@@ -794,6 +809,18 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
         source.parameters(), target.parameters(), strict=True
     ):
         assert torch.equal(expected, actual)
+
+    incompatible = build_model(
+        replace(
+            config,
+            legacy_bottleneck_generate=None,
+            processor_generation_mode=(
+                "windowed" if legacy_generate else "post_prefill_relative"
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="model configuration differs"):
+        _load_initial_model(incompatible, checkpoint)
 
 
 def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):

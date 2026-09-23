@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import torch
 
-from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint
+from gcw.checkpoint import (
+    _model_config_from_checkpoint,
+    load_backbone_checkpoint,
+    load_checkpoint,
+)
 from gcw.config import TrainConfig, to_dict
 from gcw.models import build_model
 from gcw.models.lora import LoRALinear
@@ -16,7 +20,7 @@ def _load_initial_model(
     source, source_config, _ = load_checkpoint(checkpoint_path, device="cpu")
     model_config = getattr(model, "config", None)
     if not isinstance(model_config, type(source_config)) or to_dict(
-        model_config
+        _model_config_from_checkpoint(to_dict(model_config))
     ) != to_dict(source_config):
         raise ValueError(
             "init_checkpoint model configuration differs from train.model"
