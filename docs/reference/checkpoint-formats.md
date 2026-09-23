@@ -35,6 +35,14 @@ view with the original model/config files and a copied `train_state.json` whose
 backbone path points to the matching local weights. Preserve the source
 checkpoint; this view is for initialization, not authenticated training resume.
 
+When a new run initialized with `init_checkpoint` saves processor-only weights,
+it carries forward the initialization checkpoint's frozen-backbone reference.
+If the initialization checkpoint contains the complete model, that checkpoint
+itself supplies the frozen backbone. The optimizer and training cursor still
+start fresh. Older processor-only outputs missing this reference can recover it
+from their recorded `init_checkpoint` when loaded; that initialization source
+must remain accessible.
+
 ## Hugging Face initialization
 
 Convert a supported pretrained backbone and initialize any selected processor:

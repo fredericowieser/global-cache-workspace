@@ -7,6 +7,7 @@ from typing import Any
 import torch
 
 from gcw.architecture import admission_receipt_metadata
+from gcw.checkpoint import initialization_backbone_checkpoint
 from gcw.config import TrainConfig, to_dict
 from gcw.data.training import TrainingBatchStream, training_data_identity
 from gcw.performance.adjacent_pairs import adaptive_batching_metadata
@@ -57,6 +58,10 @@ def _checkpoint_metadata(
         state["backbone_checkpoint"] = config.backbone_checkpoint
     if config.init_checkpoint is not None:
         state["init_checkpoint"] = config.init_checkpoint
+        if config.freeze_backbone or config.save_cache_processor_only:
+            state["backbone_checkpoint"] = initialization_backbone_checkpoint(
+                config.init_checkpoint
+            )
     if config.data.tokenizer_source is not None:
         state["source"] = config.data.tokenizer_source
         state["tokenizer_source"] = config.data.tokenizer_source

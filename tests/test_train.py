@@ -810,6 +810,39 @@ def test_complete_model_initialization_loads_backbone_and_processor(
     ):
         assert torch.equal(expected, actual)
 
+    training = replace(
+        tiny_train_config(tmp_path),
+        model=config,
+        init_checkpoint=str(checkpoint),
+        backbone_checkpoint=None,
+        freeze_backbone=True,
+        trainable="cache_processor",
+    )
+    metadata = _checkpoint_metadata(training, {}, admission={})
+    assert metadata["backbone_checkpoint"] == str(
+        backbone_checkpoint if processor_only else checkpoint
+    )
+    output = tmp_path / "retrained"
+    with torch.no_grad():
+        target.cache_processor.block.gate.fill_(0.5)
+    save_checkpoint(output, target, config, metadata, cache_processor_only=True)
+    restored, _, _ = load_checkpoint(output)
+    for expected, actual in zip(
+        target.parameters(), restored.parameters(), strict=True
+    ):
+        assert torch.equal(expected, actual)
+
+    metadata.pop("backbone_checkpoint")
+    save_checkpoint(output, target, config, metadata, cache_processor_only=True)
+    restored, _, recovered = load_checkpoint(output)
+    assert recovered["backbone_checkpoint"] == str(
+        backbone_checkpoint if processor_only else checkpoint
+    )
+    for expected, actual in zip(
+        target.parameters(), restored.parameters(), strict=True
+    ):
+        assert torch.equal(expected, actual)
+
     incompatible = build_model(
         replace(
             config,
