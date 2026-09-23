@@ -60,6 +60,13 @@ COLORS = (
     "#CC79A7",
     "#D55E00",
 )
+BACKBONE_STYLES = {
+    "Llama 3.2-1B": ("#0072B2", "o"),
+    "Llama 3.2-3B": ("#E69F00", "s"),
+    "Qwen3.5-2B": ("#009E73", "^"),
+    "Qwen3.5-4B": ("#CC79A7", "D"),
+    "Qwen3.5-27B": ("#D55E00", "p"),
+}
 
 
 def parse_modes(cell: str) -> list[float | None]:
@@ -341,6 +348,122 @@ def plot_suite(rows: list[dict], suite: str, option: str, columns: int):
     return fig
 
 
+def plot_points(rows: list[dict], suite: str):
+    rows = [
+        r for r in rows if r["suite"] == suite and r["method"] != "Instruct"
+    ]
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    unknown = set(backbones) - BACKBONE_STYLES.keys()
+    if unknown:
+        raise ValueError(f"Define point styles for new backbones: {unknown}")
+    method_labels = list(METHODS.values())[1:]
+    method_names = [label.replace("\n", " ") for label in method_labels]
+    offsets = dict(zip(BACKBONE_STYLES, np.linspace(-0.3, 0.3, 5)))
+    has_on = any(
+        r["thinking"] == "on" and r["accuracy_percent"] is not None
+        for r in rows
+    )
+    fig, axes = plt.subplots(2, 1, figsize=(7.2, 4.5), sharex=True)
+    for ax, field, label in zip(
+        axes,
+        ("relative_change_percent", "relative_tokens_change_percent"),
+        ("Accuracy change (%)", "Token change (%)"),
+    ):
+        values = [0.0]
+        for backbone in backbones:
+            color, marker = BACKBONE_STYLES[backbone]
+            for mode in ("off", "on"):
+                points = [
+                    r
+                    for r in rows
+                    if r["backbone"] == backbone
+                    and r["thinking"] == mode
+                    and r[field] is not None
+                ]
+                if not points:
+                    continue
+                xs = [
+                    method_names.index(r["method"]) + offsets[backbone]
+                    for r in points
+                ]
+                ys = [r[field] for r in points]
+                values.extend(ys)
+                ax.scatter(
+                    xs,
+                    ys,
+                    s=48,
+                    marker=marker,
+                    linewidths=1.2,
+                    facecolors=color if mode == "off" else "none",
+                    edgecolors=color,
+                    zorder=3,
+                )
+        padding = max(5, (max(values) - min(values)) * 0.12)
+        ax.set_ylim(min(values) - padding, max(values) + padding)
+        ax.set_ylabel(label, fontsize=9)
+        ax.axhline(0, color="#646A73", linewidth=0.9, zorder=2)
+        ax.set_axisbelow(True)
+        ax.grid(axis="y", color="#E6E8EB", linewidth=0.6)
+        for boundary in np.arange(0.5, len(method_names) - 1, 1):
+            ax.axvline(boundary, color="#ECEEF1", linewidth=0.6, zorder=0)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.tick_params(axis="both", labelsize=8, length=2.5)
+        ax.spines[["top", "right"]].set_visible(False)
+        for spine in ax.spines.values():
+            spine.set_color("#B6BBC2")
+    axes[-1].set_xticks(np.arange(len(method_names)), method_labels)
+    axes[-1].set_xlim(-0.55, len(method_names) - 0.45)
+    handles = [
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker=BACKBONE_STYLES[b][1],
+            color=BACKBONE_STYLES[b][0],
+            markersize=6.5,
+            label=b,
+        )
+        for b in backbones
+    ]
+    fig.suptitle(TABLES[suite][1], fontsize=10, y=0.985)
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.943),
+        ncol=len(handles),
+        frameon=False,
+        fontsize=7.5,
+        handletextpad=0.35,
+        columnspacing=1.2,
+    )
+    mode_handles = [
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker="o",
+            color="#555555",
+            markerfacecolor="#555555" if mode == "off" else "white",
+            markersize=6.5,
+            label=f"Thinking {mode}",
+        )
+        for mode in (("off", "on") if has_on else ("off",))
+    ]
+    fig.legend(
+        handles=mode_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.891),
+        ncol=len(mode_handles),
+        frameon=False,
+        fontsize=7.5,
+        handletextpad=0.35,
+    )
+    fig.subplots_adjust(
+        left=0.12, right=0.985, bottom=0.12, top=0.79, hspace=0.18
+    )
+    return fig
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -358,9 +481,12 @@ def main() -> None:
     )
     parser.add_argument("--columns", type=int, default=3)
     parser.add_argument("--suite", choices=tuple(TABLES), action="append")
+    parser.add_argument("--layout", choices=("bars", "points"), default="bars")
     args = parser.parse_args()
     if args.columns < 1:
         parser.error("--columns must be positive")
+    if args.layout == "points" and args.option != "relative":
+        parser.error("--layout points requires --option relative")
     rows = read_tables(args.source)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update(
@@ -377,8 +503,12 @@ def main() -> None:
     suites = args.suite or list(TABLES)
     for option in options:
         for suite in suites:
-            fig = plot_suite(rows, suite, option, args.columns)
-            path = args.output_dir / f"{suite}_{option}.svg"
+            if args.layout == "points":
+                fig = plot_points(rows, suite)
+                path = args.output_dir / f"{suite}_{option}_points.svg"
+            else:
+                fig = plot_suite(rows, suite, option, args.columns)
+                path = args.output_dir / f"{suite}_{option}.svg"
             fig.savefig(path, facecolor="white")
             print(path)
             plt.close(fig)
@@ -388,6 +518,7 @@ def main() -> None:
         "options": list(options),
         "suites": suites,
         "columns": args.columns,
+        "layout": args.layout,
         "format": "svg",
         "relative_statistic": "100 * (value / baseline_value - 1)",
         "relative_quantities": ["accuracy", "mean_response_tokens"],
@@ -395,7 +526,10 @@ def main() -> None:
         "source_precision": "Rounded values as reported in the paper tables",
         "matplotlib_version": matplotlib.__version__,
     }
-    (args.output_dir / "manifest.json").write_text(
+    manifest_name = (
+        "manifest_points.json" if args.layout == "points" else "manifest.json"
+    )
+    (args.output_dir / manifest_name).write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
 

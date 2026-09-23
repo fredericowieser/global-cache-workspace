@@ -1,0 +1,27 @@
+{
+  "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
+  "source_sha256": "67d16984c1ff4e315de6908248797927ee5eb552f027ffa4ba183a74a8c5ee4a",
+  "options": [
+    "relative"
+  ],
+  "suites": [
+    "math_after_math",
+    "korbench_after_math",
+    "korbench_after_reasoning"
+  ],
+  "columns": 3,
+  "layout": "points",
+  "format": "svg",
+  "relative_statistic": "100 * (value / baseline_value - 1)",
+  "relative_quantities": [
+    "accuracy",
+    "mean_response_tokens"
+  ],
+  "baseline_matching": [
+    "suite",
+    "backbone",
+    "thinking"
+  ],
+  "source_precision": "Rounded values as reported in the paper tables",
+  "matplotlib_version": "3.11.0"
+}

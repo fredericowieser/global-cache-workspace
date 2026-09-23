@@ -72,3 +72,36 @@ tasks. For KOR-Bench, accuracy averages the five equally sized categories and
 response tokens average all 1,250 responses. Reasoning Gym currently has only
 thinking-off KOR-Bench results. These plots show aggregate point estimates
 without uncertainty intervals; raw per-example results are not inputs.
+
+### Compact point plots
+
+The same script also offers a relative point view with two vertically stacked
+panels: accuracy change above and response-token change below. Generate it with:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout points --option relative
+```
+
+The new `plot_points()` function reuses the table parser and baseline
+normalisation. It saves three `*_relative_points.svg` files and a separate
+`manifest_points.json`, preserving the existing bar figures and their manifest.
+`--suite` can select a single benchmark setting. `--columns` applies only to
+the bar view.
+
+Each method column contains the available backbones, encoded by both colour
+and marker shape. Filled markers indicate thinking off; hollow markers indicate
+thinking on. Fixed horizontal offsets separate backbones and match across both
+panels. Thinking off/on share the same horizontal position for each backbone;
+hollow markers have transparent interiors to preserve overlapping filled points.
+All reported backbones are retained, including
+Qwen3.5-2B. Unavailable evaluations have no marker. Both panels show percentage
+change against the same backbone's instruct baseline in the same thinking mode;
+the instruct columns are omitted. The panels use separate y-axis ranges.
+
+The compact artwork omits the long explanatory footer. When used in the paper,
+the caption should state the baseline matching, missing-result convention,
+and aggregation: mathematical accuracy averages six benchmarks including
+LogiQA, while mathematical token means pool only the four generation tasks;
+KOR-Bench accuracy and token means cover all 1,250 questions. Positive accuracy
+change means higher accuracy; negative token change means shorter responses.
