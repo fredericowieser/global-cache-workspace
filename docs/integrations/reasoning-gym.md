@@ -331,21 +331,37 @@ implemented; rows retain provenance alongside targets.
 ## 128k experiments initialized from maths checkpoints
 
 `configs/experiments/reasoning_gym_128k_maths_init/` contains six Qwen3.5-4B
-runs initialized from the step-2000 OpenMathInstruct-2 checkpoints selected for
-the paper in `TODO.md`: Fred's SFT and Martin's `pct015` LoRA, BT, BGT,
-Longshot, and Diffusion-Longshot. Paths point to the local copies under
-`/shared/gwt/checkpoints/`.
+and six Qwen3.5-27B runs initialized from the step-2000 OpenMathInstruct-2
+checkpoints selected for the paper in `TODO.md`. The 4B sources are Fred's SFT
+and Martin's `pct015` LoRA, BT, BGT, Longshot, and Diffusion-Longshot. The 27B
+sources are Martin's `qwen35_27b_instruct_{sft,lora,bt,bgt}_seed24` runs and
+`qwen35_27b_instruct_{longshot,diffusion_longshot}_fair_gate_rank1_seed24` runs,
+each using `checkpoint-2000`. Paths point to the local copies under
+`/shared/gwt/checkpoints/`. The 27B processor-only sources retain a dependency
+on the available backbone at `/shared/gwt/models/qwen35_27b/tf_base`.
 
 These configs use `init_checkpoint` with `backbone_checkpoint: null` and
 `resume: null`. This loads all backbone and adapter/processor weights, while
 starting a new optimizer, schedule, data cursor, and 2,000-step training run.
-They retain the original Reasoning Gym settings and probed batch sizes:
-SFT/Longshot/Diffusion-Longshot 16, LoRA/BT/BGT 32. Outputs and W&B run names
-use a separate `reasoning_gym_128k_maths_init` namespace. The obsolete
+They retain the original Reasoning Gym settings and batch sizes qualified on
+the raw-initialized configs; maths-initialized training has not been re-probed:
+
+| Model | GPUs | SFT | LoRA | BT | BGT | Longshot | Diffusion-Longshot |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Qwen3.5-4B | 1 | 16 | 32 | 32 | 32 | 16 | 16 |
+| Qwen3.5-27B | 2 | 64 | 64 | 16 | 32 | 16 | 16 |
+
+Batch sizes are per GPU. Gradient accumulation preserves 128 examples per
+optimizer step. The 27B configs use FSDP, reference loss, a 1,024-token training
+limit, and shared checkpoint outputs under
+`/shared/gwt/checkpoints/martin/runs/experiments/reasoning_gym_128k_maths_init/`.
+Initialization metadata records the source checkpoint, step, and dataset;
+W&B uses a separate `reasoning-gym-128k-maths-init` group and run names, with
+`maths-init` replacing `raw-instruct` in the 27B tags. The obsolete
 `legacy_bottleneck_generate` alias is cleared while retaining its resolved
 `processor_generation_mode`, matching the checkpoint loader's configuration.
 
-The campaign submits six one-GPU training workers with KOR-Bench evaluation,
+The 4B campaign submits six one-GPU training workers with KOR-Bench evaluation,
 then six one-GPU Paper7 evaluation workers. Both use thinking off; KOR-Bench
 logs samples and automatically records diffusion cache-update metrics where
 applicable. Paper7 excludes TheoremQA. Only the GPU count is requested;
