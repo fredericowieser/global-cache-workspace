@@ -1,6 +1,8 @@
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 
 import pytest
 import yaml
@@ -12,6 +14,7 @@ from scripts.cluster import probe_batch as probe
 def campaign(tmp_path, monkeypatch):
     monkeypatch.setattr(probe, "__file__", str(tmp_path / "scripts/cluster/probe.py"))
     monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.setattr(probe.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path / "triton"))
     config = tmp_path / "train.yaml"
     base = {
         "model": {"variant": "tf", "cache_processor": None},
@@ -29,7 +32,7 @@ def mock_training(monkeypatch, outcomes):
 
     def launch(command, **kwargs):
         config = yaml.safe_load(Path(command[-1]).read_text())
-        calls.append((command, config))
+        calls.append((command, config, kwargs["env"].copy()))
         status = next(outcomes)
         if status == "oom":
             output, code = "torch.OutOfMemoryError: CUDA out of memory\n", 1
@@ -55,12 +58,35 @@ def test_accumulation_search_and_isolation(campaign, monkeypatch, gpus, expected
     assert report["optimal_batch_size"] == expected[-1]
     assert report["optimal_grad_accum_steps"] == 2
     assert yaml.safe_load(source.read_text()) == original
-    for command, config in calls:
+    for command, config, environment in calls:
         assert ("torchrun" in command) == (gpus == 2)
         assert config["total_batch_size"] == 131072
         assert config["learning_rate"] == original["learning_rate"]
         assert config["save_final"] is False and config["wandb"]["enabled"] is False
         assert config["output_dir"] != original["output_dir"]
+        assert environment["TRITON_CACHE_DIR"] == str(source.parent / "triton")
+
+
+def test_distributed_rank_cache_isolation(campaign, monkeypatch, tmp_path):
+    source, output, _ = campaign
+    monkeypatch.setenv("TRITON_CACHE_DIR", "/shared/inherited-cache")
+    with monkeypatch.context() as mocked:
+        calls = mock_training(mocked, iter(["success"]))
+        assert probe.main([str(source), "--gpus", "2", "--result-dir", str(output)]) == 0
+    command, _, environment = calls[0]
+    python = tmp_path / "python"
+    python.write_text('#!/bin/sh\nprintf "%s\\n" "$TRITON_CACHE_DIR" "$@"\n')
+    python.chmod(0o755)
+    launcher = command[command.index("bash"):]
+    for rank in (0, 1):
+        result = subprocess.run(
+            launcher,
+            env={**environment, "LOCAL_RANK": str(rank), "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+            capture_output=True, text=True, check=True,
+        )
+        lines = result.stdout.splitlines()
+        assert lines[0] == f"{tmp_path}/triton-rank-{rank}"
+        assert lines[1:] == ["-m", "gcw.cli", "train", "--config", command[-1]]
 
 
 def test_non_power_of_two_divisors(campaign, monkeypatch):
