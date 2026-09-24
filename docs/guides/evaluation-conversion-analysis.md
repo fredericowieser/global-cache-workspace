@@ -235,3 +235,25 @@ cp data/analysis/paper_results_figures/mathematical_relative_paired_heatmap.svg 
 cp data/analysis/paper_results_figures/mathematical_relative_paired_heatmap.pdf \
   src/Global-Cache-Workspace-Theory-ICLR-2027-/figures/mathematical_relative_paired_heatmap_svg-raw.pdf
 ```
+
+### Sequential domain adaptation
+
+The sequential-adaptation tables use five mathematical/LogiQA tasks and five
+KOR-Bench tasks, with thinking disabled. Generate matching individual and
+paired heatmaps with:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout heatmap --option relative \
+  --suite math_after_sequential --suite korbench_after_sequential
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout paired_heatmap \
+  --option relative --adaptation sequential
+```
+
+Both commands save SVG and PDF files in the analysis output directory.
+The paired heatmap is included in the main-text sequential-adaptation subsection.
+All changes use the matched pretrained instruct baseline, not the
+mathematics-adapted checkpoint. Heatmap columns retain backbones and modes
+with reported baselines even when adapted results are pending; those cells
+remain N/A. Entirely missing panels use a symmetric fallback colour limit.

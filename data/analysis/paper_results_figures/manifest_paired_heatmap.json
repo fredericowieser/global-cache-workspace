@@ -1,18 +1,18 @@
 {
   "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
-  "source_sha256": "53ec6b0a01825d5067692baeb721316d2b054de6b16db5e4c8052897f0976e61",
+  "source_sha256": "35c482a492be3c2b554fc2d81f1368d5c56e3500fa4557447c9c877dfecd3126",
   "options": [
     "relative"
   ],
   "suites": [
-    "math_after_reasoning",
-    "korbench_after_reasoning"
+    "math_after_sequential",
+    "korbench_after_sequential"
   ],
   "columns": 3,
   "layout": "paired_heatmap",
   "palette": "terracotta_cream_forest",
   "adaptations": [
-    "reasoning"
+    "sequential"
   ],
   "omitted_backbones": {},
   "formats": [

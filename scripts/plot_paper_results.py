@@ -48,10 +48,23 @@ TABLES = {
         "Accuracy: mean of five tasks including LogiQA, excluding TheoremQA. "
         "Tokens: pooled mean across three generation tasks.",
     ),
+    "math_after_sequential": (
+        "tab:paper7-sequential-adaptation-results",
+        "Mathematical benchmarks after sequential adaptation",
+        "Accuracy: mean of five tasks including LogiQA, excluding TheoremQA. "
+        "Tokens: pooled mean across three generation tasks.",
+    ),
+    "korbench_after_sequential": (
+        "tab:korbench-sequential-adaptation-results",
+        "KOR-Bench after sequential adaptation",
+        "Accuracy: mean of five tasks. "
+        "Tokens: mean across all 1,250 responses.",
+    ),
 }
 ADAPTATIONS = {
     "mathematical": ("math_after_math", "korbench_after_math"),
     "reasoning": ("math_after_reasoning", "korbench_after_reasoning"),
+    "sequential": ("math_after_sequential", "korbench_after_sequential"),
 }
 HEATMAP_COLORS = ["#AC4035", "#E6AB8F", "#FCF6EA", "#A8C8A6", "#236548"]
 METHODS = {
@@ -811,9 +824,7 @@ def draw_heatmap_panel(ax, values, columns, title, cmap, limit, subtitle=""):
 
 
 def plot_heatmap(rows: list[dict], suite: str):
-    rows = [
-        r for r in rows if r["suite"] == suite and r["method"] != "Instruct"
-    ]
+    rows = [r for r in rows if r["suite"] == suite]
     backbones = list(dict.fromkeys(r["backbone"] for r in rows))
     methods = [label.replace("\n", " ") for label in list(METHODS.values())[1:]]
     columns = [
@@ -855,7 +866,10 @@ def plot_heatmap(rows: list[dict], suite: str):
             ],
             dtype=float,
         )
-        limit = max(1, float(np.nanmax(np.abs(values))))
+        limit = max(
+            1,
+            float(np.max(np.abs(values), where=np.isfinite(values), initial=0)),
+        )
         mesh = draw_heatmap_panel(
             ax, values, columns, title, cmap, limit, "relative change"
         )
@@ -905,9 +919,7 @@ def plot_heatmap(rows: list[dict], suite: str):
 
 def plot_paired_heatmap(rows: list[dict], adaptation: str):
     suites = ADAPTATIONS[adaptation]
-    rows = [
-        r for r in rows if r["suite"] in suites and r["method"] != "Instruct"
-    ]
+    rows = [r for r in rows if r["suite"] in suites]
     backbones = list(dict.fromkeys(r["backbone"] for r in rows))
     columns = [
         (backbone, mode)
@@ -939,7 +951,13 @@ def plot_paired_heatmap(rows: list[dict], adaptation: str):
         )
         for suite in suites
     ]
-    limit = max(1, *(float(np.nanmax(np.abs(values))) for values in matrices))
+    limit = max(
+        1,
+        *(
+            float(np.max(np.abs(values), where=np.isfinite(values), initial=0))
+            for values in matrices
+        ),
+    )
     cmap = LinearSegmentedColormap.from_list(
         "terracotta_cream_forest",
         HEATMAP_COLORS,
