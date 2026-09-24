@@ -253,43 +253,43 @@ math_after_reasoning,Qwen3.5-4B,Diffusion Longshot,off,39.61,309.7,58.05,-31.765
 math_after_reasoning,Qwen3.5-4B,Diffusion Longshot,on,,,,,,
 math_after_sequential,Llama 3.2-1B,Instruct,off,35.4,178.1,35.4,0.0,178.1,0.0
 math_after_sequential,Llama 3.2-1B,Instruct,on,,,,,,
-math_after_sequential,Llama 3.2-1B,SFT,off,,,35.4,,178.1,
+math_after_sequential,Llama 3.2-1B,SFT,off,35.93,200.8,35.4,1.4971751412429457,178.1,12.745648512071872
 math_after_sequential,Llama 3.2-1B,SFT,on,,,,,,
-math_after_sequential,Llama 3.2-1B,LoRA,off,,,35.4,,178.1,
+math_after_sequential,Llama 3.2-1B,LoRA,off,33.21,267.9,35.4,-6.1864406779660985,178.1,50.42111173498034
 math_after_sequential,Llama 3.2-1B,LoRA,on,,,,,,
-math_after_sequential,Llama 3.2-1B,BT,off,,,35.4,,178.1,
+math_after_sequential,Llama 3.2-1B,BT,off,33.94,193.0,35.4,-4.12429378531074,178.1,8.366086468276258
 math_after_sequential,Llama 3.2-1B,BT,on,,,,,,
-math_after_sequential,Llama 3.2-1B,BGT,off,,,35.4,,178.1,
+math_after_sequential,Llama 3.2-1B,BGT,off,34.56,139.6,35.4,-2.372881355932188,178.1,-21.617069062324536
 math_after_sequential,Llama 3.2-1B,BGT,on,,,,,,
-math_after_sequential,Llama 3.2-1B,Longshot,off,,,35.4,,178.1,
+math_after_sequential,Llama 3.2-1B,Longshot,off,34.08,147.1,35.4,-3.7288135593220306,178.1,-17.405951712521063
 math_after_sequential,Llama 3.2-1B,Longshot,on,,,,,,
-math_after_sequential,Llama 3.2-1B,Diffusion Longshot,off,,,35.4,,178.1,
+math_after_sequential,Llama 3.2-1B,Diffusion Longshot,off,13.87,1328.3,35.4,-60.81920903954803,178.1,645.8169567658618
 math_after_sequential,Llama 3.2-1B,Diffusion Longshot,on,,,,,,
 math_after_sequential,Llama 3.2-3B,Instruct,off,46.51,196.6,46.51,0.0,196.6,0.0
 math_after_sequential,Llama 3.2-3B,Instruct,on,,,,,,
-math_after_sequential,Llama 3.2-3B,SFT,off,,,46.51,,196.6,
+math_after_sequential,Llama 3.2-3B,SFT,off,47.49,184.5,46.51,2.1070737475811674,196.6,-6.154628687690744
 math_after_sequential,Llama 3.2-3B,SFT,on,,,,,,
-math_after_sequential,Llama 3.2-3B,LoRA,off,,,46.51,,196.6,
+math_after_sequential,Llama 3.2-3B,LoRA,off,46.03,212.9,46.51,-1.0320361212642348,196.6,8.290946083418117
 math_after_sequential,Llama 3.2-3B,LoRA,on,,,,,,
 math_after_sequential,Llama 3.2-3B,BT,off,,,46.51,,196.6,
 math_after_sequential,Llama 3.2-3B,BT,on,,,,,,
 math_after_sequential,Llama 3.2-3B,BGT,off,,,46.51,,196.6,
 math_after_sequential,Llama 3.2-3B,BGT,on,,,,,,
-math_after_sequential,Llama 3.2-3B,Longshot,off,,,46.51,,196.6,
+math_after_sequential,Llama 3.2-3B,Longshot,off,45.07,206.3,46.51,-3.0961083637927267,196.6,4.9338758901322555
 math_after_sequential,Llama 3.2-3B,Longshot,on,,,,,,
-math_after_sequential,Llama 3.2-3B,Diffusion Longshot,off,,,46.51,,196.6,
+math_after_sequential,Llama 3.2-3B,Diffusion Longshot,off,28.63,434.8,46.51,-38.4433455170931,196.6,121.15971515768061
 math_after_sequential,Llama 3.2-3B,Diffusion Longshot,on,,,,,,
 math_after_sequential,Qwen3.5-2B,Instruct,off,50.83,458.4,50.83,0.0,458.4,0.0
 math_after_sequential,Qwen3.5-2B,Instruct,on,,,,,,
-math_after_sequential,Qwen3.5-2B,SFT,off,,,50.83,,458.4,
+math_after_sequential,Qwen3.5-2B,SFT,off,49.98,210.2,50.83,-1.6722408026755842,458.4,-54.14485165794066
 math_after_sequential,Qwen3.5-2B,SFT,on,,,,,,
-math_after_sequential,Qwen3.5-2B,LoRA,off,,,50.83,,458.4,
+math_after_sequential,Qwen3.5-2B,LoRA,off,49.99,205.8,50.83,-1.652567381467629,458.4,-55.10471204188481
 math_after_sequential,Qwen3.5-2B,LoRA,on,,,,,,
-math_after_sequential,Qwen3.5-2B,BT,off,,,50.83,,458.4,
+math_after_sequential,Qwen3.5-2B,BT,off,45.35,359.2,50.83,-10.781034821955537,458.4,-21.640488656195455
 math_after_sequential,Qwen3.5-2B,BT,on,,,,,,
 math_after_sequential,Qwen3.5-2B,BGT,off,,,50.83,,458.4,
 math_after_sequential,Qwen3.5-2B,BGT,on,,,,,,
-math_after_sequential,Qwen3.5-2B,Longshot,off,,,50.83,,458.4,
+math_after_sequential,Qwen3.5-2B,Longshot,off,42.87,401.2,50.83,-15.660043281526658,458.4,-12.478184991273999
 math_after_sequential,Qwen3.5-2B,Longshot,on,,,,,,
 math_after_sequential,Qwen3.5-2B,Diffusion Longshot,off,,,50.83,,458.4,
 math_after_sequential,Qwen3.5-2B,Diffusion Longshot,on,,,,,,
@@ -327,13 +327,13 @@ korbench_after_sequential,Llama 3.2-3B,SFT,off,24.8,371.4,33.28,-25.480769230769
 korbench_after_sequential,Llama 3.2-3B,SFT,on,,,,,,
 korbench_after_sequential,Llama 3.2-3B,LoRA,off,24.08,529.6,33.28,-27.64423076923078,407.1,30.090886760009816
 korbench_after_sequential,Llama 3.2-3B,LoRA,on,,,,,,
-korbench_after_sequential,Llama 3.2-3B,BT,off,,,33.28,,407.1,
+korbench_after_sequential,Llama 3.2-3B,BT,off,32.88,476.6,33.28,-1.2019230769230727,407.1,17.0719724883321
 korbench_after_sequential,Llama 3.2-3B,BT,on,,,,,,
-korbench_after_sequential,Llama 3.2-3B,BGT,off,,,33.28,,407.1,
+korbench_after_sequential,Llama 3.2-3B,BGT,off,32.32,478.4,33.28,-2.8846153846153855,407.1,17.514124293785294
 korbench_after_sequential,Llama 3.2-3B,BGT,on,,,,,,
-korbench_after_sequential,Llama 3.2-3B,Longshot,off,,,33.28,,407.1,
+korbench_after_sequential,Llama 3.2-3B,Longshot,off,32.48,409.6,33.28,-2.4038461538461675,407.1,0.6140997297961137
 korbench_after_sequential,Llama 3.2-3B,Longshot,on,,,,,,
-korbench_after_sequential,Llama 3.2-3B,Diffusion Longshot,off,,,33.28,,407.1,
+korbench_after_sequential,Llama 3.2-3B,Diffusion Longshot,off,23.76,718.8,33.28,-28.60576923076923,407.1,76.56595431098008
 korbench_after_sequential,Llama 3.2-3B,Diffusion Longshot,on,,,,,,
 korbench_after_sequential,Qwen3.5-2B,Instruct,off,46.32,813.7,46.32,0.0,813.7,0.0
 korbench_after_sequential,Qwen3.5-2B,Instruct,on,,,,,,
@@ -343,7 +343,7 @@ korbench_after_sequential,Qwen3.5-2B,LoRA,off,35.84,484.1,46.32,-22.625215889464
 korbench_after_sequential,Qwen3.5-2B,LoRA,on,,,,,,
 korbench_after_sequential,Qwen3.5-2B,BT,off,20.4,289.7,46.32,-55.95854922279793,813.7,-64.39719798451517
 korbench_after_sequential,Qwen3.5-2B,BT,on,,,,,,
-korbench_after_sequential,Qwen3.5-2B,BGT,off,,,46.32,,813.7,
+korbench_after_sequential,Qwen3.5-2B,BGT,off,24.4,626.3,46.32,-47.32297063903281,813.7,-23.03060095858426
 korbench_after_sequential,Qwen3.5-2B,BGT,on,,,,,,
 korbench_after_sequential,Qwen3.5-2B,Longshot,off,39.76,620.0,46.32,-14.162348877374786,813.7,-23.804842079390443
 korbench_after_sequential,Qwen3.5-2B,Longshot,on,,,,,,

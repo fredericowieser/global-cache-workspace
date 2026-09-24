@@ -1,19 +1,35 @@
 {
   "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
-  "source_sha256": "53ec6b0a01825d5067692baeb721316d2b054de6b16db5e4c8052897f0976e61",
+  "source_sha256": "a08b2b377d1bfb00e20bb8de2ef2a550248ce0b4b7f0b35e224fd5228546c76a",
   "options": [
     "relative"
   ],
   "suites": [
+    "math_after_math",
+    "korbench_after_math",
+    "korbench_after_reasoning",
     "math_after_reasoning",
-    "korbench_after_reasoning"
+    "math_after_sequential",
+    "korbench_after_sequential"
   ],
   "columns": 3,
   "layout": "compact",
   "palette": null,
   "adaptations": [],
   "omitted_backbones": {
+    "math_after_math": [
+      "Qwen3.5-2B"
+    ],
+    "korbench_after_math": [
+      "Qwen3.5-2B"
+    ],
     "math_after_reasoning": [
+      "Qwen3.5-2B"
+    ],
+    "math_after_sequential": [
+      "Qwen3.5-2B"
+    ],
+    "korbench_after_sequential": [
       "Qwen3.5-2B"
     ]
   },
@@ -21,7 +37,13 @@
     "svg",
     "pdf"
   ],
+  "omitted_methods": [],
   "relative_statistic": "100 * (value / baseline_value - 1)",
+  "comparison_baseline": "Instruct",
+  "thinking_modes": [
+    "off",
+    "on"
+  ],
   "relative_quantities": [
     "accuracy",
     "mean_response_tokens"
