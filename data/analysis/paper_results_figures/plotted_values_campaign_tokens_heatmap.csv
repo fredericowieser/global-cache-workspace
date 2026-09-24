@@ -273,7 +273,7 @@ math_after_sequential,Llama 3.2-3B,LoRA,off,46.03,212.9,46.51,-1.032036121264234
 math_after_sequential,Llama 3.2-3B,LoRA,on,,,,,,
 math_after_sequential,Llama 3.2-3B,BT,off,45.65,220.5,46.51,-1.8490647172651031,196.6,12.156663275686675
 math_after_sequential,Llama 3.2-3B,BT,on,,,,,,
-math_after_sequential,Llama 3.2-3B,BGT,off,,,46.51,,196.6,
+math_after_sequential,Llama 3.2-3B,BGT,off,46.2,197.4,46.51,-0.6665233283164818,196.6,0.4069175991861629
 math_after_sequential,Llama 3.2-3B,BGT,on,,,,,,
 math_after_sequential,Llama 3.2-3B,Longshot,off,45.07,206.3,46.51,-3.0961083637927267,196.6,4.9338758901322555
 math_after_sequential,Llama 3.2-3B,Longshot,on,,,,,,

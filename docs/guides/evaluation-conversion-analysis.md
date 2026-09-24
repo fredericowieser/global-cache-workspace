@@ -253,34 +253,20 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
 
 Both commands save SVG and PDF files in the analysis output directory.
 The paired heatmap is included in the main-text sequential-adaptation subsection.
+Both individual accuracy/token heatmaps are included in the matching appendix
+subsection.
 All changes use the matched pretrained instruct baseline, not the
 mathematics-adapted checkpoint. Heatmap columns retain backbones and modes
 with reported baselines even when adapted results are pending; those cells
 remain N/A. Entirely missing panels use a symmetric fallback colour limit.
 
-The main-text paired heatmaps omit Diffusion Longshot, which is presented
-separately in the behavioural-reasoning subsection. The individual
-accuracy/token heatmaps and appendix tables retain it. The paired manifest
-records this exclusion; CSV exports still contain all methods.
+All submission tables and figures now omit Diffusion Longshot. Its methods, results, and original figures are preserved in the optional internal appendix `appendices/E_Diffusion_Archive.tex`, excluded by default through `\includeResearchArchivefalse` in the paper's `MAIN.tex`. For individual accuracy/token heatmaps, use the restricted-method regeneration recipe in the [archive maintenance notes](../../src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/diffusion/README.md) instead of the unrestricted `--layout heatmap` command above. The main-text paired heatmap command already excludes diffusion.
 
 ### Longshot diffusion comparison
 
-Generate the main-text difference heatmap with:
+The difference heatmap is retained only in the internal archive. The [archive maintenance notes](../../src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/diffusion/README.md#regenerating-the-archived-comparison) provide a command using the archived tables and their separate labels; the default submission tables no longer contain diffusion results.
 
-```bash
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
-  .venv/bin/python scripts/plot_paper_results.py --layout diffusion_heatmap --option difference
-```
-
-`plot_diffusion_heatmap()` saves `diffusion_difference_heatmap.svg` and `.pdf`,
-with its own CSV and manifest. Rows are backbones and columns are Maths/KOR-Bench
-pairs grouped by the three training regimes. Values are Diffusion Longshot
-minus Longshot accuracy in percentage points, using thinking-off results and
-requiring both methods to be reported. Missing comparisons are grey N/A cells.
-The shared linear colour scale is symmetric around zero, and annotations use
-one decimal place. The six-task versus five-task maths aggregation follows the
-source tables and is disclosed in the paper caption. The full absolute-score
-table remains in the matching appendix subsection.
+`plot_diffusion_heatmap()` compares Diffusion Longshot minus Longshot accuracy in percentage points, with thinking disabled and both methods required for each cell. Rows are backbones and columns are Maths/KOR-Bench pairs grouped by the three training regimes. Missing comparisons are grey N/A cells. The shared linear colour scale is symmetric around zero, and annotations use one decimal place. Mathematical adaptation averages six tasks; direct Reasoning Gym and sequential adaptation average five, excluding TheoremQA. The archive retains the absolute-score comparison table and original SVG/PDF assets.
 
 
 ### Mean performance across campaigns

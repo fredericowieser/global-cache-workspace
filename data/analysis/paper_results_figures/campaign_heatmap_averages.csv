@@ -21,7 +21,7 @@ math_after_math,BGT,off,0.3280876220938911,2.5286945789087065,5,Llama 3.2-1B; Ll
 korbench_after_math,BGT,off,-59.36713687352318,26.187687527259037,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
 math_after_reasoning,BGT,off,-7.215378400557821,7.956918497073161,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
 korbench_after_reasoning,BGT,off,-39.03426632616064,28.372521970895548,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
-math_after_sequential,BGT,off,-15.334424394120925,13.383317164502278,3,Llama 3.2-1B; Qwen3.5-2B; Qwen3.5-4B
+math_after_sequential,BGT,off,-11.667449127669816,13.216467249554192,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
 korbench_after_sequential,BGT,off,-33.793446481769124,29.30042160303466,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
 math_after_math,Longshot,off,-0.7030150350610809,4.228663557676095,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
 korbench_after_math,Longshot,off,-27.8468844705513,15.641161250213173,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
