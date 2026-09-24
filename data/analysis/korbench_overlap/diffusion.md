@@ -1,6 +1,6 @@
 # Separate diffusion overlap analysis
 
-Diffusion results were added only to the three KOR-Bench tables in `E_Diffusion_Archive.tex`. Definitions, provenance, and limitations are shared with [the main report](README.md). Means below give equal weight to the eight mathematical backbone/thinking conditions and the four conditions in each other training regime.
+Diffusion results were added only to the three KOR-Bench tables in `E_Diffusion_Archive.tex`. A [separate follow-up](diffusion_normalization.md) accounts for accuracy using success composition and category-normalized overlap; the raw comparisons below alone do not establish greater behavioral divergence. Definitions, provenance, and limitations are shared with [the main report](README.md). Means below give equal weight to the eight mathematical backbone/thinking conditions and the four conditions in each other training regime.
 
 | Training | Method | Retained (%) | Recovered (%) | Correctness changed (%) | Accuracy change (pp) |
 |---|---|---:|---:|---:|---:|

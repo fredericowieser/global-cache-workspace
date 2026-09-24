@@ -2,6 +2,8 @@
 
 All six appendix tables have two added columns. Diffusion appears only in the separate diffusion appendix; its analysis is in [diffusion.md](diffusion.md). All original accuracy and token entries are preserved.
 
+A [follow-up analysis accounting for accuracy](normalization.md) adds shared/new-success shares and category-normalized overlap, with worked examples and plots. It qualifies the raw-retention interpretation below: higher retention alone does not establish closer behavior independently of overall accuracy.
+
 ## Definitions
 
 For the same question, let B indicate that the pretrained instruct backbone was correct and F that the adapted model was correct. Retained = 100 × count(B and F) / count(B). Recovered = 100 × count(not B and F) / count(not B). Baselines compared with themselves therefore have 100% retained and 0% recovered. Thinking off and on are paired separately. Scores pool all 1,250 questions, with the denominator taken over the backbone's correct or incorrect subset, rather than averaging category percentages.
@@ -38,7 +40,7 @@ These are equal-weight means across eight backbone/thinking conditions for mathe
 - The affected categories differ markedly. Mathematical Llama 3B Longshot retains only 7.43% of the backbone's counterfactual successes, losing 187 and gaining 1 in that category. Mathematical Qwen 2B Longshot retains 95.98% of counterfactual successes but only 12.21% of operation successes (187 lost and 7 gained). A single aggregate retention percentage conceals these differences; see `categories.csv`.
 - Formatting failures explain part, but not most, of the lost successes. Across main-method comparisons, missing/empty answer delimiters occur in 28.46% of lost-success events after mathematical training, 26.46% after Reasoning Gym, and 25.39% after sequential training. These are pooled run-question events, not unique questions. The benchmark's parse-failure flag is narrower than all possible grading or answer-format problems.
 
-Restricting mathematical training to the same four thinking-off backbones used in the other regimes gives Longshot 60.05% retained and 5.96% recovered, versus retention of 20.32% for SFT, 18.54% for LoRA, 46.17% for BT, and 32.76% for BGT. Its mean-retention lead therefore also holds in this matched subset.
+Restricting mathematical training to the same four thinking-off backbones used in the other regimes gives Longshot 60.05% retained and 5.96% recovered, versus retention of 20.32% for SFT, 18.54% for LoRA, 46.17% for BT, and 32.76% for BGT. Its raw mean-retention lead therefore also holds in this matched subset; this still does not adjust for the adapted models' different accuracies.
 
 ## Coverage and interpretation
 
@@ -47,6 +49,18 @@ The audit covers 104 distinct complete evaluations (130,000 saved responses), re
 Some Llama comparisons have different `Today Date` strings in the system prompt: mathematical Llama 1B BT, BGT, and diffusion, and both Llama backbones after Reasoning Gym or sequential adaptation. All prompts match after replacing that date field, checked on every question. These differences are a confound for attributing changes solely to training. All other paired prompts match exactly. Thinking mode, chat formatting, generation caps, source data, and scoring identity were also checked.
 
 These metrics describe overlap of correctness, not semantic equivalence of wrong answers, similarity of reasoning traces, internal representations, or distributional divergence. The `both_wrong` group may contain different wrong answers. `summary.csv` additionally records exact response-string agreement and exact nonempty extracted-answer agreement over all questions; these are literal equality measures, not semantic judgments. Category-specific denominators can be small, so consult counts alongside percentages. The experiments use one available training seed per condition and do not support a universal ranking of adaptation methods.
+
+## Paper presentation
+
+The paper presents the main-method findings in `appendices/E_Extended_Analysis.tex`, immediately after the extended results. Diffusion findings remain in the separate archive. The section motivates absolute retention/recovery, success composition, and category-normalised overlap in sequence, and qualifies the interpretation using the measure definitions and evaluation limitations.
+
+Regenerate the four paper figures (PDF and SVG) from the validated count summaries with:
+
+```bash
+MPLCONFIGDIR=/tmp/gcw-overlap-mpl OPENBLAS_NUM_THREADS=1 .venv/bin/python data/analysis/korbench_overlap/paper_figures.py
+```
+
+Main-method assets are written to the paper's `figures/` directory; diffusion assets go only to `appendices/diffusion/figures/`. The paper includes the PDFs directly. The existing exploratory plots remain separate.
 
 ## Reproduction and files
 
@@ -60,6 +74,8 @@ MPLCONFIGDIR=/tmp/gcw-overlap-mpl .venv/bin/python data/analysis/korbench_overla
 
 `analyze.py` uses the existing KOR-Bench scorer to rescore eight historical Qwen 27B evaluation files offline, bringing them to the same scoring convention as the paper. All other runs use their recorded per-example scores. Raw source files are unchanged. `provenance.json` records source paths, SHA256 hashes, original and effective scoring metadata, score-change counts, and the mapping to paper rows. The three complete original 27B thinking-on backbone/SFT/LoRA files were copied read-only from `nb_gpu:/opt/soperator-home/martin/global-cache-workspace/results/qwen27b-korbench-concurrent-20260920_162752/` into `data/analysis/local/korbench-overlap-20260924/sources/`; their names and hashes are in the manifest. Other raw files remain at their existing local/shared-storage paths. Reproduction requires those saved results and the evaluation dependencies.
 
+- `normalization.md` and `diffusion_normalization.md`: follow-up explanations, results, and plots accounting for accuracy, reproduced with `normalize.py`.
+- `normalization.csv`: per-condition success shares and category-normalized overlap with their supporting counts and reference values.
 - `summary.csv`: paired counts and percentages for each regime/backbone/method/mode, including self-comparisons for baselines.
 - `categories.csv`: the same contingency analysis for each KOR-Bench category.
 - `paired_correctness.csv.gz`: source-question identities and paired binary correctness, sufficient to recompute all contingency statistics without model files or scoring dependencies.
