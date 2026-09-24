@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 import yaml
 
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     environment["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
     environment["WANDB_MODE"] = "disabled"
     environment["PYTHONUNBUFFERED"] = "1"
+    environment["TRITON_CACHE_DIR"] = tempfile.mkdtemp(prefix="gcw-batch-probe-", dir="/tmp")
     print(f"results={result_dir} configs={len(configs)}", flush=True)
 
     for index, (source, base, identity, global_rows, candidates) in enumerate(prepared):
@@ -128,7 +130,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.gpus > 1:
                 command.extend([
                     "torchrun", "--standalone", f"--nproc-per-node={args.gpus}",
-                    "-m", "gcw.cli",
+                    "--no-python", "bash", "-c",
+                    'export TRITON_CACHE_DIR="${TRITON_CACHE_DIR}-rank-${LOCAL_RANK}"; '
+                    'exec python -m gcw.cli "$@"',
+                    "bash",
                 ])
             else:
                 command.append("gcw")

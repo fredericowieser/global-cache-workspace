@@ -33,8 +33,10 @@ training batch.
 
 `--gpus N` defaults to one. For multiple GPUs the config must already specify
 DDP or FSDP; the probe uses `torchrun --standalone`. Run the controller once,
-outside torchrun. The Slurm wrapper requests one GPU and six hours by default; when using
-more GPUs, set both the Slurm allocation and `--gpus` accordingly:
+outside torchrun. The Slurm wrapper requests one GPU and leaves CPU, memory,
+time, and partition at Slurm defaults. Clear inherited `SBATCH_*` resource
+overrides before submission. When using more GPUs, set both the Slurm
+allocation and `--gpus` accordingly:
 
 ```bash
 sbatch scripts/cluster/slurm/probe_batch.sbatch \
@@ -61,6 +63,15 @@ preserved. W&B, evaluation, and checkpoint saves are disabled in temporary
 configs. Resuming training is rejected because attempts must start fresh.
 Required local SFT datasets must exist before any attempt starts. The job uses
 GPU/Qwen3.5 runtime extras and expandable allocator segments.
+
+Each probe invocation creates a fresh Triton cache under node-local `/tmp`,
+with separate cache directories for each distributed rank, matching the array
+launcher. Attempts within that invocation reuse the caches. An inherited
+`TRITON_CACHE_DIR` is overridden to avoid shared-home cache contention and
+missing compiled-kernel files. These disposable caches remain on the node.
+NCCL watchdog and timeout settings are not relaxed. Host-memory failures during
+27B model initialization are distinct from CUDA batch-size failures; retain
+Slurm's per-GPU memory defaults rather than the former fixed 180 GiB limit.
 
 ## Shared worker queues
 
