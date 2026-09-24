@@ -5,8 +5,10 @@ from functools import partial
 from typing import Any, cast
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from gcw.config import TrainConfig
+from gcw.data.training import TrainingBatch
 from gcw.performance.checkpointing import (
     transformer_layer_classes as _transformer_layer_classes,
 )
@@ -14,6 +16,23 @@ from gcw.performance.checkpointing import (
 
 def _fsdp_active(config: TrainConfig) -> bool:
     return config.distributed == "fsdp" and dist.is_initialized()
+
+
+def _align_fsdp_batch(batch: TrainingBatch) -> TrainingBatch:
+    """Keep windowed module traversal identical across FSDP ranks."""
+    width = batch.x.new_tensor(batch.x.shape[1])
+    dist.all_reduce(width, op=dist.ReduceOp.MAX)
+    padding = int(width.item()) - batch.x.shape[1]
+    if padding == 0:
+        return batch
+    attention_mask = batch.attention_mask
+    if attention_mask is None:
+        attention_mask = torch.ones_like(batch.x, dtype=torch.bool)
+    return TrainingBatch(
+        x=F.pad(batch.x, (0, padding), value=0),
+        y=F.pad(batch.y, (0, padding), value=-100),
+        attention_mask=F.pad(attention_mask, (0, padding), value=0),
+    )
 
 
 def _fsdp_wrap_classes(family: str) -> set[type[torch.nn.Module]]:

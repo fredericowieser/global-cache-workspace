@@ -38,6 +38,14 @@ data:
 
 `answer_only` masks prompt labels. `full_sequence` computes next-token cross-entropy over prompt and answer tokens. Padding remains masked in both modes.
 
+With FSDP, each training microbatch and validation batch is right-padded to the
+maximum sequence width across ranks before the model runs. This keeps windowed
+cache processing and FSDP collectives in the same order when ranks receive
+different-length examples. Added positions use ignored targets (`-100`) and a
+false attention mask; example ordering, supervised tokens, and gradient
+accumulation are preserved. Single-process and DDP batching retain their existing
+padding behavior. This synchronization requires no configuration flag.
+
 Use `global_batch_rows` when experiments must consume the same examples per optimizer step despite different sequence padding or physical microbatches. It is mutually exclusive with the legacy token-budget field `total_batch_size`.
 
 ### Adjacent logical-pair objective
