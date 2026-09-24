@@ -17,4 +17,8 @@
 
 This codebase is a development codebase designed to run the research experiments presented in the paper, ensuring reproducibility and facilitating further investigation into the proposed methods. A draft of the paper, in latex format, is available as a submodule: `src/Global-Cache-Workspace-Theory-ICLR-2027-`. Sometimes you may be asked to make changes to this paper. When this happens you should make sure to adapt to this setting: adopt a scientific writing style consistent with that of a high-impact machine learning research paper. Avoid all non-crucial details that belong in the codebase: include only what is necessary to understand and reproduce the experiments. Don't mention the version of the scoring or other implementation-specific details that are not relevant to the scientific content of the paper.
 
-NEVER use em-dashes for anything other than showing missing results in tables.
+Some more specific points:
+* NEVER use em-dashes for anything other than showing missing results in tables.
+* If you are not writing a new paragraph, continue the text on the same line without adding unnecessary line breaks. The column-80 limit does not apply to the md/latex files.
+
+

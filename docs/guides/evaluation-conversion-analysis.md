@@ -312,3 +312,22 @@ mean, SD, count, and contributing backbone list. Counts remain in the CSV
 rather than the figure. The view also writes its own
 source-values CSV and manifest. Existing figures and paper inclusions are
 unchanged by this command.
+
+
+For the matching token-usage overview, use:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout campaign_heatmap --option relative --metric tokens
+```
+
+This saves `campaign_relative_tokens_heatmap.svg` and `.pdf`, with separate
+`campaign_tokens_heatmap_averages.csv`, source-values CSV, and manifest files.
+The cells report mean ± population SD of each backbone's percentage change in
+mean response tokens against its matching pretrained instruct baseline.
+Thinking is off, and each available backbone has equal weight. Green indicates
+fewer tokens and terracotta more tokens; negative values are reductions.
+The Maths columns use the source tables' pooled generation-task token means
+(four tasks after mathematical adaptation, three after the other campaigns).
+The accuracy overview is preserved. The `--metric` option applies only to the
+campaign overview; the default is accuracy.

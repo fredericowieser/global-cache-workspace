@@ -1039,7 +1039,11 @@ def plot_diffusion_heatmap(rows: list[dict]):
     )
 
 
-def plot_campaign_heatmap(rows: list[dict]):
+def plot_campaign_heatmap(rows: list[dict], metric: str = "accuracy"):
+    field = {
+        "accuracy": "relative_change_percent",
+        "tokens": "relative_tokens_change_percent",
+    }[metric]
     methods = [
         method
         for method in METHODS.values()
@@ -1057,10 +1061,10 @@ def plot_campaign_heatmap(rows: list[dict]):
                 if r["suite"] == suite
                 and r["method"] == method
                 and r["thinking"] == "off"
-                and r["relative_change_percent"] is not None
+                and r[field] is not None
             ]
             if available:
-                changes = [r["relative_change_percent"] for r in available]
+                changes = [r[field] for r in available]
                 values[i, j] = np.mean(changes)
                 stds[i, j] = np.std(changes, ddof=0)
             aggregates.append(
@@ -1082,8 +1086,13 @@ def plot_campaign_heatmap(rows: list[dict]):
         values,
         methods,
         "CHANGE VS INSTRUCT",
-        "Mean relative accuracy (%)",
+        (
+            "Mean token change (%)"
+            if metric == "tokens"
+            else "Mean relative accuracy (%)"
+        ),
         stds=stds,
+        lower_is_better=metric == "tokens",
     )
     return fig, aggregates
 
@@ -1094,13 +1103,15 @@ def draw_campaign_heatmap(
     legend_title: str,
     legend_subtitle: str,
     stds: np.ndarray | None = None,
+    lower_is_better: bool = False,
 ):
     row_count, column_count = values.shape
     limit = max(
         1, float(np.max(np.abs(values), where=np.isfinite(values), initial=0))
     )
     cmap = LinearSegmentedColormap.from_list(
-        "terracotta_cream_forest", HEATMAP_COLORS
+        "terracotta_cream_forest",
+        HEATMAP_COLORS[::-1] if lower_is_better else HEATMAP_COLORS,
     )
     cmap.set_bad("#E8EBEF")
     fig, ax = plt.subplots(figsize=(7.2, 2.8 if stds is None else 3.1))
@@ -1199,8 +1210,21 @@ def draw_campaign_heatmap(
         color="#334155",
     )
     fig.text(left_margin, 0.065, legend_subtitle, fontsize=7, color="#64748B")
-    fig.text(0.47, 0.15, "Lower", fontsize=6.5, color=cmap(0.0))
-    fig.text(0.85, 0.15, "Higher", fontsize=6.5, color=cmap(1.0), ha="right")
+    fig.text(
+        0.47,
+        0.15,
+        "Fewer tokens" if lower_is_better else "Lower",
+        fontsize=6.5,
+        color=cmap(0.0),
+    )
+    fig.text(
+        0.85,
+        0.15,
+        "More tokens" if lower_is_better else "Higher",
+        fontsize=6.5,
+        color=cmap(1.0),
+        ha="right",
+    )
     fig.text(
         0.90,
         0.11,
@@ -1238,6 +1262,12 @@ def main() -> None:
         choices=("raw", "relative", "both", "difference"),
         default="both",
     )
+    parser.add_argument(
+        "--metric",
+        choices=("accuracy", "tokens"),
+        default="accuracy",
+        help="Quantity for campaign_heatmap (default: accuracy)",
+    )
     parser.add_argument("--columns", type=int, default=3)
     parser.add_argument("--suite", choices=tuple(TABLES), action="append")
     parser.add_argument(
@@ -1273,6 +1303,11 @@ def main() -> None:
         parser.error("Use --adaptation instead of --suite with paired_heatmap")
     if args.adaptation and args.layout != "paired_heatmap":
         parser.error("--adaptation requires --layout paired_heatmap")
+    if args.metric != "accuracy" and args.layout != "campaign_heatmap":
+        parser.error("--metric tokens requires --layout campaign_heatmap")
+    artifact_layout = (
+        "campaign_tokens_heatmap" if args.metric == "tokens" else args.layout
+    )
     rows = read_tables(args.source)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update(
@@ -1282,7 +1317,7 @@ def main() -> None:
         }
     )
     csv_name = (
-        f"plotted_values_{args.layout}.csv"
+        f"plotted_values_{artifact_layout}.csv"
         if args.layout
         in {"paired_heatmap", "diffusion_heatmap", "campaign_heatmap"}
         else "plotted_values.csv"
@@ -1308,9 +1343,16 @@ def main() -> None:
                 fig = plot_diffusion_heatmap(rows)
                 path = args.output_dir / "diffusion_difference_heatmap.svg"
             elif args.layout == "campaign_heatmap":
-                fig, aggregates = plot_campaign_heatmap(rows)
-                path = args.output_dir / "campaign_relative_heatmap.svg"
-                with (args.output_dir / "campaign_heatmap_averages.csv").open(
+                fig, aggregates = plot_campaign_heatmap(
+                    rows, metric=args.metric
+                )
+                name = (
+                    "campaign_relative_tokens_heatmap"
+                    if args.metric == "tokens"
+                    else "campaign_relative_heatmap"
+                )
+                path = args.output_dir / f"{name}.svg"
+                with (args.output_dir / f"{artifact_layout}_averages.csv").open(
                     "w", newline=""
                 ) as f:
                     writer = csv.DictWriter(f, fieldnames=list(aggregates[0]))
@@ -1394,15 +1436,20 @@ def main() -> None:
         "matplotlib_version": matplotlib.__version__,
     }
     if args.layout == "campaign_heatmap":
+        manifest["relative_quantities"] = [
+            "mean_response_tokens" if args.metric == "tokens" else "accuracy"
+        ]
+        manifest["metric"] = args.metric
+        manifest["lower_is_better"] = args.metric == "tokens"
         manifest["aggregation"] = {
             "weighting": "Equal weight per available backbone, separately per cell",
             "missing_values": "Omitted; N/A if no backbones have results",
             "standard_deviation": "Population SD across available backbones (ddof=0)",
             "cell_annotations": "Mean with plus/minus standard deviation",
-            "counts_and_backbones": "campaign_heatmap_averages.csv",
+            "counts_and_backbones": f"{artifact_layout}_averages.csv",
         }
     manifest_name = (
-        f"manifest_{args.layout}.json"
+        f"manifest_{artifact_layout}.json"
         if args.layout != "bars"
         else "manifest.json"
     )
