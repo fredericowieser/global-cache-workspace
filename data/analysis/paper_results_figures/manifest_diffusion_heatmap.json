@@ -1,0 +1,44 @@
+{
+  "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
+  "source_sha256": "e5c91d28e03f7c81c0cbb510b27fd559a2d2d9672e8a1ab2604615fb531a5637",
+  "options": [
+    "difference"
+  ],
+  "suites": [
+    "math_after_math",
+    "korbench_after_math",
+    "korbench_after_reasoning",
+    "math_after_reasoning",
+    "math_after_sequential",
+    "korbench_after_sequential"
+  ],
+  "columns": 3,
+  "layout": "diffusion_heatmap",
+  "palette": "terracotta_cream_forest",
+  "adaptations": [
+    "mathematical",
+    "reasoning",
+    "sequential"
+  ],
+  "omitted_backbones": {},
+  "formats": [
+    "svg",
+    "pdf"
+  ],
+  "omitted_methods": [],
+  "relative_statistic": "diffusion_accuracy_percent - longshot_accuracy_percent",
+  "comparison_baseline": "Longshot",
+  "thinking_modes": [
+    "off"
+  ],
+  "relative_quantities": [
+    "accuracy"
+  ],
+  "baseline_matching": [
+    "suite",
+    "backbone",
+    "thinking"
+  ],
+  "source_precision": "Rounded values as reported in the paper tables",
+  "matplotlib_version": "3.11.0"
+}

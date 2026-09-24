@@ -257,3 +257,27 @@ All changes use the matched pretrained instruct baseline, not the
 mathematics-adapted checkpoint. Heatmap columns retain backbones and modes
 with reported baselines even when adapted results are pending; those cells
 remain N/A. Entirely missing panels use a symmetric fallback colour limit.
+
+The main-text paired heatmaps omit Diffusion Longshot, which is presented
+separately in the behavioural-reasoning subsection. The individual
+accuracy/token heatmaps and appendix tables retain it. The paired manifest
+records this exclusion; CSV exports still contain all methods.
+
+### Longshot diffusion comparison
+
+Generate the main-text difference heatmap with:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout diffusion_heatmap --option difference
+```
+
+`plot_diffusion_heatmap()` saves `diffusion_difference_heatmap.svg` and `.pdf`,
+with its own CSV and manifest. Rows are backbones and columns are Maths/KOR-Bench
+pairs grouped by the three training regimes. Values are Diffusion Longshot
+minus Longshot accuracy in percentage points, using thinking-off results and
+requiring both methods to be reported. Missing comparisons are grey N/A cells.
+The shared linear colour scale is symmetric around zero, and annotations use
+one decimal place. The six-task versus five-task maths aggregation follows the
+source tables and is disclosed in the paper caption. The full absolute-score
+table remains in the matching appendix subsection.

@@ -668,9 +668,12 @@ def plot_tradeoff(rows: list[dict], suite: str):
     return fig
 
 
-def draw_heatmap_panel(ax, values, columns, title, cmap, limit, subtitle=""):
+def draw_heatmap_panel(
+    ax, values, columns, title, cmap, limit, subtitle="", methods=None
+):
     backbones = list(dict.fromkeys(backbone for backbone, _ in columns))
-    methods = list(METHODS.values())[1:]
+    if methods is None:
+        methods = list(METHODS.values())[1:]
     centers = [
         np.mean([i for i, (b, _) in enumerate(columns) if b == backbone])
         for backbone in backbones
@@ -689,7 +692,7 @@ def draw_heatmap_panel(ax, values, columns, title, cmap, limit, subtitle=""):
     )
     ax.set_ylim(len(methods) - 0.5, -0.5)
     ax.set_xticks(np.arange(len(columns)), [mode for _, mode in columns])
-    ax.set_yticks(np.arange(len(methods)), list(METHODS.values())[1:])
+    ax.set_yticks(np.arange(len(methods)), methods)
     ax.tick_params(
         length=0,
         labelsize=7.5,
@@ -932,7 +935,11 @@ def plot_paired_heatmap(rows: list[dict], adaptation: str):
             for r in rows
         )
     ]
-    methods = [label.replace("\n", " ") for label in list(METHODS.values())[1:]]
+    methods = [
+        label.replace("\n", " ")
+        for label in list(METHODS.values())[1:]
+        if label != METHODS[r"\methodDiffusionLongshot{}"]
+    ]
     lookup = {
         (r["suite"], r["method"], r["backbone"], r["thinking"]): r for r in rows
     }
@@ -971,7 +978,7 @@ def plot_paired_heatmap(rows: list[dict], adaptation: str):
         (f"{task_count} tasks", "5 tasks"),
     ):
         mesh = draw_heatmap_panel(
-            ax, values, columns, title, cmap, limit, subtitle
+            ax, values, columns, title, cmap, limit, subtitle, methods=methods
         )
     fig.subplots_adjust(
         left=0.14, right=0.99, bottom=0.25, top=0.68, wspace=0.12
@@ -1012,6 +1019,118 @@ def plot_paired_heatmap(rows: list[dict], adaptation: str):
     return fig
 
 
+def plot_diffusion_heatmap(rows: list[dict]):
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    suites = [suite for pair in ADAPTATIONS.values() for suite in pair]
+    lookup = {
+        (r["suite"], r["backbone"], r["method"]): r["accuracy_percent"]
+        for r in rows
+        if r["thinking"] == "off"
+    }
+    values = np.full((len(backbones), len(suites)), np.nan)
+    for i, backbone in enumerate(backbones):
+        for j, suite in enumerate(suites):
+            longshot = lookup.get((suite, backbone, "Longshot"))
+            diffusion = lookup.get((suite, backbone, "Diffusion Longshot"))
+            if longshot is not None and diffusion is not None:
+                values[i, j] = diffusion - longshot
+    limit = max(
+        1, float(np.max(np.abs(values), where=np.isfinite(values), initial=0))
+    )
+    cmap = LinearSegmentedColormap.from_list(
+        "terracotta_cream_forest", HEATMAP_COLORS
+    )
+    cmap.set_bad("#E8EBEF")
+    fig, ax = plt.subplots(figsize=(7.2, 2.8))
+    fig.subplots_adjust(left=0.19, right=0.99, bottom=0.25, top=0.77)
+    mesh = ax.pcolormesh(
+        np.arange(len(suites) + 1) - 0.5,
+        np.arange(len(backbones) + 1) - 0.5,
+        np.ma.masked_invalid(values),
+        cmap=cmap,
+        vmin=-limit,
+        vmax=limit,
+        edgecolors="white",
+        linewidth=1.1,
+        rasterized=False,
+    )
+    ax.set_ylim(len(backbones) - 0.5, -0.5)
+    ax.set_yticks(range(len(backbones)), backbones)
+    ax.set_xticks(range(len(suites)), ["Maths", "KOR-Bench"] * len(ADAPTATIONS))
+    ax.xaxis.tick_top()
+    ax.tick_params(length=0, labelsize=7.5, colors="#334155", pad=7)
+    for group, title in enumerate(
+        ("Maths training", "Reasoning Gym", "Sequential")
+    ):
+        left = 2 * group - 0.5
+        ax.text(
+            left + 1,
+            1.25,
+            title,
+            transform=ax.get_xaxis_transform(),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            fontweight="bold",
+            color="#17212E",
+        )
+        ax.plot(
+            [left + 0.08, left + 1.92],
+            [1.19, 1.19],
+            transform=ax.get_xaxis_transform(),
+            clip_on=False,
+            color="#C9D1DA",
+            linewidth=0.7,
+        )
+        if group:
+            ax.axvline(left, color="white", linewidth=3)
+    for (i, j), value in np.ndenumerate(values):
+        label = "N/A" if not np.isfinite(value) else f"{value:+.1f}"
+        if np.isfinite(value) and abs(value) < 0.05:
+            label = "0.0"
+        color = "#7C8796"
+        if np.isfinite(value):
+            rgb = cmap((value + limit) / (2 * limit))[:3]
+            color = (
+                "white"
+                if np.dot(rgb, (0.2126, 0.7152, 0.0722)) < 0.53
+                else "#18202B"
+            )
+        ax.text(j, i, label, ha="center", va="center", fontsize=8, color=color)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    color_ax = fig.add_axes((0.47, 0.10, 0.38, 0.028))
+    colorbar = fig.colorbar(mesh, cax=color_ax, orientation="horizontal")
+    colorbar.locator = MaxNLocator(nbins=5, symmetric=True)
+    colorbar.update_ticks()
+    colorbar.ax.tick_params(labelsize=6.5, length=2, pad=2, colors="#475569")
+    colorbar.outline.set_visible(False)
+    colorbar.solids.set_rasterized(False)
+    colorbar.ax.axvline(0, color="#64748B", linewidth=0.7)
+    fig.text(
+        0.19,
+        0.12,
+        "DIFFUSION − LONGSHOT",
+        fontsize=7,
+        fontweight="bold",
+        color="#334155",
+    )
+    fig.text(
+        0.19, 0.065, "Accuracy difference (pp)", fontsize=7, color="#64748B"
+    )
+    fig.text(0.47, 0.15, "Lower", fontsize=6.5, color=cmap(0.0))
+    fig.text(0.85, 0.15, "Higher", fontsize=6.5, color=cmap(1.0), ha="right")
+    fig.text(
+        0.90,
+        0.11,
+        "N/A",
+        fontsize=6.5,
+        color="#64748B",
+        bbox={"facecolor": "#E8EBEF", "edgecolor": "none", "pad": 3},
+    )
+    return fig
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1026,7 +1145,9 @@ def main() -> None:
         help="Directory for SVG/PDF figures, plotted values, and manifests",
     )
     parser.add_argument(
-        "--option", choices=("raw", "relative", "both"), default="both"
+        "--option",
+        choices=("raw", "relative", "both", "difference"),
+        default="both",
     )
     parser.add_argument("--columns", type=int, default=3)
     parser.add_argument("--suite", choices=tuple(TABLES), action="append")
@@ -1040,11 +1161,22 @@ def main() -> None:
         "heatmap": plot_heatmap,
         "paired_heatmap": plot_paired_heatmap,
     }
-    parser.add_argument("--layout", choices=("bars", *layouts), default="bars")
+    parser.add_argument(
+        "--layout",
+        choices=("bars", *layouts, "diffusion_heatmap"),
+        default="bars",
+    )
     args = parser.parse_args()
     if args.columns < 1:
         parser.error("--columns must be positive")
-    if args.layout != "bars" and args.option != "relative":
+    if args.layout == "diffusion_heatmap":
+        if args.option != "difference" or args.suite or args.adaptation:
+            parser.error(
+                "diffusion_heatmap requires --option difference and all regimes"
+            )
+    elif args.option == "difference":
+        parser.error("--option difference requires --layout diffusion_heatmap")
+    elif args.layout != "bars" and args.option != "relative":
         parser.error(f"--layout {args.layout} requires --option relative")
     if args.layout == "paired_heatmap" and args.suite:
         parser.error("Use --adaptation instead of --suite with paired_heatmap")
@@ -1059,8 +1191,8 @@ def main() -> None:
         }
     )
     csv_name = (
-        "plotted_values_paired_heatmap.csv"
-        if args.layout == "paired_heatmap"
+        f"plotted_values_{args.layout}.csv"
+        if args.layout in {"paired_heatmap", "diffusion_heatmap"}
         else "plotted_values.csv"
     )
     with (args.output_dir / csv_name).open("w", newline="") as f:
@@ -1076,9 +1208,14 @@ def main() -> None:
         ]
     for option in options:
         for suite in (
-            adaptations if args.layout == "paired_heatmap" else suites
+            ["diffusion"]
+            if args.layout == "diffusion_heatmap"
+            else adaptations if args.layout == "paired_heatmap" else suites
         ):
-            if args.layout in layouts:
+            if args.layout == "diffusion_heatmap":
+                fig = plot_diffusion_heatmap(rows)
+                path = args.output_dir / "diffusion_difference_heatmap.svg"
+            elif args.layout in layouts:
                 fig = layouts[args.layout](rows, suite)
                 path = args.output_dir / f"{suite}_{option}_{args.layout}.svg"
             else:
@@ -1098,10 +1235,14 @@ def main() -> None:
         "layout": args.layout,
         "palette": (
             "terracotta_cream_forest"
-            if args.layout in {"heatmap", "paired_heatmap"}
+            if args.layout in {"heatmap", "paired_heatmap", "diffusion_heatmap"}
             else None
         ),
-        "adaptations": adaptations if args.layout == "paired_heatmap" else [],
+        "adaptations": (
+            adaptations
+            if args.layout in {"paired_heatmap", "diffusion_heatmap"}
+            else []
+        ),
         "omitted_backbones": (
             {
                 s: ["Qwen3.5-2B"]
@@ -1112,10 +1253,23 @@ def main() -> None:
             else {}
         ),
         "formats": ["svg", "pdf"],
-        "relative_statistic": "100 * (value / baseline_value - 1)",
+        "omitted_methods": (
+            ["Diffusion Longshot"] if args.layout == "paired_heatmap" else []
+        ),
+        "relative_statistic": (
+            "diffusion_accuracy_percent - longshot_accuracy_percent"
+            if args.layout == "diffusion_heatmap"
+            else "100 * (value / baseline_value - 1)"
+        ),
+        "comparison_baseline": (
+            "Longshot" if args.layout == "diffusion_heatmap" else "Instruct"
+        ),
+        "thinking_modes": (
+            ["off"] if args.layout == "diffusion_heatmap" else ["off", "on"]
+        ),
         "relative_quantities": (
             ["accuracy"]
-            if args.layout == "paired_heatmap"
+            if args.layout in {"paired_heatmap", "diffusion_heatmap"}
             else ["accuracy", "mean_response_tokens"]
         ),
         "baseline_matching": ["suite", "backbone", "thinking"],

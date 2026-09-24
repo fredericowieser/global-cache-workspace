@@ -5,6 +5,10 @@
     "relative"
   ],
   "suites": [
+    "math_after_math",
+    "korbench_after_math",
+    "math_after_reasoning",
+    "korbench_after_reasoning",
     "math_after_sequential",
     "korbench_after_sequential"
   ],
@@ -12,12 +16,17 @@
   "layout": "paired_heatmap",
   "palette": "terracotta_cream_forest",
   "adaptations": [
+    "mathematical",
+    "reasoning",
     "sequential"
   ],
   "omitted_backbones": {},
   "formats": [
     "svg",
     "pdf"
+  ],
+  "omitted_methods": [
+    "Diffusion Longshot"
   ],
   "relative_statistic": "100 * (value / baseline_value - 1)",
   "relative_quantities": [
