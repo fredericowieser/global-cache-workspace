@@ -1,0 +1,31 @@
+suite,method,thinking,mean_relative_change_percent,std_relative_change_percent,backbone_count,backbones
+math_after_math,SFT,off,5.073770570268161,2.829681629171815,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+korbench_after_math,SFT,off,-69.7577126728847,18.12571703739521,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+math_after_reasoning,SFT,off,-3.3889824476103807,3.7985198771131397,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_reasoning,SFT,off,-17.2132678104839,8.534278397875383,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_sequential,SFT,off,1.0988504280832145,1.636772860522008,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_sequential,SFT,off,-31.844508550002228,12.350325117853393,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_math,LoRA,off,8.023241721872422,2.1131154393220832,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+korbench_after_math,LoRA,off,-70.91134619288867,18.888547075273614,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+math_after_reasoning,LoRA,off,-8.354199418986225,7.452448319954038,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_reasoning,LoRA,off,-36.874226088030625,8.330195744530888,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_sequential,LoRA,off,-2.1574681941839673,2.4242325269199054,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_sequential,LoRA,off,-34.135444716339705,15.61678617686494,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_math,BT,off,-2.1995517320835694,2.4131728544541673,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+korbench_after_math,BT,off,-50.184340820708954,27.78275815372517,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+math_after_reasoning,BT,off,-3.5939861982858314,3.0276299950578585,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_reasoning,BT,off,-42.42847143932254,26.517116273390624,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_sequential,BT,off,-6.036143550771086,3.3739520204084736,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_sequential,BT,off,-36.95610069202344,25.31941932888618,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_math,BGT,off,0.3280876220938911,2.5286945789087065,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+korbench_after_math,BGT,off,-59.36713687352318,26.187687527259037,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+math_after_reasoning,BGT,off,-7.215378400557821,7.956918497073161,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_reasoning,BGT,off,-39.03426632616064,28.372521970895548,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_sequential,BGT,off,-15.334424394120925,13.383317164502278,3,Llama 3.2-1B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_sequential,BGT,off,-33.793446481769124,29.30042160303466,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_math,Longshot,off,-0.7030150350610809,4.228663557676095,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+korbench_after_math,Longshot,off,-27.8468844705513,15.641161250213173,5,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B; Qwen3.5-27B
+math_after_reasoning,Longshot,off,-14.058374681778908,19.588392909521428,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_reasoning,Longshot,off,-15.620682270848928,12.660448513866932,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+math_after_sequential,Longshot,off,-4.790061283933825,6.8556893938727885,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B
+korbench_after_sequential,Longshot,off,-11.771920558867526,5.736805548863815,4,Llama 3.2-1B; Llama 3.2-3B; Qwen3.5-2B; Qwen3.5-4B

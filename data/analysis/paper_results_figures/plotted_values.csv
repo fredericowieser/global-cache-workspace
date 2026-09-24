@@ -271,7 +271,7 @@ math_after_sequential,Llama 3.2-3B,SFT,off,47.49,184.5,46.51,2.1070737475811674,
 math_after_sequential,Llama 3.2-3B,SFT,on,,,,,,
 math_after_sequential,Llama 3.2-3B,LoRA,off,46.03,212.9,46.51,-1.0320361212642348,196.6,8.290946083418117
 math_after_sequential,Llama 3.2-3B,LoRA,on,,,,,,
-math_after_sequential,Llama 3.2-3B,BT,off,,,46.51,,196.6,
+math_after_sequential,Llama 3.2-3B,BT,off,45.65,220.5,46.51,-1.8490647172651031,196.6,12.156663275686675
 math_after_sequential,Llama 3.2-3B,BT,on,,,,,,
 math_after_sequential,Llama 3.2-3B,BGT,off,,,46.51,,196.6,
 math_after_sequential,Llama 3.2-3B,BGT,on,,,,,,
@@ -287,11 +287,11 @@ math_after_sequential,Qwen3.5-2B,LoRA,off,49.99,205.8,50.83,-1.652567381467629,4
 math_after_sequential,Qwen3.5-2B,LoRA,on,,,,,,
 math_after_sequential,Qwen3.5-2B,BT,off,45.35,359.2,50.83,-10.781034821955537,458.4,-21.640488656195455
 math_after_sequential,Qwen3.5-2B,BT,on,,,,,,
-math_after_sequential,Qwen3.5-2B,BGT,off,,,50.83,,458.4,
+math_after_sequential,Qwen3.5-2B,BGT,off,33.67,1063.8,50.83,-33.759590792838864,458.4,132.06806282722513
 math_after_sequential,Qwen3.5-2B,BGT,on,,,,,,
 math_after_sequential,Qwen3.5-2B,Longshot,off,42.87,401.2,50.83,-15.660043281526658,458.4,-12.478184991273999
 math_after_sequential,Qwen3.5-2B,Longshot,on,,,,,,
-math_after_sequential,Qwen3.5-2B,Diffusion Longshot,off,,,50.83,,458.4,
+math_after_sequential,Qwen3.5-2B,Diffusion Longshot,off,21.26,1369.4,50.83,-58.17430651190241,458.4,198.73472949389185
 math_after_sequential,Qwen3.5-2B,Diffusion Longshot,on,,,,,,
 math_after_sequential,Qwen3.5-4B,Instruct,off,58.05,489.2,58.05,0.0,489.2,0.0
 math_after_sequential,Qwen3.5-4B,Instruct,on,,,,,,

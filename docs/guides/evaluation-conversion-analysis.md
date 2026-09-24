@@ -281,3 +281,34 @@ The shared linear colour scale is symmetric around zero, and annotations use
 one decimal place. The six-task versus five-task maths aggregation follows the
 source tables and is disclosed in the paper caption. The full absolute-score
 table remains in the matching appendix subsection.
+
+
+### Mean performance across campaigns
+
+Generate the method-by-campaign overview with:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout campaign_heatmap --option relative
+```
+
+`plot_campaign_heatmap()` saves `campaign_relative_heatmap.svg` and `.pdf`.
+It shares the diffusion comparison's layout and palette, with SFT, LoRA, BT,
+BGT, and Longshot as rows and the same six Maths/KOR-Bench columns grouped by
+training regime. Thinking-off accuracy is first normalised to the matching
+pretrained instruct backbone using `100 * (accuracy / baseline_accuracy - 1)`.
+Each cell is the arithmetic mean of those percentage changes across available
+backbones, with equal weight per backbone. This is not a percentage change of
+pooled mean accuracies. Diffusion Longshot is excluded.
+
+Cell annotations show the mean with ± standard deviation beneath it. The SD
+is computed across the same per-backbone percentage changes, using population
+SD (`ddof=0`) to describe the available backbones; a single result has SD zero.
+Colours encode the mean. Missing results are omitted rather than treated as
+zero; cells without any results show N/A. Backbone coverage can differ between cells. The source tables use
+six Maths tasks after mathematical adaptation and five after reasoning or
+sequential adaptation. `campaign_heatmap_averages.csv` records each plotted
+mean, SD, count, and contributing backbone list. Counts remain in the CSV
+rather than the figure. The view also writes its own
+source-values CSV and manifest. Existing figures and paper inclusions are
+unchanged by this command.
