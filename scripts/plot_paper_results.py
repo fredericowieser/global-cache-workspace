@@ -691,6 +691,82 @@ def plot_tradeoff(rows: list[dict], suite: str):
     return fig
 
 
+def plot_retention(rows: list[dict], adaptation: str):
+    adapted, korbench = ADAPTATIONS[adaptation]
+    methods = [label.replace("\n", " ") for label in list(METHODS.values())[1:6]]
+    changes = {
+        (r["suite"], r["backbone"], r["method"], r["thinking"]): r[
+            "relative_change_percent"
+        ]
+        for r in rows
+        if r["suite"] in (adapted, korbench)
+    }
+    fig, ax = plt.subplots(figsize=(2.75, 2.35))
+    for method, color in zip(methods, COLORS[1:]):
+        points = [
+            (changes[(adapted, *key)], changes[(korbench, *key)], key[2])
+            for key in sorted(
+                {k[1:] for k in changes if k[0] == adapted and k[2] == method}
+            )
+            if changes[(adapted, *key)] is not None
+            and changes.get((korbench, *key)) is not None
+        ]
+        for x, y, mode in points:
+            ax.scatter(
+                x,
+                y,
+                s=13,
+                marker="o" if mode == "off" else "^",
+                facecolors=color if mode == "off" else "white",
+                edgecolors=color,
+                linewidths=1.0,
+                alpha=0.55,
+                zorder=2,
+            )
+        mean_x = float(np.mean([p[0] for p in points]))
+        mean_y = float(np.mean([p[1] for p in points]))
+        ax.scatter(
+            mean_x,
+            mean_y,
+            s=60,
+            marker="o",
+            facecolors=color,
+            edgecolors="#22252A",
+            linewidths=1.1,
+            zorder=4,
+        )
+        label = METHOD_LABELS.get(method, method)
+        offset, align = {
+            "BT": ((0, 7), "center"),
+            "BGT": ((-6, -12), "right"),
+            "FFT": ((0, -14), "center"),
+        }.get(label, ((6, 3), "left"))
+        ax.annotate(
+            label,
+            (mean_x, mean_y),
+            xytext=offset,
+            textcoords="offset points",
+            ha=align,
+            fontsize=8,
+            fontweight="bold",
+            color="#22252A",
+            zorder=5,
+        )
+    ax.axhline(0, color="#979DA5", linewidth=0.7, zorder=1)
+    ax.axvline(0, color="#979DA5", linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.grid(color="#ECEEF1", linewidth=0.5)
+    ax.tick_params(labelsize=7.5, length=2, pad=1.5)
+    ax.spines[["top", "right"]].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#AEB4BC")
+    domain = "In-domain" if adaptation == "mathematical" else "Maths/LogiQA"
+    ax.set_xlabel(f"{domain} change (%)", fontsize=8, labelpad=1.5)
+    ax.set_ylabel("KOR-Bench change (%)", fontsize=8, labelpad=1.5)
+    fig.subplots_adjust(left=0.19, right=0.97, bottom=0.17, top=0.97)
+    return fig
+
+
 def draw_heatmap_panel(
     ax, values, columns, title, cmap, limit, subtitle="", methods=None
 ):
@@ -1447,6 +1523,7 @@ def main() -> None:
         "tradeoff": plot_tradeoff,
         "heatmap": plot_heatmap,
         "paired_heatmap": plot_paired_heatmap,
+        "retention": plot_retention,
     }
     parser.add_argument(
         "--layout",
@@ -1467,10 +1544,10 @@ def main() -> None:
         parser.error(f"--layout {args.layout} requires --option relative")
     if args.layout == "campaign_heatmap" and (args.suite or args.adaptation):
         parser.error("campaign_heatmap requires all suites and regimes")
-    if args.layout == "paired_heatmap" and args.suite:
-        parser.error("Use --adaptation instead of --suite with paired_heatmap")
-    if args.adaptation and args.layout != "paired_heatmap":
-        parser.error("--adaptation requires --layout paired_heatmap")
+    if args.layout in {"paired_heatmap", "retention"} and args.suite:
+        parser.error(f"Use --adaptation instead of --suite with {args.layout}")
+    if args.adaptation and args.layout not in {"paired_heatmap", "retention"}:
+        parser.error("--adaptation requires --layout paired_heatmap or retention")
     if args.metric != "accuracy" and args.layout != "campaign_heatmap":
         parser.error("--metric tokens/both requires --layout campaign_heatmap")
     if args.thinking_view != "off" and args.layout != "campaign_heatmap":
@@ -1516,7 +1593,9 @@ def main() -> None:
         for suite in (
             ["overview"]
             if args.layout in {"diffusion_heatmap", "campaign_heatmap"}
-            else adaptations if args.layout == "paired_heatmap" else suites
+            else adaptations
+            if args.layout in {"paired_heatmap", "retention"}
+            else suites
         ):
             if args.layout == "diffusion_heatmap":
                 fig = plot_diffusion_heatmap(rows)
