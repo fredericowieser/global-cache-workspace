@@ -48,6 +48,8 @@ data/analysis/paper_results_figures/*.svg
 data/analysis/paper_results_figures/*.pdf
 data/analysis/scaling_workspace/**/*.svg
 data/analysis/scaling_workspace/**/*.pdf
+data/analysis/scaling_cp/**/*.svg
+data/analysis/scaling_cp/**/*.pdf
 !data/analysis/.gitkeep
 
 # Large model and dataset artifacts
