@@ -78,6 +78,12 @@ uv run --extra gpu gcw train --config /path/to/experiment.yaml
 
 New local run records live under `data/training-runs/`. They contain resolved config, metrics, logs, environment, provenance, and W&B identity. Mutable checkpoints remain separate.
 
+The final checkpoint is stored once in `checkpoint-<final_step>`, with
+`checkpoint` as a relative symlink for compatibility. This also applies when
+the final step falls between periodic saves and `save_final` is enabled.
+Intermediate numbered checkpoints remain independent; a later save replaces
+the symlink without modifying its retained target.
+
 For Slurm worker arrays, set `GPUS` to the number of GPUs per worker when
 needed. `scripts/cluster/submit_array.sh` otherwise leaves partition, time,
 CPU count, and memory to Slurm defaults. Set `PARTITION`, `ARRAY_TIME`,

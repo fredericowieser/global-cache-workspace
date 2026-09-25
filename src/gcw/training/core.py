@@ -69,6 +69,7 @@ from gcw.training.precision import (
     _autocast_kwargs,
 )
 from gcw.training.state import (
+    _retain_final_checkpoint,
     _retained_checkpoint_every,
     _save_step_checkpoint,
 )
@@ -466,7 +467,12 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 initial_processor_state=initial_processor_state,
             )
             last_checkpoint_step = step_num
-            if (
+            if step_num == config.max_steps:
+                if rank == 0:
+                    _retain_final_checkpoint(
+                        Path(config.output_dir) / "checkpoint", step_num
+                    )
+            elif (
                 retained_checkpoint_every is not None
                 and step_num % retained_checkpoint_every == 0
             ):
@@ -512,6 +518,10 @@ def run_training_loop(plan: TrainingPlan) -> None:
             use_fsdp=use_fsdp,
             initial_processor_state=initial_processor_state,
         )
+        if rank == 0:
+            _retain_final_checkpoint(
+                Path(config.output_dir) / "checkpoint", config.max_steps
+            )
     _close_training_stream(stream)
     if tracker is not None:
         tracker.finish(
