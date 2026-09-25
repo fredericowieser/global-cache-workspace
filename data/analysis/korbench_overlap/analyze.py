@@ -25,6 +25,7 @@ MODELS = {
 METHODS = {
     "Pretrained instruct": "backbone",
     "SFT": "sft",
+    r"\methodSFT{}": "sft",
     "LoRA": "lora",
     r"\methodBT{}": "bt",
     r"\methodBGT{}": "bgt",

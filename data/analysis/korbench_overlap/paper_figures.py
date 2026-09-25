@@ -1,6 +1,7 @@
 """Render the paired-correctness analysis at the paper's figure dimensions."""
 
 import csv
+import re
 from statistics import mean
 
 import matplotlib
@@ -22,6 +23,22 @@ def main():
     plt.rcParams.update(
         {"font.size": 8, "font.family": "DejaVu Sans", "svg.fonttype": "none"}
     )
+    method_labels = dict(METHODS, sft="FFT", longshot="GCW")
+    commands = dict(
+        re.findall(
+            r"\\newcommand\{\\(method\w+)\}\{\\textsc\{([^{}]+)\}\}",
+            (
+                (PAPER / "MAIN.tex").read_text(encoding="utf-8")
+                if (PAPER / "MAIN.tex").is_file()
+                else ""
+            ),
+        )
+    )
+    for method, command in (
+        ("sft", "methodSFT"),
+        ("longshot", "methodLongshot"),
+    ):
+        method_labels[method] = commands.get(command, method_labels[method])
     conditions = list(
         dict.fromkeys((r["regime"], r["model"], r["mode"]) for r in rows)
     )
@@ -35,7 +52,9 @@ def main():
     ]:
         folder.mkdir(parents=True, exist_ok=True)
         labels = [
-            METHODS[m].replace("Diffusion Longshot", "Diffusion\nLongshot")
+            method_labels[m].replace(
+                "Diffusion Longshot", "Diffusion\nLongshot"
+            )
             for m in methods
         ]
         fig, axes = plt.subplots(
@@ -69,6 +88,9 @@ def main():
                     102, i, f"{value:.1f}", ha="left", va="center", fontsize=7
                 )
             ax.set_yticks(y, labels)
+            for label in ax.get_yticklabels():
+                if label.get_text() == method_labels["longshot"]:
+                    label.set_fontweight("bold")
             ax.set_ylim(len(methods) - 0.5, -0.5)
             ax.set_xlim(0, 122)
             ax.set_xticks([0, 50, 100])
@@ -110,6 +132,9 @@ def main():
         )
         im = ax.imshow(values, vmin=0, vmax=1, cmap="Blues", aspect="auto")
         ax.set_yticks(range(len(methods)), labels)
+        for label in ax.get_yticklabels():
+            if label.get_text() == method_labels["longshot"]:
+                label.set_fontweight("bold")
         tick_labels = [
             model.replace("llama32_", "L")
             .replace("qwen35_", "Q")

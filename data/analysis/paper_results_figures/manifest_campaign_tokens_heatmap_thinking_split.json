@@ -1,0 +1,69 @@
+{
+  "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
+  "source_sha256": "28da427008dafceeb7e3e4aa48b11d0466d3081b254921aa42dcdac9c2cb093b",
+  "options": [
+    "relative"
+  ],
+  "suites": [
+    "math_after_math",
+    "korbench_after_math",
+    "korbench_after_reasoning",
+    "math_after_reasoning",
+    "math_after_sequential",
+    "korbench_after_sequential"
+  ],
+  "columns": 3,
+  "layout": "campaign_heatmap",
+  "palette": "terracotta_cream_forest",
+  "adaptations": [
+    "mathematical",
+    "reasoning",
+    "sequential"
+  ],
+  "omitted_backbones": {},
+  "formats": [
+    "svg",
+    "pdf"
+  ],
+  "omitted_methods": [
+    "Diffusion Longshot"
+  ],
+  "relative_statistic": "mean_observations(100 * (value / matched_baseline_value - 1))",
+  "comparison_baseline": "Instruct",
+  "thinking_modes": [
+    "off",
+    "on"
+  ],
+  "relative_quantities": [
+    "mean_response_tokens"
+  ],
+  "baseline_matching": [
+    "suite",
+    "backbone",
+    "thinking"
+  ],
+  "source_precision": "Rounded values as reported in the paper tables",
+  "matplotlib_version": "3.11.0",
+  "thinking_view": "split",
+  "thinking_modes_by_adaptation": {
+    "mathematical": [
+      "off",
+      "on"
+    ],
+    "reasoning": [
+      "off"
+    ],
+    "sequential": [
+      "off"
+    ]
+  },
+  "metric": "tokens",
+  "lower_is_better": true,
+  "aggregation": {
+    "weighting": "Equal weight per available backbone, separately per cell",
+    "missing_values": "Omitted; N/A if no backbones have results",
+    "standard_deviation": "Population SD across the observations in each cell (ddof=0)",
+    "cell_annotations": "Mean with plus/minus standard deviation",
+    "counts_and_backbones": "campaign_tokens_heatmap_thinking_split_averages.csv"
+  }
+}

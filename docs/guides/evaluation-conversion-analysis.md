@@ -218,12 +218,7 @@ inkscape figures/mathematical_relative_paired_heatmap.svg \
 The local conversion was produced using librsvg/Cairo because the Inkscape
 executable is unavailable here. Both formats retain the same source artwork.
 
-All four table-level suites, including mathematical/LogiQA transfer after
-reasoning adaptation, are available through `--layout heatmap --option relative`.
-The paper includes both paired accuracy heatmaps in the main text and all four
-accuracy/token heatmaps in the corresponding appendix subsections. The reasoning
-adaptation maths view averages five accuracy tasks and pools response lengths
-over three generation tasks, using that table’s matched instruct baseline.
+All six table-level suites are available through `--layout heatmap --option relative`. The main text uses the pooled stacked cross-campaign overview, and the corresponding appendix subsections contain the six individual accuracy/token heatmaps. The reasoning and sequential adaptation Maths views average five accuracy tasks and pool response lengths over three generation tasks, using each table’s matched instruct baseline.
 
 For example, refresh the mathematical-adaptation paired heatmap with:
 
@@ -252,7 +247,7 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
 ```
 
 Both commands save SVG and PDF files in the analysis output directory.
-The paired heatmap is included in the main-text sequential-adaptation subsection.
+The per-campaign paired heatmaps remain available as analysis figures; the main text uses the pooled stacked cross-campaign overview.
 Both individual accuracy/token heatmaps are included in the matching appendix
 subsection.
 All changes use the matched pretrained instruct baseline, not the
@@ -260,7 +255,7 @@ mathematics-adapted checkpoint. Heatmap columns retain backbones and modes
 with reported baselines even when adapted results are pending; those cells
 remain N/A. Entirely missing panels use a symmetric fallback colour limit.
 
-All submission tables and figures now omit Diffusion Longshot. Its methods, results, and original figures are preserved in the optional internal appendix `appendices/E_Diffusion_Archive.tex`, excluded by default through `\includeResearchArchivefalse` in the paper's `MAIN.tex`. For individual accuracy/token heatmaps, use the restricted-method regeneration recipe in the [archive maintenance notes](../../src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/diffusion/README.md) instead of the unrestricted `--layout heatmap` command above. The main-text paired heatmap command already excludes diffusion.
+All submission tables and figures now omit Diffusion Longshot. Its methods, results, and original figures are preserved in the optional internal appendix `appendices/E_Diffusion_Archive.tex`, excluded by default through `\includeResearchArchivefalse` in the paper's `MAIN.tex`. Individual accuracy/token heatmaps include only methods present in the source table, so the ordinary `--layout heatmap --option relative` command now produces the submission views without an empty diffusion row. Paired and campaign heatmaps also exclude diffusion.
 
 ### Longshot diffusion comparison
 
@@ -278,14 +273,7 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
   .venv/bin/python scripts/plot_paper_results.py --layout campaign_heatmap --option relative
 ```
 
-`plot_campaign_heatmap()` saves `campaign_relative_heatmap.svg` and `.pdf`.
-It shares the diffusion comparison's layout and palette, with SFT, LoRA, BT,
-BGT, and Longshot as rows and the same six Maths/KOR-Bench columns grouped by
-training regime. Thinking-off accuracy is first normalised to the matching
-pretrained instruct backbone using `100 * (accuracy / baseline_accuracy - 1)`.
-Each cell is the arithmetic mean of those percentage changes across available
-backbones, with equal weight per backbone. This is not a percentage change of
-pooled mean accuracies. Diffusion Longshot is excluded.
+`plot_campaign_heatmap()` saves `campaign_relative_heatmap.svg` and `.pdf`. It shares the diffusion comparison's layout and palette, with FFT, LoRA, BT, BGT, and GCW as rows and the same six Maths/KOR-Bench columns grouped by training regime. Thinking-off accuracy is first normalised to the matching pretrained instruct backbone using `100 * (accuracy / baseline_accuracy - 1)`. Each cell is the arithmetic mean of those percentage changes across available backbones, with equal weight per backbone. This is not a percentage change of pooled mean accuracies. Diffusion Longshot is excluded.
 
 Cell annotations show the mean with ± standard deviation beneath it. The SD
 is computed across the same per-backbone percentage changes, using population
@@ -317,3 +305,37 @@ The Maths columns use the source tables' pooled generation-task token means
 (four tasks after mathematical adaptation, three after the other campaigns).
 The accuracy overview is preserved. The `--metric` option applies only to the
 campaign overview; the default is accuracy.
+
+
+### Thinking-enabled cross-campaign overviews
+
+Use `--thinking-view pooled` to average the available thinking-off and thinking-on observations into the two existing Maths-training cells. Each backbone/mode observation contributes equal weight after normalisation to the pretrained instruct baseline for that same suite, backbone, and thinking mode. Thus, a backbone with both modes contributes twice, and a backbone with only one reported mode contributes once. The cell SD is the population SD across these observations, not a standard error or a standard deviation of backbone means. Reasoning Gym and sequential cells still use thinking off.
+
+Use `--thinking-view split` to show eight columns: Maths off, Maths on, KOR-Bench off, and KOR-Bench on under Maths training, followed by the existing two thinking-off columns for each other campaign. Each cell shows mean ± population SD across the available backbones for its mode. Both views retain all available backbones, omit diffusion, and preserve the thinking-off-only figures.
+
+```bash
+for metric in accuracy tokens; do
+  for view in pooled split; do
+    OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+      .venv/bin/python scripts/plot_paper_results.py --layout campaign_heatmap \
+      --option relative --metric "$metric" --thinking-view "$view"
+  done
+done
+```
+
+The new SVG/PDF filenames append `_thinking_pooled` or `_thinking_split` to the existing figure stems, with separate CSVs and manifests. CSVs record both distinct backbone counts and backbone/mode observation counts and identities. Missing observations are omitted rather than treated as zero. The default `--thinking-view off` retains the original view. This option applies only to campaign heatmaps.
+
+
+### Stacked performance and token overview
+
+The preferred cross-campaign summary pools the maths-training thinking modes. To place performance above token usage in a single figure, use `--metric both`:
+
+```bash
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
+  .venv/bin/python scripts/plot_paper_results.py --layout campaign_heatmap \
+  --option relative --metric both --thinking-view pooled
+```
+
+This saves `campaign_relative_overview_heatmap_thinking_pooled.svg` and `.pdf`, with separate overview CSVs and a manifest. Both panels reuse the existing aggregation and rendering logic, align method rows and benchmark columns, and retain mean ± population SD. Column headings and the averaging note are shared; each panel has its own symmetric colour scale. Green denotes improved accuracy in the upper panel and reduced token usage in the lower panel. The figure is included in the combined main-text results subsection, replacing the three per-campaign paired heatmaps. Its cell fonts are half a point larger than the standalone views, while headings and legends are one point larger. The GCW row label is bold, and the N/A legend is shown only when values are missing. `--thinking-view split` remains available for separate thinking-mode columns, including in the stacked view.
+
+Paper method labels are read from the `\newcommand{\method...}{\textsc{...}}` definitions in `MAIN.tex`: `\methodSFT{}` renders as FFT and `\methodLongshot{}` as GCW. Both the aggregate plotting script and `data/analysis/korbench_overlap/paper_figures.py` use these names, with built-in FFT/GCW defaults if `MAIN.tex` or the corresponding command is absent. Without the paper submodule, the aggregate plotting script still needs an available results table supplied through `--source`; backend method names remain `SFT` and `Longshot` in parsed records, CSVs, and manifests, as do experiment and checkpoint identifiers. `METHOD_LABELS` applies paper aliases only when rendering plot labels. Table parsing accepts both `\methodSFT{}` and historical literal `SFT` rows. GCW labels are bold in the appendix heatmaps and correctness plots. Individual, paired, and campaign heatmaps display the N/A legend only when their plotted cells contain missing values.
