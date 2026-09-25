@@ -90,7 +90,7 @@ def source_path(regime, model, method, mode):
 
 def paper_rows():
     rows = []
-    for filename in ("D_Extended_Results.tex", "E_Diffusion_Archive.tex"):
+    for filename in ("C_Extended_Results.tex", "E_Diffusion_Archive.tex"):
         for block in re.findall(
             r"\\begin\{table\}(.*?)\\end\{table\}",
             (PAPER / filename).read_text(),

@@ -37,7 +37,7 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
 ```
 
 The script requires Matplotlib and NumPy from the project environment. It reads
-`src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex`
+`src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/C_Extended_Results.tex`
 and saves SVG figures with editable text, vector PDFs, `plotted_values.csv`,
 and a source-hash manifest under `data/analysis/paper_results_figures/`.
 Copy selected figures into the paper submodule when ready.

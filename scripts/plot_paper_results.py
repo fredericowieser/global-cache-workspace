@@ -1411,7 +1411,7 @@ def main() -> None:
     parser.add_argument(
         "--source",
         type=Path,
-        default=PAPER / "appendices/D_Extended_Results.tex",
+        default=PAPER / "appendices/C_Extended_Results.tex",
     )
     parser.add_argument(
         "--output-dir",

@@ -169,7 +169,7 @@ These metrics describe overlap of correctness, not semantic equivalence of wrong
 
 ## Paper presentation
 
-The paper presents the main-method findings in `appendices/E_Extended_Analysis.tex`, immediately after the extended results. Diffusion findings remain in the separate archive. The section motivates absolute retention/recovery, success composition, and category-normalised overlap in sequence, and qualifies the interpretation using the measure definitions and evaluation limitations.
+The paper presents the main-method findings in `appendices/D_Extended_Analysis.tex`, immediately after the extended results. Diffusion findings remain in the separate archive. The section motivates absolute retention/recovery, success composition, and category-normalised overlap in sequence, and qualifies the interpretation using the measure definitions and evaluation limitations.
 
 Regenerate the four paper figures (PDF and SVG) from the validated count summaries with:
 

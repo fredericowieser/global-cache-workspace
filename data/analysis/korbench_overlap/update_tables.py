@@ -9,7 +9,7 @@ values = {
     tuple(row[k] for k in ("regime", "model", "method", "mode")): row
     for row in csv.DictReader((OUT / "summary.csv").open())
 }
-for filename in ("D_Extended_Results.tex", "E_Diffusion_Archive.tex"):
+for filename in ("C_Extended_Results.tex", "E_Diffusion_Archive.tex"):
     path = PAPER / filename
     text = path.read_text()
     for match in list(
