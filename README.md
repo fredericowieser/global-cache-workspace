@@ -103,6 +103,7 @@ uv run --extra cpu --extra eval gcw eval all \
 ```
 
 Evaluation creates an independent record under `data/eval-runs/`. It does not mutate training state.
+For Paper7 and the standard lm-eval suites, `--out results/run.json` also enables atomic saving of completed benchmark results under `results/run.partial/<settings-hash>/`. Retrying the same command with unchanged checkpoints resumes those completed benchmarks; an interrupted benchmark starts again from its beginning. Different CLI settings or `GCW_EVAL_SKIP_TASKS` use separate partial directories. `GCW_EVAL_PARTIAL_DIR` overrides the automatic location for existing workflows. Partial results stay beside the output, including when the output is on shared storage. Already-running evaluations pick up this behavior only when restarted.
 Standard suites use plain prompts. Use `--apply-chat-template` to enable chat
 formatting. When chat formatting is active and `--enable-thinking` is omitted,
 native checkpoints inherit `data.sft_enable_thinking` from their training
