@@ -13,7 +13,7 @@
 * max new tokens for generation should be set to 2048 without thinking and 4096 with thinking
 * make sure to have merged with fred-dev / dev before re-evaluating the checkpoints
 * If multiple checkpoints exist for the same model, ensure only step 2000 is evaluated
-* new results should then be entered into the paper table (`src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results_and_Discussion.tex`) once complete and checked for accuracy
+* new results should then be entered into the paper table (`src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results.tex`) once complete and checked for accuracy
 
 
 ### Qwen3. 5-2B 
@@ -245,7 +245,7 @@ claimed; they may overlap with slower original evaluations still running.
 
 ## Paper performance table update — approved and entered (2026-09-20)
 
-**Approved by the user and entered into `src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results_and_Discussion.tex`.** The proposal and source tables below are retained as the review record. All 33 previously populated row/mode token entries were independently recomputed and matched at displayed precision. The 20 approved row mappings (29 new mode evaluations) are now entered; original populated scores are preserved. The two missing 27B on-mode final JSONs were rechecked and remain absent. No additional modes were added. Earlier restart completion columns above are historical submission snapshots; this section audits the results now available.
+**Approved by the user and entered into `src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results.tex`.** The proposal and source tables below are retained as the review record. All 33 previously populated row/mode token entries were independently recomputed and matched at displayed precision. The 20 approved row mappings (29 new mode evaluations) are now entered; original populated scores are preserved. The two missing 27B on-mode final JSONs were rechecked and remain absent. No additional modes were added. Earlier restart completion columns above are historical submission snapshots; this section audits the results now available.
 
 ### Proposed scope
 
@@ -452,7 +452,7 @@ this KOR-Bench campaign. The historical queue/status notes below are superseded.
 
 
 Audited **2026-09-21 13:26 UTC** against all **35 paper-table rows** in
-`src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results_and_Discussion.tex`.
+`src/Global-Cache-Workspace-Theory-ICLR-2027-/sections/5_Results.tex`.
 **All 35 are available: 30 fully imported trained checkpoints (20 Martin, 10 Fred),
 plus five verified local native backbones. None are missing or partially imported.**
 
@@ -624,3 +624,61 @@ Added one more 1-GPU worker as **27089** after old worker 27045_3 exited. It att
 
 
 2026-09-22: User confirmed 27B BT ON and BGT ON results already entered from another machine. Canceled **27089_0 (BT ON)** and **27071_2 (BGT ON)** and removed their entries from the live queue under its lock. Qwen-2B BGT ON worker **27071_1** remains running; no KOR-Bench tasks remain unclaimed. Partial local 27B outputs are not completed results.
+
+
+## Zaf's Feedback
+
+**GCW / ICLR to-dos from today's call**
+
+**Decisions**
+- The architecture is the contribution and retention is the headline. The one-liner we're writing to is "A global workspace that learns to read and rewrite a frozen LLM's head-level memory can reach competitive in-domain accuracy while losing substantially less out of domain than weight-based adaptation."
+- Full fine-tuning (renamed from SFT) carries the headline as the forgetting baseline. LoRA is the control for "it's only because the backbone is frozen". Group both as weight-space adaptation.
+- No "continual learning" label. We say sequential adaptation and retention.
+- Diffusion is out of the main paper. Keep it in an appendix marked do-not-include for now, final call before submission.
+
+**Writing (before submission)**
+- Abstract: swap in the new middle (bottom of this message). Drop test-time compute, iterative refinement and "beyond memorisation" from the abstract and contributions.
+- Title proposal, dropping "Towards Robust Reasoning": "Global Cache Workspace: Adapting Frozen Language Models Through Their Memory".
+- Define "cache" once as the model's inference-time memory, meaning KV entries for attention heads and recurrent states for linear-attention heads.
+- Intro: lead the gap with fragmentation across heads and top-down access through memory. GCW writes only to each head's latest entry, so "revising earlier representations" describes BT. Fix "none of it recomputes the cache" (contradicts BT). Cut the metacognition/System 2 paragraph.
+- Related work: own paragraph on Liu et al. 2024 (cache augmentation with a frozen decoder) and how we differ. Discuss prefix tuning. Cite Biderman et al. 2024 (LoRA learns less and forgets less).
+- Results open with the trade-off figure (in-domain change vs KOR retention). Lead the text with the two matched-accuracy pairs, Qwen-4B GCW vs full FT (54.74 vs 54.73 in domain, 47.8 vs 26.6 KOR) and Qwen-27B GCW vs LoRA (62.98 vs 62.97, 49.8 vs 40.2).
+- Short paragraph naming the exceptions, 27B thinking on (full FT retains KOR), Reasoning Gym (GCW loses more maths on Qwen-2B) and Llama (no in-domain gain).
+- Frame tokens as selectivity, not raw efficiency. With thinking on, GCW cuts 67 to 82% in domain but 0 to 19% on KOR, while LoRA cuts 51 to 86% on both.
+- Thinking-on results go to the appendix, with truncation rates.
+- Claim only the sequential endpoint (Qwen-4B, GCW narrowly best on maths, +6.8 over full FT on KOR). No comparison with direct RG training until the mixed-precision rerun.
+- State that in the RG setting the cache processors trained without mixed precision (gates stayed near init), or keep that setting in the appendix.
+- Call them settings, not campaigns ("Specialisation and retention", "Broad adaptation", "Sequential adaptation").
+- Parameter table per method and backbone. Inference FLOPs and wall-clock vs LoRA (FLOPs are logged), training cost in the appendix.
+- Also fix Sec 5.2 (misses GCW's 47.28 on Qwen-4B, which beats full FT), Figure 3's stale N/As, ICARUS in Table 1, the empty Appendix B, the placeholder conclusion, and Figure 1's K-step loop, which must match the reported runs.
+
+**Analyses on existing outputs (no training)**
+- Re-score KOR with a lenient extractor and report parse-failure rates (Qwen-2B full FT counterfactual going from 89.6 to 0.4 looks like parsing).
+- Bootstrap CIs, and no claims on sub-2-point gaps.
+- Update norms on KOR vs maths for the maths-trained GCW. Does it write less out of domain?
+- Which heads the selector picks, frequency by layer.
+- Processor-size ablation as a small graph for the backbone we have, with LoRA rank points on the same backbone if they exist.
+- For the aggregate plot, average absolute points (not relative %) and put per-model dots on top so exceptions stay visible.
+- Confirm BT/BGT used the corrected learning rate.
+
+**If GPUs allow before the deadline**
+- 2 or 3 intermediate LoRA and full-FT checkpoints on Qwen-4B (thinking off), maths plus KOR, to draw the frontier.
+- Table 7 (sequential, maths) for Qwen-2B.
+- Held-out Reasoning Gym score, in domain.
+
+**After the deadline (rebuttal / arXiv v2)**
+- More seeds.
+- RG rerun with mixed precision, and thinking-on evals for settings 2 and 3.
+- GCW without cross-head mixing, and GCW on attention heads only (softmax vs linear).
+- Selection sparsity (number of heads).
+- LoRA + GCW and full FT + GCW across backbones, and processor size vs LoRA rank.
+- Reverse sequence (RG then maths), continued pretraining setting, BGT then GCW stacking.
+- Diffusion as a separate follow-up.
+
+**Zaf**
+- BGT vs GCW diagram panel, building on Hugo's overview.
+- Repo / Overleaf access via Fred's invite.
+- Huawei approval for the final version, and arXiv timing.
+
+**New abstract middle** (replaces "On the larger Qwen3.5 models…" through "…fine-tuning and LoRA.")
+With thinking disabled, GCW's in-domain gain matches full fine-tuning on Qwen3.5-4B and LoRA on Qwen3.5-27B, and trails the stronger baseline by 1.8 to 2.4 points. Out of domain, the methods separate. At matched in-domain accuracy, GCW scores 21.1 points above fine-tuning (4B) and 9.6 points above LoRA (27B) on KOR-Bench, which supplies unfamiliar rule systems in context. Across Qwen3.5 backbones it retains 64 to 79% of the base model's KOR-Bench accuracy, against 6 to 58% for fine-tuning and LoRA.
