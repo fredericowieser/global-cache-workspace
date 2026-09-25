@@ -11,7 +11,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
 import numpy as np
 
@@ -59,26 +58,25 @@ def main() -> None:
         print(f"{label}: baseline={baseline:.6f}, relative mean={mean.round(6).tolist()}, sample std={std.round(6).tolist()}")
 
     plt.rcParams.update({"font.family": "DejaVu Sans", "svg.fonttype": "none", "pdf.fonttype": 42})
-    fig, ax = plt.subplots(figsize=(6.8, 2.8))
-    fig.subplots_adjust(left=0.12, right=0.98, bottom=0.24, top=0.82)
+    fig, ax = plt.subplots(figsize=(3.4, 2.2))
+    fig.subplots_adjust(left=0.19, right=0.97, bottom=0.22, top=0.73)
     x = 100 * np.array(fractions)
     handles = []
     for label, color, marker, mean, std in curves:
         ax.fill_between(x, mean - std, mean + std, color=color, alpha=0.14)
         line, = ax.plot(
             x, mean, color=color, marker=marker, linewidth=2,
-            markersize=5, markerfacecolor="white", markeredgewidth=1.4, label=label,
+            markersize=6, markerfacecolor="white", markeredgewidth=1.4, label=label,
         )
         handles.append(line)
-    handles.append(Patch(facecolor="#848B95", alpha=0.25, label="Std. dev."))
     fig.legend(
         handles=handles, loc="upper center", bbox_to_anchor=(0.54, 0.99),
-        ncol=4, frameon=False, fontsize=10, columnspacing=1.2, handlelength=1.8,
+        ncol=2, frameon=False, fontsize=10, columnspacing=1, handlelength=1.6,
     )
     ax.set_xticks(x, labels=["1.5", "5", "10"])
     ax.set_xlim(1.1, 10.4)
-    ax.set_xlabel("Target processor size (% of backbone parameters)", labelpad=8, fontsize=11)
-    ax.set_ylabel("Relative performance (%)", labelpad=8, fontsize=12)
+    ax.set_xlabel("Processor size (% of backbone)", labelpad=6, fontsize=11)
+    ax.set_ylabel("Rel. acc. (%)", labelpad=5, fontsize=11)
     extent = max(float(np.max(np.abs(mean) + std)) for _, _, _, mean, std in curves)
     ax.set_ylim(-1.1 * extent, 1.1 * extent)
     ax.axhline(0, color="#848B95", linewidth=0.9, linestyle=(0, (4, 4)), zorder=1)

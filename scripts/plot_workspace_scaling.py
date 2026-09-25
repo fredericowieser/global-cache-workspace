@@ -11,7 +11,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator, PercentFormatter
 import numpy as np
 
@@ -33,12 +32,12 @@ def plot_scaling(
     ylim: tuple[float, float] | None = None,
     paper_style: bool = False,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(6.8, 2.8) if paper_style else (7.2, 4.3))
+    fig, ax = plt.subplots(figsize=(3.4, 2.2) if paper_style else (7.2, 4.3))
     fig.subplots_adjust(
-        left=0.13 if paper_style else 0.11,
-        right=0.86 if paper_style else 0.88,
-        bottom=0.24 if paper_style else 0.22,
-        top=0.82 if paper_style else 0.78,
+        left=0.19 if paper_style else 0.11,
+        right=0.79 if paper_style else 0.88,
+        bottom=0.22 if paper_style else 0.22,
+        top=0.73 if paper_style else 0.78,
     )
     if not paper_style:
         fig.suptitle(title, y=0.97, fontsize=13)
@@ -55,15 +54,10 @@ def plot_scaling(
         ax.fill_between(x, mean - spread, mean + spread, color=color, alpha=0.14)
         line, = ax.plot(
             x, mean, color=color, marker=marker, linewidth=2,
-            markersize=5, markerfacecolor="white", markeredgewidth=1.4,
+            markersize=6 if paper_style else 5, markerfacecolor="white", markeredgewidth=1.4,
             label=label,
         )
         handles.append(line)
-        if paper_style:
-            handles.append(Patch(
-                facecolor=color, alpha=0.14,
-                label="Std. err." if band == "sem" else "Std. dev.",
-            ))
 
     complexity = ax.twinx()
     reference, = complexity.plot(
@@ -71,23 +65,30 @@ def plot_scaling(
         linewidth=1.4, label="Linear complexity",
     )
     complexity.set_ylim(0, 105)
-    complexity.set_yticks([0, 25, 50, 75, 100])
+    complexity.set_yticks([0, 50, 100] if paper_style else [0, 25, 50, 75, 100])
     complexity.yaxis.set_major_formatter(PercentFormatter(100, decimals=0))
     complexity.set_ylabel(
-        "Relative complexity", color="#A67816", labelpad=9,
-        fontsize=12 if paper_style else 10,
+        "Rel. complexity" if paper_style else "Relative complexity", color="#A67816", labelpad=5 if paper_style else 9,
+        fontsize=11 if paper_style else 10,
     )
     complexity.tick_params(axis="y", colors="#A67816", labelsize=10.5 if paper_style else 9)
     complexity.spines["right"].set_color("#D9A126")
     complexity.spines[["top", "left", "bottom"]].set_visible(False)
     ax.set_xlim(-3 if total_heads == 128 else 20, 104)
-    ax.set_xticks([0, 10, 25, 50, 75, 100] if total_heads == 128 else [25, 50, 75, 100])
-    ax.xaxis.set_major_formatter(PercentFormatter(100, decimals=0))
+    if total_heads == 128:
+        ax.set_xticks([0, 25, 50, 75, 100] if paper_style else [0, 10, 25, 50, 75, 100])
+    else:
+        ax.set_xticks([25, 50, 75, 100])
+    if not paper_style:
+        ax.xaxis.set_major_formatter(PercentFormatter(100, decimals=0))
     ax.set_xlabel(
-        "Selected Heads (%)" if paper_style else "Workspace size", labelpad=8,
-        fontsize=12 if paper_style else 10,
+        "Selected heads (%)" if paper_style else "Workspace size", labelpad=6 if paper_style else 8,
+        fontsize=11 if paper_style else 10,
     )
-    ax.set_ylabel("Average performance (%)", labelpad=8, fontsize=12 if paper_style else 10)
+    ax.set_ylabel(
+        "Mean acc. (%)" if paper_style else "Average performance (%)",
+        labelpad=5 if paper_style else 8, fontsize=11 if paper_style else 10,
+    )
     ax.yaxis.set_major_locator(MaxNLocator(4 if paper_style else 6))
     if ylim is not None:
         ax.set_ylim(*ylim)
@@ -101,7 +102,8 @@ def plot_scaling(
     fig.legend(
         handles=handles, loc="upper center",
         bbox_to_anchor=(0.5, 0.99 if paper_style else 0.91),
-        ncol=len(handles), frameon=False, fontsize=10.5 if paper_style else 9,
+        ncol=1 if paper_style else len(handles), frameon=False, fontsize=10 if paper_style else 9,
+        columnspacing=1, handlelength=1.6,
     )
     uncertainty = "standard error" if band == "sem" else "sample standard deviation"
     note = f"Mean across seeds 24, 25, 26; shading: ±1 {uncertainty}."
