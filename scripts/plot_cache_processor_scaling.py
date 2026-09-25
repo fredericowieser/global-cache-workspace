@@ -58,7 +58,7 @@ def main() -> None:
         curves.append((label, color, marker, mean, std))
         print(f"{label}: baseline={baseline:.6f}, relative mean={mean.round(6).tolist()}, sample std={std.round(6).tolist()}")
 
-    plt.rcParams.update({"font.family": "DejaVu Serif", "svg.fonttype": "none", "pdf.fonttype": 42})
+    plt.rcParams.update({"font.family": "DejaVu Sans", "svg.fonttype": "none", "pdf.fonttype": 42})
     fig, ax = plt.subplots(figsize=(6.8, 2.8))
     fig.subplots_adjust(left=0.12, right=0.98, bottom=0.24, top=0.82)
     x = 100 * np.array(fractions)

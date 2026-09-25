@@ -121,7 +121,7 @@ def main() -> None:
     parser.add_argument("--band", choices=("sem", "std"), default="sem")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    plt.rcParams.update({"font.family": "DejaVu Serif", "svg.fonttype": "none", "pdf.fonttype": 42})
+    plt.rcParams.update({"font.family": "DejaVu Sans", "svg.fonttype": "none", "pdf.fonttype": 42})
 
     with (args.data_dir / "llama_3.2_1B.csv").open(newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
