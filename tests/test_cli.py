@@ -1,8 +1,60 @@
 import json
+import os
+from pathlib import Path
 
 import pytest
 
 from gcw import cli
+
+
+@pytest.mark.parametrize(
+    "suite", ["all", "math", "general", "korbench", "tasks", "paper7", "paper7-legacy"]
+)
+def test_eval_partial_directory_is_scoped_to_command(monkeypatch, tmp_path, suite):
+    monkeypatch.delenv("GCW_EVAL_PARTIAL_DIR", raising=False)
+    monkeypatch.delenv("GCW_EVAL_SKIP_TASKS", raising=False)
+    paths = []
+
+    def dispatch(args):
+        paths.append(Path(os.environ["GCW_EVAL_PARTIAL_DIR"]))
+        raise RuntimeError("interrupted")
+
+    monkeypatch.setattr(cli, "dispatch", dispatch)
+    command = [
+        "eval", suite, "--checkpoint", "checkpoint-2000",
+        "--out", str(tmp_path / "result.json"),
+    ]
+    if suite == "tasks":
+        command += ["--tasks", "logiqa"]
+    for extra in ([], [], ["--enable-thinking"], ["--limit", "1"]):
+        with pytest.raises(RuntimeError, match="interrupted"):
+            cli.main(command + extra)
+        assert "GCW_EVAL_PARTIAL_DIR" not in os.environ
+    monkeypatch.setenv("GCW_EVAL_SKIP_TASKS", "theoremqa")
+    with pytest.raises(RuntimeError, match="interrupted"):
+        cli.main(command)
+    assert paths[0] == paths[1]
+    assert len(set(paths)) == 4
+    assert all(path.parent == tmp_path / "result.partial" for path in paths)
+
+
+@pytest.mark.parametrize("partial_dir", [None, "custom-partials"])
+def test_eval_preserves_explicit_partial_directory(monkeypatch, partial_dir):
+    if partial_dir is None:
+        monkeypatch.delenv("GCW_EVAL_PARTIAL_DIR", raising=False)
+    else:
+        monkeypatch.setenv("GCW_EVAL_PARTIAL_DIR", partial_dir)
+    seen = []
+    monkeypatch.setattr(
+        cli, "dispatch",
+        lambda args: seen.append(os.environ.get("GCW_EVAL_PARTIAL_DIR")),
+    )
+    command = ["eval", "paper7", "--checkpoint", "checkpoint-2000"]
+    if partial_dir:
+        command += ["--out", "result.json"]
+    cli.main(command)
+    assert seen == [partial_dir]
+    assert os.environ.get("GCW_EVAL_PARTIAL_DIR") == partial_dir
 
 
 def test_chat_eval_parser_leaves_thinking_unspecified():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -615,7 +616,43 @@ def dispatch(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     """Parse and execute a GCW command."""
-    dispatch(build_parser().parse_args(argv))
+    args = build_parser().parse_args(argv)
+    partial_dir = os.environ.get("GCW_EVAL_PARTIAL_DIR")
+    if (
+        args.cmd != "eval"
+        or args.suite not in {
+            "all",
+            "math",
+            "general",
+            "korbench",
+            "tasks",
+            "paper7",
+            "paper7-legacy",
+        }
+        or not args.out
+        or partial_dir
+    ):
+        dispatch(args)
+        return
+
+    from gcw.evaluation.progress import _payload_sha256
+
+    identity = {
+        "arguments": vars(args),
+        "skip_tasks": os.environ.get("GCW_EVAL_SKIP_TASKS", ""),
+    }
+    destination = (
+        Path(args.out).with_suffix(".partial") / _payload_sha256(identity)
+    )
+    os.environ["GCW_EVAL_PARTIAL_DIR"] = str(destination)
+    print(f"Completed-task evaluation results: {destination}", flush=True)
+    try:
+        dispatch(args)
+    finally:
+        if partial_dir is None:
+            os.environ.pop("GCW_EVAL_PARTIAL_DIR", None)
+        else:
+            os.environ["GCW_EVAL_PARTIAL_DIR"] = partial_dir
 
 
 if __name__ == "__main__":
