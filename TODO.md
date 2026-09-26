@@ -633,41 +633,23 @@ Added one more 1-GPU worker as **27089** after old worker 27045_3 exited. It att
 **Decisions**
 - The architecture is the contribution and retention is the headline. The one-liner we're writing to is "A global workspace that learns to read and rewrite a frozen LLM's head-level memory can reach competitive in-domain accuracy while losing substantially less out of domain than weight-based adaptation."
 - Full fine-tuning (renamed from SFT) carries the headline as the forgetting baseline. LoRA is the control for "it's only because the backbone is frozen". Group both as weight-space adaptation.
-- No "continual learning" label. We say sequential adaptation and retention.
-- Diffusion is out of the main paper. Keep it in an appendix marked do-not-include for now, final call before submission.
+- No "continual learning" label. We talk about (sequential) adaptation and retention.
 
 **Writing (before submission)**
-- Abstract: swap in the new middle (bottom of this message). Drop test-time compute, iterative refinement and "beyond memorisation" from the abstract and contributions.
-- Title proposal, dropping "Towards Robust Reasoning": "Global Cache Workspace: Adapting Frozen Language Models Through Their Memory".
+- Drop test-time compute, iterative refinement and "beyond memorisation" from the abstract and contributions.
 - Define "cache" once as the model's inference-time memory, meaning KV entries for attention heads and recurrent states for linear-attention heads.
 - Intro: lead the gap with fragmentation across heads and top-down access through memory. GCW writes only to each head's latest entry, so "revising earlier representations" describes BT. Fix "none of it recomputes the cache" (contradicts BT). Cut the metacognition/System 2 paragraph.
 - Related work: own paragraph on Liu et al. 2024 (cache augmentation with a frozen decoder) and how we differ. Discuss prefix tuning. Cite Biderman et al. 2024 (LoRA learns less and forgets less).
 - Results open with the trade-off figure (in-domain change vs KOR retention). Lead the text with the two matched-accuracy pairs, Qwen-4B GCW vs full FT (54.74 vs 54.73 in domain, 47.8 vs 26.6 KOR) and Qwen-27B GCW vs LoRA (62.98 vs 62.97, 49.8 vs 40.2).
 - Short paragraph naming the exceptions, 27B thinking on (full FT retains KOR), Reasoning Gym (GCW loses more maths on Qwen-2B) and Llama (no in-domain gain).
 - Frame tokens as selectivity, not raw efficiency. With thinking on, GCW cuts 67 to 82% in domain but 0 to 19% on KOR, while LoRA cuts 51 to 86% on both.
-- Thinking-on results go to the appendix, with truncation rates.
-- Claim only the sequential endpoint (Qwen-4B, GCW narrowly best on maths, +6.8 over full FT on KOR). No comparison with direct RG training until the mixed-precision rerun.
-- State that in the RG setting the cache processors trained without mixed precision (gates stayed near init), or keep that setting in the appendix.
 - Call them settings, not campaigns ("Specialisation and retention", "Broad adaptation", "Sequential adaptation").
 - Parameter table per method and backbone. Inference FLOPs and wall-clock vs LoRA (FLOPs are logged), training cost in the appendix.
 - Also fix Sec 5.2 (misses GCW's 47.28 on Qwen-4B, which beats full FT), Figure 3's stale N/As, ICARUS in Table 1, the empty Appendix B, the placeholder conclusion, and Figure 1's K-step loop, which must match the reported runs.
 
-**Analyses on existing outputs (no training)**
-- Re-score KOR with a lenient extractor and report parse-failure rates (Qwen-2B full FT counterfactual going from 89.6 to 0.4 looks like parsing).
-- Bootstrap CIs, and no claims on sub-2-point gaps.
-- Update norms on KOR vs maths for the maths-trained GCW. Does it write less out of domain?
-- Which heads the selector picks, frequency by layer.
-- Processor-size ablation as a small graph for the backbone we have, with LoRA rank points on the same backbone if they exist.
-- For the aggregate plot, average absolute points (not relative %) and put per-model dots on top so exceptions stay visible.
-- Confirm BT/BGT used the corrected learning rate.
-
-**If GPUs allow before the deadline**
-- 2 or 3 intermediate LoRA and full-FT checkpoints on Qwen-4B (thinking off), maths plus KOR, to draw the frontier.
-- Table 7 (sequential, maths) for Qwen-2B.
-- Held-out Reasoning Gym score, in domain.
-
 **After the deadline (rebuttal / arXiv v2)**
 - More seeds.
+- Which heads the selector picks, frequency by layer
 - RG rerun with mixed precision, and thinking-on evals for settings 2 and 3.
 - GCW without cross-head mixing, and GCW on attention heads only (softmax vs linear).
 - Selection sparsity (number of heads).
@@ -680,5 +662,65 @@ Added one more 1-GPU worker as **27089** after old worker 27045_3 exited. It att
 - Repo / Overleaf access via Fred's invite.
 - Huawei approval for the final version, and arXiv timing.
 
-**New abstract middle** (replaces "On the larger Qwen3.5 models…" through "…fine-tuning and LoRA.")
-With thinking disabled, GCW's in-domain gain matches full fine-tuning on Qwen3.5-4B and LoRA on Qwen3.5-27B, and trails the stronger baseline by 1.8 to 2.4 points. Out of domain, the methods separate. At matched in-domain accuracy, GCW scores 21.1 points above fine-tuning (4B) and 9.6 points above LoRA (27B) on KOR-Bench, which supplies unfamiliar rule systems in context. Across Qwen3.5 backbones it retains 64 to 79% of the base model's KOR-Bench accuracy, against 6 to 58% for fine-tuning and LoRA.
+
+
+### Ideas for adjustments to narrative
+#### 1. Core Narrative Sentence
+This is the sentence I'd build the paper around:
+
+> Adapting a frozen language model by rewriting its memory through a global workspace, instead of its weights, reaches comparable in-domain accuracy while preserving far more of its out-of-domain reasoning.
+
+It's modest, but a reviewer can check it against every table, which is what tends to get papers through.
+
+On LoRA, you're right if it's framed as the competitor, because then reviewers read the comparison on in-domain accuracy, the axis you lose. Leaving it out isn't an option, though, since it's the first baseline anyone asks for when a trainable module sits on a frozen backbone. What you control is the axis. Group SFT and LoRA as weight-space adaptation and make the question where learning should live, not which adapter scores highest.
+
+SFT (FFT) then carries the headline as the classic forgetting baseline. On Qwen-4B, GCW ties it in domain (54.74 vs 54.73) and keeps 47.8 on KOR against 26.6. LoRA comes in as the control for the sceptic who says you forget less because the backbone is frozen. LoRA freezes the pretrained weights too, yet it retains 11 to 58% of KOR across Qwen sizes, in line with full fine-tuning's 6 to 57%, while GCW keeps 64 to 79%. On that axis LoRA is your best foil, not your weakest comparison. State the in-domain gap once ('within 2.5 points of LoRA on the larger Qwen models') and open the results with the trade-off figure, so the comparison gets read where you win.
+
+#### 2. Astra's corrections
+Astra's three corrections are right, and I'd adopt all of them.
+
+**Scope.** "A reviewer can check it against every table" was wrong. The claim holds for maths adaptation on Qwen with thinking off, and in the sequential runs. Besides the 27B thinking-on case Astra found, there's a bigger exception it missed. After Reasoning Gym, Qwen-2B GCW retains less KOR than SFT (31.28 vs 39.36) and forgets more maths (−47% vs −9%). State the scope in the abstract and give the exceptions, Llama's lack of in-domain gain included, a short paragraph in the results.
+
+**Gains, not gaps.** "Within 2.5 points" hides that on Qwen-4B GCW's gain is 1.45 against LoRA's 3.85, and "state it once" was the wrong instinct. Reviewers punish anything that reads as steering. The trade-off figure still leads, because it puts both axes in front of them at once.
+
+**Where the change acts.** Also right, and there's a sharper version. LoRA applies the same weight change to every input, while GCW computes its update from the current context. That's a candidate mechanism for the retention, and Martin's update-norm logging can test it cheaply. If GCW writes less on KOR than on maths, the processor is staying quiet out of domain, which would make a strong paragraph.
+
+I agree on the architecture controls. A GCW without cross-head mixing is the cleanest test that global communication drives the effect, though at this point it's probably a rebuttal item.
+
+#### 3. Final Narrative Adjustments
+Here's the thesis, tightened from Astra's version.
+
+> A global workspace that learns to read and rewrite a frozen LLM's head-level memory can reach competitive in-domain accuracy while losing substantially less out of domain than weight-based adaptation.
+
+## Paper checklist: Results, Discussion, Conclusion (2026-09-25, v2)
+
+### Results (Section 5)
+- [x] Organise by claim rather than by setting: (1) overview, (2) in-domain adaptation, (3) retention, (4) thinking mode, (5) architecture comparison, (6) workspace and processor scaling.
+- [x] Overview: open with the pooled result that GCW loses the least KOR-Bench accuracy on average in every setting, shown in a trade-off figure (in-domain change vs KOR-Bench change, one point per method and backbone). Keep or move the pooled heatmap.
+- [x] In-domain adaptation: use the mathematical setting, where in-domain performance is measured; report GCW's gains against full fine-tuning and LoRA per backbone.
+- [x] Retention: draw on all three settings and say what each adds (mathematical: largest gap; broad: e.g. Qwen-4B GCW 47.28 vs FFT 46.88 on KOR-Bench; sequential: endpoint result).
+- [x] Thinking mode: GCW beats full fine-tuning in domain on all three Qwen3.5 sizes; token savings are selective (67-82% in domain vs 0-19% on KOR-Bench), set against the weight-space methods' larger KOR-Bench losses.
+- [x] Architecture comparison: GCW vs BT and BGT (e.g. Qwen-4B after maths: in domain 54.74 vs 51.63 / 52.70; KOR-Bench 47.76 vs 41.76 / 12.96), supporting heads as specialists.
+- [x] Scaling: frame as design support (10% of heads within 0.28 points of the full workspace; larger processors bring no consistent gain); note the workspace sweep is Llama-only; replace the internal "Paper7" label in captions.
+- [x] Add a compact main-text table for the Qwen3.5 backbones: in-domain avg, KOR-Bench avg, and tokens, thinking off/on, all methods. (Resolved without a table: Results describe the figures and cite the appendix tables.)
+- [x] Report truncation rates (Setup says we do, no table does), especially for thinking-on results. (Already in the appendix tables; Results now discuss them for thinking mode.)
+- [x] State what "in domain" covers (the Avg. column includes LogiQA).
+- [ ] Add cost: trainable parameters per method and backbone; inference FLOPs and wall-clock vs LoRA.
+
+### Discussion (Section 6)
+- [x] Turn the current bullet list into 4-5 short paragraphs.
+- [x] Why the adaptation is selective: context-dependent updates vs one weight change for every input; test with update norms in domain vs on KOR-Bench (could become a result if cheap).
+- [x] What retention means: Appendix D shows GCW has the lowest new-success share on KOR-Bench, so retention is mostly preserved backbone competence rather than new transfer.
+- [x] Size trend: GCW's retention advantage over the FFT/LoRA mean narrows with backbone size (49.7 / 33.6 / 15.3 points at 2B / 4B / 27B, thinking off); 27B thinking on, full fine-tuning keeps its KOR-Bench accuracy.
+- [x] Limitations: no in-domain gain on Llama or on Qwen-2B thinking off; GCW loses more maths in the broad setting (Qwen-2B: 26.81 vs 46.48 for FFT); single seeds; thinking mode only after maths adaptation; truncation. (Single seeds left out, following Martin's revised bullets.)
+- [x] Architecture and GWT: what the BT/BGT comparisons show about heads as specialists; which ablations would isolate cross-head communication.
+- [x] Future work: combining GCW with weight-space methods.
+
+### Conclusion (Section 7)
+- [x] Rewrite: the current text is stale (recurrent refinement, more processor calls, "project").
+- [ ] One short paragraph: thesis, the three findings, one sentence on limitations and next steps, consistent with the abstract. (Drafted without the limitations sentence, since the Discussion covers it; add one if wanted.)
+
+### Cross-cutting
+- [ ] Pick one retention metric (ratio of mean accuracies, relative change, or paired retention) and define it once. (Results now define the relative change; the intro contributions still use ratio ranges.)
+- [ ] Use one term for the adaptation settings (the paper mixes "regimes" and "settings"). (Results done; the heatmap SVG still says "campaigns", and Setup describes two settings rather than three.)
+- [x] Re-check the abstract's pooled claims against the final Results numbers. (Recomputed from the Appendix C tables; all match.)
