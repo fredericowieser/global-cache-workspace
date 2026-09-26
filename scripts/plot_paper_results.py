@@ -1205,7 +1205,7 @@ def plot_campaign_heatmap(
     columns = []
     column_groups = []
     for (adaptation, suites), title in zip(
-        ADAPTATIONS.items(), ("Maths training", "Reasoning Gym", "Sequential")
+        ADAPTATIONS.items(), ("Mathematical", "Broad", "Sequential")
     ):
         labels = []
         for suite, benchmark in zip(suites, ("Maths", "KOR-Bench")):
@@ -1275,7 +1275,7 @@ def plot_campaign_heatmap(
         figure=figure,
         footer={
             "off": "Thinking off · Mean ± SD across available backbones (equal weight)",
-            "pooled": "Maths training: pooled off/on · Other campaigns: off · Mean ± SD across evaluations",
+            "pooled": "Mathematical: thinking off and on pooled · Other settings: thinking off · Mean ± SD across evaluations",
             "split": "Mean ± SD across available backbones · Off/on = thinking disabled/enabled",
         }[thinking_view],
     )
@@ -1350,7 +1350,7 @@ def draw_campaign_heatmap(
     if column_groups is None:
         column_groups = [
             (title, ["Maths", "KOR-Bench"])
-            for title in ("Maths training", "Reasoning Gym", "Sequential")
+            for title in ("Mathematical", "Broad", "Sequential")
         ]
     labels = [
         label for _, group_labels in column_groups for label in group_labels

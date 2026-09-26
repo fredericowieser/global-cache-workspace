@@ -1,6 +1,6 @@
 {
-  "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
-  "source_sha256": "28da427008dafceeb7e3e4aa48b11d0466d3081b254921aa42dcdac9c2cb093b",
+  "source": "/sessions/rcw-01w9aublrxxwkzsyqc1yynwy/mnt/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/C_Extended_Results.tex",
+  "source_sha256": "42513a2712c4f3c300359310a316719b23e726f824294c4d908dc40e42d4625a",
   "options": [
     "relative"
   ],
@@ -44,7 +44,7 @@
     "thinking"
   ],
   "source_precision": "Rounded values as reported in the paper tables",
-  "matplotlib_version": "3.11.0",
+  "matplotlib_version": "3.10.9",
   "thinking_view": "pooled",
   "thinking_modes_by_adaptation": {
     "mathematical": [
