@@ -696,7 +696,9 @@ def plot_tradeoff(rows: list[dict], suite: str):
 
 def plot_retention(rows: list[dict], adaptation: str):
     adapted, korbench = ADAPTATIONS[adaptation]
-    methods = [label.replace("\n", " ") for label in list(METHODS.values())[1:6]]
+    methods = [
+        label.replace("\n", " ") for label in list(METHODS.values())[1:6]
+    ]
     changes = {
         (r["suite"], r["backbone"], r["method"], r["thinking"]): r[
             "relative_change_percent"
@@ -1186,9 +1188,9 @@ def plot_campaign_heatmap(
         raise ValueError(f"Unknown thinking view: {thinking_view}")
     if metric == "both":
         fig = plt.figure(
-            figsize=(9.0 if thinking_view == "split" else 7.2, 5.2)
+            figsize=(9.0 if thinking_view == "split" else 7.2, 2.6)
         )
-        panels = fig.subfigures(2, 1, hspace=0)
+        panels = fig.subfigures(1, 2, wspace=0.04)
         aggregates = []
         for panel, quantity in zip(panels, ("accuracy", "tokens")):
             _, cells = plot_campaign_heatmap(
@@ -1272,7 +1274,7 @@ def plot_campaign_heatmap(
             if metric == "tokens"
             else "Mean relative accuracy (%)"
         ),
-        stds=stds,
+        stds=None if figure is not None else stds,
         lower_is_better=metric == "tokens",
         column_groups=column_groups,
         figure=figure,
@@ -1307,7 +1309,8 @@ def draw_campaign_heatmap(
     cmap.set_bad("#E8EBEF")
     width = 9.0 if column_count > 6 else 7.2
     stacked = figure is not None
-    font_increase = 1 if stacked else 0
+    compact = stacked and stds is None
+    font_increase = 1 if stacked and not compact else 0
     if stacked:
         fig = figure
         ax = fig.subplots()
@@ -1316,18 +1319,28 @@ def draw_campaign_heatmap(
     left_margin = (
         0.19 if stds is None else (0.108 if stacked else 0.095) * 7.2 / width
     )
+    if compact:
+        left_margin = 0.14 * 7.2 / width
     fig.subplots_adjust(
         left=left_margin,
-        right=0.99,
-        bottom=(0.30 if lower_is_better else 0.23) if stacked else 0.25,
-        top=(0.83 if lower_is_better else 0.76) if stacked else 0.77,
+        right=0.975 if compact else 0.99,
+        bottom=0.29
+        if compact
+        else (0.30 if lower_is_better else 0.23)
+        if stacked
+        else 0.25,
+        top=0.64
+        if compact
+        else (0.83 if lower_is_better else 0.76)
+        if stacked
+        else 0.77,
     )
     if stacked:
         fig.text(
             0.02,
-            0.93 if lower_is_better else 0.98,
+            0.98 if compact else 0.93 if lower_is_better else 0.98,
             "(b) Token usage" if lower_is_better else "(a) Performance",
-            fontsize=9 + font_increase,
+            fontsize=11.5 if compact else 9 + font_increase,
             fontweight="bold",
             color="#17212E",
             va="top",
@@ -1358,31 +1371,49 @@ def draw_campaign_heatmap(
     labels = [
         label for _, group_labels in column_groups for label in group_labels
     ]
+    if compact:
+        labels = [label.replace("KOR-Bench", "KOR\nBench") for label in labels]
     ax.set_xticks(range(column_count), labels)
     ax.xaxis.tick_top()
     ax.tick_params(
-        length=0, labelsize=7.5 + font_increase, colors="#334155", pad=7
+        length=0,
+        labelsize=7.5 + font_increase,
+        colors="#334155",
+        pad=4 if compact else 7,
     )
-    if stacked and lower_is_better:
+    if compact:
+        ax.tick_params(axis="x", labelsize=9)
+        ax.tick_params(axis="y", labelsize=9.5)
+    if stacked and lower_is_better and not compact:
         ax.tick_params(axis="x", labeltop=False)
     left = -0.5
     for group, (title, group_labels) in enumerate(column_groups):
         group_width = len(group_labels)
-        if not (stacked and lower_is_better):
+        if compact or not (stacked and lower_is_better):
             ax.text(
                 left + group_width / 2,
-                1.32 if column_count > 6 else 1.20 if stacked else 1.25,
+                1.47
+                if compact
+                else 1.32
+                if column_count > 6
+                else 1.20
+                if stacked
+                else 1.25,
                 title,
                 transform=ax.get_xaxis_transform(),
                 ha="center",
                 va="bottom",
-                fontsize=8 + font_increase,
+                fontsize=9.5 if compact else 8 + font_increase,
                 fontweight="bold",
                 color="#17212E",
             )
             ax.plot(
                 [left + 0.08, left + group_width - 0.08],
-                [1.27, 1.27] if column_count > 6 else [1.19, 1.19],
+                [1.41, 1.41]
+                if compact
+                else [1.27, 1.27]
+                if column_count > 6
+                else [1.19, 1.19],
                 transform=ax.get_xaxis_transform(),
                 clip_on=False,
                 color="#C9D1DA",
@@ -1409,7 +1440,7 @@ def draw_campaign_heatmap(
             label,
             ha="center",
             va="center",
-            fontsize=8 + 0.5 * font_increase,
+            fontsize=9.5 if compact else 8 + 0.5 * font_increase,
             color=color,
         )
         if stds is not None and np.isfinite(stds[i, j]):
@@ -1425,16 +1456,35 @@ def draw_campaign_heatmap(
     for spine in ax.spines.values():
         spine.set_visible(False)
     legend_offset = 0.06 if stacked and lower_is_better else 0
-    color_ax = fig.add_axes((0.47, 0.10 + legend_offset, 0.38, 0.028))
+    color_ax = fig.add_axes(
+        (left_margin, 0.12, 0.975 - left_margin, 0.035)
+        if compact
+        else (0.47, 0.10 + legend_offset, 0.38, 0.028)
+    )
     colorbar = fig.colorbar(mesh, cax=color_ax, orientation="horizontal")
     colorbar.locator = MaxNLocator(nbins=5, symmetric=True)
     colorbar.update_ticks()
     colorbar.ax.tick_params(
-        labelsize=6.5 + font_increase, length=2, pad=2, colors="#475569"
+        labelsize=9 if compact else 6.5 + font_increase,
+        length=2,
+        pad=2,
+        colors="#475569",
     )
     colorbar.outline.set_visible(False)
     colorbar.solids.set_rasterized(False)
     colorbar.ax.axvline(0, color="#64748B", linewidth=0.7)
+    if compact:
+        fig.text(
+            (left_margin + 0.975) / 2,
+            0.20,
+            "Token change vs backbone (%)"
+            if lower_is_better
+            else "Accuracy change vs backbone (%)",
+            ha="center",
+            fontsize=9.5,
+            color="#475569",
+        )
+        return fig
     fig.text(
         left_margin,
         0.12 + legend_offset,
@@ -1550,7 +1600,9 @@ def main() -> None:
     if args.layout in {"paired_heatmap", "retention"} and args.suite:
         parser.error(f"Use --adaptation instead of --suite with {args.layout}")
     if args.adaptation and args.layout not in {"paired_heatmap", "retention"}:
-        parser.error("--adaptation requires --layout paired_heatmap or retention")
+        parser.error(
+            "--adaptation requires --layout paired_heatmap or retention"
+        )
     if args.metric != "accuracy" and args.layout != "campaign_heatmap":
         parser.error("--metric tokens/both requires --layout campaign_heatmap")
     if args.thinking_view != "off" and args.layout != "campaign_heatmap":
@@ -1743,7 +1795,11 @@ def main() -> None:
             ),
             "missing_values": "Omitted; N/A if no backbones have results",
             "standard_deviation": "Population SD across the observations in each cell (ddof=0)",
-            "cell_annotations": "Mean with plus/minus standard deviation",
+            "cell_annotations": (
+                "Mean only"
+                if args.metric == "both"
+                else "Mean with plus/minus standard deviation"
+            ),
             "counts_and_backbones": f"{artifact_layout}_averages.csv",
         }
     manifest_name = (
