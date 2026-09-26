@@ -14,6 +14,7 @@ MODELS = {
     "Qwen3.5-27B": "qwen35_27b",
 }
 METHODS = {
+    "Backbone": "backbone",
     "Pretrained instruct": "backbone",
     "SFT": "sft",
     r"\methodSFT{}": "sft",

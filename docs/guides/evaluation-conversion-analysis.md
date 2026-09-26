@@ -51,7 +51,7 @@ for a single row of backbone panels, and `--output-dir PATH` to save elsewhere.
 
 Each option contains four figures: mathematical/LogiQA and KOR-Bench
 averages after mathematical adaptation and after Reasoning Gym adaptation. Panels represent backbones; the x-axis shows
-adaptation methods. Raw plots include the pretrained instruct baseline;
+adaptation methods. Raw plots include the backbone baseline;
 relative plots omit its columns. Thinking-off
 accuracy uses filled bars; thinking-on accuracy uses overlapping, unfilled
 bars with dashed borders. Token lines use solid circles and dashed open diamonds,
@@ -102,8 +102,8 @@ panels. Thinking off/on share the same horizontal position for each backbone;
 hollow markers have transparent interiors to preserve overlapping filled points.
 All reported backbones are retained, including
 Qwen3.5-2B. Unavailable evaluations have no marker. Both panels show percentage
-change against the same backbone's instruct baseline in the same thinking mode;
-the instruct columns are omitted. The panels use separate y-axis ranges.
+change against the same backbone's baseline in the same thinking mode;
+the backbone columns are omitted. The panels use separate y-axis ranges.
 
 The compact artwork omits the long explanatory footer. When used in the paper,
 the caption should state the baseline matching, missing-result convention,
@@ -131,7 +131,7 @@ figures are preserved.
 - `plot_tradeoff()`: accuracy change versus response-token change in one panel
   per backbone, retaining all backbones. Colours identify methods; filled
   circles and hollow triangles identify thinking off/on. A cross at the
-  origin marks instruct. The upper-left quadrant denotes higher accuracy
+  origin marks the backbone. The upper-left quadrant denotes higher accuracy
   with fewer tokens. Limits are shared across panels; points are not jittered
   or connected, so similar results can overlap.
 - `plot_heatmap()`: paired accuracy and token matrices, retaining all
@@ -218,7 +218,7 @@ inkscape figures/mathematical_relative_paired_heatmap.svg \
 The local conversion was produced using librsvg/Cairo because the Inkscape
 executable is unavailable here. Both formats retain the same source artwork.
 
-All six table-level suites are available through `--layout heatmap --option relative`. The main text uses the pooled stacked cross-campaign overview, and the corresponding appendix subsections contain the six individual accuracy/token heatmaps. The reasoning and sequential adaptation Maths views average five accuracy tasks and pool response lengths over three generation tasks, using each table’s matched instruct baseline.
+All six table-level suites are available through `--layout heatmap --option relative`. The main text uses the pooled stacked cross-campaign overview, and the corresponding appendix subsections contain the six individual accuracy/token heatmaps. The reasoning and sequential adaptation Maths views average five accuracy tasks and pool response lengths over three generation tasks, using each table’s matched backbone baseline.
 
 For example, refresh the mathematical-adaptation paired heatmap with:
 
@@ -250,7 +250,7 @@ Both commands save SVG and PDF files in the analysis output directory.
 The per-campaign paired heatmaps remain available as analysis figures; the main text uses the pooled stacked cross-campaign overview.
 Both individual accuracy/token heatmaps are included in the matching appendix
 subsection.
-All changes use the matched pretrained instruct baseline, not the
+All changes use the matched backbone baseline, not the
 mathematics-adapted checkpoint. Heatmap columns retain backbones and modes
 with reported baselines even when adapted results are pending; those cells
 remain N/A. Entirely missing panels use a symmetric fallback colour limit.
@@ -273,7 +273,7 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
   .venv/bin/python scripts/plot_paper_results.py --layout campaign_heatmap --option relative
 ```
 
-`plot_campaign_heatmap()` saves `campaign_relative_heatmap.svg` and `.pdf`. It shares the diffusion comparison's layout and palette, with FFT, LoRA, BT, BGT, and GCW as rows and the same six Maths/KOR-Bench columns grouped by training regime. Thinking-off accuracy is first normalised to the matching pretrained instruct backbone using `100 * (accuracy / baseline_accuracy - 1)`. Each cell is the arithmetic mean of those percentage changes across available backbones, with equal weight per backbone. This is not a percentage change of pooled mean accuracies. Diffusion Longshot is excluded.
+`plot_campaign_heatmap()` saves `campaign_relative_heatmap.svg` and `.pdf`. It shares the diffusion comparison's layout and palette, with FFT, LoRA, BT, BGT, and GCW as rows and the same six Maths/KOR-Bench columns grouped by training regime. Thinking-off accuracy is first normalised to the matching backbone using `100 * (accuracy / baseline_accuracy - 1)`. Each cell is the arithmetic mean of those percentage changes across available backbones, with equal weight per backbone. This is not a percentage change of pooled mean accuracies. Diffusion Longshot is excluded.
 
 Cell annotations show the mean with ± standard deviation beneath it. The SD
 is computed across the same per-backbone percentage changes, using population
@@ -298,7 +298,7 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
 This saves `campaign_relative_tokens_heatmap.svg` and `.pdf`, with separate
 `campaign_tokens_heatmap_averages.csv`, source-values CSV, and manifest files.
 The cells report mean ± population SD of each backbone's percentage change in
-mean response tokens against its matching pretrained instruct baseline.
+mean response tokens against its matching backbone baseline.
 Thinking is off, and each available backbone has equal weight. Green indicates
 fewer tokens and terracotta more tokens; negative values are reductions.
 The Maths columns use the source tables' pooled generation-task token means
@@ -309,7 +309,7 @@ campaign overview; the default is accuracy.
 
 ### Thinking-enabled cross-campaign overviews
 
-Use `--thinking-view pooled` to average the available thinking-off and thinking-on observations into the two existing Maths-training cells. Each backbone/mode observation contributes equal weight after normalisation to the pretrained instruct baseline for that same suite, backbone, and thinking mode. Thus, a backbone with both modes contributes twice, and a backbone with only one reported mode contributes once. The cell SD is the population SD across these observations, not a standard error or a standard deviation of backbone means. Reasoning Gym and sequential cells still use thinking off.
+Use `--thinking-view pooled` to average the available thinking-off and thinking-on observations into the two existing Maths-training cells. Each backbone/mode observation contributes equal weight after normalisation to the backbone baseline for that same suite, backbone, and thinking mode. Thus, a backbone with both modes contributes twice, and a backbone with only one reported mode contributes once. The cell SD is the population SD across these observations, not a standard error or a standard deviation of backbone means. Reasoning Gym and sequential cells still use thinking off.
 
 Use `--thinking-view split` to show eight columns: Maths off, Maths on, KOR-Bench off, and KOR-Bench on under Maths training, followed by the existing two thinking-off columns for each other campaign. Each cell shows mean ± population SD across the available backbones for its mode. Both views retain all available backbones, omit diffusion, and preserve the thinking-off-only figures.
 
@@ -338,4 +338,4 @@ OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \
 
 This saves `campaign_relative_overview_heatmap_thinking_pooled.svg` and `.pdf`, with separate overview CSVs and a manifest. Both panels reuse the existing aggregation and rendering logic, align method rows and benchmark columns, and retain mean ± population SD. Column headings and the averaging note are shared; each panel has its own symmetric colour scale. Green denotes improved accuracy in the upper panel and reduced token usage in the lower panel. The figure is included in the combined main-text results subsection, replacing the three per-campaign paired heatmaps. Its cell fonts are half a point larger than the standalone views, while headings and legends are one point larger. The GCW row label is bold, and the N/A legend is shown only when values are missing. `--thinking-view split` remains available for separate thinking-mode columns, including in the stacked view.
 
-Paper method labels are read from the `\newcommand{\method...}{\textsc{...}}` definitions in `MAIN.tex`: `\methodSFT{}` renders as FFT and `\methodLongshot{}` as GCW. Both the aggregate plotting script and `data/analysis/korbench_overlap/paper_figures.py` use these names, with built-in FFT/GCW defaults if `MAIN.tex` or the corresponding command is absent. Without the paper submodule, the aggregate plotting script still needs an available results table supplied through `--source`; backend method names remain `SFT` and `Longshot` in parsed records, CSVs, and manifests, as do experiment and checkpoint identifiers. `METHOD_LABELS` applies paper aliases only when rendering plot labels. Table parsing accepts both `\methodSFT{}` and historical literal `SFT` rows. GCW labels are bold in the appendix heatmaps and correctness plots. Individual, paired, and campaign heatmaps display the N/A legend only when their plotted cells contain missing values.
+Paper method labels are read from the `\newcommand{\method...}{\textsc{...}}` definitions in `MAIN.tex`: `\methodSFT{}` renders as FFT and `\methodLongshot{}` as GCW. Both the aggregate plotting script and `data/analysis/korbench_overlap/paper_figures.py` use these names, with built-in FFT/GCW defaults if `MAIN.tex` or the corresponding command is absent. Without the paper submodule, the aggregate plotting script still needs an available results table supplied through `--source`; backend method names remain `SFT` and `Longshot` in parsed records, CSVs, and manifests, as do experiment and checkpoint identifiers. `METHOD_LABELS` applies paper aliases only when rendering plot labels. Table parsing accepts both `\methodSFT{}` and historical literal `SFT` rows. The unadapted checkpoint is labelled Backbone in tables and plots; parsers also accept historical `Pretrained instruct` rows, while parsed records retain the internal `Instruct` method identifier. GCW labels are bold in the appendix heatmaps and correctness plots. Individual, paired, and campaign heatmaps display the N/A legend only when their plotted cells contain missing values.

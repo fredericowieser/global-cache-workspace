@@ -68,7 +68,7 @@ ADAPTATIONS = {
 }
 HEATMAP_COLORS = ["#AC4035", "#E6AB8F", "#FCF6EA", "#A8C8A6", "#236548"]
 METHODS = {
-    "Pretrained instruct": "Instruct",
+    "Backbone": "Instruct",
     r"\methodSFT{}": "SFT",
     "LoRA": "LoRA",
     r"\methodBT{}": "BT",
@@ -78,6 +78,7 @@ METHODS = {
 }
 METHOD_LABELS = {
     **{name: name for name in METHODS.values()},
+    "Instruct": "Backbone",
     "SFT": "FFT",
     "Longshot": "GCW",
 }
@@ -152,6 +153,8 @@ def read_tables(source: Path, tables: dict | None = None) -> list[dict]:
                 continue
             if backbone is None or columns is None:
                 continue
+            if cells[0] == "Pretrained instruct":
+                cells[0] = "Backbone"
             if cells[0] == "SFT":
                 cells[0] = r"\methodSFT{}"
             if cells[0] not in METHODS or len(cells) != len(columns):
@@ -243,8 +246,8 @@ def plot_suite(rows: list[dict], suite: str, option: str, columns: int):
                 span * (1 - zero_fraction),
             )
         limits, token_limits = relative_limits
-        ylabel = "Accuracy change vs instruct (%)"
-        token_label = "Response-token change vs instruct (%)"
+        ylabel = "Accuracy change vs backbone (%)"
+        token_label = "Response-token change vs backbone (%)"
     ncols = min(columns, len(backbones))
     nrows = math.ceil(len(backbones) / ncols)
     fig, axes = plt.subplots(
@@ -390,9 +393,9 @@ def plot_suite(rows: list[dict], suite: str, option: str, columns: int):
     )
     note = TABLES[suite][2]
     if option == "relative":
-        note += "\nBoth axes: 100 × (value / instruct value − 1), "
+        note += "\nBoth axes: 100 × (value / backbone value − 1), "
         note += (
-            "matched by backbone and thinking mode. Instruct columns omitted."
+            "matched by backbone and thinking mode. Backbone columns omitted."
         )
     note += (
         "\nMissing evaluations are omitted; N/A means neither mode is reported."
@@ -657,7 +660,7 @@ def plot_tradeoff(rows: list[dict], suite: str):
             linestyle="none",
             marker="+",
             color="#333333",
-            label="Instruct",
+            label=METHOD_LABELS["Instruct"],
             markersize=6,
         ),
     ]
@@ -683,8 +686,8 @@ def plot_tradeoff(rows: list[dict], suite: str):
         frameon=False,
         fontsize=7.5,
     )
-    fig.supxlabel("Response-token change vs instruct (%)", fontsize=8, y=0.025)
-    fig.supylabel("Accuracy change vs instruct (%)", fontsize=8, x=0.015)
+    fig.supxlabel("Response-token change vs backbone (%)", fontsize=8, y=0.025)
+    fig.supylabel("Accuracy change vs backbone (%)", fontsize=8, x=0.015)
     fig.subplots_adjust(
         left=0.10, right=0.985, bottom=0.13, top=0.75, wspace=0.14, hspace=0.32
     )
@@ -762,7 +765,7 @@ def plot_retention(rows: list[dict], adaptation: str):
         ax.spines[spine].set_color("#AEB4BC")
     domain = "In-domain" if adaptation == "mathematical" else "Maths/LogiQA"
     ax.set_xlabel(f"{domain} change (%)", fontsize=8, labelpad=1.5)
-    ax.set_ylabel("KOR-Bench change (%)", fontsize=8, labelpad=1.5)
+    ax.set_ylabel("OOD accuracy change (%)", fontsize=8, labelpad=1.5)
     fig.subplots_adjust(left=0.19, right=0.97, bottom=0.17, top=0.97)
     return fig
 
@@ -1016,7 +1019,7 @@ def plot_heatmap(rows: list[dict], suite: str):
     fig.text(
         0.14,
         0.018,
-        "CHANGE VS INSTRUCT (%)",
+        "CHANGE VS BACKBONE (%)",
         fontsize=6.2,
         fontweight="bold",
         color="#334155",
@@ -1117,7 +1120,7 @@ def plot_paired_heatmap(rows: list[dict], adaptation: str):
     fig.text(
         0.14,
         0.108,
-        "CHANGE VS INSTRUCT",
+        "CHANGE VS BACKBONE",
         fontsize=6.2,
         fontweight="bold",
         color="#334155",
@@ -1263,7 +1266,7 @@ def plot_campaign_heatmap(
     fig = draw_campaign_heatmap(
         values,
         methods,
-        "CHANGE VS INSTRUCT",
+        "CHANGE VS BACKBONE",
         (
             "Mean token change (%)"
             if metric == "tokens"
