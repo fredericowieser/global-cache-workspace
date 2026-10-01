@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=martin_dev
-#SBATCH --partition=main
+#SBATCH --partition=agent-dev,agent-dev-15
 #SBATCH --gres=gpu:1
-#SBATCH --time=1-00:00:00
+#SBATCH --time=4:00:00
 
 set -e
 
