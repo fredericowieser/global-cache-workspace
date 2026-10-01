@@ -35,6 +35,8 @@ view with the original model/config files and a copied `train_state.json` whose
 backbone path points to the matching local weights. Preserve the source
 checkpoint; this view is for initialization, not authenticated training resume.
 
+For FSDP training with `init_checkpoint`, rank zero uses the loaded checkpoint model directly before sharding. It does not construct and randomly initialize a separate training model whose parameters would immediately be overwritten. Nonzero ranks construct their models on the meta device and receive the loaded state through FSDP synchronization. Model compatibility checks and processor-only backbone loading still apply.
+
 When a new run initialized with `init_checkpoint` saves processor-only weights,
 it carries forward the initialization checkpoint's frozen-backbone reference.
 If the initialization checkpoint contains the complete model, that checkpoint

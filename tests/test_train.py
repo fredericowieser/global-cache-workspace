@@ -993,6 +993,53 @@ def test_complete_model_initialization_loads_backbone_and_processor(
         _load_initial_model(incompatible, checkpoint)
 
 
+@pytest.mark.parametrize("processor_only", [False, True])
+@pytest.mark.parametrize("precision", ["fp32", "bf16"])
+def test_fsdp_initial_checkpoint_reuses_loaded_model(
+    tmp_path, monkeypatch, processor_only, precision
+):
+    from gcw.training import model_setup
+
+    cfg = tiny_train_config(tmp_path)
+    cfg.model = replace(
+        cfg.model,
+        variant="bgt",
+        cache_processor=CacheProcessorConfig(
+            hidden_size=8, intermediate_size=16, num_heads=1
+        ),
+    )
+    source = build_model(cfg.model)
+    source.init_weights()
+    source.to(dtype=torch.bfloat16)
+    backbone = tmp_path / "base"
+    checkpoint = tmp_path / "initial"
+    save_checkpoint(backbone, source.backbone, source.backbone.config)
+    save_checkpoint(
+        checkpoint, source, cfg.model,
+        {"backbone_checkpoint": str(backbone)},
+        cache_processor_only=processor_only,
+    )
+    cfg.init_checkpoint = str(checkpoint)
+    cfg.precision = precision
+
+    def reject_redundant_build(*args, **kwargs):
+        raise AssertionError("initialization must reuse the checkpoint model")
+
+    monkeypatch.setattr(model_setup, "build_model", reject_redundant_build)
+    monkeypatch.setattr(type(source), "init_weights", reject_redundant_build)
+    actual = _build_training_model(
+        cfg, torch.device("cpu"), rank=0, use_fsdp=True
+    )
+    dtype = torch.bfloat16 if precision == "bf16" else torch.float32
+    assert {parameter.dtype for parameter in actual.parameters()} == {dtype}
+    for key, expected in source.state_dict().items():
+        assert torch.equal(actual.state_dict()[key], expected.to(dtype=dtype))
+
+    cfg.model = replace(cfg.model, norm_eps=cfg.model.norm_eps * 2)
+    with pytest.raises(ValueError, match="model configuration differs"):
+        _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=True)
+
+
 def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):
     cfg = tiny_train_config(tmp_path)
     cfg.mode = "sft"
