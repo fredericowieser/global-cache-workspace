@@ -270,7 +270,11 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 
 | Field | Type | Default |
 |---|---|---|
-| `batch_size` | `int` | `8` |
+| `batch_size` | `Union[int, Literal['auto']]` | `8` |
+| `max_batch_size` | `int` | `64` |
 | `limit` | `int \| None` | `None` |
 | `apply_chat_template` | `bool` | `False` |
 | `enable_thinking` | `bool` | `False` |
+| `cache_update_metrics_path` | `str \| None` | `None` |
+| `log_samples` | `bool` | `False` |
+| `partial_samples_dir` | `str \| None` | `None` |

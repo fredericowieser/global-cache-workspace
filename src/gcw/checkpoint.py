@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import torch
+from safetensors import safe_open
 from safetensors.torch import load as load_safetensors
 from safetensors.torch import load_file, save_file
 
@@ -31,6 +32,24 @@ def _upgrade_qwen35_gated_delta_keys(
                 del upgraded[key]
                 break
     return upgraded
+
+
+def initialization_backbone_checkpoint(path: str | Path) -> str:
+    """Resolve the unchanged backbone supplied by a model initialization."""
+    path = Path(path)
+    with safe_open(path / "model.safetensors", framework="pt") as weights:
+        processor_only = all(
+            key.startswith("cache_processor.") for key in weights.keys()
+        )
+    if not processor_only:
+        return str(path)
+    state = json.loads((path / "train_state.json").read_text())
+    backbone = state.get("backbone_checkpoint")
+    if not backbone:
+        raise ValueError(
+            "processor-only init_checkpoint has no backbone_checkpoint"
+        )
+    return backbone
 
 
 def save_checkpoint(
@@ -177,6 +196,11 @@ def load_checkpoint_bytes(
         if not missing.issubset(backbone_keys):
             raise KeyError(f"missing checkpoint keys: {sorted(missing)[:8]}")
         backbone_checkpoint = train_state.get("backbone_checkpoint")
+        if not backbone_checkpoint and train_state.get("init_checkpoint"):
+            backbone_checkpoint = initialization_backbone_checkpoint(
+                train_state["init_checkpoint"]
+            )
+            train_state["backbone_checkpoint"] = backbone_checkpoint
         if not backbone_checkpoint:
             raise KeyError(
                 "checkpoint contains only cache processor parameters but "

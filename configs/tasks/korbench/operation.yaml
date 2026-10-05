@@ -1,0 +1,8 @@
+include: _common.yaml
+task: korbench_operation
+dataset_kwargs:
+  category: operation
+metadata:
+  version: 1
+  source_revision: bb8194dff8e51e2e2247cf62aa9932c3d57d53d7
+  data_sha256: 83261899d0d2a1356d29719c430691c537a61090d3e27544a4888b205e4255ba

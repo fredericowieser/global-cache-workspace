@@ -25,6 +25,26 @@ A resumable version-2 checkpoint additionally contains optimizer state, RNG stat
 
 `backbone_checkpoint` and `init_checkpoint` start a new optimizer and schedule. `resume.checkpoint` continues an existing execution. The three sources are mutually exclusive.
 
+Initialization compares model configurations after applying the checkpoint
+loader's legacy-field normalization, so equivalent legacy generation flags are
+accepted while differences in generation policy or architecture are rejected.
+Processor-only checkpoints still require the frozen backbone referenced by
+their own `train_state.json`, even when the new training config sets
+`backbone_checkpoint: null`. When relocating such a checkpoint, use a local
+view with the original model/config files and a copied `train_state.json` whose
+backbone path points to the matching local weights. Preserve the source
+checkpoint; this view is for initialization, not authenticated training resume.
+
+For FSDP training with `init_checkpoint`, rank zero uses the loaded checkpoint model directly before sharding. It does not construct and randomly initialize a separate training model whose parameters would immediately be overwritten. Nonzero ranks construct their models on the meta device and receive the loaded state through FSDP synchronization. Model compatibility checks and processor-only backbone loading still apply.
+
+When a new run initialized with `init_checkpoint` saves processor-only weights,
+it carries forward the initialization checkpoint's frozen-backbone reference.
+If the initialization checkpoint contains the complete model, that checkpoint
+itself supplies the frozen backbone. The optimizer and training cursor still
+start fresh. Older processor-only outputs missing this reference can recover it
+from their recorded `init_checkpoint` when loaded; that initialization source
+must remain accessible.
+
 ## Hugging Face initialization
 
 Convert a supported pretrained backbone and initialize any selected processor:

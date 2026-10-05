@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models.backbones.transformer import RMSNorm
+from gcw.models.cache_processors.update_metrics import UPDATE_OBSERVER
 from gcw.models.cache_processors.longshot_layers import (
     _activate_update_gate,
     _initialize_contextual_output_projection,
@@ -159,6 +160,9 @@ class LinearStateAdapter(nn.Module):
 
     def project_update(self, hidden: torch.Tensor) -> torch.Tensor:
         projected = self.output_proj(hidden)
+        observer = UPDATE_OBSERVER.get() if not self.training else None
+        if observer is not None:
+            observer.linear(projected[..., : self.output_dim])
         if self.gate_dim == 0:
             return projected
         delta, gate_logits = projected.split(

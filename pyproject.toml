@@ -38,6 +38,7 @@ only-include = [
     "/docs",
     "/README.md",
     "/LICENSE",
+    "/licenses",
     "/pyproject.toml",
     "/uv.lock",
 ]
@@ -58,7 +59,10 @@ cpu = ["torch>=2.7"]
 # causal-conv1d 1.6.2.post1 publishes CUDA 12 wheels through Torch 2.10.
 gpu = ["torch>=2.10,<2.11", "liger-kernel==0.8.1"]
 rocm = ["torch>=2.7", "pytorch-triton-rocm"]
-eval = ["lm-eval>=0.4", "transformers>=5,<6", "pillow>=10.0", "accelerate>=1.0"]
+eval = [
+    "lm-eval>=0.4", "transformers>=5,<6", "pillow>=10.0", "accelerate>=1.0",
+    "sympy>=1.12", "antlr4-python3-runtime==4.11.1",
+]
 convert = ["transformers>=5,<6"]
 qwen35 = [
     "causal-conv1d==1.6.2.post1",
@@ -136,6 +140,7 @@ markers = [
 
 [tool.ruff]
 line-length = 80
+extend-exclude = ["src/gcw/data/_vendor"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -143,3 +148,4 @@ ignore_missing_imports = true
 
 [tool.black]
 line-length = 80
+extend-exclude = "/src/gcw/data/_vendor/"

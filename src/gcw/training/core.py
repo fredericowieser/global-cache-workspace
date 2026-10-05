@@ -25,7 +25,7 @@ from gcw.runtime import (
 )
 from gcw.config import TrainConfig, load_train_config
 from gcw.data.shards import data_loader
-from gcw.data.training import TrainingBatchStream, build_training_stream
+from gcw.data.training import TrainingBatch, TrainingBatchStream, build_training_stream
 from gcw.performance.adjacent_pairs import (
     PAIRS_PER_STEP,
     build_adaptive_pair_step,
@@ -57,7 +57,7 @@ from gcw.training.audit import (
     _validate_train_batch,
     _write_training_audit,
 )
-from gcw.training.distributed import _no_sync
+from gcw.training.distributed import _align_fsdp_batch, _fsdp_active, _no_sync
 from gcw.training.optimizer import (
     _clip_grad_norm,
     _compact_metrics,
@@ -69,6 +69,7 @@ from gcw.training.precision import (
     _autocast_kwargs,
 )
 from gcw.training.state import (
+    _retain_final_checkpoint,
     _retained_checkpoint_every,
     _save_step_checkpoint,
 )
@@ -198,6 +199,8 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 if adaptive_step_plan is not None
                 else next(stream)
             )
+            if use_fsdp:
+                batch = _align_fsdp_batch(batch)
             if adaptive_step_plan is None and step == 0 and micro_step == 0:
                 _validate_train_batch(batch.x, batch.y, config)
             batch_non_padding_tokens += int(
@@ -464,7 +467,12 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 initial_processor_state=initial_processor_state,
             )
             last_checkpoint_step = step_num
-            if (
+            if step_num == config.max_steps:
+                if rank == 0:
+                    _retain_final_checkpoint(
+                        Path(config.output_dir) / "checkpoint", step_num
+                    )
+            elif (
                 retained_checkpoint_every is not None
                 and step_num % retained_checkpoint_every == 0
             ):
@@ -510,6 +518,10 @@ def run_training_loop(plan: TrainingPlan) -> None:
             use_fsdp=use_fsdp,
             initial_processor_state=initial_processor_state,
         )
+        if rank == 0:
+            _retain_final_checkpoint(
+                Path(config.output_dir) / "checkpoint", config.max_steps
+            )
     _close_training_stream(stream)
     if tracker is not None:
         tracker.finish(
@@ -555,8 +567,12 @@ def _eval_loss(
     total_loss = torch.zeros((), device=device)
     total_weight = torch.zeros((), device=device)
     total_tokens = torch.zeros((), device=device)
+    use_fsdp = _fsdp_active(config)
     for _ in range(max(1, config.eval_batches)):
         x, y, attention_mask = next(loader)
+        if use_fsdp:
+            batch = _align_fsdp_batch(TrainingBatch(x, y, attention_mask))
+            x, y, attention_mask = batch.x, batch.y, batch.attention_mask
         longshot_checkpointing = _longshot_gradient_checkpointing_decision(
             config, x
         )

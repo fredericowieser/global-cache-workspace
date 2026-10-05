@@ -1,0 +1,1816 @@
+#!/usr/bin/env python3
+"""Plot aggregate accuracy and response lengths from the paper's tables."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import math
+from pathlib import Path
+import re
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
+from matplotlib.ticker import MaxNLocator
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+PAPER = ROOT / "src/Global-Cache-Workspace-Theory-ICLR-2027-"
+TABLES = {
+    "math_after_math": (
+        "tab:results-overview",
+        "Mathematical benchmarks after mathematical adaptation",
+        "Accuracy: mean of six tasks (including LogiQA). "
+        "Tokens: pooled mean across the four generation tasks.",
+    ),
+    "korbench_after_math": (
+        "tab:korbench-results",
+        "KOR-Bench after mathematical adaptation",
+        "Accuracy: mean of five categories. "
+        "Tokens: mean across all 1,250 responses.",
+    ),
+    "korbench_after_reasoning": (
+        "tab:korbench-reasoning-gym-results",
+        "KOR-Bench after reasoning adaptation",
+        "Accuracy: mean of five categories. "
+        "Tokens: mean across all 1,250 responses.",
+    ),
+    "math_after_reasoning": (
+        "tab:paper7-reasoning-gym-results",
+        "Mathematical benchmarks after reasoning adaptation",
+        "Accuracy: mean of five tasks including LogiQA, excluding TheoremQA. "
+        "Tokens: pooled mean across three generation tasks.",
+    ),
+    "math_after_sequential": (
+        "tab:paper7-sequential-adaptation-results",
+        "Mathematical benchmarks after sequential adaptation",
+        "Accuracy: mean of five tasks including LogiQA, excluding TheoremQA. "
+        "Tokens: pooled mean across three generation tasks.",
+    ),
+    "korbench_after_sequential": (
+        "tab:korbench-sequential-adaptation-results",
+        "KOR-Bench after sequential adaptation",
+        "Accuracy: mean of five tasks. "
+        "Tokens: mean across all 1,250 responses.",
+    ),
+}
+ADAPTATIONS = {
+    "mathematical": ("math_after_math", "korbench_after_math"),
+    "reasoning": ("math_after_reasoning", "korbench_after_reasoning"),
+    "sequential": ("math_after_sequential", "korbench_after_sequential"),
+}
+HEATMAP_COLORS = ["#AC4035", "#E6AB8F", "#FCF6EA", "#A8C8A6", "#236548"]
+METHODS = {
+    "Backbone": "Instruct",
+    r"\methodSFT{}": "SFT",
+    "LoRA": "LoRA",
+    r"\methodBT{}": "BT",
+    r"\methodBGT{}": "BGT",
+    r"\methodLongshot{}": "Longshot",
+    r"\methodDiffusionLongshot{}": "Diffusion\nLongshot",
+}
+METHOD_LABELS = {
+    **{name: name for name in METHODS.values()},
+    "Instruct": "Backbone",
+    "SFT": "FFT",
+    "Longshot": "GCW",
+}
+if (PAPER / "MAIN.tex").is_file():
+    METHOD_LABELS.update(
+        {
+            METHODS[rf"\{command}{{}}"]: label
+            for command, label in re.findall(
+                r"\\newcommand\{\\(method\w+)\}\{\\textsc\{([^{}]+)\}\}",
+                (PAPER / "MAIN.tex").read_text(encoding="utf-8"),
+            )
+            if rf"\{command}{{}}" in METHODS
+        }
+    )
+
+COLORS = (
+    "#9AA2AB",
+    "#56B4E9",
+    "#E69F00",
+    "#009E73",
+    "#0072B2",
+    "#CC79A7",
+    "#D55E00",
+)
+BACKBONE_STYLES = {
+    "Llama 3.2-1B": ("#0072B2", "o"),
+    "Llama 3.2-3B": ("#E69F00", "s"),
+    "Qwen3.5-2B": ("#009E73", "^"),
+    "Qwen3.5-4B": ("#CC79A7", "D"),
+    "Qwen3.5-27B": ("#D55E00", "p"),
+}
+
+
+def parse_modes(cell: str) -> list[float | None]:
+    values = []
+    for part in cell.strip().split("/"):
+        if part in {r"\textemdash", r"\textemdash{}"}:
+            values.append(None)
+        else:
+            value = float(part)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"Invalid table value: {cell}")
+            values.append(value)
+    if len(values) == 1:
+        values.append(None)
+    if len(values) != 2:
+        raise ValueError(f"Expected thinking off/on: {cell}")
+    return values
+
+
+def read_tables(source: Path, tables: dict | None = None) -> list[dict]:
+    text = source.read_text(encoding="utf-8")
+    blocks = re.findall(r"\\begin\{table\}(.*?)\\end\{table\}", text, re.DOTALL)
+    rows = []
+    for suite, (label, _, _) in (TABLES if tables is None else tables).items():
+        matches = [b for b in blocks if rf"\label{{{label}}}" in b]
+        if len(matches) != 1:
+            raise ValueError(f"Expected one table with label {label}")
+        backbone = None
+        columns = None
+        seen = set()
+        for line in matches[0].splitlines():
+            model = re.search(r"\\text(?:bf|it)\{([^{}]+)\}", line)
+            if line.startswith(r"\multicolumn") and model:
+                backbone = model[1]
+                continue
+            if "&" not in line or not line.rstrip().endswith(r"\\"):
+                continue
+            cells = [c.strip() for c in line.rstrip()[:-2].split("&")]
+            if cells[0] == "Method":
+                columns = cells
+                continue
+            if backbone is None or columns is None:
+                continue
+            if cells[0] == "Pretrained instruct":
+                cells[0] = "Backbone"
+            if cells[0] == "SFT":
+                cells[0] = r"\methodSFT{}"
+            if cells[0] not in METHODS or len(cells) != len(columns):
+                raise ValueError(f"Unrecognised result row: {line}")
+            identity = (backbone, cells[0])
+            if identity in seen:
+                raise ValueError(f"Duplicate result: {suite}, {identity}")
+            seen.add(identity)
+            scores = parse_modes(cells[columns.index("Avg.")])
+            tokens = parse_modes(cells[columns.index("Mean/resp.")])
+            for mode, score, count in zip(("off", "on"), scores, tokens):
+                if score is not None and score > 100:
+                    raise ValueError(f"Accuracy exceeds 100: {line}")
+                rows.append(
+                    {
+                        "suite": suite,
+                        "backbone": backbone,
+                        "method": METHODS[cells[0]].replace("\n", " "),
+                        "thinking": mode,
+                        "accuracy_percent": score,
+                        "mean_response_tokens": count,
+                    }
+                )
+        if not seen:
+            raise ValueError(f"No results found in {label}")
+    baselines = {
+        (r["suite"], r["backbone"], r["thinking"]): r
+        for r in rows
+        if r["method"] == "Instruct"
+    }
+    for row in rows:
+        key = (row["suite"], row["backbone"], row["thinking"])
+        if key not in baselines:
+            raise ValueError(f"Missing pretrained baseline: {key}")
+        for field, relative in (
+            ("accuracy_percent", "relative_change_percent"),
+            ("mean_response_tokens", "relative_tokens_change_percent"),
+        ):
+            baseline = baselines[key][field]
+            value = row[field]
+            if value is not None and (baseline is None or baseline == 0):
+                raise ValueError(f"Relative {field} undefined: {key}")
+            row[f"baseline_{field}"] = baseline
+            row[relative] = (
+                None if value is None else 100 * (value / baseline - 1)
+            )
+    return rows
+
+
+def plot_suite(rows: list[dict], suite: str, option: str, columns: int):
+    rows = [r for r in rows if r["suite"] == suite]
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    method_labels = list(METHODS.values())
+    colors = COLORS
+    if option == "relative":
+        method_labels = method_labels[1:]
+        colors = colors[1:]
+        rows = [r for r in rows if r["method"] != "Instruct"]
+    method_names = [m.replace("\n", " ") for m in method_labels]
+    method_labels = [METHOD_LABELS[m] for m in method_labels]
+    has_on = any(
+        r["thinking"] == "on" and r["accuracy_percent"] is not None
+        for r in rows
+    )
+    field = "accuracy_percent" if option == "raw" else "relative_change_percent"
+    if option == "raw":
+        limits = (0, 100)
+        ylabel = "Average accuracy (%)"
+        token_field = "mean_response_tokens"
+        token_limits = (0, 4300 if has_on else 2200)
+        token_label = "Mean response tokens"
+    else:
+        token_field = "relative_tokens_change_percent"
+        relative_limits = []
+        for quantity in (field, token_field):
+            values = [0] + [
+                r[quantity] for r in rows if r[quantity] is not None
+            ]
+            lower, upper = min(values), max(values)
+            padding = max(5, (upper - lower) * 0.1)
+            relative_limits.append((lower - padding, upper + padding))
+        zero_fraction = sum(
+            -lower / (upper - lower) for lower, upper in relative_limits
+        ) / len(relative_limits)
+        for i, (lower, upper) in enumerate(relative_limits):
+            span = max(-lower / zero_fraction, upper / (1 - zero_fraction))
+            relative_limits[i] = (
+                -span * zero_fraction,
+                span * (1 - zero_fraction),
+            )
+        limits, token_limits = relative_limits
+        ylabel = "Accuracy change vs backbone (%)"
+        token_label = "Response-token change vs backbone (%)"
+    ncols = min(columns, len(backbones))
+    nrows = math.ceil(len(backbones) / ncols)
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(4.0 * ncols, 3.25 * nrows + 1.2),
+        squeeze=False,
+    )
+    x = np.arange(len(method_names))
+    for ax, backbone in zip(axes.flat, backbones):
+        lookup = {
+            (r["method"], r["thinking"]): r
+            for r in rows
+            if r["backbone"] == backbone
+        }
+        token_ax = ax.twinx()
+        token_ax.set_zorder(ax.get_zorder() + 1)
+        token_ax.patch.set_visible(False)
+        for mode in ("off", "on"):
+            accuracy = np.array(
+                [
+                    lookup.get((method, mode), {}).get(field)
+                    for method in method_names
+                ],
+                dtype=float,
+            )
+            tokens = np.array(
+                [
+                    lookup.get((method, mode), {}).get(token_field)
+                    for method in method_names
+                ],
+                dtype=float,
+            )
+            for i, value in enumerate(accuracy):
+                if not np.isfinite(value):
+                    continue
+                ax.bar(
+                    x[i],
+                    value,
+                    width=0.68,
+                    facecolor=colors[i] if mode == "off" else "none",
+                    edgecolor=colors[i] if mode == "off" else "#252A34",
+                    alpha=0.78 if mode == "off" else 1,
+                    linewidth=0.6 if mode == "off" else 1.35,
+                    linestyle="-" if mode == "off" else "--",
+                    zorder=2 if mode == "off" else 3,
+                )
+            token_ax.plot(
+                x,
+                tokens,
+                color="#22252A",
+                linewidth=1.15,
+                linestyle="-" if mode == "off" else "--",
+                marker="o" if mode == "off" else "D",
+                markersize=3.5,
+                markerfacecolor="#22252A" if mode == "off" else "white",
+                markeredgewidth=0.85,
+                zorder=5,
+            )
+        for i, method in enumerate(method_names):
+            if all(
+                lookup.get((method, mode), {}).get(field) is None
+                for mode in ("off", "on")
+            ):
+                ax.text(
+                    i,
+                    0.035,
+                    "N/A",
+                    transform=ax.get_xaxis_transform(),
+                    ha="center",
+                    va="bottom",
+                    fontsize=7,
+                    color="#777777",
+                )
+        panel_on = any(
+            r["thinking"] == "on" and r[field] is not None
+            for r in lookup.values()
+        )
+        ax.set_title(
+            backbone + ("" if panel_on else " (thinking off only)"),
+            fontsize=10,
+            pad=9,
+        )
+        ax.set_xticks(x, method_labels, rotation=38, ha="right", fontsize=8)
+        ax.set_xlim(-0.65, len(x) - 0.35)
+        ax.set_ylim(*limits)
+        ax.set_ylabel(ylabel, fontsize=8)
+        ax.axhline(0, color="#555555", linewidth=0.65, zorder=1)
+        ax.set_axisbelow(True)
+        ax.grid(axis="y", color="#E2E5E9", linewidth=0.6)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        token_ax.set_ylim(*token_limits)
+        token_ax.set_ylabel(token_label, fontsize=8)
+        token_ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+        for axis in (ax, token_ax):
+            axis.tick_params(axis="y", labelsize=8, length=2.5)
+            axis.spines["top"].set_visible(False)
+            for spine in axis.spines.values():
+                spine.set_color("#AEB4BC")
+    for ax in list(axes.flat)[len(backbones) :]:
+        ax.set_visible(False)
+    handles = [
+        Patch(facecolor="#9AA2AB", alpha=0.78, label="Accuracy: thinking off"),
+        Line2D(
+            [],
+            [],
+            color="#22252A",
+            marker="o",
+            markersize=4,
+            label="Tokens: thinking off",
+        ),
+    ]
+    if has_on:
+        handles.insert(
+            1,
+            Patch(
+                facecolor="none",
+                edgecolor="#252A34",
+                linestyle="--",
+                label="Accuracy: thinking on",
+            ),
+        )
+        handles.append(
+            Line2D(
+                [],
+                [],
+                color="#22252A",
+                linestyle="--",
+                marker="D",
+                markerfacecolor="white",
+                markersize=4,
+                label="Tokens: thinking on",
+            )
+        )
+    fig.suptitle(TABLES[suite][1], fontsize=13, y=0.98)
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.945),
+        ncol=len(handles),
+        frameon=False,
+        fontsize=8,
+    )
+    note = TABLES[suite][2]
+    if option == "relative":
+        note += "\nBoth axes: 100 × (value / backbone value − 1), "
+        note += (
+            "matched by backbone and thinking mode. Backbone columns omitted."
+        )
+    note += (
+        "\nMissing evaluations are omitted; N/A means neither mode is reported."
+    )
+    fig.text(
+        0.5, 0.016, note, ha="center", va="bottom", fontsize=8, color="#4C535C"
+    )
+    fig.tight_layout(rect=(0, 0.105, 1, 0.895), h_pad=1.7, w_pad=1.5)
+    return fig
+
+
+def plot_points(rows: list[dict], suite: str):
+    rows = [
+        r for r in rows if r["suite"] == suite and r["method"] != "Instruct"
+    ]
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    unknown = set(backbones) - BACKBONE_STYLES.keys()
+    if unknown:
+        raise ValueError(f"Define point styles for new backbones: {unknown}")
+    method_labels = list(METHODS.values())[1:]
+    method_names = [label.replace("\n", " ") for label in method_labels]
+    method_labels = [METHOD_LABELS[m] for m in method_labels]
+    offsets = dict(zip(BACKBONE_STYLES, np.linspace(-0.3, 0.3, 5)))
+    has_on = any(
+        r["thinking"] == "on" and r["accuracy_percent"] is not None
+        for r in rows
+    )
+    fig, axes = plt.subplots(2, 1, figsize=(7.2, 4.5), sharex=True)
+    for ax, field, label in zip(
+        axes,
+        ("relative_change_percent", "relative_tokens_change_percent"),
+        ("Accuracy change (%)", "Token change (%)"),
+    ):
+        values = [0.0]
+        for backbone in backbones:
+            color, marker = BACKBONE_STYLES[backbone]
+            for mode in ("off", "on"):
+                points = [
+                    r
+                    for r in rows
+                    if r["backbone"] == backbone
+                    and r["thinking"] == mode
+                    and r[field] is not None
+                ]
+                if not points:
+                    continue
+                xs = [
+                    method_names.index(r["method"]) + offsets[backbone]
+                    for r in points
+                ]
+                ys = [r[field] for r in points]
+                values.extend(ys)
+                ax.scatter(
+                    xs,
+                    ys,
+                    s=48,
+                    marker=marker,
+                    linewidths=1.2,
+                    facecolors=color if mode == "off" else "none",
+                    edgecolors=color,
+                    zorder=3,
+                )
+        padding = max(5, (max(values) - min(values)) * 0.12)
+        ax.set_ylim(min(values) - padding, max(values) + padding)
+        ax.set_ylabel(label, fontsize=9)
+        ax.axhline(0, color="#646A73", linewidth=0.9, zorder=2)
+        ax.set_axisbelow(True)
+        ax.grid(axis="y", color="#E6E8EB", linewidth=0.6)
+        for boundary in np.arange(0.5, len(method_names) - 1, 1):
+            ax.axvline(boundary, color="#ECEEF1", linewidth=0.6, zorder=0)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.tick_params(axis="both", labelsize=8, length=2.5)
+        ax.spines[["top", "right"]].set_visible(False)
+        for spine in ax.spines.values():
+            spine.set_color("#B6BBC2")
+    axes[-1].set_xticks(np.arange(len(method_names)), method_labels)
+    axes[-1].set_xlim(-0.55, len(method_names) - 0.45)
+    handles = [
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker=BACKBONE_STYLES[b][1],
+            color=BACKBONE_STYLES[b][0],
+            markersize=6.5,
+            label=b,
+        )
+        for b in backbones
+    ]
+    fig.suptitle(TABLES[suite][1], fontsize=10, y=0.985)
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.943),
+        ncol=len(handles),
+        frameon=False,
+        fontsize=7.5,
+        handletextpad=0.35,
+        columnspacing=1.2,
+    )
+    mode_handles = [
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker="o",
+            color="#555555",
+            markerfacecolor="#555555" if mode == "off" else "white",
+            markersize=6.5,
+            label=f"Thinking {mode}",
+        )
+        for mode in (("off", "on") if has_on else ("off",))
+    ]
+    fig.legend(
+        handles=mode_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.891),
+        ncol=len(mode_handles),
+        frameon=False,
+        fontsize=7.5,
+        handletextpad=0.35,
+    )
+    fig.subplots_adjust(
+        left=0.12, right=0.985, bottom=0.12, top=0.79, hspace=0.18
+    )
+    return fig
+
+
+def plot_compact(rows: list[dict], suite: str):
+    if suite != "korbench_after_reasoning":
+        rows = [r for r in rows if r["backbone"] != "Qwen3.5-2B"]
+    fig = plot_suite(rows, suite, "relative", 2)
+    fig.set_size_inches(7.2, 4.5)
+    for text in list(fig.texts):
+        if text is not fig._suptitle:
+            text.remove()
+    fig._suptitle.set_fontsize(10)
+    fig._suptitle.set_y(0.985)
+    for legend in fig.legends:
+        legend.set_bbox_to_anchor((0.5, 0.945))
+        for text in legend.get_texts():
+            text.set_fontsize(7)
+    for i, ax in enumerate(fig.axes[:4]):
+        ax.set_title(ax.get_title().split(" (thinking")[0], fontsize=9, pad=5)
+        ax.set_ylabel("Accuracy change (%)" if i % 2 == 0 else "", fontsize=8)
+        ax.tick_params(axis="y", labelsize=7, labelleft=i % 2 == 0)
+        ax.set_xticks(
+            np.arange(6), [METHOD_LABELS[m] for m in list(METHODS.values())[1:]]
+        )
+        ax.tick_params(axis="x", labelbottom=i >= 2, labelsize=6.5)
+        plt.setp(ax.get_xticklabels(), rotation=0, ha="center")
+        for text in ax.texts:
+            text.set_fontsize(6)
+    for i, ax in enumerate(fig.axes[4:]):
+        ax.set_ylabel("Token change (%)" if i % 2 == 1 else "", fontsize=8)
+        ax.tick_params(
+            axis="y", right=i % 2 == 1, labelright=i % 2 == 1, labelsize=7
+        )
+    fig.subplots_adjust(
+        left=0.10,
+        right=0.90,
+        bottom=0.12,
+        top=0.81,
+        wspace=0.12,
+        hspace=0.30,
+    )
+    return fig
+
+
+def plot_tradeoff(rows: list[dict], suite: str):
+    rows = [
+        r for r in rows if r["suite"] == suite and r["method"] != "Instruct"
+    ]
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    methods = [label.replace("\n", " ") for label in list(METHODS.values())[1:]]
+    has_on = any(
+        r["thinking"] == "on" and r["accuracy_percent"] is not None
+        for r in rows
+    )
+    limits = []
+    for field in ("relative_tokens_change_percent", "relative_change_percent"):
+        values = [0] + [r[field] for r in rows if r[field] is not None]
+        padding = max(5, (max(values) - min(values)) * 0.12)
+        limits.append((min(values) - padding, max(values) + padding))
+    ncols = 3 if len(backbones) > 4 else 2
+    fig, axes = plt.subplots(
+        2, ncols, figsize=(7.2, 4.8), sharex=True, sharey=True
+    )
+    for ax, backbone in zip(axes.flat, backbones):
+        for method, color in zip(methods, COLORS[1:]):
+            for mode in ("off", "on"):
+                points = [
+                    r
+                    for r in rows
+                    if r["backbone"] == backbone
+                    and r["method"] == method
+                    and r["thinking"] == mode
+                    and r["relative_change_percent"] is not None
+                    and r["relative_tokens_change_percent"] is not None
+                ]
+                if not points:
+                    continue
+                ax.scatter(
+                    [r["relative_tokens_change_percent"] for r in points],
+                    [r["relative_change_percent"] for r in points],
+                    s=36,
+                    marker="o" if mode == "off" else "^",
+                    facecolors=color if mode == "off" else "none",
+                    edgecolors=color,
+                    linewidths=1.0,
+                    zorder=3,
+                )
+        ax.scatter([0], [0], marker="+", s=45, color="#333333", zorder=4)
+        ax.axhline(0, color="#979DA5", linewidth=0.7)
+        ax.axvline(0, color="#979DA5", linewidth=0.7)
+        ax.set_xlim(*limits[0])
+        ax.set_ylim(*limits[1])
+        ax.set_title(backbone, fontsize=9, pad=5)
+        ax.set_axisbelow(True)
+        ax.grid(color="#ECEEF1", linewidth=0.5)
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+        ax.tick_params(labelsize=7, length=2)
+        ax.spines[["top", "right"]].set_visible(False)
+    for ax in list(axes.flat)[len(backbones) :]:
+        ax.set_visible(False)
+    handles = [
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker="o",
+            color=color,
+            markersize=5,
+            label=METHOD_LABELS.get(method, method),
+        )
+        for method, color in zip(methods, COLORS[1:])
+    ]
+    fig.suptitle(TABLES[suite][1], fontsize=10, y=0.985)
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.945),
+        ncol=3,
+        frameon=False,
+        fontsize=7.5,
+        handletextpad=0.4,
+    )
+    mode_handles = [
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker="o",
+            color="#555555",
+            label="Thinking off",
+            markersize=5,
+        ),
+        Line2D(
+            [],
+            [],
+            linestyle="none",
+            marker="+",
+            color="#333333",
+            label=METHOD_LABELS["Instruct"],
+            markersize=6,
+        ),
+    ]
+    if has_on:
+        mode_handles.insert(
+            1,
+            Line2D(
+                [],
+                [],
+                linestyle="none",
+                marker="^",
+                color="#555555",
+                markerfacecolor="none",
+                label="Thinking on",
+                markersize=5,
+            ),
+        )
+    fig.legend(
+        handles=mode_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.86),
+        ncol=len(mode_handles),
+        frameon=False,
+        fontsize=7.5,
+    )
+    fig.supxlabel("Response-token change vs backbone (%)", fontsize=8, y=0.025)
+    fig.supylabel("Accuracy change vs backbone (%)", fontsize=8, x=0.015)
+    fig.subplots_adjust(
+        left=0.10, right=0.985, bottom=0.13, top=0.75, wspace=0.14, hspace=0.32
+    )
+    return fig
+
+
+def plot_retention(rows: list[dict], adaptation: str):
+    adapted, korbench = ADAPTATIONS[adaptation]
+    methods = [
+        label.replace("\n", " ") for label in list(METHODS.values())[1:6]
+    ]
+    changes = {
+        (r["suite"], r["backbone"], r["method"], r["thinking"]): r[
+            "relative_change_percent"
+        ]
+        for r in rows
+        if r["suite"] in (adapted, korbench)
+    }
+    fig, ax = plt.subplots(figsize=(2.75, 2.35))
+    for method, color in zip(methods, COLORS[1:]):
+        points = [
+            (changes[(adapted, *key)], changes[(korbench, *key)], key[2])
+            for key in sorted(
+                {k[1:] for k in changes if k[0] == adapted and k[2] == method}
+            )
+            if changes[(adapted, *key)] is not None
+            and changes.get((korbench, *key)) is not None
+        ]
+        for x, y, mode in points:
+            ax.scatter(
+                x,
+                y,
+                s=13,
+                marker="o" if mode == "off" else "^",
+                facecolors=color if mode == "off" else "white",
+                edgecolors=color,
+                linewidths=1.0,
+                alpha=0.55,
+                zorder=2,
+            )
+        mean_x = float(np.mean([p[0] for p in points]))
+        mean_y = float(np.mean([p[1] for p in points]))
+        ax.scatter(
+            mean_x,
+            mean_y,
+            s=60,
+            marker="o",
+            facecolors=color,
+            edgecolors="#22252A",
+            linewidths=1.1,
+            zorder=4,
+        )
+        label = METHOD_LABELS.get(method, method)
+        offset, align = {
+            "BT": ((0, 7), "center"),
+            "BGT": ((-6, -12), "right"),
+            "FFT": ((0, -14), "center"),
+        }.get(label, ((6, 3), "left"))
+        ax.annotate(
+            label,
+            (mean_x, mean_y),
+            xytext=offset,
+            textcoords="offset points",
+            ha=align,
+            fontsize=8,
+            fontweight="bold",
+            color="#22252A",
+            zorder=5,
+        )
+    ax.axhline(0, color="#979DA5", linewidth=0.7, zorder=1)
+    ax.axvline(0, color="#979DA5", linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.grid(color="#ECEEF1", linewidth=0.5)
+    ax.tick_params(labelsize=7.5, length=2, pad=1.5)
+    ax.spines[["top", "right"]].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#AEB4BC")
+    domain = "In-domain" if adaptation == "mathematical" else "Maths/LogiQA"
+    ax.set_xlabel(f"{domain} change (%)", fontsize=8, labelpad=1.5)
+    ax.set_ylabel("OOD accuracy change (%)", fontsize=8, labelpad=1.5)
+    fig.subplots_adjust(left=0.19, right=0.97, bottom=0.17, top=0.97)
+    return fig
+
+
+def draw_heatmap_panel(
+    ax, values, columns, title, cmap, limit, subtitle="", methods=None
+):
+    backbones = list(dict.fromkeys(backbone for backbone, _ in columns))
+    if methods is None:
+        methods = list(METHODS.values())[1:]
+    centers = [
+        np.mean([i for i, (b, _) in enumerate(columns) if b == backbone])
+        for backbone in backbones
+    ]
+    cmap.set_bad("#E8EBEF")
+    mesh = ax.pcolormesh(
+        np.arange(len(columns) + 1) - 0.5,
+        np.arange(len(methods) + 1) - 0.5,
+        np.ma.masked_invalid(values),
+        cmap=cmap,
+        vmin=-limit,
+        vmax=limit,
+        edgecolors="white",
+        linewidth=1.1,
+        rasterized=False,
+    )
+    ax.set_ylim(len(methods) - 0.5, -0.5)
+    ax.set_xticks(np.arange(len(columns)), [mode for _, mode in columns])
+    ax.set_yticks(
+        np.arange(len(methods)), [METHOD_LABELS.get(m, m) for m in methods]
+    )
+    for label in ax.get_yticklabels():
+        if label.get_text() == METHOD_LABELS["Longshot"]:
+            label.set_fontweight("bold")
+    ax.tick_params(
+        length=0,
+        labelsize=7.5,
+        colors="#334155",
+    )
+    ax.tick_params(axis="x", labelsize=6.5, pad=5)
+    ax.tick_params(axis="y", pad=8)
+    transform = ax.get_xaxis_transform()
+    families = list(dict.fromkeys(b.rsplit("-", 1)[0] for b in backbones))
+    for family in families:
+        positions = [
+            i
+            for i, (b, _) in enumerate(columns)
+            if b.rsplit("-", 1)[0] == family
+        ]
+        left, right = min(positions), max(positions)
+        ax.text(
+            (left + right) / 2,
+            1.205,
+            family,
+            transform=transform,
+            ha="center",
+            va="bottom",
+            fontsize=7.5,
+            fontweight="bold",
+            color="#334155",
+        )
+        ax.plot(
+            [left - 0.38, right + 0.38],
+            [1.15, 1.15],
+            transform=transform,
+            clip_on=False,
+            color="#C9D1DA",
+            linewidth=0.7,
+        )
+    for center, backbone in zip(centers, backbones):
+        ax.text(
+            center,
+            1.045,
+            backbone.rsplit("-", 1)[1],
+            transform=transform,
+            ha="center",
+            va="bottom",
+            fontsize=7.2,
+            color="#475569",
+        )
+    if ax.get_subplotspec().is_first_col():
+        ax.text(
+            -0.035,
+            1.045,
+            "METHOD",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=6,
+            fontweight="bold",
+            color="#64748B",
+        )
+        ax.text(
+            -0.035,
+            -0.060,
+            "Thinking",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=6.5,
+            color="#64748B",
+        )
+    for i in range(1, len(columns)):
+        if columns[i][0] != columns[i - 1][0]:
+            ax.axvline(
+                i - 0.5,
+                color="white",
+                linewidth=2.0,
+            )
+    for (i, j), value in np.ndenumerate(values):
+        text = "N/A" if np.isnan(value) else f"{value:+.0f}"
+        if np.isfinite(value) and abs(value) < 0.5:
+            text = "0"
+        rgb = (
+            cmap((value + limit) / (2 * limit))[:3]
+            if np.isfinite(value)
+            else (1, 1, 1)
+        )
+        luminance = np.dot(rgb, (0.2126, 0.7152, 0.0722))
+        color = "white" if luminance < 0.53 else "#18202B"
+        if np.isnan(value):
+            color = "#7C8796"
+        ax.text(
+            j,
+            i,
+            text,
+            ha="center",
+            va="center",
+            fontsize=7.5,
+            color=color,
+            fontweight="normal",
+        )
+    ax.text(
+        0,
+        1.445,
+        f"({chr(97 + ax.get_subplotspec().colspan.start)})",
+        transform=ax.transAxes,
+        fontsize=8,
+        fontweight="bold",
+        color="#64748B",
+        va="bottom",
+    )
+    ax.text(
+        0.09,
+        1.445,
+        title,
+        transform=ax.transAxes,
+        fontsize=10,
+        fontweight="bold",
+        color="#17212E",
+        va="bottom",
+    )
+    ax.text(
+        1,
+        1.445,
+        subtitle,
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=6.5,
+        color="#64748B",
+    )
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    return mesh
+
+
+def plot_heatmap(rows: list[dict], suite: str):
+    rows = [r for r in rows if r["suite"] == suite]
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    methods = [
+        label.replace("\n", " ")
+        for label in list(METHODS.values())[1:]
+        if any(r["method"] == label.replace("\n", " ") for r in rows)
+    ]
+    columns = [
+        (backbone, mode)
+        for backbone in backbones
+        for mode in ("off", "on")
+        if any(
+            r["backbone"] == backbone
+            and r["thinking"] == mode
+            and r["accuracy_percent"] is not None
+            for r in rows
+        )
+    ]
+    lookup = {(r["method"], r["backbone"], r["thinking"]): r for r in rows}
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.15), sharey=True)
+    fig.subplots_adjust(
+        left=0.14, right=0.99, bottom=0.25, top=0.68, wspace=0.12
+    )
+    improvement_cmap = LinearSegmentedColormap.from_list(
+        "terracotta_cream_forest", HEATMAP_COLORS
+    )
+    has_missing = False
+    for ax, field, title, cmap, endpoints in zip(
+        axes,
+        ("relative_change_percent", "relative_tokens_change_percent"),
+        ("Accuracy", "Response tokens"),
+        (improvement_cmap, improvement_cmap.reversed()),
+        (
+            ("Lower accuracy", "Higher accuracy"),
+            ("Fewer tokens", "More tokens"),
+        ),
+    ):
+        values = np.array(
+            [
+                [
+                    lookup.get((method, backbone, mode), {}).get(field)
+                    for backbone, mode in columns
+                ]
+                for method in methods
+            ],
+            dtype=float,
+        )
+        has_missing |= not np.isfinite(values).all()
+        limit = max(
+            1,
+            float(np.max(np.abs(values), where=np.isfinite(values), initial=0)),
+        )
+        mesh = draw_heatmap_panel(
+            ax,
+            values,
+            columns,
+            title,
+            cmap,
+            limit,
+            "relative change",
+            methods=methods,
+        )
+        position = ax.get_position()
+        color_ax = fig.add_axes((position.x0, 0.105, position.width, 0.026))
+        colorbar = fig.colorbar(mesh, cax=color_ax, orientation="horizontal")
+        colorbar.locator = MaxNLocator(nbins=6, symmetric=True)
+        colorbar.update_ticks()
+        colorbar.ax.tick_params(
+            labelsize=6.5, length=2, pad=2, colors="#475569"
+        )
+        colorbar.outline.set_visible(False)
+        colorbar.solids.set_rasterized(False)
+        colorbar.ax.axvline(0, color="#64748B", linewidth=0.7)
+        fig.text(position.x0, 0.15, endpoints[0], fontsize=6.5, color=cmap(0.0))
+        fig.text(
+            position.x1,
+            0.15,
+            endpoints[1],
+            fontsize=6.5,
+            color=cmap(1.0),
+            ha="right",
+        )
+    fig.text(
+        0.14,
+        0.018,
+        "CHANGE VS BACKBONE (%)",
+        fontsize=6.2,
+        fontweight="bold",
+        color="#334155",
+    )
+    if has_missing:
+        fig.text(
+            0.84,
+            0.028,
+            "N/A",
+            fontsize=6.2,
+            color="#64748B",
+            va="center",
+            ha="center",
+            bbox={"facecolor": "#E8EBEF", "edgecolor": "none", "pad": 3},
+        )
+        fig.text(
+            0.873,
+            0.028,
+            "Not reported",
+            fontsize=6.2,
+            color="#64748B",
+            va="center",
+        )
+    return fig
+
+
+def plot_paired_heatmap(rows: list[dict], adaptation: str):
+    suites = ADAPTATIONS[adaptation]
+    rows = [r for r in rows if r["suite"] in suites]
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    columns = [
+        (backbone, mode)
+        for backbone in backbones
+        for mode in ("off", "on")
+        if any(
+            r["backbone"] == backbone
+            and r["thinking"] == mode
+            and r["relative_change_percent"] is not None
+            for r in rows
+        )
+    ]
+    methods = [
+        label.replace("\n", " ")
+        for label in list(METHODS.values())[1:]
+        if label != METHODS[r"\methodDiffusionLongshot{}"]
+    ]
+    lookup = {
+        (r["suite"], r["method"], r["backbone"], r["thinking"]): r for r in rows
+    }
+    matrices = [
+        np.array(
+            [
+                [
+                    lookup.get((suite, method, backbone, mode), {}).get(
+                        "relative_change_percent"
+                    )
+                    for backbone, mode in columns
+                ]
+                for method in methods
+            ],
+            dtype=float,
+        )
+        for suite in suites
+    ]
+    limit = max(
+        1,
+        *(
+            float(np.max(np.abs(values), where=np.isfinite(values), initial=0))
+            for values in matrices
+        ),
+    )
+    cmap = LinearSegmentedColormap.from_list(
+        "terracotta_cream_forest",
+        HEATMAP_COLORS,
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.15), sharey=True)
+    task_count = 6 if adaptation == "mathematical" else 5
+    for ax, values, title, subtitle in zip(
+        axes,
+        matrices,
+        ("Maths + LogiQA", "KOR-Bench"),
+        (f"{task_count} tasks", "5 tasks"),
+    ):
+        mesh = draw_heatmap_panel(
+            ax, values, columns, title, cmap, limit, subtitle, methods=methods
+        )
+    fig.subplots_adjust(
+        left=0.14, right=0.99, bottom=0.25, top=0.68, wspace=0.12
+    )
+    color_ax = fig.add_axes((0.40, 0.075, 0.39, 0.026))
+    colorbar = fig.colorbar(mesh, cax=color_ax, orientation="horizontal")
+    colorbar.locator = MaxNLocator(nbins=6, symmetric=True)
+    colorbar.update_ticks()
+    colorbar.ax.tick_params(labelsize=6.5, length=2, pad=2, colors="#475569")
+    colorbar.outline.set_visible(False)
+    colorbar.solids.set_rasterized(False)
+    colorbar.ax.axvline(0, color="#64748B", linewidth=0.7)
+    fig.text(
+        0.14,
+        0.108,
+        "CHANGE VS BACKBONE",
+        fontsize=6.2,
+        fontweight="bold",
+        color="#334155",
+        va="bottom",
+    )
+    fig.text(0.14, 0.057, "Relative accuracy (%)", fontsize=7, color="#64748B")
+    fig.text(0.40, 0.124, "Lower", fontsize=6.5, color=cmap(0.0))
+    fig.text(0.79, 0.124, "Higher", fontsize=6.5, color=cmap(1.0), ha="right")
+    if any(not np.isfinite(values).all() for values in matrices):
+        fig.text(
+            0.84,
+            0.084,
+            "N/A",
+            fontsize=6.2,
+            color="#64748B",
+            va="center",
+            ha="center",
+            bbox={"facecolor": "#E8EBEF", "edgecolor": "none", "pad": 3},
+        )
+        fig.text(
+            0.873,
+            0.084,
+            "Not reported",
+            fontsize=6.2,
+            color="#64748B",
+            va="center",
+        )
+    return fig
+
+
+def plot_diffusion_heatmap(rows: list[dict]):
+    backbones = list(dict.fromkeys(r["backbone"] for r in rows))
+    suites = [suite for pair in ADAPTATIONS.values() for suite in pair]
+    lookup = {
+        (r["suite"], r["backbone"], r["method"]): r["accuracy_percent"]
+        for r in rows
+        if r["thinking"] == "off"
+    }
+    values = np.full((len(backbones), len(suites)), np.nan)
+    for i, backbone in enumerate(backbones):
+        for j, suite in enumerate(suites):
+            longshot = lookup.get(
+                (suite, backbone, METHODS[r"\methodLongshot{}"])
+            )
+            diffusion = lookup.get((suite, backbone, "Diffusion Longshot"))
+            if longshot is not None and diffusion is not None:
+                values[i, j] = diffusion - longshot
+    return draw_campaign_heatmap(
+        values,
+        backbones,
+        "DIFFUSION − " + METHOD_LABELS["Longshot"],
+        "Accuracy difference (pp)",
+    )
+
+
+def plot_campaign_heatmap(
+    rows: list[dict],
+    metric: str = "accuracy",
+    thinking_view: str = "off",
+    figure=None,
+):
+    if thinking_view not in {"off", "pooled", "split"}:
+        raise ValueError(f"Unknown thinking view: {thinking_view}")
+    if metric == "both":
+        fig = plt.figure(
+            figsize=(9.0 if thinking_view == "split" else 7.2, 2.6)
+        )
+        panels = fig.subfigures(1, 2, wspace=0.04)
+        aggregates = []
+        for panel, quantity in zip(panels, ("accuracy", "tokens")):
+            _, cells = plot_campaign_heatmap(
+                rows, quantity, thinking_view, figure=panel
+            )
+            aggregates.extend({"metric": quantity, **cell} for cell in cells)
+        return fig, aggregates
+    field = {
+        "accuracy": "relative_change_percent",
+        "tokens": "relative_tokens_change_percent",
+    }[metric]
+    methods = [
+        method
+        for method in METHODS.values()
+        if method not in {"Instruct", METHODS[r"\methodDiffusionLongshot{}"]}
+    ]
+    columns = []
+    column_groups = []
+    for (adaptation, suites), title in zip(
+        ADAPTATIONS.items(), ("Mathematical", "Broad", "Sequential")
+    ):
+        labels = []
+        for suite, benchmark in zip(suites, ("Maths", "KOR-Bench")):
+            modes = (
+                ("off", "on")
+                if adaptation == "mathematical" and thinking_view != "off"
+                else ("off",)
+            )
+            if thinking_view == "split":
+                for mode in modes:
+                    columns.append((suite, (mode,)))
+                    labels.append(f"{benchmark}\n{mode.capitalize()}")
+            else:
+                columns.append((suite, modes))
+                labels.append(benchmark)
+        column_groups.append((title, labels))
+    values = np.full((len(methods), len(columns)), np.nan)
+    stds = np.full(values.shape, np.nan)
+    aggregates = []
+    for i, method in enumerate(methods):
+        for j, (suite, modes) in enumerate(columns):
+            available = [
+                r
+                for r in rows
+                if r["suite"] == suite
+                and r["method"] == method
+                and r["thinking"] in modes
+                and r[field] is not None
+            ]
+            if available:
+                changes = [r[field] for r in available]
+                values[i, j] = np.mean(changes)
+                stds[i, j] = np.std(changes, ddof=0)
+            aggregates.append(
+                {
+                    "suite": suite,
+                    "method": method,
+                    "thinking": "/".join(modes),
+                    "mean_relative_change_percent": (
+                        float(values[i, j]) if available else None
+                    ),
+                    "std_relative_change_percent": (
+                        float(stds[i, j]) if available else None
+                    ),
+                    "backbone_count": len({r["backbone"] for r in available}),
+                    "observation_count": len(available),
+                    "backbones": "; ".join(
+                        dict.fromkeys(r["backbone"] for r in available)
+                    ),
+                    "observations": "; ".join(
+                        f"{r['backbone']} ({r['thinking']})" for r in available
+                    ),
+                }
+            )
+    fig = draw_campaign_heatmap(
+        values,
+        methods,
+        "CHANGE VS BACKBONE",
+        (
+            "Mean token change (%)"
+            if metric == "tokens"
+            else "Mean relative accuracy (%)"
+        ),
+        stds=None if figure is not None else stds,
+        lower_is_better=metric == "tokens",
+        column_groups=column_groups,
+        figure=figure,
+        footer={
+            "off": "Thinking off · Mean ± SD across available backbones (equal weight)",
+            "pooled": "Mathematical: thinking off and on pooled · Other settings: thinking off · Mean ± SD across evaluations",
+            "split": "Mean ± SD across available backbones · Off/on = thinking disabled/enabled",
+        }[thinking_view],
+    )
+    return fig, aggregates
+
+
+def draw_campaign_heatmap(
+    values: np.ndarray,
+    row_labels: list[str],
+    legend_title: str,
+    legend_subtitle: str,
+    stds: np.ndarray | None = None,
+    lower_is_better: bool = False,
+    column_groups: list[tuple[str, list[str]]] | None = None,
+    footer: str = "Thinking off · Mean ± SD across available backbones (equal weight)",
+    figure=None,
+):
+    row_count, column_count = values.shape
+    limit = max(
+        1, float(np.max(np.abs(values), where=np.isfinite(values), initial=0))
+    )
+    cmap = LinearSegmentedColormap.from_list(
+        "terracotta_cream_forest",
+        HEATMAP_COLORS[::-1] if lower_is_better else HEATMAP_COLORS,
+    )
+    cmap.set_bad("#E8EBEF")
+    width = 9.0 if column_count > 6 else 7.2
+    stacked = figure is not None
+    compact = stacked and stds is None
+    font_increase = 1 if stacked and not compact else 0
+    if stacked:
+        fig = figure
+        ax = fig.subplots()
+    else:
+        fig, ax = plt.subplots(figsize=(width, 2.8 if stds is None else 3.1))
+    left_margin = (
+        0.19 if stds is None else (0.108 if stacked else 0.095) * 7.2 / width
+    )
+    if compact:
+        left_margin = 0.14 * 7.2 / width
+    fig.subplots_adjust(
+        left=left_margin,
+        right=0.975 if compact else 0.99,
+        bottom=0.29
+        if compact
+        else (0.30 if lower_is_better else 0.23)
+        if stacked
+        else 0.25,
+        top=0.64
+        if compact
+        else (0.83 if lower_is_better else 0.76)
+        if stacked
+        else 0.77,
+    )
+    if stacked:
+        fig.text(
+            0.02,
+            0.98 if compact else 0.93 if lower_is_better else 0.98,
+            "(b) Token usage" if lower_is_better else "(a) Performance",
+            fontsize=11.5 if compact else 9 + font_increase,
+            fontweight="bold",
+            color="#17212E",
+            va="top",
+        )
+    mesh = ax.pcolormesh(
+        np.arange(column_count + 1) - 0.5,
+        np.arange(row_count + 1) - 0.5,
+        np.ma.masked_invalid(values),
+        cmap=cmap,
+        vmin=-limit,
+        vmax=limit,
+        edgecolors="white",
+        linewidth=1.1,
+        rasterized=False,
+    )
+    ax.set_ylim(row_count - 0.5, -0.5)
+    ax.set_yticks(
+        range(row_count), [METHOD_LABELS.get(m, m) for m in row_labels]
+    )
+    for label in ax.get_yticklabels():
+        if label.get_text() == METHOD_LABELS["Longshot"]:
+            label.set_fontweight("bold")
+    if column_groups is None:
+        column_groups = [
+            (title, ["Maths", "KOR-Bench"])
+            for title in ("Mathematical", "Broad", "Sequential")
+        ]
+    labels = [
+        label for _, group_labels in column_groups for label in group_labels
+    ]
+    if compact:
+        labels = [label.replace("KOR-Bench", "KOR\nBench") for label in labels]
+    ax.set_xticks(range(column_count), labels)
+    ax.xaxis.tick_top()
+    ax.tick_params(
+        length=0,
+        labelsize=7.5 + font_increase,
+        colors="#334155",
+        pad=4 if compact else 7,
+    )
+    if compact:
+        ax.tick_params(axis="x", labelsize=9)
+        ax.tick_params(axis="y", labelsize=9.5)
+    if stacked and lower_is_better and not compact:
+        ax.tick_params(axis="x", labeltop=False)
+    left = -0.5
+    for group, (title, group_labels) in enumerate(column_groups):
+        group_width = len(group_labels)
+        if compact or not (stacked and lower_is_better):
+            ax.text(
+                left + group_width / 2,
+                1.47
+                if compact
+                else 1.32
+                if column_count > 6
+                else 1.20
+                if stacked
+                else 1.25,
+                title,
+                transform=ax.get_xaxis_transform(),
+                ha="center",
+                va="bottom",
+                fontsize=9.5 if compact else 8 + font_increase,
+                fontweight="bold",
+                color="#17212E",
+            )
+            ax.plot(
+                [left + 0.08, left + group_width - 0.08],
+                [1.41, 1.41]
+                if compact
+                else [1.27, 1.27]
+                if column_count > 6
+                else [1.19, 1.19],
+                transform=ax.get_xaxis_transform(),
+                clip_on=False,
+                color="#C9D1DA",
+                linewidth=0.7,
+            )
+        if group:
+            ax.axvline(left, color="white", linewidth=3)
+        left += group_width
+    for (i, j), value in np.ndenumerate(values):
+        label = "N/A" if not np.isfinite(value) else f"{value:+.1f}"
+        if np.isfinite(value) and abs(value) < 0.05:
+            label = "0.0"
+        color = "#7C8796"
+        if np.isfinite(value):
+            rgb = cmap((value + limit) / (2 * limit))[:3]
+            color = (
+                "white"
+                if np.dot(rgb, (0.2126, 0.7152, 0.0722)) < 0.53
+                else "#18202B"
+            )
+        ax.text(
+            j,
+            i if stds is None else i - (0.18 if stacked else 0.13),
+            label,
+            ha="center",
+            va="center",
+            fontsize=9.5 if compact else 8 + 0.5 * font_increase,
+            color=color,
+        )
+        if stds is not None and np.isfinite(stds[i, j]):
+            ax.text(
+                j,
+                i + (0.24 if stacked else 0.23),
+                f"± {stds[i, j]:.1f}",
+                ha="center",
+                va="center",
+                fontsize=6.5 + 0.5 * font_increase,
+                color=color,
+            )
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    legend_offset = 0.06 if stacked and lower_is_better else 0
+    color_ax = fig.add_axes(
+        (left_margin, 0.12, 0.975 - left_margin, 0.035)
+        if compact
+        else (0.47, 0.10 + legend_offset, 0.38, 0.028)
+    )
+    colorbar = fig.colorbar(mesh, cax=color_ax, orientation="horizontal")
+    colorbar.locator = MaxNLocator(nbins=5, symmetric=True)
+    colorbar.update_ticks()
+    colorbar.ax.tick_params(
+        labelsize=9 if compact else 6.5 + font_increase,
+        length=2,
+        pad=2,
+        colors="#475569",
+    )
+    colorbar.outline.set_visible(False)
+    colorbar.solids.set_rasterized(False)
+    colorbar.ax.axvline(0, color="#64748B", linewidth=0.7)
+    if compact:
+        fig.text(
+            (left_margin + 0.975) / 2,
+            0.20,
+            "Token change vs backbone (%)"
+            if lower_is_better
+            else "Accuracy change vs backbone (%)",
+            ha="center",
+            fontsize=9.5,
+            color="#475569",
+        )
+        return fig
+    fig.text(
+        left_margin,
+        0.12 + legend_offset,
+        legend_title,
+        fontsize=7 + font_increase,
+        fontweight="bold",
+        color="#334155",
+    )
+    fig.text(
+        left_margin,
+        0.065 + legend_offset,
+        legend_subtitle,
+        fontsize=7 + font_increase,
+        color="#64748B",
+    )
+    fig.text(
+        0.47,
+        0.15 + legend_offset,
+        "Fewer tokens" if lower_is_better else "Lower",
+        fontsize=6.5 + font_increase,
+        color=cmap(0.0),
+    )
+    fig.text(
+        0.85,
+        0.15 + legend_offset,
+        "More tokens" if lower_is_better else "Higher",
+        fontsize=6.5 + font_increase,
+        color=cmap(1.0),
+        ha="right",
+    )
+    if not np.isfinite(values).all():
+        fig.text(
+            0.90,
+            0.11 + legend_offset,
+            "N/A",
+            fontsize=6.5 + font_increase,
+            color="#64748B",
+            bbox={"facecolor": "#E8EBEF", "edgecolor": "none", "pad": 3},
+        )
+    if stds is not None and (not stacked or lower_is_better):
+        fig.text(
+            left_margin,
+            0.015,
+            footer,
+            fontsize=6.5 + font_increase,
+            color="#64748B",
+        )
+    return fig
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=PAPER / "appendices/C_Extended_Results.tex",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=ROOT / "data/analysis/paper_results_figures",
+        help="Directory for SVG/PDF figures, plotted values, and manifests",
+    )
+    parser.add_argument(
+        "--option",
+        choices=("raw", "relative", "both", "difference"),
+        default="both",
+    )
+    parser.add_argument(
+        "--metric",
+        choices=("accuracy", "tokens", "both"),
+        default="accuracy",
+        help="Quantity for campaign_heatmap (default: accuracy)",
+    )
+    parser.add_argument(
+        "--thinking-view",
+        choices=("off", "pooled", "split"),
+        default="off",
+        help="Campaign heatmaps: off only, pooled maths off/on, or separate maths off/on columns",
+    )
+    parser.add_argument("--columns", type=int, default=3)
+    parser.add_argument("--suite", choices=tuple(TABLES), action="append")
+    parser.add_argument(
+        "--adaptation", choices=tuple(ADAPTATIONS), action="append"
+    )
+    layouts = {
+        "points": plot_points,
+        "compact": plot_compact,
+        "tradeoff": plot_tradeoff,
+        "heatmap": plot_heatmap,
+        "paired_heatmap": plot_paired_heatmap,
+        "retention": plot_retention,
+    }
+    parser.add_argument(
+        "--layout",
+        choices=("bars", *layouts, "diffusion_heatmap", "campaign_heatmap"),
+        default="bars",
+    )
+    args = parser.parse_args()
+    if args.columns < 1:
+        parser.error("--columns must be positive")
+    if args.layout == "diffusion_heatmap":
+        if args.option != "difference" or args.suite or args.adaptation:
+            parser.error(
+                "diffusion_heatmap requires --option difference and all regimes"
+            )
+    elif args.option == "difference":
+        parser.error("--option difference requires --layout diffusion_heatmap")
+    elif args.layout != "bars" and args.option != "relative":
+        parser.error(f"--layout {args.layout} requires --option relative")
+    if args.layout == "campaign_heatmap" and (args.suite or args.adaptation):
+        parser.error("campaign_heatmap requires all suites and regimes")
+    if args.layout in {"paired_heatmap", "retention"} and args.suite:
+        parser.error(f"Use --adaptation instead of --suite with {args.layout}")
+    if args.adaptation and args.layout not in {"paired_heatmap", "retention"}:
+        parser.error(
+            "--adaptation requires --layout paired_heatmap or retention"
+        )
+    if args.metric != "accuracy" and args.layout != "campaign_heatmap":
+        parser.error("--metric tokens/both requires --layout campaign_heatmap")
+    if args.thinking_view != "off" and args.layout != "campaign_heatmap":
+        parser.error("--thinking-view requires --layout campaign_heatmap")
+    thinking_suffix = (
+        f"_thinking_{args.thinking_view}" if args.thinking_view != "off" else ""
+    )
+    artifact_layout = (
+        "campaign_overview_heatmap"
+        if args.metric == "both"
+        else (
+            "campaign_tokens_heatmap"
+            if args.metric == "tokens"
+            else args.layout
+        )
+    ) + thinking_suffix
+    rows = read_tables(args.source)
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Sans",
+            "svg.fonttype": "none",
+        }
+    )
+    csv_name = (
+        f"plotted_values_{artifact_layout}.csv"
+        if args.layout
+        in {"paired_heatmap", "diffusion_heatmap", "campaign_heatmap"}
+        else "plotted_values.csv"
+    )
+    with (args.output_dir / csv_name).open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    options = ("raw", "relative") if args.option == "both" else (args.option,)
+    suites = args.suite or list(TABLES)
+    adaptations = args.adaptation or list(ADAPTATIONS)
+    if args.layout == "paired_heatmap":
+        suites = [
+            s for adaptation in adaptations for s in ADAPTATIONS[adaptation]
+        ]
+    for option in options:
+        for suite in (
+            ["overview"]
+            if args.layout in {"diffusion_heatmap", "campaign_heatmap"}
+            else adaptations
+            if args.layout in {"paired_heatmap", "retention"}
+            else suites
+        ):
+            if args.layout == "diffusion_heatmap":
+                fig = plot_diffusion_heatmap(rows)
+                path = args.output_dir / "diffusion_difference_heatmap.svg"
+            elif args.layout == "campaign_heatmap":
+                fig, aggregates = plot_campaign_heatmap(
+                    rows, metric=args.metric, thinking_view=args.thinking_view
+                )
+                name = (
+                    "campaign_relative_overview_heatmap"
+                    if args.metric == "both"
+                    else (
+                        "campaign_relative_tokens_heatmap"
+                        if args.metric == "tokens"
+                        else "campaign_relative_heatmap"
+                    )
+                )
+                path = args.output_dir / f"{name}{thinking_suffix}.svg"
+                with (args.output_dir / f"{artifact_layout}_averages.csv").open(
+                    "w", newline=""
+                ) as f:
+                    writer = csv.DictWriter(f, fieldnames=list(aggregates[0]))
+                    writer.writeheader()
+                    writer.writerows(aggregates)
+            elif args.layout in layouts:
+                fig = layouts[args.layout](rows, suite)
+                path = args.output_dir / f"{suite}_{option}_{args.layout}.svg"
+            else:
+                fig = plot_suite(rows, suite, option, args.columns)
+                path = args.output_dir / f"{suite}_{option}.svg"
+            for extension in ("svg", "pdf"):
+                output = path.with_suffix(f".{extension}")
+                fig.savefig(output, facecolor="white")
+                print(output)
+            plt.close(fig)
+    manifest = {
+        "source": str(args.source.resolve()),
+        "source_sha256": hashlib.sha256(args.source.read_bytes()).hexdigest(),
+        "options": list(options),
+        "suites": suites,
+        "columns": args.columns,
+        "layout": args.layout,
+        "palette": (
+            "terracotta_cream_forest"
+            if args.layout
+            in {
+                "heatmap",
+                "paired_heatmap",
+                "diffusion_heatmap",
+                "campaign_heatmap",
+            }
+            else None
+        ),
+        "adaptations": (
+            adaptations
+            if args.layout
+            in {"paired_heatmap", "diffusion_heatmap", "campaign_heatmap"}
+            else []
+        ),
+        "omitted_backbones": (
+            {
+                s: ["Qwen3.5-2B"]
+                for s in suites
+                if s != "korbench_after_reasoning"
+            }
+            if args.layout == "compact"
+            else {}
+        ),
+        "formats": ["svg", "pdf"],
+        "omitted_methods": (
+            ["Diffusion Longshot"]
+            if args.layout in {"paired_heatmap", "campaign_heatmap"}
+            else []
+        ),
+        "relative_statistic": (
+            "diffusion_accuracy_percent - longshot_accuracy_percent"
+            if args.layout == "diffusion_heatmap"
+            else (
+                "mean_backbones(100 * (value / baseline_value - 1))"
+                if args.layout == "campaign_heatmap"
+                else "100 * (value / baseline_value - 1)"
+            )
+        ),
+        "comparison_baseline": (
+            METHODS[r"\methodLongshot{}"]
+            if args.layout == "diffusion_heatmap"
+            else "Instruct"
+        ),
+        "thinking_modes": (
+            ["off"]
+            if args.layout in {"diffusion_heatmap", "campaign_heatmap"}
+            else ["off", "on"]
+        ),
+        "relative_quantities": (
+            ["accuracy"]
+            if args.layout
+            in {"paired_heatmap", "diffusion_heatmap", "campaign_heatmap"}
+            else ["accuracy", "mean_response_tokens"]
+        ),
+        "baseline_matching": ["suite", "backbone", "thinking"],
+        "source_precision": "Rounded values as reported in the paper tables",
+        "matplotlib_version": matplotlib.__version__,
+    }
+    if args.layout == "campaign_heatmap":
+        manifest["relative_quantities"] = (
+            ["accuracy", "mean_response_tokens"]
+            if args.metric == "both"
+            else [
+                (
+                    "mean_response_tokens"
+                    if args.metric == "tokens"
+                    else "accuracy"
+                )
+            ]
+        )
+        manifest["thinking_view"] = args.thinking_view
+        manifest["thinking_modes_by_adaptation"] = {
+            adaptation: (
+                ["off", "on"]
+                if adaptation == "mathematical" and args.thinking_view != "off"
+                else ["off"]
+            )
+            for adaptation in ADAPTATIONS
+        }
+        manifest["thinking_modes"] = (
+            ["off"] if args.thinking_view == "off" else ["off", "on"]
+        )
+        manifest["relative_statistic"] = (
+            "mean_observations(100 * (value / matched_baseline_value - 1))"
+        )
+        manifest["metric"] = args.metric
+        manifest["lower_is_better"] = (
+            {"accuracy": False, "mean_response_tokens": True}
+            if args.metric == "both"
+            else args.metric == "tokens"
+        )
+        manifest["aggregation"] = {
+            "weighting": (
+                "Equal weight per available backbone/mode observation, separately per cell"
+                if args.thinking_view == "pooled"
+                else "Equal weight per available backbone, separately per cell"
+            ),
+            "missing_values": "Omitted; N/A if no backbones have results",
+            "standard_deviation": "Population SD across the observations in each cell (ddof=0)",
+            "cell_annotations": (
+                "Mean only"
+                if args.metric == "both"
+                else "Mean with plus/minus standard deviation"
+            ),
+            "counts_and_backbones": f"{artifact_layout}_averages.csv",
+        }
+    manifest_name = (
+        f"manifest_{artifact_layout}.json"
+        if args.layout != "bars"
+        else "manifest.json"
+    )
+    (args.output_dir / manifest_name).write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+if __name__ == "__main__":
+    main()

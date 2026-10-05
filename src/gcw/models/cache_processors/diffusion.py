@@ -8,6 +8,7 @@ import torch.nn as nn
 
 from gcw.config import DiffusionProcessorConfig
 from gcw.models.cache_processors.base import cache_processor_recomputation_id
+from gcw.models.cache_processors.update_metrics import UPDATE_OBSERVER
 
 DiffusionField = Callable[[torch.Tensor, float], torch.Tensor]
 
@@ -211,7 +212,12 @@ class TaskDirectedDiffusion(nn.Module):
                 start_level * (1.0 - step / solver_steps)
                 for step in range(solver_steps)
             ]
-        for level in levels:
+        observer = (
+            UPDATE_OBSERVER.get()
+            if not self.training and not torch.compiler.is_compiling()
+            else None
+        )
+        for step, level in enumerate(levels):
             log_sigma = math.log(self.scheduled_sigma(level))
             field_input = state + self.config.conditioning_scale * bottleneck
             if self.config.time_conditioning:
@@ -225,7 +231,12 @@ class TaskDirectedDiffusion(nn.Module):
                     f"diffusion field changed state shape from {tuple(state.shape)} "
                     f"to {tuple(velocity.shape)}"
                 )
+            before = state
             state = state + step_size * velocity
+            if observer is not None:
+                observer.step(
+                    before, state, initial, final=step + 1 == len(levels)
+                )
         return state - initial
 
     def deterministic_recurrence(
@@ -237,6 +248,11 @@ class TaskDirectedDiffusion(nn.Module):
         """Run the legacy task-directed recurrence from an already-noised state."""
         initial = state
         step_size = self.scale(state.dtype) / self.config.num_steps
+        observer = (
+            UPDATE_OBSERVER.get()
+            if not self.training and not torch.compiler.is_compiling()
+            else None
+        )
         for step in range(self.config.num_steps):
             time = step / self.config.num_steps
             field_input = state + self.config.conditioning_scale * bottleneck
@@ -250,7 +266,15 @@ class TaskDirectedDiffusion(nn.Module):
                     f"diffusion field changed state shape from {tuple(state.shape)} "
                     f"to {tuple(velocity.shape)}"
                 )
+            before = state
             state = state + step_size * velocity
+            if observer is not None:
+                observer.step(
+                    before,
+                    state,
+                    initial,
+                    final=step + 1 == self.config.num_steps,
+                )
         return state - initial
 
     def scale(self, dtype: torch.dtype) -> torch.Tensor:

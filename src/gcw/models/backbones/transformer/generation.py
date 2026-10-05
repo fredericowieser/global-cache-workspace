@@ -12,6 +12,10 @@ import torch
 
 from gcw.config import ModelConfig
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
+from gcw.models.cache_processors.update_metrics import (
+    UPDATE_BATCH,
+    generation_update_metrics,
+)
 
 
 def _matches_stop_sequence(
@@ -48,6 +52,7 @@ def _should_process_decoding_cache(
 
 
 @torch.no_grad()
+@generation_update_metrics()
 def generate_tf(
     model: Any,
     input_ids: torch.Tensor,
@@ -106,6 +111,13 @@ def generate_tf(
         )
         if bool(finished.all()):
             break
+        if (batch_metrics := UPDATE_BATCH.get()) is not None:
+            batch_metrics.phase = (
+                "prefill" if generated_idx == 0 else "decoding"
+            )
+            batch_metrics.active = ~finished & (
+                generated_idx + 1 < max_new_tokens
+            )
         pos = out.shape[1] - 1
         if processor is not None:
             should_process = _should_process_decoding_cache(
@@ -127,6 +139,7 @@ def generate_tf(
 
 
 @torch.no_grad()
+@generation_update_metrics()
 def generate_fast_tf(
     model: Any,
     input_ids: torch.Tensor,
@@ -196,6 +209,13 @@ def generate_fast_tf(
         )
         if bool(finished.all()):
             break
+        if (batch_metrics := UPDATE_BATCH.get()) is not None:
+            batch_metrics.phase = (
+                "prefill" if generated_idx == 0 else "decoding"
+            )
+            batch_metrics.active = ~finished & (
+                generated_idx + 1 < max_new_tokens
+            )
         pos = out.shape[1] - 1
         if processor is not None:
             should_process = _should_process_decoding_cache(

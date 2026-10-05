@@ -403,6 +403,9 @@ class EvalConfig:
     limit: int | None = None
     apply_chat_template: bool = False
     enable_thinking: bool = False
+    cache_update_metrics_path: str | None = None
+    log_samples: bool = False
+    partial_samples_dir: str | None = None
 
     def __post_init__(self) -> None:
         if self.batch_size != "auto" and (
@@ -417,8 +420,22 @@ class EvalConfig:
             raise ValueError("limit must be a positive integer")
         if type(self.apply_chat_template) is not bool:
             raise ValueError("apply_chat_template must be boolean")
+        if type(self.log_samples) is not bool:
+            raise ValueError("log_samples must be boolean")
         if type(self.enable_thinking) is not bool:
             raise ValueError("enable_thinking must be boolean")
+        if self.cache_update_metrics_path is not None and (
+            not isinstance(self.cache_update_metrics_path, str)
+            or not self.cache_update_metrics_path.strip()
+        ):
+            raise ValueError(
+                "cache_update_metrics_path must be a nonempty string"
+            )
+        if self.partial_samples_dir is not None and (
+            not isinstance(self.partial_samples_dir, str)
+            or not self.partial_samples_dir.strip()
+        ):
+            raise ValueError("partial_samples_dir must be a nonempty string")
         if self.enable_thinking and not self.apply_chat_template:
             raise ValueError(
                 "enable_thinking requires apply_chat_template=True"

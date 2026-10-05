@@ -190,6 +190,61 @@ def run_task_groups(
     )
     partial = _load_partial_results(runs)
     merged = partial or _empty_eval_results()
+    if partial and ("samples" in partial) != config.log_samples:
+        raise ValueError(
+            "Sample logging changed; use a fresh evaluation destination"
+        )
+    if config.log_samples:
+        merged.setdefault("samples", {})
+        merged.setdefault("configs", {})
+    sample_protocol = {
+        "checkpoint": str(checkpoint) if checkpoint is not None else None,
+        "hf_model": str(hf_model) if hf_model is not None else None,
+        "processor_enabled": processor_enabled,
+        "dtype": str(dtype),
+        "limit": config.limit,
+        "batch_size": config.batch_size,
+        "max_batch_size": config.max_batch_size,
+        "apply_chat_template": config.apply_chat_template,
+        "enable_thinking": config.enable_thinking,
+        "generation_process_every": generation_process_every,
+        "diffusion_eval_solver_steps": diffusion_eval_solver_steps,
+    }
+    if partial and config.log_samples:
+        for task_names, _ in runs:
+            previous = partial["gcw_runtime"].get(",".join(task_names))
+            if previous and previous.get("sample_protocol") != sample_protocol:
+                raise ValueError(
+                    "Sample evaluation protocol changed; use a fresh destination"
+                )
+    if partial:
+        for task_names, _ in runs:
+            if not any(
+                name == "korbench" or name.startswith("korbench_")
+                for name in task_names
+            ):
+                continue
+            previous = partial["gcw_runtime"].get(",".join(task_names))
+            if previous:
+                from gcw.evaluation.korbench import evaluation_protocol
+
+                benchmark = dict(previous.get("benchmark", {}))
+                benchmark.pop("task_configs", None)
+                if benchmark != evaluation_protocol(config):
+                    raise ValueError(
+                        "KOR-Bench protocol changed; use a fresh destination"
+                    )
+    if config.cache_update_metrics_path:
+        lm.update_metrics.validate_resume(merged)
+    lm.sample_protocol = {**sample_protocol, "runs": runs}
+    if config.log_samples and any(
+        name == "korbench" or name.startswith("korbench_")
+        for tasks, _ in runs
+        for name in tasks
+    ):
+        from gcw.evaluation.korbench import evaluation_protocol
+
+        lm.sample_protocol["benchmark"] = evaluation_protocol(config)
     evaluation_timer = EvaluationTimer.from_results(merged, evaluation_started)
     _write_progress(_new_progress(runs, resume=partial is not None), merged)
     for run_idx, (tasks, fewshot) in enumerate(runs):
@@ -222,7 +277,7 @@ def run_task_groups(
                 num_fewshot=fewshot,
                 limit=config.limit,
                 bootstrap_iters=0,
-                log_samples=False,
+                log_samples=config.log_samples,
                 verbosity="ERROR",
                 task_manager=task_manager,
                 confirm_run_unsafe_code=True,
@@ -242,6 +297,8 @@ def run_task_groups(
             )
             raise
         lm_runtime = lm.pop_runtime_metrics()
+        if config.cache_update_metrics_path:
+            lm_runtime["cache_update_metrics"] = lm.update_metrics.finish(tasks)
         if out is None:
             continue
         elapsed = time.monotonic() - started
@@ -265,6 +322,20 @@ def run_task_groups(
         field_evaluations = pop_diffusion_field_evaluation_count(model)
         if field_evaluations:
             runtime["diffusion_field_evaluations"] = field_evaluations
+        if config.log_samples:
+            runtime["sample_protocol"] = sample_protocol
+            journal = getattr(lm, "partial_samples", None)
+            if journal is not None:
+                runtime["partial_samples_directory"] = str(journal.path.parent)
+        if any(name.startswith("korbench_") for name in out.get("results", {})):
+            from gcw.evaluation.korbench import (
+                annotate_results,
+                evaluation_protocol,
+            )
+
+            annotate_results(out)
+            runtime["benchmark"] = evaluation_protocol(config)
+            runtime["benchmark"]["task_configs"] = out.get("configs", {})
         out.setdefault("gcw_runtime", {})[",".join(tasks)] = runtime
         for key in merged:
             if key in out and isinstance(out[key], dict):
@@ -280,6 +351,7 @@ def run_task_groups(
         )
     protocol: dict[str, object] = {
         "name": "lm_eval_loglikelihood_v1",
+        "log_samples": config.log_samples,
         "apply_chat_template": config.apply_chat_template,
         "enable_thinking": config.enable_thinking,
         "generation_process_every": (

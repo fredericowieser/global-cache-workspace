@@ -61,6 +61,9 @@ The smoke program constructs TF and BGT, computes finite losses, admits Longshot
 
 ## Train
 
+To prepare procedural reasoning SFT data with worked solutions and labelled
+answers, see the [Reasoning Gym data pipeline](docs/integrations/reasoning-gym.md).
+
 Run a CPU smoke config:
 
 ```bash
@@ -74,6 +77,12 @@ uv run --extra gpu gcw train --config /path/to/experiment.yaml
 ```
 
 New local run records live under `data/training-runs/`. They contain resolved config, metrics, logs, environment, provenance, and W&B identity. Mutable checkpoints remain separate.
+
+The final checkpoint is stored once in `checkpoint-<final_step>`, with
+`checkpoint` as a relative symlink for compatibility. This also applies when
+the final step falls between periodic saves and `save_final` is enabled.
+Intermediate numbered checkpoints remain independent; a later save replaces
+the symlink without modifying its retained target.
 
 For Slurm worker arrays, set `GPUS` to the number of GPUs per worker when
 needed. `scripts/cluster/submit_array.sh` otherwise leaves partition, time,
@@ -94,6 +103,7 @@ uv run --extra cpu --extra eval gcw eval all \
 ```
 
 Evaluation creates an independent record under `data/eval-runs/`. It does not mutate training state.
+For Paper7 and the standard lm-eval suites, `--out results/run.json` also enables atomic saving of completed benchmark results under `results/run.partial/<settings-hash>/`. Retrying the same command with unchanged checkpoints resumes those completed benchmarks; an interrupted benchmark starts again from its beginning. Different CLI settings or `GCW_EVAL_SKIP_TASKS` use separate partial directories. `GCW_EVAL_PARTIAL_DIR` overrides the automatic location for existing workflows. Partial results stay beside the output, including when the output is on shared storage. Already-running evaluations pick up this behavior only when restarted.
 Standard suites use plain prompts. Use `--apply-chat-template` to enable chat
 formatting. When chat formatting is active and `--enable-thinking` is omitted,
 native checkpoints inherit `data.sft_enable_thinking` from their training
@@ -200,3 +210,15 @@ uv run --extra cpu --group docs sphinx-build -W --keep-going -b html docs docs/_
 - `tests/`: unit, integration, provenance, and compatibility contracts.
 
 Local metric files are canonical. W&B mirrors them. Historical evidence keeps its original paths and identity schemas.
+Reproducible analysis findings under `data/analysis/` may be tracked, including
+the published truncation summaries, reports, and math row-length evidence.
+
+### Add workers to an existing Slurm evaluation queue
+
+Reuse the original evaluation environment and run
+`scripts/cluster/submit_array.sh --backend slurm --workers 4 --attach-eval-queue /absolute/state/directory`
+with `EVAL_ONLY=1`. This submits four additional workers sharing the existing
+`configs.txt`, claim records, and queue lock. It preserves running work and queue
+order; it does not copy or reset the queue. Use the same suite, code snapshot,
+local dependency paths, batching, and generation settings as the original workers.
+This option supports three-column evaluation queues only.

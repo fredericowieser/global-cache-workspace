@@ -13,6 +13,83 @@ import gcw.evaluation.lm_eval_adapter as lm_eval_adapter
 from gcw.models.cache_processors.longshot_processor import CacheProcessor
 
 
+def test_cli_resumes_completed_paper7_benchmarks(monkeypatch, tmp_path):
+    from gcw import cli
+    from gcw.evaluation import progress
+
+    monkeypatch.delenv("GCW_EVAL_PARTIAL_DIR", raising=False)
+    monkeypatch.delenv("GCW_EVAL_PROGRESS_PATH", raising=False)
+    monkeypatch.delenv("GCW_EVAL_SKIP_TASKS", raising=False)
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setattr(paper7, "HAS_LM_EVAL", True)
+    monkeypatch.setattr(
+        paper7, "PAPER7_RUNS",
+        [(["logiqa"], 0), (["agieval_gaokao_mathqa"], 0)],
+    )
+    monkeypatch.setattr(paper7, "_distributed_eval_state", lambda: (None, 0, 1))
+    monkeypatch.setattr(paper7, "_eval_device", lambda rank: torch.device("cpu"))
+    monkeypatch.setattr(
+        paper7, "_load_eval_target",
+        lambda **kwargs: (torch.nn.Module(), types.SimpleNamespace(chat_template="template")),
+    )
+
+    class LM:
+        def __init__(self, model, tokenizer, config):
+            pass
+
+        def reset_runtime_metrics(self):
+            pass
+
+        def pop_runtime_metrics(self):
+            return {
+                "requested_batch_size": 8,
+                "configured_auto_max_batch_size": None,
+                "successful_batch_sizes": {"loglikelihood": {"1": 1}},
+            }
+
+    monkeypatch.setattr(paper7, "GCWEvalLM", LM)
+    calls = []
+
+    def evaluate(**kwargs):
+        task = kwargs["tasks"][0]
+        calls.append(task)
+        if len(calls) == 2:
+            raise RuntimeError("interrupted during second benchmark")
+        return {"results": {task: {"acc,none": len(calls) / 10}}}
+
+    monkeypatch.setitem(
+        sys.modules, "lm_eval", types.SimpleNamespace(simple_evaluate=evaluate)
+    )
+    task_module = types.ModuleType("lm_eval.tasks")
+    task_module.TaskManager = lambda **kwargs: None
+    task_module.get_task_dict = lambda tasks, manager: {}
+    monkeypatch.setitem(sys.modules, "lm_eval.tasks", task_module)
+    results = []
+    monkeypatch.setattr(
+        cli, "dispatch",
+        lambda args: results.append(paper7.run_paper7(args.checkpoint)),
+    )
+    command = [
+        "eval", "paper7", "--checkpoint", "checkpoint-2000",
+        "--out", str(tmp_path / "result.json"),
+    ]
+    with pytest.raises(RuntimeError, match="second benchmark"):
+        cli.main(command)
+    partial_path, = (tmp_path / "result.partial").glob("*/partial.json")
+    partial = progress._load_authenticated_json(
+        partial_path, kind="flow_math_eval_partial_results"
+    )
+    assert partial["results"] == {"logiqa": {"acc,none": 0.1}}
+    cli.main(command)
+    cli.main(command)
+    assert calls == ["logiqa", "agieval_gaokao_mathqa", "agieval_gaokao_mathqa"]
+    assert results[0]["results"] == {
+        "logiqa": {"acc,none": 0.1},
+        "agieval_gaokao_mathqa": {"acc,none": 0.3},
+    }
+    assert results[0] == results[1]
+
+
 def test_paper7_legacy_task_order_and_skip(monkeypatch):
     assert legacy.PAPER7_TASKS == [
         "gsm8k_openmath",

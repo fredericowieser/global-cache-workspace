@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -67,6 +68,49 @@ def _resolve_enable_thinking(
     return False
 
 
+def _resolve_cache_update_metrics(args: argparse.Namespace) -> str | None:
+    metrics_path = args.cache_update_metrics
+    # TODO: Remove this automatic default after the diffusion re-run evaluations.
+    if metrics_path is None:
+        checkpoint = getattr(args, "checkpoint", None)
+        destination = getattr(args, "out", None) or getattr(args, "output_dir", None)
+        if checkpoint and destination and getattr(args, "processor", "on") != "off":
+            config_path = Path(checkpoint) / "config.json"
+            if config_path.is_file():
+                payload = json.loads(config_path.read_text(encoding="utf-8"))
+                model = payload.get("model", {})
+                if (
+                    model.get("variant") == "longshot"
+                    and model.get("diffusion_processor") is not None
+                    and model.get("cache_processor") is not None
+                ):
+                    metrics_path = "auto"
+    if metrics_path == "auto":
+        destination = getattr(args, "out", None)
+        if destination is None and getattr(args, "output_dir", None):
+            destination = Path(args.output_dir) / "result.json"
+        if destination is None:
+            raise ValueError(
+                "--cache-update-metrics requires PATH or an evaluation output destination"
+            )
+        destination = Path(destination)
+        metrics_path = str(
+            destination.with_name(
+                destination.stem + ".cache-update-metrics.jsonl"
+            )
+        )
+    if metrics_path is not None:
+        destination = getattr(args, "out", None)
+        if (
+            destination is not None
+            and Path(metrics_path).resolve() == Path(destination).resolve()
+        ):
+            raise ValueError(
+                "cache update metrics must have a separate output path"
+            )
+    return metrics_path
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the GCW command-line parser without importing execution systems."""
     parser = argparse.ArgumentParser(prog="gcw")
@@ -120,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--head-selection-method", choices=["random"], default=None
         )
         legacy.add_argument("--out", default=None)
-    for suite in ("all", "math", "general", "tasks"):
+    for suite in ("all", "math", "general", "korbench", "tasks"):
         command = eval_sub.add_parser(suite)
         target = command.add_mutually_exclusive_group(required=True)
         target.add_argument("--checkpoint")
@@ -156,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if suite == "tasks":
             command.add_argument("--tasks", nargs="+", required=True)
+        command.add_argument("--log-samples", action="store_true")
         command.add_argument("--out", default=None)
     chat = eval_sub.add_parser("chat")
     target = chat.add_mutually_exclusive_group(required=True)
@@ -254,6 +299,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar=("JSONL", "SHA256", "COUNT"),
     )
+    for command in eval_sub.choices.values():
+        command.add_argument(
+            "--cache-update-metrics", nargs="?", const="auto", metavar="PATH"
+        )
     convert = sub.add_parser("convert")
     convert_sub = convert.add_subparsers(dest="source", required=True)
     hf = convert_sub.add_parser("hf")
@@ -316,12 +365,16 @@ def dispatch(args: argparse.Namespace) -> None:
     elif args.cmd == "train":
         train_from_config(args.config)
     elif args.cmd == "eval":
+        metrics_path = _resolve_cache_update_metrics(args)
         if args.suite == "fineweb":
             results = run_fineweb(
                 args.checkpoint,
                 data_dir=args.data_dir,
                 eval_tokens=args.eval_tokens,
-                config=EvalConfig(batch_size=args.batch_size),
+                config=EvalConfig(
+                    cache_update_metrics_path=metrics_path,
+                    batch_size=args.batch_size,
+                ),
                 dtype=args.dtype,
             )
         elif args.suite == "chat":
@@ -333,6 +386,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 apply_chat_template=True,
             )
             eval_config = EvalConfig(
+                cache_update_metrics_path=metrics_path,
                 batch_size=args.batch_size,
                 apply_chat_template=True,
                 enable_thinking=args.enable_thinking,
@@ -360,6 +414,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 apply_chat_template=args.apply_chat_template,
             )
             eval_config = EvalConfig(
+                cache_update_metrics_path=metrics_path,
                 batch_size=args.batch_size,
                 max_batch_size=args.max_batch_size,
                 limit=args.limit,
@@ -402,6 +457,7 @@ def dispatch(args: argparse.Namespace) -> None:
                     processor_enabled=args.processor == "on",
                     scoring_protocol=args.scoring_protocol,
                     eval_config=EvalConfig(
+                        cache_update_metrics_path=metrics_path,
                         batch_size=args.batch_size,
                         limit=args.limit,
                         apply_chat_template=True,
@@ -438,6 +494,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 or args.enable_thinking is not None
             ):
                 eval_config = EvalConfig(
+                    cache_update_metrics_path=metrics_path,
                     batch_size=1,
                     apply_chat_template=bool(args.apply_chat_template),
                     enable_thinking=bool(args.enable_thinking),
@@ -457,6 +514,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 expected_tokenizer_sha256=args.expected_tokenizer_sha256,
                 expected_loaded_state_sha256=args.expected_loaded_state_sha256,
                 solver_steps=args.solver_steps,
+                cache_update_metrics_path=metrics_path,
                 disjoint_from=[
                     AnswerNLLData(Path(path), digest, int(count))
                     for path, digest, count in args.disjoint_from
@@ -478,6 +536,13 @@ def dispatch(args: argparse.Namespace) -> None:
             common = {
                 "checkpoint": args.checkpoint,
                 "config": EvalConfig(
+                    log_samples=args.log_samples,
+                    partial_samples_dir=(
+                        str(Path(args.out).with_suffix(".partial-samples"))
+                        if args.log_samples and args.out
+                        else None
+                    ),
+                    cache_update_metrics_path=metrics_path,
                     batch_size=args.batch_size,
                     max_batch_size=args.max_batch_size,
                     limit=args.limit,
@@ -491,8 +556,11 @@ def dispatch(args: argparse.Namespace) -> None:
                 "diffusion_eval_solver_steps": args.diffusion_eval_solver_steps,
             }
             results = (
-                run_tasks(args.tasks, **common)
-                if args.suite == "tasks"
+                run_tasks(
+                    ["korbench"] if args.suite == "korbench" else args.tasks,
+                    **common,
+                )
+                if args.suite in {"korbench", "tasks"}
                 else runners[args.suite](**common)
             )
         if not is_main_process():
@@ -516,6 +584,7 @@ def dispatch(args: argparse.Namespace) -> None:
         )
         record.append_log(f"completed evaluation suite {args.suite}")
         summary = json.loads(text)
+        summary.pop("samples", None)
         if args.suite in {"chat", "gsm8k-reproduction", "answer-nll"}:
             summary = {
                 key: value for key, value in summary.items() if key != "rows"
@@ -547,7 +616,43 @@ def dispatch(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     """Parse and execute a GCW command."""
-    dispatch(build_parser().parse_args(argv))
+    args = build_parser().parse_args(argv)
+    partial_dir = os.environ.get("GCW_EVAL_PARTIAL_DIR")
+    if (
+        args.cmd != "eval"
+        or args.suite not in {
+            "all",
+            "math",
+            "general",
+            "korbench",
+            "tasks",
+            "paper7",
+            "paper7-legacy",
+        }
+        or not args.out
+        or partial_dir
+    ):
+        dispatch(args)
+        return
+
+    from gcw.evaluation.progress import _payload_sha256
+
+    identity = {
+        "arguments": vars(args),
+        "skip_tasks": os.environ.get("GCW_EVAL_SKIP_TASKS", ""),
+    }
+    destination = (
+        Path(args.out).with_suffix(".partial") / _payload_sha256(identity)
+    )
+    os.environ["GCW_EVAL_PARTIAL_DIR"] = str(destination)
+    print(f"Completed-task evaluation results: {destination}", flush=True)
+    try:
+        dispatch(args)
+    finally:
+        if partial_dir is None:
+            os.environ.pop("GCW_EVAL_PARTIAL_DIR", None)
+        else:
+            os.environ["GCW_EVAL_PARTIAL_DIR"] = partial_dir
 
 
 if __name__ == "__main__":

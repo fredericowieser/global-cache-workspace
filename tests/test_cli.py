@@ -1,8 +1,60 @@
 import json
+import os
+from pathlib import Path
 
 import pytest
 
 from gcw import cli
+
+
+@pytest.mark.parametrize(
+    "suite", ["all", "math", "general", "korbench", "tasks", "paper7", "paper7-legacy"]
+)
+def test_eval_partial_directory_is_scoped_to_command(monkeypatch, tmp_path, suite):
+    monkeypatch.delenv("GCW_EVAL_PARTIAL_DIR", raising=False)
+    monkeypatch.delenv("GCW_EVAL_SKIP_TASKS", raising=False)
+    paths = []
+
+    def dispatch(args):
+        paths.append(Path(os.environ["GCW_EVAL_PARTIAL_DIR"]))
+        raise RuntimeError("interrupted")
+
+    monkeypatch.setattr(cli, "dispatch", dispatch)
+    command = [
+        "eval", suite, "--checkpoint", "checkpoint-2000",
+        "--out", str(tmp_path / "result.json"),
+    ]
+    if suite == "tasks":
+        command += ["--tasks", "logiqa"]
+    for extra in ([], [], ["--enable-thinking"], ["--limit", "1"]):
+        with pytest.raises(RuntimeError, match="interrupted"):
+            cli.main(command + extra)
+        assert "GCW_EVAL_PARTIAL_DIR" not in os.environ
+    monkeypatch.setenv("GCW_EVAL_SKIP_TASKS", "theoremqa")
+    with pytest.raises(RuntimeError, match="interrupted"):
+        cli.main(command)
+    assert paths[0] == paths[1]
+    assert len(set(paths)) == 4
+    assert all(path.parent == tmp_path / "result.partial" for path in paths)
+
+
+@pytest.mark.parametrize("partial_dir", [None, "custom-partials"])
+def test_eval_preserves_explicit_partial_directory(monkeypatch, partial_dir):
+    if partial_dir is None:
+        monkeypatch.delenv("GCW_EVAL_PARTIAL_DIR", raising=False)
+    else:
+        monkeypatch.setenv("GCW_EVAL_PARTIAL_DIR", partial_dir)
+    seen = []
+    monkeypatch.setattr(
+        cli, "dispatch",
+        lambda args: seen.append(os.environ.get("GCW_EVAL_PARTIAL_DIR")),
+    )
+    command = ["eval", "paper7", "--checkpoint", "checkpoint-2000"]
+    if partial_dir:
+        command += ["--out", "result.json"]
+    cli.main(command)
+    assert seen == [partial_dir]
+    assert os.environ.get("GCW_EVAL_PARTIAL_DIR") == partial_dir
 
 
 def test_chat_eval_parser_leaves_thinking_unspecified():
@@ -38,7 +90,7 @@ def test_chat_eval_parser_can_enable_thinking():
     assert args.enable_thinking is True
 
 
-@pytest.mark.parametrize("suite", ["all", "math", "general", "tasks"])
+@pytest.mark.parametrize("suite", ["all", "math", "general", "korbench", "tasks"])
 def test_standard_eval_parser_exposes_boolean_thinking_config(suite):
     base = ["eval", suite, "--hf-model", "model"]
     if suite == "tasks":
@@ -442,3 +494,69 @@ def test_convert_hf_accepts_gemma4_family(monkeypatch):
             {"family": "gemma4", "variant": "tf", "dtype": "bfloat16"},
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "model,enabled",
+    [
+        ({"variant": "longshot", "diffusion_processor": {}, "cache_processor": {}}, True),
+        ({"variant": "longshot", "diffusion_processor": None, "cache_processor": {}}, False),
+        ({"variant": "bgt", "diffusion_processor": {}, "cache_processor": {}}, False),
+        ({"model_type": "qwen3_5"}, False),
+    ],
+)
+def test_diffusion_metrics_temporary_default(tmp_path, model, enabled):
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "config.json").write_text(json.dumps({"model": model}))
+    out = tmp_path / "eval.json"
+    parser = cli.build_parser()
+    command = ["eval", "paper7", "--checkpoint", str(checkpoint), "--out", str(out)]
+    args = parser.parse_args(command)
+    expected = str(tmp_path / "eval.cache-update-metrics.jsonl") if enabled else None
+    assert cli._resolve_cache_update_metrics(args) == expected
+    args = parser.parse_args([*command, "--cache-update-metrics", "custom.jsonl"])
+    assert cli._resolve_cache_update_metrics(args) == "custom.jsonl"
+
+
+def test_diffusion_metrics_default_requires_processor_and_destination(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"model": {
+        "variant": "longshot", "diffusion_processor": {}, "cache_processor": {},
+    }}))
+    args = cli.build_parser().parse_args([
+        "eval", "paper7", "--checkpoint", str(tmp_path), "--out", str(tmp_path / "eval.json"),
+    ])
+    args.processor = "off"
+    assert cli._resolve_cache_update_metrics(args) is None
+    args.processor = "on"
+    assert cli._resolve_cache_update_metrics(args).endswith(".cache-update-metrics.jsonl")
+    args.out = None
+    assert cli._resolve_cache_update_metrics(args) is None
+
+
+@pytest.mark.parametrize("thinking", [False, True])
+def test_korbench_suite_dispatches_shared_evaluator(monkeypatch, thinking, tmp_path):
+    from gcw.evaluation import core
+
+    captured = {}
+
+    def run_tasks(tasks, **kwargs):
+        captured.update(tasks=tasks, **kwargs)
+        return {}
+
+    monkeypatch.setattr(core, "run_tasks", run_tasks)
+    monkeypatch.setattr(core, "is_main_process", lambda: False)
+    cli.main([
+        "eval", "korbench", "--hf-model", "model",
+        "--apply-chat-template", "true", "--enable-thinking", str(thinking).lower(),
+        "--batch-size", "auto", "--log-samples",
+        "--out", str(tmp_path / "result.json"),
+    ])
+    assert captured["tasks"] == ["korbench"]
+    assert captured["hf_model"] == "model"
+    assert captured["config"].log_samples
+    assert captured["config"].partial_samples_dir == str(
+        tmp_path / "result.partial-samples"
+    )
+    assert captured["config"].enable_thinking is thinking
+    assert captured["config"].default_max_new_tokens == (4096 if thinking else 2048)

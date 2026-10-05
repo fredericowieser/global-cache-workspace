@@ -1,0 +1,73 @@
+{
+  "source": "/sessions/rcw-01w9aublrxxwkzsyqc1yynwy/mnt/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/C_Extended_Results.tex",
+  "source_sha256": "42513a2712c4f3c300359310a316719b23e726f824294c4d908dc40e42d4625a",
+  "options": [
+    "relative"
+  ],
+  "suites": [
+    "math_after_math",
+    "korbench_after_math",
+    "korbench_after_reasoning",
+    "math_after_reasoning",
+    "math_after_sequential",
+    "korbench_after_sequential"
+  ],
+  "columns": 3,
+  "layout": "campaign_heatmap",
+  "palette": "terracotta_cream_forest",
+  "adaptations": [
+    "mathematical",
+    "reasoning",
+    "sequential"
+  ],
+  "omitted_backbones": {},
+  "formats": [
+    "svg",
+    "pdf"
+  ],
+  "omitted_methods": [
+    "Diffusion Longshot"
+  ],
+  "relative_statistic": "mean_observations(100 * (value / matched_baseline_value - 1))",
+  "comparison_baseline": "Instruct",
+  "thinking_modes": [
+    "off",
+    "on"
+  ],
+  "relative_quantities": [
+    "accuracy",
+    "mean_response_tokens"
+  ],
+  "baseline_matching": [
+    "suite",
+    "backbone",
+    "thinking"
+  ],
+  "source_precision": "Rounded values as reported in the paper tables",
+  "matplotlib_version": "3.10.9",
+  "thinking_view": "pooled",
+  "thinking_modes_by_adaptation": {
+    "mathematical": [
+      "off",
+      "on"
+    ],
+    "reasoning": [
+      "off"
+    ],
+    "sequential": [
+      "off"
+    ]
+  },
+  "metric": "both",
+  "lower_is_better": {
+    "accuracy": false,
+    "mean_response_tokens": true
+  },
+  "aggregation": {
+    "weighting": "Equal weight per available backbone/mode observation, separately per cell",
+    "missing_values": "Omitted; N/A if no backbones have results",
+    "standard_deviation": "Population SD across the observations in each cell (ddof=0)",
+    "cell_annotations": "Mean with plus/minus standard deviation",
+    "counts_and_backbones": "campaign_overview_heatmap_thinking_pooled_averages.csv"
+  }
+}

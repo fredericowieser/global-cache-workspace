@@ -1,0 +1,53 @@
+{
+  "adaptations": [
+    "Private package imports; removed unused curricula, registry registration, reseeding and cascade scoring.",
+    "utils.py retains only the upstream Python 3.10-compatible StrEnum.",
+    "Generator, transition and direct scorer logic is unchanged."
+  ],
+  "files": {
+    "algorithmic/ab.py": {
+      "adapted_sha256": "40c942a0284d8a3303cd44f3bbddb2ab6ca0622942188ec1e4a4956c0a5a3671",
+      "upstream_sha256": "a232e9cbf1cc7fb20f913cca845504d808578866734e085c9cffda12636bab65"
+    },
+    "algorithmic/base_conversion.py": {
+      "adapted_sha256": "63a000f9907ce442bbd8d36338afa892330d02d295f192bf04e7274f15d76446",
+      "upstream_sha256": "7d1a1564b6b9e462c73aba989bc572ee75a7d5bc5604637b181345ef94bb903e"
+    },
+    "algorithmic/manipulate_matrix.py": {
+      "adapted_sha256": "352f5575a56bccfe61c18eda5a4eb2c87c8a2d902038bf6719e3c906182caf19",
+      "upstream_sha256": "7203c8ad02bb74fe52a91b88a9fcaca17647735a9d32acba09b04718a0458093"
+    },
+    "algorithmic/string_manipulation.py": {
+      "adapted_sha256": "82f785b99d66f122b33123735b1ea002119ce4f8808be9e5eeebe693eaf5ca9f",
+      "upstream_sha256": "acd0355646b5a302cb1af04e4d39da4ff38b097c3489c3019a297a005d06d795"
+    },
+    "arithmetic/gcd.py": {
+      "adapted_sha256": "68b05d7636954152dde08f4e6981384dc0b485b0b9f384148745454eb8d1da4d",
+      "upstream_sha256": "d9a0d704f1425c5f03cee24683f63f819b324b882542da45886ca2f9682e3d2c"
+    },
+    "cognition/color_cube_rotation.py": {
+      "adapted_sha256": "fff2fce4398f413b49e15d4dd57cc7b81f2237dc34ba3ad93ee06c348d06821c",
+      "upstream_sha256": "0ea2f095bedd12372096fde20a06b5017820b3228e2603bc1f8a8dd188dab93e"
+    },
+    "dataset.py": {
+      "adapted_sha256": "d7a02732455eb73a82abb65e31599a84e92b960f8c3fb16b303809c05b5b398d",
+      "upstream_sha256": "6e29c6f83cba9174631bd0fd10b86c5fbdd9de5904ace54d2554c92ee80371b4"
+    },
+    "utils.py": {
+      "adapted_sha256": "1fc5cf0bc80b5ef9d8124c371fa856b09bcb222885fea826ea1dca5274af02b8",
+      "upstream_sha256": "25fe815ebfce019dad92aa79e61528e0418a04edbce2aa86d019a5a3f186e9d1"
+    }
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/open-thought/reasoning-gym",
+  "revision": "49b07130b3fcd12f2d064bba7c43869543a0e7e7",
+  "supporting_files": {
+    "../__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "NOTICE.txt": "3561beeb12cd4927e38ff93bc61a13a601746f1a3b2bf7f4a8b39c5158af7f83",
+    "__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "algorithmic/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "arithmetic/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "cognition/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

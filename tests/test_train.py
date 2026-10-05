@@ -644,11 +644,15 @@ def test_train_does_not_duplicate_final_checkpoint_when_save_every_hits_max_step
     cfg.eval_on_start = False
     cfg.save_every = 1
     calls = []
+    from gcw.training.state import _save_training_state
 
     def fake_save(
         path, model, optimizer, config, resume_state, fingerprint, rank
     ):
         calls.append((path, resume_state.step, rank))
+        return _save_training_state(
+            path, model, optimizer, config, resume_state, fingerprint, rank
+        )
 
     monkeypatch.setattr("gcw.training.state._save_training_state", fake_save)
 
@@ -677,14 +681,28 @@ def test_train_reads_pretrain_shards(tmp_path):
     assert (tmp_path / "run" / "checkpoint" / "train_state.json").exists()
 
 
-def test_train_can_retain_numbered_step_checkpoints(monkeypatch, tmp_path):
+@pytest.mark.parametrize("max_steps", [2, 3, 4])
+def test_train_can_retain_numbered_step_checkpoints(
+    monkeypatch, tmp_path, max_steps
+):
     cfg = tiny_train_config(tmp_path)
     cfg.wandb.enabled = False
     cfg.eval_every = 0
     cfg.eval_on_start = False
     cfg.save_every = 1
+    cfg.max_steps = max_steps
     monkeypatch.setenv("GCW_KEEP_STEP_CHECKPOINTS", "1")
     monkeypatch.setenv("GCW_STEP_CHECKPOINT_EVERY", "2")
+    from gcw.training import state
+
+    original_save = state._save_training_state
+    saved_steps = []
+
+    def track_save(path, *args, **kwargs):
+        saved_steps.append(path.name)
+        return original_save(path, *args, **kwargs)
+
+    monkeypatch.setattr(state, "_save_training_state", track_save)
 
     train(cfg)
 
@@ -693,6 +711,125 @@ def test_train_can_retain_numbered_step_checkpoints(monkeypatch, tmp_path):
     retained = tmp_path / "run" / "checkpoint-2" / "train_state.json"
     assert retained.exists()
     assert json.loads(retained.read_text(encoding="utf-8"))["step"] == 2
+    checkpoint = tmp_path / "run" / "checkpoint"
+    assert (
+        json.loads((checkpoint / "train_state.json").read_text())["step"]
+        == max_steps
+    )
+    assert checkpoint.is_symlink()
+    assert saved_steps.count("checkpoint") == max_steps
+    assert saved_steps.count("checkpoint-2") == (max_steps > 2)
+    assert "checkpoint-4" not in saved_steps
+    if checkpoint.is_symlink():
+        assert checkpoint.readlink().name == f"checkpoint-{max_steps}"
+
+
+@pytest.mark.parametrize("save_final", [False, True])
+def test_final_checkpoint_between_periodic_saves_is_numbered(
+    monkeypatch, tmp_path, save_final
+):
+    cfg = tiny_train_config(tmp_path)
+    cfg.wandb.enabled = False
+    cfg.eval_every = 0
+    cfg.eval_on_start = False
+    cfg.save_every = 2
+    cfg.max_steps = 3
+    cfg.save_final = save_final
+    monkeypatch.setenv("GCW_KEEP_STEP_CHECKPOINTS", "0")
+
+    train(cfg)
+
+    checkpoint = tmp_path / "run" / "checkpoint"
+    final = tmp_path / "run" / "checkpoint-3"
+    assert final.exists() == save_final
+    assert checkpoint.is_symlink() == save_final
+    assert json.loads((checkpoint / "train_state.json").read_text())[
+        "step"
+    ] == (3 if save_final else 2)
+    if save_final:
+        assert checkpoint.resolve() == final
+
+
+def test_final_checkpoint_retention_preserves_existing_destination(tmp_path):
+    from gcw.training.state import _retain_final_checkpoint
+
+    checkpoint = tmp_path / "checkpoint"
+    retained = tmp_path / "checkpoint-2"
+    checkpoint.mkdir()
+    retained.mkdir()
+    (checkpoint / "weights").write_bytes(b"new")
+    (retained / "weights").write_bytes(b"old")
+
+    with pytest.raises(FileExistsError):
+        _retain_final_checkpoint(checkpoint, 2)
+
+    assert (checkpoint / "weights").read_bytes() == b"new"
+    assert (retained / "weights").read_bytes() == b"old"
+
+
+def test_final_checkpoint_retention_rolls_back_failed_alias(
+    monkeypatch, tmp_path
+):
+    from pathlib import Path
+    from gcw.training.state import _retain_final_checkpoint
+
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    (checkpoint / "weights").write_bytes(b"saved")
+
+    def fail_symlink(*args, **kwargs):
+        raise OSError("alias failed")
+
+    monkeypatch.setattr(Path, "symlink_to", fail_symlink)
+    with pytest.raises(OSError, match="alias failed"):
+        _retain_final_checkpoint(checkpoint, 2)
+
+    assert (checkpoint / "weights").read_bytes() == b"saved"
+    assert not (tmp_path / "checkpoint-2").exists()
+
+
+@pytest.mark.parametrize("use_fsdp", [False, True])
+def test_saving_after_final_alias_preserves_retained_checkpoint(
+    monkeypatch, tmp_path, use_fsdp
+):
+    from types import SimpleNamespace
+    from gcw.training import state
+
+    cfg = tiny_train_config(tmp_path)
+    checkpoint = tmp_path / "checkpoint"
+    retained = tmp_path / "checkpoint-2"
+    retained.mkdir()
+    (retained / "weights").write_bytes(b"retained")
+    checkpoint.symlink_to(retained.name, target_is_directory=True)
+
+    def save_new(path, *args, **kwargs):
+        path.mkdir()
+        (path / "weights").write_bytes(b"new")
+
+    monkeypatch.setattr(state, "_save_training_state", save_new)
+    monkeypatch.setattr(state, "_save_training_checkpoint", save_new)
+    monkeypatch.setattr(state, "_resume_state", lambda *args: None)
+    monkeypatch.setattr(state, "_checkpoint_state", lambda *args: {})
+    monkeypatch.setattr(state, "cursor_to_dict", lambda *args: {})
+    state._save_step_checkpoint(
+        checkpoint,
+        None,
+        None,
+        cfg,
+        3,
+        0.0,
+        SimpleNamespace(cursor=None),
+        1,
+        {},
+        {},
+        0,
+        use_fsdp=use_fsdp,
+        initial_processor_state=None,
+    )
+
+    assert not checkpoint.is_symlink()
+    assert (checkpoint / "weights").read_bytes() == b"new"
+    assert (retained / "weights").read_bytes() == b"retained"
 
 
 def test_train_loads_native_backbone_checkpoint(tmp_path):
@@ -765,7 +902,11 @@ def test_train_loads_native_backbone_checkpoint(tmp_path):
     )
 
 
-def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
+@pytest.mark.parametrize("legacy_generate", [None, False, True])
+@pytest.mark.parametrize("processor_only", [False, True])
+def test_complete_model_initialization_loads_backbone_and_processor(
+    tmp_path, legacy_generate, processor_only
+):
     config = ModelConfig(
         variant="bgt",
         vocab_size=32,
@@ -775,6 +916,7 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
         num_heads=2,
         num_kv_heads=1,
         head_dim=8,
+        legacy_bottleneck_generate=legacy_generate,
         cache_processor=CacheProcessorConfig(
             hidden_size=8, intermediate_size=16, num_heads=1
         ),
@@ -784,7 +926,17 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
     with torch.no_grad():
         source.cache_processor.block.gate.fill_(0.75)
     checkpoint = tmp_path / "complete-model"
-    save_checkpoint(checkpoint, source, config)
+    backbone_checkpoint = tmp_path / "backbone"
+    save_checkpoint(
+        backbone_checkpoint, source.backbone, source.backbone.config
+    )
+    save_checkpoint(
+        checkpoint,
+        source,
+        config,
+        {"backbone_checkpoint": str(backbone_checkpoint)},
+        cache_processor_only=processor_only,
+    )
 
     target = build_model(config)
     target.init_weights()
@@ -794,6 +946,98 @@ def test_complete_model_initialization_loads_backbone_and_processor(tmp_path):
         source.parameters(), target.parameters(), strict=True
     ):
         assert torch.equal(expected, actual)
+
+    training = replace(
+        tiny_train_config(tmp_path),
+        model=config,
+        init_checkpoint=str(checkpoint),
+        backbone_checkpoint=None,
+        freeze_backbone=True,
+        trainable="cache_processor",
+    )
+    metadata = _checkpoint_metadata(training, {}, admission={})
+    assert metadata["backbone_checkpoint"] == str(
+        backbone_checkpoint if processor_only else checkpoint
+    )
+    output = tmp_path / "retrained"
+    with torch.no_grad():
+        target.cache_processor.block.gate.fill_(0.5)
+    save_checkpoint(output, target, config, metadata, cache_processor_only=True)
+    restored, _, _ = load_checkpoint(output)
+    for expected, actual in zip(
+        target.parameters(), restored.parameters(), strict=True
+    ):
+        assert torch.equal(expected, actual)
+
+    metadata.pop("backbone_checkpoint")
+    save_checkpoint(output, target, config, metadata, cache_processor_only=True)
+    restored, _, recovered = load_checkpoint(output)
+    assert recovered["backbone_checkpoint"] == str(
+        backbone_checkpoint if processor_only else checkpoint
+    )
+    for expected, actual in zip(
+        target.parameters(), restored.parameters(), strict=True
+    ):
+        assert torch.equal(expected, actual)
+
+    incompatible = build_model(
+        replace(
+            config,
+            legacy_bottleneck_generate=None,
+            processor_generation_mode=(
+                "windowed" if legacy_generate else "post_prefill_relative"
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="model configuration differs"):
+        _load_initial_model(incompatible, checkpoint)
+
+
+@pytest.mark.parametrize("processor_only", [False, True])
+@pytest.mark.parametrize("precision", ["fp32", "bf16"])
+def test_fsdp_initial_checkpoint_reuses_loaded_model(
+    tmp_path, monkeypatch, processor_only, precision
+):
+    from gcw.training import model_setup
+
+    cfg = tiny_train_config(tmp_path)
+    cfg.model = replace(
+        cfg.model,
+        variant="bgt",
+        cache_processor=CacheProcessorConfig(
+            hidden_size=8, intermediate_size=16, num_heads=1
+        ),
+    )
+    source = build_model(cfg.model)
+    source.init_weights()
+    source.to(dtype=torch.bfloat16)
+    backbone = tmp_path / "base"
+    checkpoint = tmp_path / "initial"
+    save_checkpoint(backbone, source.backbone, source.backbone.config)
+    save_checkpoint(
+        checkpoint, source, cfg.model,
+        {"backbone_checkpoint": str(backbone)},
+        cache_processor_only=processor_only,
+    )
+    cfg.init_checkpoint = str(checkpoint)
+    cfg.precision = precision
+
+    def reject_redundant_build(*args, **kwargs):
+        raise AssertionError("initialization must reuse the checkpoint model")
+
+    monkeypatch.setattr(model_setup, "build_model", reject_redundant_build)
+    monkeypatch.setattr(type(source), "init_weights", reject_redundant_build)
+    actual = _build_training_model(
+        cfg, torch.device("cpu"), rank=0, use_fsdp=True
+    )
+    dtype = torch.bfloat16 if precision == "bf16" else torch.float32
+    assert {parameter.dtype for parameter in actual.parameters()} == {dtype}
+    for key, expected in source.state_dict().items():
+        assert torch.equal(actual.state_dict()[key], expected.to(dtype=dtype))
+
+    cfg.model = replace(cfg.model, norm_eps=cfg.model.norm_eps * 2)
+    with pytest.raises(ValueError, match="model configuration differs"):
+        _build_training_model(cfg, torch.device("cpu"), rank=0, use_fsdp=True)
 
 
 def test_checkpoint_metadata_records_hf_tokenizer_source(tmp_path):

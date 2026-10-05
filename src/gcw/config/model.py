@@ -230,6 +230,16 @@ class CacheProcessorConfig:
                 "live_rank1_linear_writer requires linear_state_cache=true, "
                 "linear_state_update_mode='outer_product', and out_proj_init='zero'"
             )
+        if (
+            self.linear_state_cache
+            and self.linear_state_update_mode == "outer_product"
+            and self.out_proj_init == "zero"
+            and not self.live_rank1_linear_writer
+        ):
+            raise ValueError(
+                "zero-initialized outer-product linear-state writers require "
+                "live_rank1_linear_writer=true to receive gradients"
+            )
         if self.linear_state_update_mode == "gated_delta":
             self.gate_linear_state_delta = False
 

@@ -7,6 +7,10 @@ import torch.nn as nn
 
 from gcw.config import LossBackend, ModelConfig
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
+from gcw.models.cache_processors.update_metrics import (
+    UPDATE_BATCH,
+    generation_update_metrics,
+)
 from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.models.backbones.transformer import (
     Linear,
@@ -305,6 +309,7 @@ class Gemma4TF(TF):
         return out, cache
 
     @torch.no_grad()
+    @generation_update_metrics()
     def generate_fast(  # type: ignore[override]
         self,
         input_ids: torch.Tensor,
@@ -384,6 +389,13 @@ class Gemma4TF(TF):
             )
             if bool(finished.all()):
                 break
+            if (batch_metrics := UPDATE_BATCH.get()) is not None:
+                batch_metrics.phase = (
+                    "prefill" if generated_idx == 0 else "decoding"
+                )
+                batch_metrics.active = ~finished & (
+                    generated_idx + 1 < max_new_tokens
+                )
             pos = out.shape[1] - 1
             if processor is not None:
                 should_process = _should_process_decoding_cache(

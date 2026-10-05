@@ -1,0 +1,8 @@
+include: _common.yaml
+task: korbench_puzzle
+dataset_kwargs:
+  category: puzzle
+metadata:
+  version: 1
+  source_revision: bb8194dff8e51e2e2247cf62aa9932c3d57d53d7
+  data_sha256: fb5560bc75a6a76ac9d8b72bb702ae0c0a40d57184165d5f8c573bf490714cc9

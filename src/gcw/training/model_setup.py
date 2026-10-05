@@ -3,24 +3,36 @@ from __future__ import annotations
 from pathlib import Path
 import torch
 
-from gcw.checkpoint import load_backbone_checkpoint, load_checkpoint
-from gcw.config import TrainConfig, to_dict
+from gcw.checkpoint import (
+    _model_config_from_checkpoint,
+    load_backbone_checkpoint,
+    load_checkpoint,
+)
+from gcw.config import ModelConfig, TrainConfig, to_dict
 from gcw.models import build_model
 from gcw.models.lora import LoRALinear
+
+
+def _load_initial_checkpoint(
+    model_config: ModelConfig | None, checkpoint_path: str | Path
+) -> torch.nn.Module:
+    source, source_config, _ = load_checkpoint(checkpoint_path, device="cpu")
+    if not isinstance(model_config, type(source_config)) or to_dict(
+        _model_config_from_checkpoint(to_dict(model_config))
+    ) != to_dict(source_config):
+        raise ValueError(
+            "init_checkpoint model configuration differs from train.model"
+        )
+    return source
 
 
 def _load_initial_model(
     model: torch.nn.Module, checkpoint_path: str | Path
 ) -> None:
     """Load a complete model state without restoring optimizer or run state."""
-    source, source_config, _ = load_checkpoint(checkpoint_path, device="cpu")
-    model_config = getattr(model, "config", None)
-    if not isinstance(model_config, type(source_config)) or to_dict(
-        model_config
-    ) != to_dict(source_config):
-        raise ValueError(
-            "init_checkpoint model configuration differs from train.model"
-        )
+    source = _load_initial_checkpoint(
+        getattr(model, "config", None), checkpoint_path
+    )
     model.load_state_dict(source.state_dict(), strict=True)
 
 
@@ -79,11 +91,14 @@ def _build_training_model(
     model_dtype = _model_dtype(config)
     if use_fsdp:
         if rank == 0:
+            if config.init_checkpoint:
+                model = _load_initial_checkpoint(
+                    config.model, config.init_checkpoint
+                )
+                return model.to(dtype=model_dtype)
             model = build_model(config.model)
             model.init_weights()
-            if config.init_checkpoint:
-                _load_initial_model(model, config.init_checkpoint)
-            elif config.backbone_checkpoint:
+            if config.backbone_checkpoint:
                 load_backbone_checkpoint(model, config.backbone_checkpoint)
             return model.to(dtype=model_dtype)
         with torch.device("meta"):

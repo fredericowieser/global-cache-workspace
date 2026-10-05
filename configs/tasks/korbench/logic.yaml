@@ -1,0 +1,8 @@
+include: _common.yaml
+task: korbench_logic
+dataset_kwargs:
+  category: logic
+metadata:
+  version: 1
+  source_revision: bb8194dff8e51e2e2247cf62aa9932c3d57d53d7
+  data_sha256: 8c9051bee856b8f5353eae812808ee63786cf5e08631a9e039d7fc1e206361cb

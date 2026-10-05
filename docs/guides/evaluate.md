@@ -38,6 +38,192 @@ neither option.
 
 For a cache-processor checkpoint, `--generation-process-every N` overrides the processor invocation cadence during decoding without changing the checkpoint or its prefill cadence. The option is available for `all`, `math`, `general`, `tasks`, `chat`, and the paper7 compatibility suites. It requires an enabled GCW cache processor and does not apply to Hugging Face targets or `fineweb` evaluation.
 
+## Live generation progress
+
+The lm-eval-backed suites (`all`, `math`, `general`, `korbench`, `tasks`,
+`paper7`, and `paper7-legacy`) print generation progress at the start, on
+completion, and at the first completed batch after each 60-second interval.
+Progress reporting does not write files.
+
+Each line reports the rank, task names, completed/total requests, generated tokens
+from completed responses, and elapsed time. Counts cover the current generation
+call on that rank; another call starts new counters. For KOR-Bench's standard
+single-GPU protocol, 1,250 requests represent 1,250 questions. Failed OOM attempts
+do not advance progress. Tokens exclude EOS and matched stop sequences and
+include thinking tokens. Distributed counts can include harness padding.
+
+Updates occur at batch boundaries, so a long batch can leave the log unchanged
+for longer than a minute. Finishing generation does not mean scoring or the
+entire suite has finished. Multiple-choice likelihood work is not included.
+Already-running processes retain their loaded code.
+
+## KOR-Bench and prediction logging
+
+The `gcw eval korbench` suite evaluates all five categories with the native model
+adapter.
+See [KOR-Bench](../integrations/korbench.md) for pinned data preparation, scoring,
+and runnable commands. Its tasks inherit GCW's generation limits and reject truncated prompts.
+
+Add `--log-samples` to `all`, `math`, `general`, `korbench`, or `tasks` to retain
+per-example harness predictions and task configurations in the final output and
+existing task-level partial-result JSON. The default remains aggregate-only.
+Changing logging or recorded sample-evaluation settings requires a fresh
+partial-result destination.
+
+With `--log-samples --out results/run.json`, completed request outputs are also
+saved incrementally under `results/run.partial-samples/`. Use an output path on
+shared storage if the samples must survive node shutdown. Without `--out`, the
+journal directory defaults to `data/eval-runs/partial-samples/`. Library callers
+can choose `EvalConfig.partial_samples_dir`. Each process prints its journal path
+and creates a unique JSONL file, including its rank in the filename. Restarts
+create new files and preserve previous attempts.
+
+The first line records the schema (`gcw.partial_samples.v1`), evaluation settings,
+rank, and model/protocol information. Subsequent lines contain completed requests:
+
+- `task`, `example_id`, `request_id`, `doc_id`, source `doc`, and prompt/arguments;
+- the raw adapter `response`, before harness filters and scoring;
+- generation token counts, effective cap, and termination reason, when applicable;
+- per-request diffusion metric sums and observation counts, when metrics are enabled.
+
+Generation and likelihood outputs are appended after each successful batch,
+then flushed and synced once per batch. Failed OOM attempts produce no sample
+records. No per-token writes or additional model forwards are needed. A write
+failure stops evaluation rather than silently losing samples. The batch in
+flight at interruption is not saved; interruption during a write can leave an
+incomplete last line, which readers should discard. Retain all preceding complete
+lines. The journal header is also synced when the file is created.
+
+These files preserve outputs for offline analysis; they do not automatically
+resume generation or contain final harness scores. Full harness samples and
+aggregate scores are still produced normally when evaluation finishes. Partial
+populations are not random: batches group requests by prompt length. Report the
+completed count and categories, and do not label partial accuracy as a full
+benchmark score.
+
+Within one journal, `call` distinguishes adapter calls and `request_index`
+distinguishes repeated/padded inputs. Join `(task, example_id)` to final samples'
+`(task, str(doc_id))`, and retain `request_id` for multiple choices/repeats. Do not
+combine separate attempts as if they were independent examples. Embedded
+`cache_update_metrics.values` uses the collector's raw per-request representation:
+new records set `cache_update_metrics.schema` to `gcw.cache_update_metrics.v3`
+and use keys
+`phase:external_iteration:solver_step:metric`, where phase is `prefill` or
+`decoding`. Historical records without a diagnostic schema use
+`external_iteration:solver_step:metric` for combined measurements. `sum` holds
+the accumulated `[min, max, mean, std]` statistics. Divide by `applications` for per-application
+averages. For multiple requests per example, sum each statistic and its
+application count before dividing; do not average request means equally.
+For combined measurements, also sum across phases before dividing. These
+values are saved with their response, even if the final metrics sidecar has not
+been written.
+
+For example, KOR-Bench's saved documents and raw responses can be scored offline
+with the same GCW scorer (use the same code version as the evaluation):
+
+```python
+import json
+from pathlib import Path
+from gcw.evaluation.korbench import process_results
+
+path = Path("results/run.partial-samples/<attempt>.rank-0.jsonl")
+with path.open() as stream:
+    for line in stream:
+        if not line.endswith("\n"):
+            break  # interrupted final write
+        row = json.loads(line)
+        if row["type"] == "sample" and row["task"].startswith("korbench_"):
+            scores = process_results(row["doc"], [row["response"]])
+            print(row["task"], row["example_id"], scores)
+```
+
+## Longshot diffusion update metrics
+
+Add `--cache-update-metrics` to a native evaluation command to write per-example
+update magnitudes and directions beside its results, using the name
+`<results-stem>.cache-update-metrics.jsonl`. Use
+`--cache-update-metrics PATH` for an explicit destination. The option requires
+an enabled Longshot diffusion processor.
+
+**Temporary September 2026 default:** CLI evaluations with an output destination
+now enable this automatically for native Longshot diffusion checkpoints with the
+processor enabled. Other checkpoints, training, and the Python `EvalConfig`
+default are unchanged. Existing processes are unaffected; subsequent evaluations
+in worker arrays pick up the default. Remove the automatic-default block marked
+TODO in `src/gcw/cli.py` after the re-run campaign. Eager recurrence remains
+required, and results originally produced without metrics cannot be resumed with
+metrics enabled; use a fresh evaluation destination.
+
+Each solver step records min, max, mean, and population standard deviation
+across heads, then averages each statistic across contributing processor
+applications for that example. Attention and linear keys and values have
+separate magnitude and contribution-direction groups. Attention groups also
+measure contribution direction relative to the original cache and rotation of
+the proposed cache. Measurements precede writeback gates and include solver
+step-size scaling; linear key/value measurements also precede normalization
+and writer transforms, excluding gate and decay scalars.
+
+Undefined cosine comparisons (either norm at most `1e-12`) are excluded, and
+entirely undefined groups are omitted. Direction records retain the full
+`heads` population, count contributing `applications`, and report
+`valid_head_observations` across applications and requests. New sidecars use
+`gcw.cache_update_metrics.v3`: `steps` contains the combined measurements and
+`phase_steps.prefill` / `phase_steps.decoding` contain the separate views.
+Prefill includes the completed-prompt cache update before generated tokens enter
+the cache; subsequent updates are decoding. Teacher-forced evaluations count
+entirely as prefill. Empty phases have empty lists. Combined statistics are
+weighted by contributing application counts, not equal-weight phase averages.
+Resume rejects v1/v2 sidecars and requires a fresh evaluation destination.
+Historical v1/v2 files remain plottable in combined mode. See [the metric
+definitions and worked example](../concepts/task-directed-diffusion.md#per-example-update-diagnostics).
+
+### Plot update magnitudes and directions
+
+Pass the metrics JSONL sidecar (rather than the benchmark score JSON) to:
+
+```bash
+python scripts/plot_cache_update_metrics.py \
+  results/<run>.cache-update-metrics.jsonl \
+  --out results/<run>.cache-update-metrics.png
+```
+
+Use `--phase prefill` or `--phase decoding` to select one phase; the default
+`--phase combined` preserves the aggregate view. Phase-specific plots require
+v3 sidecars and use `.prefill.png` or `.decoding.png` by default (or
+`.prefill.direction.png` / `.decoding.direction.png` for direction-only plots).
+The selected phase appears in the figure title. An empty selected phase reports
+that no update metrics are available.
+
+By default, `--quantity both` produces one figure containing all available
+magnitude and direction groups, with appropriate units per row. Use
+`--quantity magnitude` or `--quantity direction` to select one quantity;
+requesting an unavailable quantity reports an error. Historical v1 files show
+their recorded combined magnitude groups.
+
+Shared notation and aggregation definitions appear at the top of each figure.
+Matching key and value rows are grouped under a horizontal divider and a shared
+equation caption. Subplot titles identify the stream and statistic, keeping the
+metric definition beside the panels it describes.
+
+The figure has one row per available metric group and columns for head min,
+mean, max, and population standard deviation. The x axis is the **solver step**,
+not a generated-token or training step. Each line averages the already logged
+per-episode statistics with equal episode weight; longer episodes do not gain
+extra weight from their application counts. Shading shows the 25th–75th
+percentiles across episodes, not a confidence interval or head standard
+deviation. In particular, the `std` column averages the logged within-head
+standard deviations; it is not the spread across episodes.
+
+All tasks are pooled by default, so tasks with more episodes contribute more.
+Use `--task gsm8k_openmath` to select a task, repeating `--task` to combine a
+subset. External iterations remain separate lines. Empty episodes and absent
+step/group observations are omitted rather than treated as zero; the figure
+reports the contributing-count range. Each panel has its own y scale to keep
+small signals visible. Missing linear-state groups are omitted automatically.
+The default output replaces `.jsonl` with `.png` for `both` or `magnitude`,
+and with `.direction.png` for `direction`; `--out` also supports PDF or SVG.
+Only the existing NumPy and Matplotlib dependencies are needed.
+
 ## Generation stopping
 
 Generation stops at any configured EOS/end-of-turn token and pads finished rows

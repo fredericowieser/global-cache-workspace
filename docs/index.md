@@ -36,6 +36,7 @@ guides/training-and-resume
 guides/resume-training
 guides/evaluation-conversion-analysis
 guides/evaluate
+guides/recover-live-korbench
 guides/inspect-runs
 guides/add-a-backbone
 guides/add-a-cache-processor
@@ -50,6 +51,8 @@ experiments/gcw-dev2k
 experiments/qwen35-ablations
 experiments/qwen35-headline
 experiments/smollm-matched-total
+experiments/reasoning-transfer
+experiments/reasoning-gym-supervised-traces
 experiments/future
 ```
 
@@ -60,6 +63,8 @@ experiments/future
 integrations/weights-and-biases
 integrations/hugging-face
 integrations/lm-evaluation-harness
+integrations/korbench
+integrations/reasoning-gym
 integrations/slurm
 ```
 

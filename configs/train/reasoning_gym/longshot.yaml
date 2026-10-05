@@ -1,0 +1,128 @@
+# Training template; see docs/integrations/reasoning-gym.md before launch.
+model:
+  variant: longshot
+  family: qwen3_5
+  sequence_len: 262144
+  vocab_size: 248320
+  hidden_size: 2048
+  intermediate_size: 6144
+  num_layers: 24
+  num_heads: 8
+  num_kv_heads: 2
+  head_dim: 256
+  rope_theta: 10000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: true
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 3
+    topk_linear_heads: 72
+    linear_state_cache: true
+    linear_state_query_mode: per_linear_state
+    linear_state_update_mode: outer_product
+    gate_linear_state_delta: true
+    score: kv_norm
+    hidden_size: 384
+    intermediate_size: 1536
+    num_layers: 3
+    num_heads: 3
+    num_kv_heads: 3
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -2.0
+    attention_dropout: 0.0
+    per_cache_head_projections: false
+    gradient_checkpointing: true
+    encoder_method: query_attention
+    encoder_query_source: final_token
+    unrope_keys: true
+  legacy_bottleneck_generate: false
+  layer_types:
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  processor_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  - 19
+  - 23
+  partial_rotary_factor: 0.25
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: 128
+  linear_value_head_dim: 128
+  linear_num_key_heads: 16
+  linear_num_value_heads: 16
+  hidden_act: silu
+  processor_generation_mode: windowed
+data:
+  kind: sft
+  dataset: data/train-data/reasoning-gym/train.jsonl
+  validation_dataset: data/train-data/reasoning-gym/validation.jsonl
+  tokenizer: hf
+  tokenizer_source: artifacts/tokenizers/Qwen3.5-2B
+  sft_take_rows: 700032
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  prompt_suffix: ''
+  response_prefix: ''
+mode: sft
+seed: 24
+distributed: ddp
+freeze_backbone: true
+trainable: cache_processor
+backbone_checkpoint: artifacts/checkpoints/qwen35-2b-base-native
+output_dir: runs/reasoning-gym/qwen35-2b-longshot
+batch_size: 1
+sequence_len: 4096
+global_batch_rows: 64
+total_batch_size: 0
+max_steps: 10938
+learning_rate: 0.0001
+adam_beta2: 0.999
+warmup_steps: 100
+warmdown_ratio: 0.1
+weight_decay: 0.0
+grad_clip: 1.0
+precision: bf16_mixed
+loss_backend: reference
+save_cache_processor_only: true
+save_every: 1000
+save_final: true
+eval_every: 500
+eval_batches: 768
+wandb:
+  enabled: false
+metadata:
+  protocol: gcw.reasoning_gym.sft.v1
+  readiness: data_prepared_training_not_gpu_qualified
+  pretrained_source: Qwen/Qwen3.5-2B
+  pretrained_source_revision: 15852e8c16360a2fea060d615a32b45270f8a8fc
+  prepared_training_rows: 700032
+  dataset_manifest: data/train-data/reasoning-gym/manifest.json

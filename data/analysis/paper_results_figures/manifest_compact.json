@@ -1,0 +1,58 @@
+{
+  "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
+  "source_sha256": "28da427008dafceeb7e3e4aa48b11d0466d3081b254921aa42dcdac9c2cb093b",
+  "options": [
+    "relative"
+  ],
+  "suites": [
+    "math_after_math",
+    "korbench_after_math",
+    "korbench_after_reasoning",
+    "math_after_reasoning",
+    "math_after_sequential",
+    "korbench_after_sequential"
+  ],
+  "columns": 3,
+  "layout": "compact",
+  "palette": null,
+  "adaptations": [],
+  "omitted_backbones": {
+    "math_after_math": [
+      "Qwen3.5-2B"
+    ],
+    "korbench_after_math": [
+      "Qwen3.5-2B"
+    ],
+    "math_after_reasoning": [
+      "Qwen3.5-2B"
+    ],
+    "math_after_sequential": [
+      "Qwen3.5-2B"
+    ],
+    "korbench_after_sequential": [
+      "Qwen3.5-2B"
+    ]
+  },
+  "formats": [
+    "svg",
+    "pdf"
+  ],
+  "omitted_methods": [],
+  "relative_statistic": "100 * (value / baseline_value - 1)",
+  "comparison_baseline": "Instruct",
+  "thinking_modes": [
+    "off",
+    "on"
+  ],
+  "relative_quantities": [
+    "accuracy",
+    "mean_response_tokens"
+  ],
+  "baseline_matching": [
+    "suite",
+    "backbone",
+    "thinking"
+  ],
+  "source_precision": "Rounded values as reported in the paper tables",
+  "matplotlib_version": "3.11.0"
+}

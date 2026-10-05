@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from fractions import Fraction
 import json
@@ -14,6 +15,7 @@ import torch
 import torch.distributed as dist
 
 from gcw.config import LossBackend
+from gcw.evaluation.update_metrics import CacheUpdateMetrics
 from gcw.data.tokenizers import (
     COSMO2_VOCAB_SIZE,
     IntTokenizer,
@@ -125,12 +127,22 @@ def truncate_context_continuation(
 
 
 def encode_generate_prompt(
-    tokenizer, prompt: str, max_length: int, *, add_special_tokens: bool = False
+    tokenizer,
+    prompt: str,
+    max_length: int,
+    *,
+    add_special_tokens: bool = False,
+    require_full_prompt: bool = False,
 ) -> list[int]:
     try:
         ids = tokenizer.encode(prompt, add_special_tokens=add_special_tokens)
     except TypeError:
         ids = tokenizer.encode(prompt)
+    if require_full_prompt and len(ids) > max_length:
+        raise ValueError(
+            f"Evaluation prompt has {len(ids)} tokens but context allows {max_length}; "
+            "this task requires the complete prompt"
+        )
     return ids[-max_length:]
 
 
@@ -419,6 +431,7 @@ def evaluate_nll_bpb(
     token_bytes: torch.Tensor,
     *,
     loss_backend: LossBackend = "reference",
+    update_metrics: CacheUpdateMetrics | None = None,
 ) -> tuple[float, float]:
     device = model.get_device()
     total_nats = torch.tensor(0.0, device=device)
@@ -426,11 +439,24 @@ def evaluate_nll_bpb(
     total_tokens = torch.tensor(0, dtype=torch.long, device=device)
     it = iter(batches)
     model.eval()
-    for _ in range(steps):
+    distributed = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if distributed else 0
+    for batch_index in range(steps):
         x, y = next(it)[:2]
-        loss = model(
-            x, y, loss_reduction="none", loss_backend=loss_backend
-        ).view(-1)
+        observation = (
+            update_metrics.batch(
+                [
+                    ("fineweb", f"{rank}:{batch_index}:{row}", "0")
+                    for row in range(x.shape[0])
+                ]
+            )
+            if update_metrics is not None
+            else nullcontext()
+        )
+        with observation:
+            loss = model(
+                x, y, loss_reduction="none", loss_backend=loss_backend
+            ).view(-1)
         y = y.view(-1)
         valid = y >= 0
         safe = torch.where(valid, y, torch.zeros_like(y))
@@ -443,7 +469,7 @@ def evaluate_nll_bpb(
         total_nats += (loss * keep).sum()
         total_bytes += counts.sum()
         total_tokens += keep.sum()
-    if dist.is_available() and dist.is_initialized():
+    if distributed:
         dist.all_reduce(total_nats)
         dist.all_reduce(total_bytes)
         dist.all_reduce(total_tokens)

@@ -19,8 +19,14 @@ from gcw.evaluation.scoring import (
     tokenizer_for_checkpoint,
     trim_generated_token_ids,
 )
+from gcw.evaluation.progress import GenerationProgress
+from gcw.evaluation.samples import PartialSamples
 from gcw.evaluation.tasks import _normalize_until, _trim_until
 from gcw.runtime import print0
+from gcw.evaluation.update_metrics import (
+    CacheUpdateMetrics,
+    request_metric_keys,
+)
 
 BatchRow = TypeVar("BatchRow")
 BatchResult = TypeVar("BatchResult")
@@ -294,6 +300,10 @@ class GCWEvalLM(TemplateLM):
         self.max_length = model.config.sequence_len
         self.add_special_tokens_for_generate = False
         self.eval_config = eval_config
+        self.update_metrics = CacheUpdateMetrics(
+            self.model, eval_config.cache_update_metrics_path, resume=True
+        )
+        self._diagnostic_requests = None
         self.reset_runtime_metrics()
 
     def reset_runtime_metrics(self) -> None:
@@ -494,6 +504,28 @@ class GCWEvalLM(TemplateLM):
             start += batch_size
         return results
 
+    def loglikelihood(self, requests, disable_tqdm: bool = False):
+        self._diagnostic_requests = request_metric_keys(requests)
+        self._sample_requests = requests
+        self._start_sample_call("loglikelihood", requests)
+        try:
+            return super().loglikelihood(requests, disable_tqdm=disable_tqdm)
+        finally:
+            self._diagnostic_requests = None
+            self._sample_requests = None
+
+    def _start_sample_call(self, request_type: str, requests):
+        config = getattr(self, "eval_config", None)
+        if config is None or not config.log_samples:
+            return None
+        journal = getattr(self, "partial_samples", None)
+        if journal is None:
+            journal = self.partial_samples = PartialSamples(
+                config, getattr(self, "sample_protocol", {})
+            )
+        journal.start_call(request_type, len(requests))
+        return journal
+
     @torch.no_grad()
     def _loglikelihood_tokens(self, requests, disable_tqdm: bool = False):
         device = self.model.get_device()
@@ -518,20 +550,36 @@ class GCWEvalLM(TemplateLM):
                 padded[row, : len(inp)] = torch.tensor(
                     inp, dtype=torch.long, device=device
                 )
-            logprobs = torch.log_softmax(self.model(padded), dim=-1)
-            batch_results = []
-            for row, i in enumerate(idxs):
-                cont = continuations[row]
-                cont_len = len(cont)
-                inp_len = len(inputs[row])
-                logp = logprobs[row, inp_len - cont_len : inp_len]
-                target = torch.tensor(cont, dtype=torch.long, device=device)
-                vals = logp.gather(-1, target[:, None]).squeeze(-1)
-                batch_results.append(
-                    (
-                        float(vals.sum().item()),
-                        bool((logp.argmax(-1) == target).all().item()),
+            keys = self._diagnostic_requests or [
+                ("loglikelihood", str(i), "0") for i in range(len(requests))
+            ]
+            with self.update_metrics.batch(
+                [keys[i] for i in idxs], lengths=[len(inp) for inp in inputs]
+            ):
+                logprobs = torch.log_softmax(self.model(padded), dim=-1)
+                batch_results = []
+                for row, i in enumerate(idxs):
+                    cont = continuations[row]
+                    cont_len = len(cont)
+                    inp_len = len(inputs[row])
+                    logp = logprobs[row, inp_len - cont_len : inp_len]
+                    target = torch.tensor(cont, dtype=torch.long, device=device)
+                    vals = logp.gather(-1, target[:, None]).squeeze(-1)
+                    batch_results.append(
+                        (
+                            float(vals.sum().item()),
+                            bool((logp.argmax(-1) == target).all().item()),
+                        )
                     )
+            journal = getattr(self, "partial_samples", None)
+            sample_requests = getattr(self, "_sample_requests", None)
+            if journal is not None and sample_requests is not None:
+                journal.write_batch(
+                    sample_requests,
+                    idxs,
+                    [keys[i] for i in idxs],
+                    batch_results,
+                    self.update_metrics,
                 )
             return batch_results
 
@@ -545,16 +593,28 @@ class GCWEvalLM(TemplateLM):
 
     def loglikelihood_rolling(self, requests, disable_tqdm: bool = False):
         out = []
-        for req in requests:
-            text = req.args[0]
-            out.append(
-                sum(
-                    x[0]
-                    for x in self._loglikelihood_tokens(
-                        [(None, [self.eot_token_id], self.tok_encode(text))]
+        keys = request_metric_keys(requests)
+        journal = self._start_sample_call("loglikelihood_rolling", requests)
+        try:
+            for index, (req, key) in enumerate(
+                zip(requests, keys, strict=True)
+            ):
+                self._diagnostic_requests = [key]
+                text = req.args[0]
+                out.append(
+                    sum(
+                        x[0]
+                        for x in self._loglikelihood_tokens(
+                            [(None, [self.eot_token_id], self.tok_encode(text))]
+                        )
                     )
                 )
-            )
+                if journal is not None:
+                    journal.write_batch(
+                        requests, [index], [key], [out[-1]], self.update_metrics
+                    )
+        finally:
+            self._diagnostic_requests = None
         return out
 
     @torch.no_grad()
@@ -562,6 +622,9 @@ class GCWEvalLM(TemplateLM):
         if os.environ.get("GCW_EVAL_REFERENCE_GENERATE") == "1":
             return self._generate_until_reference(requests)
         outs: list[str | None] = [None] * len(requests)
+        metric_keys = request_metric_keys(requests)
+        progress = GenerationProgress(metric_keys)
+        journal = self._start_sample_call("generate_until", requests)
         device = self.model.get_device()
         groups: dict[
             tuple[int, int, tuple[str, ...]], list[tuple[int, list[int]]]
@@ -579,6 +642,9 @@ class GCWEvalLM(TemplateLM):
                 prompt,
                 self.max_length,
                 add_special_tokens=self.add_special_tokens_for_generate,
+                require_full_prompt=bool(
+                    kwargs.get("gcw_require_full_prompt", False)
+                ),
             )
             groups.setdefault((len(ids), max_new, until), []).append((i, ids))
 
@@ -598,34 +664,62 @@ class GCWEvalLM(TemplateLM):
                     dtype=torch.long,
                     device=device,
                 )
-                if use_fast:
-                    gen = self.model.generate_fast(
-                        batch_ids,
-                        max_new_tokens=max_new,
-                        eos_token_id=eos_ids,
-                        stop_sequences=stop_seqs,
-                        pad_token_id=pad_id,
+                with self.update_metrics.batch(
+                    [metric_keys[i] for i, _ in chunk]
+                ):
+                    if use_fast:
+                        gen = self.model.generate_fast(
+                            batch_ids,
+                            max_new_tokens=max_new,
+                            eos_token_id=eos_ids,
+                            stop_sequences=stop_seqs,
+                            pad_token_id=pad_id,
+                        )
+                    else:
+                        gen = self.model.generate(
+                            batch_ids,
+                            max_new_tokens=max_new,
+                            eos_token_id=eos_ids,
+                            stop_sequences=stop_seqs,
+                            pad_token_id=pad_id,
+                        )
+                    batch_results = []
+                    batch_generation = []
+                    batch_tokens = 0
+                    for row, _ in enumerate(chunk):
+                        tokens = gen[row, prompt_len:].tolist()
+                        tokens = trim_generated_token_ids(
+                            tokens, stop_seqs, eos_ids
+                        )
+                        termination = (
+                            "max_new_tokens"
+                            if len(tokens) >= max_new
+                            else "stop"
+                        )
+                        batch_tokens += len(tokens)
+                        self._record_generated_tokens(tokens, termination)
+                        text = _trim_until(self.tok_decode(tokens), until)
+                        batch_results.append(text)
+                        batch_generation.append(
+                            {
+                                "prompt_tokens": prompt_len,
+                                "generated_tokens": len(tokens),
+                                "max_new_tokens": max_new,
+                                "termination": termination,
+                            }
+                        )
+                if journal is not None:
+                    journal.write_batch(
+                        requests,
+                        [i for i, _ in chunk],
+                        [metric_keys[i] for i, _ in chunk],
+                        batch_results,
+                        self.update_metrics,
+                        generation=batch_generation,
                     )
-                else:
-                    gen = self.model.generate(
-                        batch_ids,
-                        max_new_tokens=max_new,
-                        eos_token_id=eos_ids,
-                        stop_sequences=stop_seqs,
-                        pad_token_id=pad_id,
-                    )
-                batch_results = []
-                for row, _ in enumerate(chunk):
-                    tokens = gen[row, prompt_len:].tolist()
-                    tokens = trim_generated_token_ids(
-                        tokens, stop_seqs, eos_ids
-                    )
-                    termination = (
-                        "max_new_tokens" if len(tokens) >= max_new else "stop"
-                    )
-                    self._record_generated_tokens(tokens, termination)
-                    text = _trim_until(self.tok_decode(tokens), until)
-                    batch_results.append(text)
+                progress.advance(
+                    [metric_keys[i] for i, _ in chunk], batch_tokens
+                )
                 return batch_results
 
             for (out_idx, _), text in zip(
@@ -639,11 +733,14 @@ class GCWEvalLM(TemplateLM):
     @torch.no_grad()
     def _generate_until_reference(self, requests):
         outs = []
+        metric_keys = request_metric_keys(requests)
+        progress = GenerationProgress(metric_keys)
+        journal = self._start_sample_call("generate_until", requests)
         device = self.model.get_device()
         eos_ids, pad_id = generation_token_ids(
             self.tokenizer, getattr(self.tokenizer, "generation_config", None)
         )
-        for req in requests:
+        for request_index, req in enumerate(requests):
             prompt, kwargs = req.args
             max_new = int(
                 kwargs.get(
@@ -657,26 +754,49 @@ class GCWEvalLM(TemplateLM):
                     prompt,
                     self.max_length,
                     add_special_tokens=self.add_special_tokens_for_generate,
+                    require_full_prompt=bool(
+                        kwargs.get("gcw_require_full_prompt", False)
+                    ),
                 ),
                 dtype=torch.long,
                 device=device,
             ).unsqueeze(0)
             stop_seqs = stop_token_sequences(self.tokenizer, until)
-            gen = self.model.generate(
-                ids,
-                max_new_tokens=max_new,
-                eos_token_id=eos_ids,
-                stop_sequences=stop_seqs,
-                pad_token_id=pad_id,
-            )[0].tolist()
-            tokens = trim_generated_token_ids(
-                gen[len(ids[0]) :], stop_seqs, eos_ids
-            )
-            termination = "max_new_tokens" if len(tokens) >= max_new else "stop"
-            self._record_successful_batch_size("generation", 1)
-            self._record_generated_tokens(tokens, termination)
-            text = self.tok_decode(tokens)
-            outs.append(_trim_until(text, until))
+            with self.update_metrics.batch([metric_keys[request_index]]):
+                gen = self.model.generate(
+                    ids,
+                    max_new_tokens=max_new,
+                    eos_token_id=eos_ids,
+                    stop_sequences=stop_seqs,
+                    pad_token_id=pad_id,
+                )[0].tolist()
+                tokens = trim_generated_token_ids(
+                    gen[len(ids[0]) :], stop_seqs, eos_ids
+                )
+                termination = (
+                    "max_new_tokens" if len(tokens) >= max_new else "stop"
+                )
+                self._record_successful_batch_size("generation", 1)
+                self._record_generated_tokens(tokens, termination)
+                text = self.tok_decode(tokens)
+                outs.append(_trim_until(text, until))
+            if journal is not None:
+                journal.write_batch(
+                    requests,
+                    [request_index],
+                    [metric_keys[request_index]],
+                    [outs[-1]],
+                    self.update_metrics,
+                    generation=[
+                        {
+                            "prompt_tokens": len(ids[0]),
+                            "generated_tokens": len(tokens),
+                            "max_new_tokens": max_new,
+                            "termination": termination,
+                        }
+                    ],
+                )
+            progress.advance([metric_keys[request_index]], len(tokens))
         return outs
 
     def _record_generated_tokens(

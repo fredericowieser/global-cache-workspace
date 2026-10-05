@@ -1,0 +1,8 @@
+include: _common.yaml
+task: korbench_cipher
+dataset_kwargs:
+  category: cipher
+metadata:
+  version: 1
+  source_revision: bb8194dff8e51e2e2247cf62aa9932c3d57d53d7
+  data_sha256: 6af4ad5aa73c9a1358fec96b1ada120b53b24f68dcffdc6c4615d0b49886a980

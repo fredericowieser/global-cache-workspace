@@ -72,6 +72,8 @@ def _save_step_checkpoint(
     use_fsdp: bool,
     initial_processor_state: dict[str, torch.Tensor] | None,
 ) -> None:
+    if rank == 0 and path.is_symlink():
+        path.unlink()
     if use_fsdp:
         state = _checkpoint_state(metadata, step, cursor_to_dict(stream.cursor))
         _save_training_checkpoint(
@@ -109,6 +111,18 @@ def _save_step_checkpoint(
             rank,
             initial_processor_state=initial_processor_state,
         )
+
+
+def _retain_final_checkpoint(path: Path, step: int) -> None:
+    retained = path.with_name(f"checkpoint-{step}")
+    if retained.exists() or retained.is_symlink():
+        raise FileExistsError(retained)
+    path.rename(retained)
+    try:
+        path.symlink_to(retained.name, target_is_directory=True)
+    except OSError:
+        retained.rename(path)
+        raise
 
 
 def _json_safe_loader_state(value: Any) -> Any:

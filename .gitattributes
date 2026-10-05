@@ -1,0 +1,9 @@
+src/gcw/data/_vendor/reasoning_gym/** text eol=lf
+src/gcw/data/_vendor/__init__.py text eol=lf
+src/gcw/data/reasoning_gym.py text eol=lf
+src/gcw/data/reasoning_gym_traces.py text eol=lf
+src/gcw/data/_staging.py text eol=lf
+scripts/prepare_reasoning_gym.py text eol=lf
+scripts/subset_reasoning_gym.py text eol=lf
+scripts/audit_reasoning_gym.py text eol=lf
+scripts/verify_reasoning_gym.py text eol=lf

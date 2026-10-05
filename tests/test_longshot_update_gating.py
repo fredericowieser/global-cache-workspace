@@ -630,7 +630,7 @@ def test_scheduled_gate_checkpoint_roundtrip_and_exact_parameter_count(
 
 
 def test_scheduled_implicit_static_gate_preserves_rng_payload_and_state_abi():
-    implicit = _scheduled_model_config(live_rank1_linear_writer=False)
+    implicit = _scheduled_model_config()
     explicit = replace(
         implicit,
         cache_processor=replace(
@@ -653,12 +653,9 @@ def test_scheduled_implicit_static_gate_preserves_rng_payload_and_state_abi():
         assert torch.equal(value, restored.state_dict()[name]), name
     restored.load_state_dict(source.state_dict(), strict=True)
     assert torch.count_nonzero(source.block.out_proj.weight) == 0
-    assert (
-        torch.count_nonzero(
-            source.block.linear_state_adapter.output_proj.weight
-        )
-        == 0
-    )
+    adapter = source.block.linear_state_adapter
+    assert torch.count_nonzero(adapter.output_proj.weight[: adapter.linear_key_dim]) > 0
+    assert torch.count_nonzero(adapter.output_proj.weight[adapter.linear_key_dim :]) == 0
 
 
 @pytest.mark.parametrize(
