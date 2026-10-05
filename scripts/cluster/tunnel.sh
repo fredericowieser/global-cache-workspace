@@ -17,7 +17,7 @@ if [[ -f "${LOCAL_ENV}" ]]; then
   set +a
 fi
 
-DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+DISCORD_WEBHOOK_URL="${TUNNEL_DISCORD_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
 
 json_escape() {
   local value="${1}"

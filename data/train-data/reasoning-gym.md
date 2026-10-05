@@ -49,6 +49,6 @@ same mixture, not new families or harder compositions. No training run or
 reasoning-transfer result is implied by data preparation. The shared native
 backbone checkpoint and target GPU memory/throughput still need qualification.
 
-[Training truncation and quality findings](../analysis/reasoning-gym-truncation/summary.md)
-and [validation findings](../analysis/reasoning-gym-validation/summary.md)
+[Training truncation and quality findings](../analysis/dataset_truncation/reasoning-gym-truncation/summary.md)
+and [validation findings](../analysis/dataset_truncation/reasoning-gym-validation/summary.md)
 are reproducible using `scripts/audit_reasoning_gym.py`.
