@@ -37,6 +37,8 @@ checkpoint; this view is for initialization, not authenticated training resume.
 
 For FSDP training with `init_checkpoint`, rank zero uses the loaded checkpoint model directly before sharding. It does not construct and randomly initialize a separate training model whose parameters would immediately be overwritten. Nonzero ranks construct their models on the meta device and receive the loaded state through FSDP synchronization. Model compatibility checks and processor-only backbone loading still apply.
 
+Native model loading constructs parameter shapes on the meta device and materializes them from saved tensors, without allocating or randomly initializing a second full model. File-backed loading uses the safetensors loader directly rather than copying the entire checkpoint into a Python byte string. Byte-snapshot loading retains the same validation and dtype rules. Non-persistent runtime buffers retain their constructed defaults; processor-only checkpoints materialize the referenced backbone before returning the model.
+
 When a new run initialized with `init_checkpoint` saves processor-only weights,
 it carries forward the initialization checkpoint's frozen-backbone reference.
 If the initialization checkpoint contains the complete model, that checkpoint

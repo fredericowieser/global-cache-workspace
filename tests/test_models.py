@@ -314,6 +314,36 @@ def tiny_gemma4_config(
     )
 
 
+@pytest.mark.parametrize(
+    "config_factory",
+    [
+        tiny_config,
+        tiny_qwen35_config,
+        tiny_qwen35_moe_config,
+        tiny_gemma4_config,
+    ],
+)
+@pytest.mark.parametrize("variant", ["tf", "longshot"])
+def test_checkpoint_materialization_preserves_runtime_buffers(
+    tmp_path, config_factory, variant
+):
+    from gcw.checkpoint import load_checkpoint, save_checkpoint
+
+    config = config_factory(variant)
+    if variant == "longshot":
+        config.cache_processor.head_selection_method = "learned_contextual"
+    model = build_model(config).eval()
+    model.init_weights()
+    save_checkpoint(tmp_path, model, config)
+    restored, _, _ = load_checkpoint(tmp_path)
+    restored.eval()
+    for name, buffer in model.named_buffers():
+        torch.testing.assert_close(dict(restored.named_buffers())[name], buffer)
+    x = torch.randint(0, config.vocab_size, (1, 9))
+    with torch.no_grad():
+        torch.testing.assert_close(restored(x), model(x))
+
+
 def test_tiny_models_forward_backward():
     for variant in ("tf", "bt", "bgt", "icarus", "longshot"):
         model = build_model(tiny_config(variant))

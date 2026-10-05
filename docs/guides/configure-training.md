@@ -154,6 +154,8 @@ trainable: cache_processor
 
 Only cache processor parameters receive gradients. Use `trainable: backbone` to freeze the cache processor instead.
 
+Under FSDP with the reference loss and untied embeddings, a frozen backbone's vocabulary embedding and output projection receive separate wrappers in addition to its layer-level wrappers. This keeps those large frozen weights out of the trainable processor's gradient buffer. Tied embeddings, loss backends that access output weights directly, and Longshot's shared `gated_delta` dynamics retain the existing wrapper layout. Longshot's `outer_product` configuration uses the separate vocabulary wrappers.
+
 ### Qwen3 frozen-backbone regional compilation
 
 Qwen3 cache-processor runs remain eager unless the training config opts into the 64-token backbone region:

@@ -89,6 +89,64 @@ def test_checkpoint_dtype_override_casts_fp32_weights_to_bf16(tmp_path):
     assert {param.dtype for param in loaded.parameters()} == {torch.bfloat16}
 
 
+@pytest.mark.parametrize("from_bytes", [False, True])
+def test_checkpoint_loading_materializes_meta_model_without_random_weights(
+    tmp_path, monkeypatch, from_bytes
+):
+    import gcw.checkpoint as checkpoint
+
+    cfg = ModelConfig(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sequence_len=16,
+        lora=LoRAConfig(rank=2),
+    )
+    model = build_model(cfg).to(dtype=torch.bfloat16)
+    model.init_weights()
+    save_checkpoint(tmp_path, model, cfg)
+
+    def build_meta(config):
+        result = build_model(config)
+        assert all(parameter.is_meta for parameter in result.parameters())
+        return result
+
+    monkeypatch.setattr(checkpoint, "build_model", build_meta)
+    if from_bytes:
+        loaded, _, _ = checkpoint.load_checkpoint_bytes(
+            config_bytes=(tmp_path / "config.json").read_bytes(),
+            train_state_bytes=(tmp_path / "train_state.json").read_bytes(),
+            model_bytes=(tmp_path / "model.safetensors").read_bytes(),
+        )
+    else:
+        original_read_bytes = type(tmp_path).read_bytes
+
+        def read_metadata(path):
+            assert path.suffix != ".safetensors"
+            return original_read_bytes(path)
+
+        monkeypatch.setattr(type(tmp_path), "read_bytes", read_metadata)
+        loaded, _, _ = load_checkpoint(tmp_path)
+    for name, tensor in model.state_dict().items():
+        torch.testing.assert_close(
+            loaded.state_dict()[name], tensor, rtol=0, atol=0
+        )
+    for name, buffer in model.named_buffers():
+        torch.testing.assert_close(dict(loaded.named_buffers())[name], buffer)
+    x = torch.randint(0, 64, (1, 4))
+    torch.testing.assert_close(loaded(x), model(x))
+    with torch.no_grad():
+        next(loaded.parameters()).add_(1)
+    reloaded, _, _ = load_checkpoint(tmp_path)
+    torch.testing.assert_close(
+        next(reloaded.parameters()), next(model.parameters()), rtol=0, atol=0
+    )
+
+
 def test_checkpoint_cache_processor_only_roundtrip(tmp_path):
     backbone_path = tmp_path / "backbone"
     cp_path = tmp_path / "cp_checkpoint"

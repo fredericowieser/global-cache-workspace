@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import timedelta
 
 import pytest
 import torch
@@ -134,6 +135,69 @@ def test_qwen35_longshot_two_rank_fsdp_gated_delta_dynamics(
     mp.spawn(
         _run_longshot_fsdp,
         args=(2, str(init_file), freeze_backbone),
+        nprocs=2,
+        join=True,
+    )
+
+
+def _run_longshot_fsdp_answer_masks(rank: int, init_file: str) -> None:
+    torch.set_num_threads(1)
+    torch.cuda.set_device(rank)
+    dist.init_process_group(
+        "nccl",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=45),
+    )
+    try:
+        device = torch.device("cuda", rank)
+        config = TrainConfig(
+            model=_tiny_qwen35_longshot_config(),
+            distributed="fsdp",
+            freeze_backbone=True,
+            precision="bf16",
+        )
+        config.model.cache_processor.linear_state_update_mode = "outer_product"
+        config.model.cache_processor.live_rank1_linear_writer = True
+        config.model.cache_processor.gate_linear_state_delta = True
+        config.model.cache_processor.gradient_checkpointing = True
+        model = _build_training_model(config, device, rank=rank, use_fsdp=True)
+        model.backbone.requires_grad_(False)
+        _apply_activation_checkpointing(model, family=config.model.family)
+        model = _wrap_fsdp(model, config, device)
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+        assert isinstance(model.module.backbone.embed_tokens, FSDP)
+        assert isinstance(model.module.backbone.lm_head, FSDP)
+        assert all(
+            not name.startswith(("backbone.embed_tokens.", "backbone.lm_head."))
+            for name in model._handle.flat_param._fqns
+        )
+        for length in (9, 16):
+            x = torch.randint(
+                0, config.model.vocab_size, (1, length), device=device
+            )
+            y = x.clone()
+            if rank == 0:
+                y[:, :5] = -100
+            else:
+                y[:, 3:] = -100
+            loss = model(x, y)
+            loss.backward()
+            assert torch.isfinite(loss)
+            model.zero_grad(set_to_none=True)
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.skipif(
+    torch.cuda.device_count() < 2, reason="requires two CUDA devices"
+)
+def test_longshot_fsdp_rank_local_answer_masks(tmp_path: Path):
+    mp.spawn(
+        _run_longshot_fsdp_answer_masks,
+        args=(str(tmp_path / "answer-masks"),),
         nprocs=2,
         join=True,
     )

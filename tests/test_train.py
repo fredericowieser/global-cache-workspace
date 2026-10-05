@@ -607,6 +607,52 @@ def test_fsdp_nonzero_rank_builds_on_meta_device(tmp_path):
     assert all(param.is_meta for param in model.parameters())
 
 
+@pytest.mark.parametrize("tie_embeddings", [False, True])
+@pytest.mark.parametrize("trainable", ["cache_processor", "all"])
+@pytest.mark.parametrize("loss_backend", ["reference", "target_only"])
+def test_fsdp_isolates_only_frozen_callable_vocabulary_modules(
+    tmp_path, monkeypatch, tie_embeddings, trainable, loss_backend
+):
+    import torch.distributed.fsdp as fsdp
+    from gcw.training.distributed import _wrap_fsdp
+
+    cfg = tiny_train_config(tmp_path)
+    cfg.model = replace(
+        cfg.model,
+        variant="bgt",
+        tie_embeddings=tie_embeddings,
+        cache_processor=CacheProcessorConfig(
+            hidden_size=8, intermediate_size=16, num_heads=1
+        ),
+    )
+    cfg.trainable = trainable
+    cfg.loss_backend = loss_backend
+    model = build_model(cfg.model)
+    _apply_trainable_policy(model, trainable)
+    separate = (
+        not tie_embeddings
+        and trainable == "cache_processor"
+        and loss_backend == "reference"
+    )
+
+    def check_wrap(module, **kwargs):
+        policy = kwargs["auto_wrap_policy"]
+        for vocabulary_module in (
+            module.backbone.embed_tokens,
+            module.backbone.lm_head,
+        ):
+            if vocabulary_module is not None:
+                assert (
+                    policy(vocabulary_module, recurse=False, nonwrapped_numel=0)
+                    == separate
+                )
+        assert not policy(module.backbone, recurse=False, nonwrapped_numel=0)
+        return module
+
+    monkeypatch.setattr(fsdp, "FullyShardedDataParallel", check_wrap)
+    assert _wrap_fsdp(model, cfg, torch.device("cpu")) is model
+
+
 def test_loader_uses_configured_batch_size_for_random_data(tmp_path):
     cfg = tiny_train_config(tmp_path)
     cfg.batch_size = 5

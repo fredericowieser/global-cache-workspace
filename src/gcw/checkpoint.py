@@ -148,6 +148,23 @@ def load_checkpoint_bytes(
     device: torch.device | str = "cpu",
     dtype: torch.dtype | str | None = "auto",
 ):
+    return _load_checkpoint_state(
+        config_bytes=config_bytes,
+        train_state_bytes=train_state_bytes,
+        weights=load_safetensors(model_bytes),
+        device=device,
+        dtype=dtype,
+    )
+
+
+def _load_checkpoint_state(
+    *,
+    config_bytes: bytes,
+    train_state_bytes: bytes,
+    weights: dict[str, torch.Tensor],
+    device: torch.device | str,
+    dtype: torch.dtype | str | None,
+):
     try:
         config_payload = json.loads(config_bytes.decode("utf-8"))
         train_state = json.loads(train_state_bytes.decode("utf-8"))
@@ -158,9 +175,9 @@ def load_checkpoint_bytes(
     if not isinstance(train_state, dict):
         raise ValueError("checkpoint train-state snapshot must be an object")
     cfg = _model_config_from_checkpoint(config_payload["model"])
-    weights = load_safetensors(model_bytes)
     weights = _upgrade_qwen35_gated_delta_keys(weights)
-    model = build_model(cfg)
+    with torch.device("meta"):
+        model = build_model(cfg)
     dtype_name = train_state.get("dtype")
     if dtype_name == "mixed_bfloat16_backbone_float32_processor" and (
         dtype is None or dtype == "auto"
@@ -207,7 +224,12 @@ def load_checkpoint_bytes(
                 "train_state.json does not specify backbone_checkpoint"
             )
         load_backbone_checkpoint(model, backbone_checkpoint)
-    model.load_state_dict(weights, strict=not missing)
+    expected_state = model.state_dict()
+    weights = {
+        key: tensor.to(dtype=expected_state[key].dtype)
+        for key, tensor in weights.items()
+    }
+    model.load_state_dict(weights, strict=not missing, assign=True)
     model.to(device)
     return model, cfg, train_state
 
@@ -247,10 +269,10 @@ def load_checkpoint(
     dtype: torch.dtype | str | None = "auto",
 ):
     path = Path(path)
-    return load_checkpoint_bytes(
+    return _load_checkpoint_state(
         config_bytes=(path / "config.json").read_bytes(),
         train_state_bytes=(path / "train_state.json").read_bytes(),
-        model_bytes=(path / "model.safetensors").read_bytes(),
+        weights=load_file(path / "model.safetensors", device="cpu"),
         device=device,
         dtype=dtype,
     )
@@ -309,10 +331,17 @@ def load_backbone_checkpoint(model: torch.nn.Module, path: str | Path) -> None:
                 f"shape mismatch for backbone key {key}: target {tuple(expected.shape)} "
                 f"vs checkpoint {tuple(tensor.shape)} from {source_key}"
             )
-        loadable[key] = tensor.to(device=expected.device, dtype=expected.dtype)
+        loadable[key] = tensor.to(
+            device="cpu" if expected.is_meta else expected.device,
+            dtype=expected.dtype,
+        )
     if missing:
         raise KeyError(f"missing backbone checkpoint keys: {missing[:8]}")
-    incompatible = target.load_state_dict(loadable, strict=False)
+    incompatible = target.load_state_dict(
+        loadable,
+        strict=False,
+        assign=any(tensor.is_meta for tensor in target_state.values()),
+    )
     unexpected_missing = [
         key
         for key in incompatible.missing_keys

@@ -176,8 +176,12 @@ class ContextualHeadSelector(nn.Module):
             self.register_parameter("identity_bias", None)
         self._training_enabled = False
         self._routing_mode: SelectorRoutingMode = "hard"
-        self.register_buffer("_temperature", torch.zeros(()), persistent=False)
-        self.register_buffer("_hard_blend", torch.ones(()), persistent=False)
+        self.register_buffer(
+            "_temperature", torch.zeros((), device="cpu"), persistent=False
+        )
+        self.register_buffer(
+            "_hard_blend", torch.ones((), device="cpu"), persistent=False
+        )
         self._metric_totals: dict[str, torch.Tensor] = {}
         self._metric_counts: dict[str, int] = {}
 

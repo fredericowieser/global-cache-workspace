@@ -56,7 +56,9 @@ class Gemma4ScaledWordEmbedding(nn.Embedding):
         self.scalar_embed_scale = embed_scale
         self.embed_scale: torch.Tensor
         self.register_buffer(
-            "embed_scale", torch.tensor(embed_scale), persistent=False
+            "embed_scale",
+            torch.tensor(embed_scale, device="cpu"),
+            persistent=False,
         )
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:

@@ -51,11 +51,46 @@ def _wrap_fsdp(
         FullyShardedDataParallel as FSDP,
         MixedPrecision,
     )
-    from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+    from torch.distributed.fsdp.wrap import (
+        _or_policy,
+        lambda_auto_wrap_policy,
+        transformer_auto_wrap_policy,
+    )
 
     layer_classes = _fsdp_wrap_classes(config.model.family)
+    backbone = getattr(model, "backbone", None)
+    processor = config.model.cache_processor
+    shared_dynamics = (
+        processor is not None
+        and processor.linear_state_cache
+        and processor.linear_state_update_mode == "gated_delta"
+    )
+    vocabulary_modules: set[torch.nn.Module] = set()
+    if (
+        isinstance(backbone, torch.nn.Module)
+        and not shared_dynamics
+        and not config.model.tie_embeddings
+        and config.loss_backend == "reference"
+        and not any(
+            parameter.requires_grad for parameter in backbone.parameters()
+        )
+    ):
+        vocabulary_modules = {
+            cast(torch.nn.Module, backbone.embed_tokens),
+            cast(torch.nn.Module, backbone.lm_head),
+        }
     auto_wrap_policy = partial(
-        transformer_auto_wrap_policy, transformer_layer_cls=layer_classes
+        _or_policy,
+        policies=[
+            partial(
+                transformer_auto_wrap_policy,
+                transformer_layer_cls=layer_classes,
+            ),
+            partial(
+                lambda_auto_wrap_policy,
+                lambda_fn=lambda module: module in vocabulary_modules,
+            ),
+        ],
     )
     mixed_precision = (
         MixedPrecision(
