@@ -82,7 +82,7 @@ Options:
                        GPU indices reported by nvidia-smi.
   --configs-file FILE  File containing one config path per line. Blank lines and # comments are ignored.
   --eval-tasks-file FILE
-                       Tab-separated CHECKPOINT, OUTPUT, and THINKING rows for eval-only workers.
+                       Tab-separated CHECKPOINT, OUTPUT, THINKING, and optional SUITE rows for eval-only workers.
   --attach-eval-queue STATE_DIR
                        Add Slurm eval workers to an existing queue without rewriting it.
                        Requires EVAL_ONLY=1 and the same evaluation environment.
@@ -502,14 +502,22 @@ run_one_config() {
   fi
 }
 
+validate_eval_suite() {
+  case "$1" in
+    paper7|paper7-legacy|korbench|all|math|general) ;;
+    *) echo "Unsupported evaluation task suite: $1" >&2; return 1 ;;
+  esac
+}
+
 run_one_eval_task() {
   local task="$1"
-  local checkpoint out enable_thinking extra
+  local checkpoint out enable_thinking suite extra
+  local EVAL_SUITE="$EVAL_SUITE"
 
-  IFS=$'\t' read -r checkpoint out enable_thinking extra <<< "$task"
+  IFS=$'\t' read -r checkpoint out enable_thinking suite extra <<< "$task"
   require_path "$checkpoint"
   if [[ -z "$out" || -z "$enable_thinking" || -n "$extra" ]]; then
-    echo "Invalid evaluation task; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING: $task" >&2
+    echo "Invalid evaluation task; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING[<TAB>SUITE]: $task" >&2
     return 1
   fi
   case "$enable_thinking" in
@@ -520,6 +528,10 @@ run_one_eval_task() {
       ;;
   esac
 
+  if [[ -n "$suite" ]]; then
+    validate_eval_suite "$suite" || return $?
+    EVAL_SUITE="$suite"
+  fi
   prepare_worker_environment
   export GCW_EVAL_SKIP_TASKS
 
@@ -747,7 +759,7 @@ write_config_list() {
 write_eval_task_list() {
   local list_path="$1"
   local tasks_file="$2"
-  local line checkpoint out enable_thinking extra
+  local line checkpoint out enable_thinking suite extra
   local line_number=0
 
   : > "$list_path"
@@ -756,9 +768,13 @@ write_eval_task_list() {
     if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
       continue
     fi
-    IFS=$'\t' read -r checkpoint out enable_thinking extra <<< "$line"
+    if ! awk -F '\t' 'NF < 3 || NF > 4 {exit 1} {for (i=1;i<=NF;i++) if ($i == "") exit 1}' <<< "$line"; then
+      echo "Invalid evaluation task on line $line_number: expected three or four nonempty TSV fields" >&2
+      return 1
+    fi
+    IFS=$'\t' read -r checkpoint out enable_thinking suite extra <<< "$line"
     if [[ -z "$checkpoint" || -z "$out" || -z "$enable_thinking" || -n "$extra" ]]; then
-      echo "Invalid evaluation task on line $line_number of $tasks_file; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING" >&2
+      echo "Invalid evaluation task on line $line_number of $tasks_file; expected CHECKPOINT<TAB>OUTPUT<TAB>THINKING[<TAB>SUITE]" >&2
       return 1
     fi
     if [[ ! -e "$checkpoint" ]]; then
@@ -769,7 +785,14 @@ write_eval_task_list() {
       echo "Evaluation task thinking mode must be true or false on line $line_number of $tasks_file; got '$enable_thinking'" >&2
       return 1
     fi
-    printf "%s\t%s\t%s\n" "$checkpoint" "$out" "$enable_thinking" >> "$list_path"
+    if [[ -n "$suite" ]]; then
+      validate_eval_suite "$suite" || return $?
+      if [[ "$EVAL_LOG_SAMPLES" == "1" && "$suite" == paper7* ]]; then
+        echo "EVAL_LOG_SAMPLES is not supported for $suite evaluation" >&2
+        return 1
+      fi
+    fi
+    printf "%s\n" "$line" >> "$list_path"
   done < "$tasks_file"
 
   if [[ ! -s "$list_path" ]]; then
@@ -1444,8 +1467,8 @@ launcher_main() {
     require_path "$attach_queue/configs.txt"
     require_path "$attach_queue/claimed_configs"
     require_path "$attach_queue/queue.lock"
-    if ! awk -F '\t' 'NF != 3 || ($3 != "true" && $3 != "false") { exit 1 }' "$attach_queue/configs.txt"; then
-      echo "Existing queue must contain three-column evaluation tasks" >&2
+    if ! awk -F '\t' '(NF != 3 && NF != 4) || ($3 != "true" && $3 != "false") { exit 1 }' "$attach_queue/configs.txt"; then
+      echo "Existing queue must contain three- or four-column evaluation tasks" >&2
       return 1
     fi
     GCW_EVAL_TASK_MODE=1

@@ -221,4 +221,8 @@ with `EVAL_ONLY=1`. This submits four additional workers sharing the existing
 `configs.txt`, claim records, and queue lock. It preserves running work and queue
 order; it does not copy or reset the queue. Use the same suite, code snapshot,
 local dependency paths, batching, and generation settings as the original workers.
-This option supports three-column evaluation queues only.
+This option supports three-column evaluation queues and queues with an optional fourth suite column.
+
+### Mix evaluation suites in one worker array
+
+With `EVAL_ONLY=1` and `--eval-tasks-file`, each TSV row contains checkpoint, output JSON, thinking boolean, and an optional suite. Three-column rows retain the array-wide `EVAL_SUITE` default; a fourth column can select `paper7` or `korbench` independently. Workers claim rows in list order without waiting for earlier tasks to finish. Put thinking-off rows first to prefer those results while allowing later thinking-on tasks to start as workers become available.

@@ -894,3 +894,65 @@ def test_attach_eval_queue_preserves_existing_work(tmp_path: Path) -> None:
     rejected = _run(["--backend", "slurm", "--dry-run",
                      "--attach-eval-queue", str(state)], env, check=False)
     assert rejected.returncode != 0
+
+
+def test_eval_tasks_support_per_row_suites(tmp_path: Path) -> None:
+    capture = tmp_path / "capture"
+    _, env = _write_fixture(
+        tmp_path,
+        uv_body='printf "%s\\n" "$*" >> "$UV_CAPTURE"',
+    )
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    tasks = tmp_path / "eval.tsv"
+    rows = [
+        f"{checkpoint}\t{tmp_path / 'paper7-off.json'}\tfalse\tpaper7",
+        f"{checkpoint}\t{tmp_path / 'korbench-off.json'}\tfalse\tkorbench",
+        f"{checkpoint}\t{tmp_path / 'paper7-on.json'}\ttrue\tpaper7",
+        f"{checkpoint}\t{tmp_path / 'korbench-on.json'}\ttrue\tkorbench",
+    ]
+    tasks.write_text("\n".join(rows) + "\n")
+    env.update(EVAL_ONLY="1", UV_CAPTURE=str(capture))
+    result = _run(
+        [
+            "--backend",
+            "local",
+            "--local-gpus",
+            "0",
+            "--eval-tasks-file",
+            str(tasks),
+        ],
+        env,
+    )
+    state = _state_dir(result.stdout)
+    _wait_for_status(state, env, "1 succeeded")
+    calls = [
+        line
+        for line in capture.read_text().splitlines()
+        if " gcw eval " in f" {line} "
+    ]
+    assert len(calls) == 4
+    for call, row in zip(calls, rows, strict=True):
+        _, out, thinking, suite = row.split("\t")
+        assert f"eval {suite}" in call
+        assert f"--enable-thinking {thinking}" in call
+        assert f"--out {out}" in call
+    assert (state / "completed_configs").read_text().splitlines() == rows
+
+
+def test_eval_tasks_reject_unknown_per_row_suite(tmp_path: Path) -> None:
+    _, env = _write_fixture(tmp_path)
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    tasks = tmp_path / "eval.tsv"
+    tasks.write_text(
+        f"{checkpoint}\t{tmp_path / 'out.json'}\tfalse\tmisspelled\n"
+    )
+    env["EVAL_ONLY"] = "1"
+    result = _run(
+        ["--backend", "slurm", "--dry-run", "--eval-tasks-file", str(tasks)],
+        env,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "Unsupported evaluation task suite" in result.stdout
