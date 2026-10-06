@@ -81,6 +81,7 @@ docs = [
 ]
 
 [tool.uv]
+preview = true
 default-groups = []
 python-preference = "only-managed"
 conflicts = [[{ extra = "cpu" }, { extra = "gpu" }, { extra = "rocm" }]]
