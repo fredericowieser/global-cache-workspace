@@ -2,6 +2,7 @@
 """Show GPUs allocated to running Slurm jobs by user."""
 
 import json
+import re
 import subprocess
 from collections import defaultdict
 
@@ -11,9 +12,21 @@ totals = defaultdict(int)
 for job in jobs:
     if "RUNNING" not in job["job_state"]:
         continue
-    for resource in job["tres_alloc_str"].split(","):
+    gpus = None
+    for resource in (job.get("tres_alloc_str") or "").split(","):
         if resource.startswith("gres/gpu="):
-            totals[job["user_name"]] += int(resource.split("=", 1)[1])
+            gpus = int(resource.split("=", 1)[1])
+            break
+    if gpus is None:
+        gpus = sum(
+            int(match.group(1))
+            for detail in job.get("gres_detail") or []
+            for match in re.finditer(
+                r"(?:^|,)gpu:(?:[^:(),]+:)?(\d+)(?=\(|,|$)", detail
+            )
+        )
+    if gpus:
+        totals[job["user_name"]] += gpus
 
 print(f'{"USER":<20} {"GPUS":>5}')
 for user, gpus in sorted(totals.items(), key=lambda item: (-item[1], item[0])):
