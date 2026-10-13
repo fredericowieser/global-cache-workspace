@@ -1,0 +1,238 @@
+model:
+  variant: longshot
+  family: qwen3_5
+  sequence_len: 262144
+  vocab_size: 248320
+  hidden_size: 5120
+  intermediate_size: 17408
+  num_layers: 64
+  num_heads: 24
+  num_kv_heads: 4
+  head_dim: 256
+  rope_theta: 10000000.0
+  norm_eps: 1.0e-06
+  tie_embeddings: false
+  qk_norm: true
+  rotary_style: llama
+  cache_processor:
+    process_every: 64
+    topk: 32
+    topk_heads: 16
+    topk_linear_heads: 576
+    linear_state_cache: true
+    linear_state_query_mode: per_linear_state
+    linear_state_update_mode: outer_product
+    gate_linear_state_delta: true
+    score: kv_norm
+    hidden_size: 896
+    intermediate_size: 3584
+    num_layers: 7
+    num_heads: 7
+    num_kv_heads: 7
+    norm_eps: 1.0e-06
+    rope_theta: 10000.0
+    gate_init: -2.0
+    attention_dropout: 0.0
+    per_cache_head_projections: false
+    gradient_checkpointing: true
+    encoder_method: query_attention
+    encoder_query_source: final_token
+    unrope_keys: true
+    head_selection_method: magnitude
+    live_rank1_linear_writer: true
+    gate_mode: sigmoid
+    update_gate_type: static_scalar
+    update_stream: kv
+    out_proj_init: zero
+    processor_mode: standard
+    iterations: 1
+    iteration_mode: internal
+  legacy_bottleneck_generate: null
+  layer_types:
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  - linear_attention
+  - linear_attention
+  - linear_attention
+  - full_attention
+  processor_layer_indices:
+  - 3
+  - 7
+  - 11
+  - 15
+  - 19
+  - 23
+  - 27
+  - 31
+  - 35
+  - 39
+  - 43
+  - 47
+  - 51
+  - 55
+  - 59
+  - 63
+  partial_rotary_factor: 0.25
+  linear_conv_kernel_dim: 4
+  linear_key_head_dim: 128
+  linear_value_head_dim: 128
+  linear_num_key_heads: 16
+  linear_num_value_heads: 48
+  hidden_act: silu
+  processor_generation_mode: post_prefill_relative
+data:
+  kind: sft
+  dataset: /home/martin/workspace/global-cache-workspace/data/train-data/reasoning-gym-128k/train.jsonl
+  tokenizer: hf
+  tokenizer_source: /home/martin/workspace/global-cache-workspace/artifacts/tokenizers/Qwen3.5-27B
+  sft_take_rows: 128000
+  response_prefix: ''
+  sft_skip_rows: 0
+  prompt_suffix: ''
+  sft_chat_template: true
+  sft_enable_thinking: false
+  sft_loss_scope: answer_only
+  validation_dataset: null
+  max_length: 2048
+mode: sft
+distributed: fsdp
+freeze_backbone: true
+trainable: cache_processor
+save_cache_processor_only: true
+loss_backend: reference
+activation_checkpointing: none
+backbone_chunk_backend: eager
+activation_checkpoint_windows: 0
+activation_checkpoint_min_padded_sequence_length: 0
+longshot_gradient_checkpointing_seq_len_threshold: null
+global_batch_rows: 0
+logical_pair_grouping: false
+init_checkpoint: /home/martin/workspace/global-cache-workspace/artifacts/checkpoints/qwen35_27b_longshot_maths_step2000
+resume: null
+save_final: true
+backbone_checkpoint: null
+output_dir: /home/martin/workspace/global-cache-workspace/runs/experiments/reasoning_gym_128k_maths_init_runpod1/qwen35_27b_longshot_seed24
+batch_size: 1
+sequence_len: 1024
+max_steps: 2000
+total_batch_size: 131072
+learning_rate: 0.0001
+adam_beta2: 0.999
+warmup_steps: 0
+warmdown_ratio: 0.0
+weight_decay: 0.0
+grad_clip: 1.0
+precision: bf16
+seed: 24
+save_every: 1000
+performance:
+  adaptive_batching:
+    enabled: false
+    bands:
+    - max_padded_tokens: 1024
+      physical_rows: 16
+    - max_padded_tokens: 2048
+      physical_rows: 8
+    - max_padded_tokens: 3072
+      physical_rows: 4
+    - max_padded_tokens: 4096
+      physical_rows: 2
+  reference_loss:
+    mode: legacy
+    checkpoint_chunks: false
+    max_projected_positions: 1024
+  noisy_diffusion:
+    recurrence_backend: eager
+wandb:
+  enabled: true
+  project: global-cache-workspace
+  group: reasoning-gym-128k-maths-init
+  name: reasoning-gym-128k-maths-init-qwen35_27b_longshot_seed24-runpod1
+  mode: offline
+  log_every: 1
+  tags:
+  - qwen3.5-27b-instruct
+  - reasoning-gym-128k
+  - longshot
+  - maths-init
+  - frozen-backbone
+  - seed-24
+  - runpod1
+metadata:
+  source_job: lrc-alpha:28570
+  source_config: configs/experiments/reasoning_gym_128k_maths_init/qwen35_27b_longshot_seed24.yaml
+  initialization_step: 2000
+  initialization_dataset: OpenMathInstruct-2
+  initialization_checkpoint: /home/martin/workspace/global-cache-workspace/artifacts/checkpoints/qwen35_27b_longshot_maths_step2000
+  dataset_manifest: /home/martin/workspace/global-cache-workspace/data/train-data/reasoning-gym-128k/manifest.json
+  subset_seed: 24
+  prepared_training_rows: 128000
+  backbone_source: Qwen/Qwen3.5-27B
+  backbone_revision: fc05daec18b0a78c049392ed2e771dde82bdf654
+  dataset_sha256: 0df5686993b303b21310cb7b950ee8bd83b121b43b7dc4a213272344e67b1b53
+adam_beta1: 0.9
+adam_eps: 1.0e-08
+final_lr_frac: 0.0
+eval_every: 0
+eval_on_start: false
+eval_batches: 10
+bf16: true
+checkpoint_format: native_safetensors

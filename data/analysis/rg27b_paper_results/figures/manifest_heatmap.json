@@ -1,0 +1,70 @@
+{
+  "source": "/workspace/empiria/shared/martin/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/C_Extended_Results.tex",
+  "source_sha256": "2930e152ba95137dbe41ece0db585aac8e4119810c0ac36047a39f20809bd2dd",
+  "options": [
+    "relative"
+  ],
+  "suites": [
+    "math_after_reasoning",
+    "korbench_after_reasoning",
+    "math_after_sequential",
+    "korbench_after_sequential"
+  ],
+  "columns": 3,
+  "layout": "heatmap",
+  "palette": "terracotta_cream_forest",
+  "adaptations": [],
+  "omitted_backbones": {},
+  "formats": [
+    "svg",
+    "pdf"
+  ],
+  "omitted_methods": [],
+  "relative_statistic": "100 * (value / baseline_value - 1)",
+  "comparison_baseline": "Instruct",
+  "thinking_modes": [
+    "off",
+    "on"
+  ],
+  "relative_quantities": [
+    "accuracy",
+    "mean_response_tokens"
+  ],
+  "baseline_matching": [
+    "suite",
+    "backbone",
+    "thinking"
+  ],
+  "source_precision": "Rounded values as reported in the paper tables",
+  "matplotlib_version": "3.11.0",
+  "thinking_modes_by_adaptation": {
+    "mathematical": [
+      "off",
+      "on"
+    ],
+    "reasoning": [
+      "off"
+    ],
+    "sequential": [
+      "off"
+    ]
+  },
+  "generation_command": [
+    "uv",
+    "run",
+    "--no-sync",
+    "python",
+    "scripts/plot_paper_results.py",
+    "--layout",
+    "heatmap",
+    "--suite",
+    "math_after_reasoning",
+    "--suite",
+    "korbench_after_reasoning",
+    "--suite",
+    "math_after_sequential",
+    "--suite",
+    "korbench_after_sequential"
+  ],
+  "row_filter": "Keep thinking off for all suites; also keep thinking on for mathematical adaptation."
+}

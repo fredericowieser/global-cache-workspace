@@ -21,9 +21,7 @@ backbone headers, compact legend, and larger numbers. The alternate palettes,
 CLI selector, generated figures, and manifests have been removed.
 
 The reasoning-adaptation maths data are present in the updated appendix under
-`tab:paper7-reasoning-gym-results`. They currently cover Qwen3.5-4B thinking off
-and average five tasks without TheoremQA, unlike the six-task maths-trained
-average. Each uses its own matching pretrained baseline. Keep this distinction
+`tab:paper7-reasoning-gym-results`. They cover all five backbones through Qwen3.5-27B and average five tasks without TheoremQA, unlike the six-task maths-trained average. Reasoning and sequential figures use thinking off for every backbone; mathematical-adaptation figures retain their existing thinking-mode coverage. The regenerated figures and source manifests are stored in `data/analysis/rg27b_paper_results/figures/`. Each uses its own matching pretrained baseline. Keep this distinction
 in the paper caption.
 
 The mathematical-adaptation paired heatmap is included using `\includesvg`
