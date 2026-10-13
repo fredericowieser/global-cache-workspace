@@ -81,3 +81,4 @@ data/train-data/reasoning-gym/
 data/train-data/reasoning-gym-128k/
 data/train-data/.reasoning-gym-*/
 data/train-data/*.failed.json
+data/train-data/fineweb-edu-20m/

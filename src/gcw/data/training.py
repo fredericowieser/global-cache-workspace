@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import json
 from array import array
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
-import json
 from pathlib import Path
 from typing import Any, BinaryIO, Literal, Protocol
 
 import torch
 
 from gcw.config import TrainConfig
-from gcw.data.shards import default_data_dir, list_shards, read_shard
 from gcw.data.sft import sft_batch
+from gcw.data.shards import (
+    ShardDataset,
+    default_data_dir,
+    list_shards,
+    read_shard,
+)
 from gcw.data.tokenizers import get_tokenizer
 
 
@@ -111,15 +116,22 @@ class FineWebBatchStream:
         cursor: FineWebCursor | None = None,
     ) -> None:
         self.data_dir = Path(data_dir).expanduser()
-        self.shards = list_shards(self.data_dir, "train")
-        if not self.shards:
-            raise FileNotFoundError(f"No train shards found in {self.data_dir}")
+        self.dataset = ShardDataset(self.data_dir)
+        self.shards = self.dataset.shards(
+            "train", batch_size * sequence_len * world_size
+        )
         self.batch_size = batch_size
         self.sequence_len = sequence_len
         self.device = torch.device(device)
         self.rank = rank
         self.world_size = world_size
         self._cursor = cursor or FineWebCursor()
+        if (
+            not 0 <= self._cursor.shard_index < len(self.shards)
+            or self._cursor.step_in_shard < 0
+            or self._cursor.epoch < 0
+        ):
+            raise ValueError("Invalid FineWeb cursor")
 
     def close(self) -> None:
         pass
@@ -130,7 +142,9 @@ class FineWebBatchStream:
 
     def __next__(self) -> TrainingBatch:
         while True:
-            shard = read_shard(self.shards[self._cursor.shard_index])
+            shard = read_shard(
+                self.shards[self._cursor.shard_index], self.dataset.dtype
+            )
             global_micro_tokens = (
                 self.batch_size * self.sequence_len * self.world_size
             )
@@ -467,10 +481,28 @@ def training_data_identity(config: TrainConfig) -> dict[str, Any]:
     shards = [Path(path) for path in list_shards(data_dir, "train")]
     if not shards:
         raise FileNotFoundError(f"No train shards found in {data_dir}")
+    dataset = ShardDataset(data_dir)
+    tokenizer_name = config.data.tokenizer
+    if tokenizer_name == "hf":
+        if not config.data.tokenizer_source:
+            raise ValueError(
+                "data.tokenizer_source is required for HF FineWeb data"
+            )
+        tokenizer_name = f"hf:{config.data.tokenizer_source}"
+    dataset.validate_tokenizer(tokenizer_name, config.model.vocab_size)
     return {
         "kind": "fineweb",
         "path": str(data_dir),
         "shards": [
             {"name": path.name, "size": path.stat().st_size} for path in shards
         ],
+        **(
+            {
+                "manifest_sha256": dataset.manifest_sha256,
+                "tokenizer": dataset.manifest["tokenizer"],
+                "dtype": dataset.manifest["dtype"],
+            }
+            if dataset.manifest is not None
+            else {}
+        ),
     }

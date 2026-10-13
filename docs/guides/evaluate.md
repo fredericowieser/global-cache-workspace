@@ -2,6 +2,20 @@
 
 **Status:** Maintained
 
+## FineWeb validation
+
+```bash
+gcw eval fineweb --checkpoint /path/to/checkpoint \
+  --data-dir /path/to/fineweb-tokenized --sequence-len 4096 \
+  --batch-size 1 --eval-tokens 524288 --out results/fineweb.json
+```
+
+FineWeb evaluation accepts supported native backbones and processors with tokenizer-matched shards. Checkpoint tokenizer provenance must match the prepared data; vocabulary size alone is insufficient. New FineWeb checkpoints carry a content identity, allowing evaluation without reopening the original tokenizer. Converted checkpoints use their tokenizer source to establish compatibility. Legacy manifest-free shards remain Cosmo2-only.
+
+Results include `val_nll` and `val_perplexity` over all target tokens, including EOS. Cosmo2 additionally retains `val_bpb` with its historical nonzero-byte token mask. Consequently, Cosmo2 NLL now uses all tokens while BPB retains its previous definition. Other tokenizers omit `val_bpb`. Results record dataset/tokenizer identity, effective sequence length, and actual evaluated tokens. `--sequence-len` defaults to the checkpoint's context length and cannot exceed it. Evaluation rounds the token budget down to whole batches, with a minimum of one batch, and cycles validation shards when necessary.
+
+## Benchmark suites
+
 1. Install evaluation dependencies.
 
    ```bash

@@ -4,7 +4,23 @@
 
 ## FineWeb pretraining
 
-The preparation pipeline streams FineWeb-Edu sample-10BT, tokenizes documents with Cosmo2, reserves the first 10,000 documents for validation, and writes contiguous `uint16` token shards. Training memory-maps those shards rather than loading the corpus into RAM.
+The preparation pipeline streams `HuggingFaceFW/fineweb-edu`, subset `sample-10BT`, in source order. It reserves the first 10,000 documents for validation by default and appends EOS to each plain-text document. Training memory-maps packed token shards rather than loading the corpus into RAM. Sequences can cross document boundaries; EOS separates documents but does not reset attention. Every next-token target contributes to loss, including EOS. Incomplete global microbatches at shard tails are skipped.
+
+Cosmo2 remains the default tokenizer. For a pretrained backbone, prepare a separate dataset using its matching fast Hugging Face tokenizer:
+
+```bash
+gcw prepare fineweb --out /path/to/fineweb-tokenized \
+  --tokenizer hf:/path/to/backbone-tokenizer \
+  --val-docs 10000 --shard-tokens 100000000
+```
+
+`--limit` caps the total documents consumed, including validation documents. Use a limit greater than `--val-docs` to produce training data. The output directory must be empty. Interrupted preparation leaves an incomplete marker and cannot be consumed; retry in a fresh location. A tokenizer without an explicit EOS is rejected.
+
+For an exact token budget, add `--train-tokens 20000000`. This counts training tokens including document EOS separators, independently of the held-out validation documents. Preparation stops at the exact count, truncating the final document's encoded stream if necessary; the manifest records how many tokens were omitted. If the source or `--limit` runs out before the requested count, preparation fails and leaves the incomplete marker. `--shard-tokens` controls individual file sizes, not the total dataset size. Use `--dataset-revision <commit>` to pin the source revision across tokenizers.
+
+Preparation selects little-endian `uint16` or `uint32` storage according to the tokenizer's maximum ID. `manifest.json` records source, preparation parameters, tokenizer content identity and EOS, dtype, and ordered shard inventories with counts and SHA-256 checksums. Readers validate the inventory and byte lengths; they do not rehash the entire corpus at each startup. The manifest digest participates in exact-resume identity. Treat published shards as immutable.
+
+The tokenizer identity includes vocabulary and tokenization rules, including normalization, but excludes its filesystem location and chat formatting. Training checks it against `data.tokenizer`/`data.tokenizer_source` and checks the model vocabulary capacity. Existing manifest-free shards retain the historical Cosmo2 `uint16` interpretation and resume identity; they cannot be selected with an HF tokenizer. Their token range remains the responsibility of the original artifact producer.
 
 A FineWeb cursor records `(epoch, shard_index, step_in_shard)`, where the step identifies the next logical global microbatch. “Global” is essential: every DDP rank takes a disjoint slice of that batch. Restoring the cursor therefore resumes data coverage rather than replaying rank-local iterators.
 
@@ -25,4 +41,4 @@ deduplicated train, validation, and test splits with generator provenance.
 
 ## Tokenizer abstraction
 
-GCW supports the Cosmo2 tokenizer used by scratch models, a Hugging Face tokenizer adapter used by converted Llama/Qwen artifacts, and a byte tokenizer for small tests. Evaluation also asks tokenizers for byte lengths so it can convert token NLL into bits per byte.
+GCW supports the Cosmo2 tokenizer used by scratch models, a Hugging Face tokenizer adapter used by converted backbones, and a byte tokenizer for small tests. FineWeb evaluation reports NLL and perplexity for compatible tokenizers, with the historical bits-per-byte metric additionally available for Cosmo2.

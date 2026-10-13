@@ -24,6 +24,8 @@ For `variant: tf`, this trains a normal transformer from random initialization. 
 
 ## SFT Or Continued SFT
 
+For plain-text FineWeb adaptation, see the continued-pretraining section below. `mode: sft` selects the prompt/answer JSONL loader.
+
 Use OpenMathInstruct JSONL:
 
 ```yaml
@@ -37,6 +39,25 @@ data:
 ```
 
 `answer_only` masks prompt labels. `full_sequence` computes next-token cross-entropy over prompt and answer tokens. Padding remains masked in both modes.
+
+### Continued pretraining on FineWeb
+
+`mode: pretrain` also supports pretrained initialization. Prepare [tokenizer-matched FineWeb shards](../concepts/data-and-tokenization.md), keep the backbone's model configuration, and use:
+
+```yaml
+mode: pretrain
+backbone_checkpoint: /path/to/native-backbone-checkpoint
+data:
+  kind: fineweb
+  data_dir: /path/to/fineweb-tokenized
+  tokenizer: hf
+  tokenizer_source: /path/to/backbone-tokenizer
+trainable: backbone
+```
+
+For full-backbone fine-tuning, use `model.variant: tf`. For LoRA, retain `tf`, supply the existing `model.lora` configuration for that backbone, and set `trainable: lora`. For processor-only training, retain the desired supported processor configuration and set `trainable: cache_processor`. Existing joint policies are also supported. Architecture and execution compatibility restrictions still apply.
+
+FineWeb always uses full next-token loss without chat formatting or answer masking. SFT-specific settings have no effect on its token stream; do not enable SFT-only logical pairing or adaptive grouping. Match sequence length, global token budget (`total_batch_size`), optimizer steps, and prepared shards when comparing training policies. Each run retains the existing initialization, validation, checkpoint, and resume behavior. Changing tokenizer requires preparing new shards; editing the training tokenizer field does not retokenize stored IDs.
 
 With FSDP, each training microbatch and validation batch is right-padded to the
 maximum sequence width across ranks before the model runs. This keeps windowed

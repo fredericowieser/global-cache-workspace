@@ -390,7 +390,7 @@ def test_evaluation_timer_accumulates_resume_time_and_preserves_noop(
     }
 
 
-def test_fineweb_reports_execution_and_end_to_end_timing(monkeypatch):
+def test_fineweb_reports_execution_and_end_to_end_timing(monkeypatch, tmp_path):
     import gcw.evaluation.bpb as bpb
 
     model = object()
@@ -419,6 +419,7 @@ def test_fineweb_reports_execution_and_end_to_end_timing(monkeypatch):
 
     result = bpb.run_fineweb(
         "checkpoint",
+        data_dir=tmp_path,
         eval_tokens=8,
         config=EvalConfig(batch_size=2),
     )

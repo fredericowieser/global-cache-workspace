@@ -174,3 +174,33 @@ def get_token_bytes(device: torch.device | str = "cpu") -> torch.Tensor:
         s = tok.id_to_token(tid)
         out[tid] = len(s) if s is not None else 0
     return out.to(device)
+
+
+def tokenizer_content_identity(tokenizer) -> dict:
+    """Identify plain-text tokenization independently of its source location."""
+    if isinstance(tokenizer, IntTokenizer):
+        payload = {"kind": "int", "vocab_size": tokenizer.vocab_size}
+        max_id = tokenizer.vocab_size - 1
+    else:
+        enc = tokenizer.enc
+        backend = getattr(enc, "backend_tokenizer", enc)
+        if not hasattr(backend, "to_str"):
+            raise ValueError("FineWeb requires a serializable fast tokenizer")
+        payload = json.loads(backend.to_str())
+        payload.pop("padding", None)
+        payload.pop("truncation", None)
+        max_id = max(enc.get_vocab().values())
+    eos = tokenizer.eot_id
+    if isinstance(tokenizer, TransformersTokenizer):
+        eos = tokenizer.enc.eos_token_id
+    if not isinstance(eos, int) or eos < 0:
+        raise ValueError("FineWeb preparation requires an explicit EOS token")
+    payload = {"tokenization": payload, "eos_token_id": eos}
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return {
+        "sha256": digest,
+        "eos_token_id": eos,
+        "max_token_id": max(max_id, eos),
+    }

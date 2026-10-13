@@ -428,14 +428,15 @@ def evaluate_nll_bpb(
     model,
     batches,
     steps: int,
-    token_bytes: torch.Tensor,
+    token_bytes: torch.Tensor | None,
     *,
     loss_backend: LossBackend = "reference",
     update_metrics: CacheUpdateMetrics | None = None,
-) -> tuple[float, float]:
+) -> tuple[float, float | None]:
     device = model.get_device()
     total_nats = torch.tensor(0.0, device=device)
     total_bytes = torch.tensor(0, dtype=torch.long, device=device)
+    byte_nats = torch.tensor(0.0, device=device)
     total_tokens = torch.tensor(0, dtype=torch.long, device=device)
     it = iter(batches)
     model.eval()
@@ -459,23 +460,32 @@ def evaluate_nll_bpb(
             ).view(-1)
         y = y.view(-1)
         valid = y >= 0
-        safe = torch.where(valid, y, torch.zeros_like(y))
-        counts = torch.where(
-            valid,
-            token_bytes[safe],
-            torch.zeros_like(y, dtype=token_bytes.dtype),
-        )
-        keep = counts > 0
-        total_nats += (loss * keep).sum()
-        total_bytes += counts.sum()
-        total_tokens += keep.sum()
+        total_nats += loss[valid].sum()
+        total_tokens += valid.sum()
+        if token_bytes is not None:
+            safe = torch.where(valid, y, torch.zeros_like(y))
+            counts = torch.where(
+                valid,
+                token_bytes[safe],
+                torch.zeros_like(y, dtype=token_bytes.dtype),
+            )
+            byte_nats += loss[counts > 0].sum()
+            total_bytes += counts.sum()
     if distributed:
         dist.all_reduce(total_nats)
         dist.all_reduce(total_bytes)
+        dist.all_reduce(byte_nats)
         dist.all_reduce(total_tokens)
     nats = float(total_nats.item())
     bytes_ = int(total_bytes.item())
     tokens = int(total_tokens.item())
-    return nats / tokens if tokens else float("inf"), (
-        nats / (math.log(2) * bytes_) if bytes_ else float("inf")
+    bpb = (
+        None
+        if token_bytes is None
+        else (
+            float(byte_nats.item()) / (math.log(2) * bytes_)
+            if bytes_
+            else float("inf")
+        )
     )
+    return nats / tokens if tokens else float("inf"), bpb

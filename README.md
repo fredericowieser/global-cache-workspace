@@ -13,7 +13,7 @@ Implemented model compositions:
 - **Longshot**: time compression, cross-head processing, frontier writeback, and recurrence.
 - **Flow**: deterministic, time-conditioned latent refinement inside BGT, Icarus, or Longshot.
 
-GCW supports scratch FineWeb pretraining and supervised fine-tuning with answer-only or full-sequence cross-entropy. Training can update the backbone, cache processor, or both. Capability admission rejects incompatible compositions before model allocation or output writes.
+GCW supports scratch and continued FineWeb pretraining, plus supervised fine-tuning with answer-only or full-sequence cross-entropy. FineWeb-Edu sample-10BT can be prepared with the backbone's tokenizer for full-backbone, LoRA, or cache-processor training; see [data preparation](docs/concepts/data-and-tokenization.md) and [training configuration](docs/guides/configure-training.md). Training can update the backbone, cache processor, or both. Capability admission rejects incompatible compositions before model allocation or output writes.
 
 ## Install
 

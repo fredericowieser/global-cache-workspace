@@ -145,7 +145,9 @@ usage: gcw eval chat [-h] (--checkpoint CHECKPOINT | --hf-model HF_MODEL)
 
 ```text
 usage: gcw eval fineweb [-h] --checkpoint CHECKPOINT [--data-dir DATA_DIR]
-                        [--eval-tokens EVAL_TOKENS] [--batch-size BATCH_SIZE]
+                        [--eval-tokens EVAL_TOKENS]
+                        [--sequence-len SEQUENCE_LEN]
+                        [--batch-size BATCH_SIZE]
                         [--dtype {auto,bfloat16,float16,float32}] [--out OUT]
                         [--cache-update-metrics [PATH]]
 ```
@@ -155,6 +157,7 @@ usage: gcw eval fineweb [-h] --checkpoint CHECKPOINT [--data-dir DATA_DIR]
 | `--checkpoint` | required |
 | `--data-dir` | flag |
 | `--eval-tokens` | default: `5242880`; type: `int` |
+| `--sequence-len` | type: `_positive_int` |
 | `--batch-size` | default: `16`; type: `int` |
 | `--dtype` | choices: `auto`, `bfloat16`, `float16`, `float32`; default: `auto` |
 | `--out` | flag |
@@ -408,7 +411,9 @@ usage: gcw prepare [-h] {fineweb,openmath} ...
 
 ```text
 usage: gcw prepare fineweb [-h] --out OUT [--shard-tokens SHARD_TOKENS]
-                           [--limit LIMIT]
+                           [--limit LIMIT] [--tokenizer TOKENIZER]
+                           [--val-docs VAL_DOCS] [--train-tokens TRAIN_TOKENS]
+                           [--dataset-revision DATASET_REVISION]
 ```
 
 | Argument | Contract |
@@ -416,6 +421,10 @@ usage: gcw prepare fineweb [-h] --out OUT [--shard-tokens SHARD_TOKENS]
 | `--out` | required |
 | `--shard-tokens` | default: `100000000`; type: `int` |
 | `--limit` | type: `int` |
+| `--tokenizer` | default: `cosmo2` |
+| `--val-docs` | default: `10000`; type: `int` |
+| `--train-tokens` | type: `_positive_int` |
+| `--dataset-revision` | flag |
 
 ## `gcw prepare openmath`
 

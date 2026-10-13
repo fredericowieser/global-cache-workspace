@@ -65,6 +65,10 @@ def _checkpoint_metadata(
     if config.data.tokenizer_source is not None:
         state["source"] = config.data.tokenizer_source
         state["tokenizer_source"] = config.data.tokenizer_source
+    if config.data.kind == "fineweb":
+        identity = training_data_identity(config)
+        if "manifest_sha256" in identity:
+            state["fineweb_data_identity"] = identity
     state["admission"] = (
         admission
         if admission is not None
