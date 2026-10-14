@@ -493,10 +493,13 @@ def test_cli_fineweb_options():
             "hf:local",
             "--val-docs",
             "20",
+            "--shuffle-seed",
+            "24",
         ]
     )
     assert args.tokenizer == "hf:local"
     assert args.val_docs == 20
+    assert args.shuffle_seed == 24
     args = parser.parse_args(
         ["eval", "fineweb", "--checkpoint", "model", "--sequence-len", "64"]
     )
@@ -537,3 +540,71 @@ def test_preparation_pins_source_revision(prepared):
     assert (
         ShardDataset(path).manifest["source"]["revision"] == "pinned-revision"
     )
+
+
+def test_global_document_shuffle(tmp_path, monkeypatch):
+    import datasets
+
+    source = datasets.Dataset.from_dict(
+        {
+            "text": [f"{i:03d}" for i in range(100)],
+            "dump": ["old"] * 50 + ["new"] * 50,
+        }
+    )
+    calls = []
+
+    def load_dataset(*args, **kwargs):
+        calls.append(kwargs)
+        return source
+
+    monkeypatch.setattr(datasets, "load_dataset", load_dataset)
+    monkeypatch.setattr(fineweb, "get_tokenizer", lambda _: IntTokenizer())
+    manifests = []
+    tokens = []
+    for index, seed in enumerate([24, 24, 25]):
+        path = tmp_path / str(index)
+        fineweb.prepare_fineweb(
+            path,
+            tokenizer="int",
+            val_docs=10,
+            limit=36,
+            train_tokens=101,
+            shuffle_seed=seed,
+        )
+        manifest = json.loads((path / "manifest.json").read_text())
+        train = read_shard(path / "train_000000.bin", manifest["dtype"])
+        val = read_shard(path / "val_000000.bin", manifest["dtype"])
+        train_ids = {
+            bytes(row[:3]).decode()
+            for row in train[:100].reshape(-1, 4).astype("uint8")
+        }
+        val_ids = {
+            bytes(row[:3]).decode()
+            for row in val.reshape(-1, 4).astype("uint8")
+        }
+        assert len(train_ids) == 25
+        assert len(val_ids) == 10
+        assert train_ids.isdisjoint(val_ids)
+        assert max(map(int, train_ids)) > 35
+        assert len(train) == 101
+        assert manifest["documents"] == {"train": 26, "val": 10}
+        assert manifest["truncated_final_document_tokens"] == 3
+        assert manifest["preparation"]["sampling"] == {
+            "method": "global_document_shuffle",
+            "seed": seed,
+            "source_documents": 100,
+        }
+        assert set(manifest["crawl_documents"]["train"]) == {"old", "new"}
+        manifests.append(manifest)
+        tokens.append(train.tolist())
+    assert all(call["streaming"] is False for call in calls)
+    assert manifests[0] == manifests[1]
+    assert tokens[0] == tokens[1]
+    assert tokens[0] != tokens[2]
+
+
+@pytest.mark.parametrize("seed", [-1, True, 1.5])
+def test_invalid_shuffle_seed(tmp_path, seed):
+    with pytest.raises(ValueError, match="shuffle_seed"):
+        fineweb.prepare_fineweb(tmp_path / "data", shuffle_seed=seed)
+    assert not (tmp_path / "data").exists()

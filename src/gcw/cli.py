@@ -128,6 +128,12 @@ def build_parser() -> argparse.ArgumentParser:
     fineweb.add_argument("--val-docs", type=int, default=10_000)
     fineweb.add_argument("--train-tokens", type=_positive_int, default=None)
     fineweb.add_argument("--dataset-revision", default=None)
+    fineweb.add_argument(
+        "--shuffle-seed",
+        type=int,
+        default=None,
+        help="Globally shuffle documents before splitting/tokenizing; caches the full source subset locally",
+    )
     openmath = prepare_sub.add_parser("openmath")
     openmath.add_argument("--source", required=True)
     openmath.add_argument("--out", required=True)
@@ -371,6 +377,7 @@ def dispatch(args: argparse.Namespace) -> None:
                 val_docs=args.val_docs,
                 train_tokens=args.train_tokens,
                 dataset_revision=args.dataset_revision,
+                shuffle_seed=args.shuffle_seed,
             )
         else:
             rows = prepare_openmath(args.source, args.out, limit=args.limit)

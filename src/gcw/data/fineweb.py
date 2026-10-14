@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 from tqdm import tqdm
@@ -18,6 +19,7 @@ def prepare_fineweb(
     tokenizer: str = "cosmo2",
     train_tokens: int | None = None,
     dataset_revision: str | None = None,
+    shuffle_seed: int | None = None,
 ) -> None:
     try:
         from datasets import load_dataset
@@ -34,6 +36,12 @@ def prepare_fineweb(
         or train_tokens <= 0
     ):
         raise ValueError("train_tokens must be a positive integer")
+    if shuffle_seed is not None and (
+        isinstance(shuffle_seed, bool)
+        or not isinstance(shuffle_seed, int)
+        or shuffle_seed < 0
+    ):
+        raise ValueError("shuffle_seed must be a nonnegative integer")
     tokenizer_name = tokenizer
     encoder = get_tokenizer(tokenizer_name)
     identity = tokenizer_content_identity(encoder)
@@ -53,10 +61,19 @@ def prepare_fineweb(
         "HuggingFaceFW/fineweb-edu",
         name="sample-10BT",
         split="train",
-        streaming=True,
+        streaming=shuffle_seed is None,
         **({"revision": dataset_revision} if dataset_revision else {}),
     )
+    sampling = None
+    if shuffle_seed is not None:
+        sampling = {
+            "method": "global_document_shuffle",
+            "seed": shuffle_seed,
+            "source_documents": len(ds),
+        }
+        ds = ds.shuffle(seed=shuffle_seed)
     documents = {"train": 0, "val": 0}
+    crawls = {"train": Counter(), "val": Counter()}
     truncated_tokens = 0
     for i, row in enumerate(tqdm(ds, desc="fineweb")):
         if limit is not None and i >= limit:
@@ -67,7 +84,10 @@ def prepare_fineweb(
             truncated_tokens = max(0, len(ids) - remaining)
             ids = ids[:remaining]
         (val if i < val_docs else train).add_tokens(ids)
-        documents["val" if i < val_docs else "train"] += 1
+        split = "val" if i < val_docs else "train"
+        documents[split] += 1
+        if sampling is not None and row.get("dump"):
+            crawls[split][row["dump"]] += 1
         if train_tokens is not None and train.total_tokens == train_tokens:
             break
     val.close()
@@ -90,10 +110,12 @@ def prepare_fineweb(
             "limit": limit,
             "shard_tokens": shard_tokens,
             "train_tokens": train_tokens,
+            **({"sampling": sampling} if sampling is not None else {}),
         },
         "tokenizer": {"source": tokenizer_name, **identity},
         "dtype": dtype,
         "documents": documents,
+        **({"crawl_documents": crawls} if sampling is not None else {}),
         "truncated_final_document_tokens": truncated_tokens,
         "shards": {"train": train.inventory, "val": val.inventory},
     }

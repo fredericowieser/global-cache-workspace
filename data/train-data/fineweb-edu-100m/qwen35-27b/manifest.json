@@ -1,0 +1,43 @@
+{
+  "schema": "gcw.fineweb.shards.v1",
+  "source": {
+    "dataset": "HuggingFaceFW/fineweb-edu",
+    "subset": "sample-10BT",
+    "split": "train",
+    "revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9"
+  },
+  "preparation": {
+    "val_docs": 1000,
+    "limit": null,
+    "shard_tokens": 100000000,
+    "train_tokens": 100000000
+  },
+  "tokenizer": {
+    "source": "hf:artifacts/tokenizers/Qwen3.5-27B",
+    "sha256": "8b9ee8fd0a05897c8dc57d4da3a7811bb21bb864fbb13094dd861c59befc2eea",
+    "eos_token_id": 248046,
+    "max_token_id": 248076
+  },
+  "dtype": "<u4",
+  "documents": {
+    "train": 95372,
+    "val": 1000
+  },
+  "truncated_final_document_tokens": 1276,
+  "shards": {
+    "train": [
+      {
+        "name": "train_000000.bin",
+        "tokens": 100000000,
+        "sha256": "e13a126bbdd324473ec9b4b4c2dbbcbbfc5b78bdb06278caa5019b83064522cd"
+      }
+    ],
+    "val": [
+      {
+        "name": "val_000000.bin",
+        "tokens": 1073442,
+        "sha256": "06dd29630ecdbcd38eac98522adb5fcb77fce7c78cb1ae2314966e9ce3b2174e"
+      }
+    ]
+  }
+}
