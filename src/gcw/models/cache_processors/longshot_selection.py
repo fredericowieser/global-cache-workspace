@@ -29,6 +29,7 @@ from gcw.performance.longshot_cache import (
     record_longshot_full_history_event,
 )
 from gcw.performance.longshot_scores import (
+    native_cache_squared_l2,
     chunked_fp32_concatenated_kv_squared_l2,
     chunked_fp32_squared_l2,
     chunked_fp32_unroped_concatenated_kv_squared_l2,
@@ -419,6 +420,15 @@ def select_kv_norm_history(
 
     policy = longshot_full_history_execution(processor)
     if not policy.enabled:
+        if (
+            not processor.config.unrope_keys
+            and cache_movement_backend(processor) == "eager"
+        ):
+            scores = native_cache_squared_l2(cache)
+            indices = select_per_cache_head_kv_norm_indices_from_scores(
+                scores, processor.config.process_every, processor.config.topk
+            )
+            return gather_per_cache_head_kv(cache, indices), scores, indices
         all_indices = expand_cache_head_indices(
             cache.all_indices(), processor.num_kv_cache_heads
         )

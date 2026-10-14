@@ -24,6 +24,49 @@ def eager_fp32_l2_norm(x: torch.Tensor) -> torch.Tensor:
     return x.float().flatten(start_dim=2).norm(dim=-1)
 
 
+@torch.no_grad()
+def native_cache_squared_l2(
+    cache: Any, *, max_temp_bytes: int = LONGSHOT_SCORE_FP32_CHUNK_BYTES
+) -> torch.Tensor:
+    """Score native cache views without packing or copying their full histories.
+
+    Scores drive discrete selection; gathered features retain their autograd graph.
+    Each tile preserves the reference concatenated-KV reduction order.
+    """
+    if max_temp_bytes <= 0:
+        raise ValueError("max_temp_bytes must be positive")
+    scores = torch.empty(
+        (
+            cache.batch_size,
+            sum(cache.layer(i)[0].shape[1] for i in range(cache.num_layers)),
+            cache.seq_len,
+        ),
+        device=cache.scores.device,
+        dtype=torch.float32,
+    )
+    head_offset = 0
+    for layer_idx in range(cache.num_layers):
+        keys, values = cache.layer(layer_idx)
+        batch, heads, steps, dim = keys.shape
+        layer_scores = scores[:, head_offset : head_offset + heads]
+        rows = max(1, max_temp_bytes // (2 * dim * _FP32_BYTES))
+        head_chunk = max(1, min(heads, rows // max(1, steps)))
+        time_chunk = max(1, min(steps, rows // head_chunk))
+        for b in range(batch):
+            for h in range(0, heads, head_chunk):
+                for t in range(0, steps, time_chunk):
+                    tile = (
+                        b,
+                        slice(h, h + head_chunk),
+                        slice(t, t + time_chunk),
+                    )
+                    layer_scores[tile] = eager_fp32_squared_l2(
+                        torch.cat((keys[tile], values[tile]), dim=-1)
+                    )
+        head_offset += heads
+    return scores
+
+
 def _eager_fp32_l2_norm_rows(x: torch.Tensor) -> torch.Tensor:
     return x.float().flatten(start_dim=1).norm(dim=-1)
 

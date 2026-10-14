@@ -8,7 +8,6 @@ import torch.nn as nn
 from gcw.config import LossBackend, ModelConfig
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.update_metrics import (
-    UPDATE_BATCH,
     generation_update_metrics,
 )
 from gcw.models.cache_processors.windowed import (
@@ -19,8 +18,6 @@ from gcw.models.backbones.transformer import (
     Linear,
     TF,
     _autocast_dtype,
-    _matches_stop_sequence,
-    _should_process_decoding_cache,
 )
 from gcw.models.backbones.gemma4.block import Gemma4Block
 from gcw.models.backbones.gemma4.norms import (
@@ -36,6 +33,7 @@ class Gemma4TF(TF):
     def __init__(self, config: ModelConfig, pad_vocab_size_to: int = 128):
         nn.Module.__init__(self)
         self.config = replace(config, variant="tf", cache_processor=None)
+        self._native_static_generation = config.variant in {"tf", "longshot"}
         vocab = (
             (config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to
         ) * pad_vocab_size_to
@@ -161,7 +159,7 @@ class Gemma4TF(TF):
             input_ids.device,
             _autocast_dtype(x.device) or x.dtype,
         )
-        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor, int]] = {}
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
             per_layer_input = (
@@ -210,7 +208,7 @@ class Gemma4TF(TF):
             else cache.scores
         )
         has_cache = cache is not None and cache.scores.numel() > 0
-        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor, int]] = {}
         attention_states = {}
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
@@ -294,24 +292,22 @@ class Gemma4TF(TF):
         *,
         logits: bool = True,
     ) -> tuple[torch.Tensor, StaticCacheState]:
-        if not self._uniform_cache_shape():
-            raise ValueError(
-                "Gemma4 static cache requires uniform stored KV shapes"
+        if torch.is_grad_enabled():
+            raise RuntimeError(
+                "Gemma4 static caches require inference without gradients"
             )
-        if self.config.cache_num_layers != (
-            self.config.num_layers - self.config.num_kv_shared_layers
-        ):
-            raise ValueError(
-                "Gemma4 static cache requires all non-shared attention layers"
-            )
+        cache.validate_append(start_pos, input_ids.shape[1])
         x = self.embed_tokens(input_ids)
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
         end_pos = start_pos + input_ids.shape[1]
         position_embeddings = self._position_embeddings(
-            start_pos, input_ids.shape[1], input_ids.device, x.dtype
+            start_pos,
+            input_ids.shape[1],
+            input_ids.device,
+            _autocast_dtype(x.device) or x.dtype,
         )
         layer_scores: list[torch.Tensor] = []
-        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor, int]] = {}
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
             per_layer_input = (
@@ -351,97 +347,58 @@ class Gemma4TF(TF):
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
     ) -> torch.Tensor:
-        if self._uniform_cache_shape() and self.config.cache_num_layers == (
-            self.config.num_layers - self.config.num_kv_shared_layers
-        ):
-            return super().generate_fast(
-                input_ids,
-                max_new_tokens,
-                eos_token_id=eos_token_id,
-                processor=processor,
-                process_every=process_every,
-                generation_process_every=generation_process_every,
-                process_prefill_windows=process_prefill_windows,
-                process_after_prefill=process_after_prefill,
-                relative_generation_cadence=relative_generation_cadence,
-                stop_sequences=stop_sequences,
-                pad_token_id=pad_token_id,
+        generate = (
+            super().generate_fast
+            if self._native_static_generation
+            or (
+                self._uniform_cache_shape()
+                and self.config.cache_num_layers
+                == (self.config.num_layers - self.config.num_kv_shared_layers)
             )
-        out = input_ids[:, -self.config.sequence_len :]
-        if out.shape[1] == 0:
-            raise ValueError("generate requires at least one input token")
-        cache: CacheState | WindowedCache | GroupedWindowedCache = CacheState(
-            [],
-            [],
-            input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32),
+            else super().generate
         )
-        logits = None
-        if process_prefill_windows:
-            for start in range(0, out.shape[1], process_every):
-                if start > 0 and processor is not None:
-                    cache = processor(cache)
-                logits, cache = self.forward_chunk(
-                    out[:, start : start + process_every], start, cache
-                )
-        else:
-            logits, cache = self.forward_chunk(out, 0, cache)
-        if logits is None:
-            raise ValueError("generate requires at least one input token")
+        return generate(
+            input_ids,
+            max_new_tokens,
+            eos_token_id=eos_token_id,
+            processor=processor,
+            process_every=process_every,
+            generation_process_every=generation_process_every,
+            process_prefill_windows=process_prefill_windows,
+            process_after_prefill=process_after_prefill,
+            relative_generation_cadence=relative_generation_cadence,
+            stop_sequences=stop_sequences,
+            pad_token_id=pad_token_id,
+        )
 
-        prompt_len = out.shape[1]
-        eos_ids = torch.tensor(
-            eos_token_id if eos_token_id is not None else [],
-            dtype=input_ids.dtype,
-            device=out.device,
-        ).reshape(-1)
-        finished = torch.zeros(
-            out.shape[0], dtype=torch.bool, device=out.device
-        )
-        fill_id = pad_token_id
-        if fill_id is None:
-            fill_id = int(eos_ids[0].item()) if eos_ids.numel() else 0
-        fill = torch.full(
-            (out.shape[0], 1),
-            int(fill_id),
-            dtype=input_ids.dtype,
-            device=out.device,
-        )
-        for generated_idx in range(max_new_tokens):
-            next_id = logits[:, -1].argmax(dim=-1, keepdim=True)
-            if bool(finished.any()):
-                next_id = torch.where(finished[:, None], fill, next_id)
-            out = torch.cat([out, next_id], dim=1)
-            finished = finished | torch.isin(next_id.squeeze(1), eos_ids)
-            finished = finished | _matches_stop_sequence(
-                out[:, prompt_len:], stop_sequences
+    def allocate_generation_cache(
+        self, batch_size: int, capacity: int, device: torch.device
+    ) -> StaticCacheState:
+        selected = set(self.config.cache_layer_indices)
+        attention_shapes = {
+            i: (
+                self.config.kv_heads_for_layer(i),
+                self.config.head_dim_for_layer(i),
+                (
+                    self.config.sliding_window
+                    if layer.self_attn.is_sliding
+                    else None
+                ),
             )
-            if bool(finished.all()):
-                break
-            if (batch_metrics := UPDATE_BATCH.get()) is not None:
-                batch_metrics.phase = (
-                    "prefill" if generated_idx == 0 else "decoding"
-                )
-                batch_metrics.active = ~finished & (
-                    generated_idx + 1 < max_new_tokens
-                )
-            pos = out.shape[1] - 1
-            if processor is not None:
-                should_process = _should_process_decoding_cache(
-                    generated_idx,
-                    pos,
-                    process_every,
-                    generation_process_every,
-                    process_after_prefill,
-                    relative_generation_cadence,
-                )
-                if should_process:
-                    cache = processor(
-                        cache,
-                        select_all=relative_generation_cadence
-                        and generated_idx == 0,
-                    )
-            logits, cache = self.forward_chunk(next_id, pos, cache)
-        return out
+            for i, layer in enumerate(self.layers)
+            if i not in selected and not layer.self_attn.is_kv_shared_layer
+        }
+        return StaticCacheState.allocate(
+            batch_size=batch_size,
+            num_layers=self.config.cache_num_layers,
+            num_kv_heads=self.config.num_kv_heads,
+            head_dim=self.config.head_dim,
+            max_seq_len=capacity,
+            device=device,
+            dtype=_autocast_dtype(device) or self.embed_tokens.weight.dtype,
+            layer_shapes=tuple(self.config.stored_cache_shapes),
+            attention_shapes=attention_shapes,
+        )
 
     def _uniform_cache_shape(self) -> bool:
         shapes = [

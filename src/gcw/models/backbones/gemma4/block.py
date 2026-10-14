@@ -75,7 +75,7 @@ class Gemma4Block(nn.Module):
         per_layer_input: torch.Tensor | None,
         cos_sin: tuple[torch.Tensor, torch.Tensor],
         past: tuple[torch.Tensor, torch.Tensor] | None,
-        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]],
+        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor, int]],
         start_pos: int,
     ) -> tuple[
         torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor
@@ -109,7 +109,7 @@ class Gemma4Block(nn.Module):
         per_layer_input: torch.Tensor | None,
         cos_sin: tuple[torch.Tensor, torch.Tensor],
         cache: StaticCacheState,
-        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]],
+        shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor, int]],
         start_pos: int,
         end_pos: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:

@@ -43,12 +43,18 @@ def _scripted_generation(kind, monkeypatch):
             head_dim_for_layer=lambda layer: layer + 1,
         )
         backbone.embed_tokens = SimpleNamespace(weight=torch.empty(16, 1))
+        if kind == "gemma-nonuniform":
+            backbone._native_static_generation = True
+            backbone.config.stored_cache_shapes = ((1, 1), (1, 2))
+            backbone.layers = []
         calls = []
         predictions = torch.tensor(script).T
 
         def forward(input_ids, start_pos, cache):
             expected_cache = (
-                StaticCacheState if kind.endswith("fast") else CacheState
+                StaticCacheState
+                if kind.endswith("fast") or kind == "gemma-nonuniform"
+                else CacheState
             )
             assert isinstance(cache, expected_cache)
             step = min(len(calls), len(predictions) - 1)
@@ -86,9 +92,7 @@ def _scripted_generation(kind, monkeypatch):
 @pytest.mark.parametrize("pad", [None, 0, 11])
 def test_multiple_eos_staggered_finish(scripted_generation, eos, pad):
     generate, calls = scripted_generation([[3, 9, 9], [6, 7, 2]])
-    out = generate(
-        [[8, 5], [8, 5]], 6, eos_token_id=eos, pad_token_id=pad
-    )
+    out = generate([[8, 5], [8, 5]], 6, eos_token_id=eos, pad_token_id=pad)
     fill = 2 if pad is None else pad
     assert out.tolist() == [[8, 5, 3, fill, fill], [8, 5, 6, 7, 2]]
     assert len(calls) == 3
@@ -122,9 +126,7 @@ def test_scalar_eos_staggered_finish(scripted_generation):
 @pytest.mark.parametrize("eos", [None, [], ()])
 def test_stop_sequences_without_eos_fill_zero(scripted_generation, eos):
     generate, calls = scripted_generation([[4, 5, 9], [6, 4, 5]])
-    out = generate(
-        [[8], [8]], 6, eos_token_id=eos, stop_sequences=[[], [4, 5]]
-    )
+    out = generate([[8], [8]], 6, eos_token_id=eos, stop_sequences=[[], [4, 5]])
     assert out.tolist() == [[8, 4, 5, 0], [8, 6, 4, 5]]
     assert len(calls) == 3
 
@@ -145,9 +147,7 @@ def test_eos_and_task_stop_finish_different_rows(scripted_generation):
 @pytest.mark.parametrize("sequence_len", [2, 4])
 def test_stop_cannot_start_in_prompt(scripted_generation, sequence_len):
     generate, calls = scripted_generation([[5, 4, 5, 9]], sequence_len)
-    out = generate(
-        [[7, 8, 4]], 6, stop_sequences=[[4, 5]], eos_token_id=[2, 3]
-    )
+    out = generate([[7, 8, 4]], 6, stop_sequences=[[4, 5]], eos_token_id=[2, 3])
     assert out.tolist() == [[7, 8, 4][-sequence_len:] + [5, 4, 5]]
     assert len(calls) == 3
 

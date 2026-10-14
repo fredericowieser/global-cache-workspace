@@ -35,10 +35,11 @@ class WindowedCacheLayout:
     linear_states: LinearStateLayout = ()
     attention_layers: tuple[int, ...] = ()
     grouped_layers: tuple[tuple[int, ...], ...] = ()
+    list_layers: int | None = None
 
 
 def _flatten_windowed_cache(
-    cache: WindowedCache | GroupedWindowedCache | None,
+    cache: CacheLike | None,
 ) -> tuple[tuple[torch.Tensor, ...], WindowedCacheLayout]:
     if cache is None:
         return (), WindowedCacheLayout()
@@ -53,7 +54,12 @@ def _flatten_windowed_cache(
             attention_layers=tuple(sorted(attention)),
             grouped_layers=cache.layer_groups,
         )
-    tensors = [cache.keys, cache.values, cache.scores]
+    if isinstance(cache, CacheState):
+        tensors = [cache.scores]
+        for keys, values in zip(cache.keys, cache.values, strict=True):
+            tensors.extend((keys, values))
+    else:
+        tensors = [cache.keys, cache.values, cache.scores]
     sidecar_spec = None
     if cache.kv_score_sidecar is not None:
         sidecar_spec = cache.kv_score_sidecar.spec
@@ -71,13 +77,16 @@ def _flatten_windowed_cache(
     for layer_idx in attention_layers:
         tensors.extend(attention_states[layer_idx])
     return tuple(tensors), WindowedCacheLayout(
-        sidecar_spec, tuple(linear_layout), attention_layers
+        sidecar_spec,
+        tuple(linear_layout),
+        attention_layers,
+        list_layers=cache.num_layers if isinstance(cache, CacheState) else None,
     )
 
 
 def _unflatten_windowed_cache(
     tensors: tuple[torch.Tensor, ...], layout: WindowedCacheLayout
-) -> WindowedCache | GroupedWindowedCache:
+) -> CacheLike:
     if layout.grouped_layers:
         expected = 1 + 2 * (
             len(layout.grouped_layers) + len(layout.attention_layers)
@@ -96,11 +105,11 @@ def _unflatten_windowed_cache(
         return GroupedWindowedCache(
             groups, layout.grouped_layers, tensors[0], attention or None
         )
-    if len(tensors) < 3:
+    position = 3 if layout.list_layers is None else 1 + 2 * layout.list_layers
+    if len(tensors) < position:
         raise ValueError(
             "a flattened WindowedCache boundary requires keys, values, and scores"
         )
-    position = 3
     sidecar = None
     if layout.sidecar_spec is not None:
         if position >= len(tensors):
@@ -135,6 +144,15 @@ def _unflatten_windowed_cache(
     if position != len(tensors):
         raise ValueError(
             "flattened WindowedCache contains unexpected state tensors"
+        )
+    if layout.list_layers is not None:
+        return CacheState(
+            list(tensors[1 : 1 + 2 * layout.list_layers : 2]),
+            list(tensors[2 : 1 + 2 * layout.list_layers : 2]),
+            tensors[0],
+            linear_states or None,
+            sidecar,
+            attention_states or None,
         )
     return WindowedCache(
         tensors[0],

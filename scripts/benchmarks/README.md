@@ -80,3 +80,25 @@ The harness observes cache indices and write destinations only; it does **not** 
 Instrumentation is restoring and limited to standard BT/BGT selection and writeback boundaries. Every event copies indices from the device to CPU; that synchronization, Python hooks, and report construction make instrumented execution invalid for timing. Run performance measurements separately with `scripts.benchmarks.harness`.
 
 Qwen3 compile acceptance uses `CompileAcceptanceRecorder` rather than hiding compilation in warmup. Adaptive 16/8/4/2 execution should produce four initial-window graphs and four later-window graphs: one per physical batch shape in each region. Each region therefore records three batch-shape recompiles; past-cache length remains dynamic within each later-window batch specialization. The recorder retains synchronized first-call cost per observed signature; Dynamo acceptance counters supply graph and recompile counts. Report cold costs separately from steady-state timings. The recorder attaches only to the tested backbone instance, so a runner cannot reuse bindings from another model.
+
+## Gemma4 native cache storage
+
+`scripts.benchmarks.gemma4_cache_storage` is a small synthetic diagnostic for native list/static storage, selected-history gather, score tiling, frontier writeback, and a processor-plus-one-token decode. It creates four tiny Gemma4 layers in BF16 at batch size two, with a 128-token sliding window, and measures both all-layer and full-attention-only selection at increasing history lengths. It loads no checkpoint or dataset. Score and gather microbenchmarks isolate one native layer shape; their reference packs or merges the full history. Both decode paths use the current native processor, so decode timing isolates storage behavior rather than comparing against an older implementation. Static decode timing includes restoring the synthetic frontier between samples.
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONPATH=src python -m scripts.benchmarks.gemma4_cache_storage --device cpu --output artifacts/benchmarks/gemma4-cache-cpu.json
+CUDA_VISIBLE_DEVICES=<idle-gpu> PYTHONPATH=src python -m scripts.benchmarks.gemma4_cache_storage --device cuda --output artifacts/benchmarks/gemma4-cache-cuda.json
+GCW_RUN_GEMMA_CACHE_CUDA_TESTS=1 pytest -q tests/test_gemma4_cache_storage_cuda.py
+```
+
+The JSON records synchronized wall-time samples, median latency, retained KV bytes, and extra peak allocated CUDA memory above each operation's starting allocation. Extra peak excludes already allocated fixture caches and model weights; it is not whole-process peak memory. CPU allocator peaks are not measured. These diagnostics have no latency gate and are not canonical campaign evidence.
+
+A development run on 2026-10-14 used Torch 2.10.0+cu128, one idle B300, two warmups, five samples, and a 512 MiB PyTorch allocator limit. All six CUDA checks passed, covering BF16 weights, CUDA BF16 autocast, mixed shapes, layer subsets, generation parity, and checkpointed training gradients. CPU tests additionally cover ring wraps, chunks larger than the window, shared KV consumers, stable backing pointers, unread-capacity sentinels, retained old sliding history, and packed/list gradient parity. Full-attention-only synthetic results were:
+
+| History | Dynamic retained KV (MiB) | Static retained KV (MiB) | Dynamic decode extra peak (MiB) | Static decode extra peak (MiB) | Dynamic/static GPU decode (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1,024 | 2.000 | 1.126 | 3.022 | 1.266 | 3.447 / 3.618 |
+| 4,096 | 8.000 | 4.126 | 12.046 | 5.062 | 3.527 / 3.621 |
+| 16,384 | 32.000 | 16.126 | 48.141 | 20.250 | 3.460 / 3.608 |
+
+At 16,384 tokens, GPU gather extra peak fell from 8.016 MiB to 0.023 MiB, static append used 0.062 MiB of temporary storage versus 32.004 MiB for dynamic append, and static frontier writeback added no allocator-visible payload versus 16 MiB for functional writeback. On CPU, median static writeback stayed near 0.029 ms across these lengths, and the 16,384-token processor/decode measurement was 26.556 ms versus 34.967 ms for dynamic storage. The tiny GPU decode was slightly slower with static storage despite the memory reduction; these results do not establish a production throughput improvement. The [cache-layout documentation](../../docs/concepts/cache-processing.md#cache-layout-and-layer-selection) gives separate 31B storage estimates. All-layer selection still retains every processor-visible archive, and KV-norm selection still scans those archives.

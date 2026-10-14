@@ -11,10 +11,7 @@ from gcw.config import LossBackend, ModelConfig
 from gcw.models.backbones.base import Backbone
 from gcw.models.cache_processors.base import cache_processor_recomputation_id
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
-from gcw.models.cache_processors.windowed import (
-    GroupedWindowedCache,
-    WindowedCache,
-)
+from gcw.models.cache_processors.windowed import WindowedCache
 from gcw.models.backbones.transformer.block import Block
 from gcw.models.backbones.transformer.cache import (
     CacheLike,
@@ -315,7 +312,9 @@ class TF(Backbone):
                     start,
                     cache,
                     logits=False,
-                    cache_format="windowed",
+                    cache_format=getattr(
+                        processor, "recurrent_cache_format", "windowed"
+                    ),
                 )
                 hidden_chunks.append(hidden)
         return self.loss_from_hidden(
@@ -335,12 +334,8 @@ class TF(Backbone):
         processor_execution_factory: ProcessorExecutionFactory,
         process_every: int,
         truncated_bptt_windows: int,
-    ) -> tuple[torch.Tensor, WindowedCache | GroupedWindowedCache]:
-        boundary_cache = (
-            cache
-            if isinstance(cache, (WindowedCache, GroupedWindowedCache))
-            else None
-        )
+    ) -> tuple[torch.Tensor, CacheLike]:
+        boundary_cache = cache if cache.num_layers else None
         input_tensors, input_layout = _flatten_windowed_cache(boundary_cache)
         output_layout: list[WindowedCacheLayout] = []
 
@@ -372,13 +367,13 @@ class TF(Backbone):
                         start,
                         current,
                         logits=False,
-                        cache_format="windowed",
+                        cache_format=getattr(
+                            segment_processor,
+                            "recurrent_cache_format",
+                            "windowed",
+                        ),
                     )
                     segment_hidden.append(hidden)
-            if not isinstance(current, (WindowedCache, GroupedWindowedCache)):
-                raise TypeError(
-                    "checkpointed window segment requires WindowedCache output"
-                )
             flat_output, layout = _flatten_windowed_cache(current)
             if cache_processor_recomputation_id() is None:
                 output_layout[:] = [layout]
@@ -641,6 +636,19 @@ class TF(Backbone):
             list(values.unbind(0)),
             new_scores,
             kv_score_sidecar=None if cache is None else cache.kv_score_sidecar,
+        )
+
+    def allocate_generation_cache(
+        self, batch_size: int, capacity: int, device: torch.device
+    ) -> StaticCacheState:
+        return StaticCacheState.allocate(
+            batch_size=batch_size,
+            num_layers=self.config.cache_num_layers,
+            num_kv_heads=self.config.num_kv_heads,
+            max_seq_len=capacity,
+            head_dim=self.config.head_dim,
+            device=device,
+            dtype=_autocast_dtype(device) or self.embed_tokens.weight.dtype,
         )
 
     def forward_chunk_static(

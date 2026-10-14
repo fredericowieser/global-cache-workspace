@@ -160,14 +160,10 @@ def generate_fast_tf(
         raise ValueError("generate requires at least one input token")
     if model.config.head_dim is None:
         raise RuntimeError("transformer has no resolved head_dim")
-    cache = StaticCacheState.allocate(
-        batch_size=out.shape[0],
-        num_layers=model.config.cache_num_layers,
-        num_kv_heads=model.config.num_kv_heads,
-        max_seq_len=out.shape[1] + max_new_tokens,
-        head_dim=model.config.head_dim,
-        device=out.device,
-        dtype=model.embed_tokens.weight.dtype,
+    cache = model.allocate_generation_cache(
+        out.shape[0],
+        out.shape[1] + max_new_tokens,
+        out.device,
     )
     logits = None
     if process_prefill_windows:

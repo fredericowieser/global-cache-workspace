@@ -48,7 +48,7 @@ from gcw.models.cache_processors.longshot_linear_state import (
 )
 from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
-    chunked_fp32_concatenated_kv_squared_l2,
+    native_cache_squared_l2,
 )
 from gcw.performance.kv_score_sidecar import kv_score_sidecar_execution
 from gcw.performance.longshot_cache import longshot_full_history_execution
@@ -333,6 +333,17 @@ class GlobalCacheProcessor(CacheProcessorBase):
         cache = _scatter_latest(cache, latest, keys, values)
         return refresh_sidecar(self, cache, latest), selected_heads
 
+    @property
+    def recurrent_cache_format(self) -> str:
+        if (
+            self._gcw_longshot_model_composition[1] == "gemma4"
+            and not kv_score_sidecar_execution(self).enabled
+            and not longshot_full_history_execution(self).enabled
+            and cache_movement_backend(self) == "eager"
+        ):
+            return "list"
+        return "windowed"
+
     def _forward_grouped(
         self, cache: CacheLike, *, select_all: bool
     ) -> tuple[CacheLike, torch.Tensor | None]:
@@ -344,18 +355,35 @@ class GlobalCacheProcessor(CacheProcessorBase):
             raise ValueError(
                 "mixed-shape Longshot requires reference cache movement"
             )
-        return_list = isinstance(cache, CacheState)
-        if return_list:
-            cache = GroupedWindowedCache.from_cache_state(cache)
-        if not isinstance(cache, GroupedWindowedCache):
-            raise TypeError(
-                "mixed-shape Longshot requires a grouped or list cache"
+        if isinstance(cache, GroupedWindowedCache):
+            if cache.layer_groups != tuple(
+                group.layers for group in self.shape_groups
+            ):
+                raise ValueError(
+                    "cache groups do not match the processor layer layout"
+                )
+            groups = cache.groups
+        elif isinstance(cache, (CacheState, StaticCacheState)):
+            groups = tuple(
+                (
+                    StaticCacheState(
+                        [cache.keys[i] for i in spec.layers],
+                        [cache.values[i] for i in spec.layers],
+                        cache.score_storage,
+                        cache.length,
+                    )
+                    if isinstance(cache, StaticCacheState)
+                    else CacheState(
+                        [cache.keys[i] for i in spec.layers],
+                        [cache.values[i] for i in spec.layers],
+                        cache.scores,
+                    )
+                )
+                for spec in self.shape_groups
             )
-        if cache.layer_groups != tuple(
-            group.layers for group in self.shape_groups
-        ):
-            raise ValueError(
-                "cache groups do not match the processor layer layout"
+        else:
+            raise TypeError(
+                "mixed-shape Longshot requires a grouped, list, or static cache"
             )
         if cache.seq_len == 0:
             return cache, None
@@ -363,12 +391,10 @@ class GlobalCacheProcessor(CacheProcessorBase):
             self.config.head_selection_method == "magnitude" and not select_all
         )
         histories, head_scores, frontiers = [], [], []
-        for spec, group in zip(self.shape_groups, cache.groups, strict=True):
+        for spec, group in zip(self.shape_groups, groups, strict=True):
             magnitude = None
             if self.config.score == "kv_norm" and not select_all:
-                scores = chunked_fp32_concatenated_kv_squared_l2(
-                    group.keys, group.values
-                )
+                scores = native_cache_squared_l2(group)
                 indices = select_per_cache_head_kv_norm_indices_from_scores(
                     scores, self.config.process_every, self.config.topk
                 )
@@ -425,7 +451,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 tuple(histories), selected, select_all=select_all
             )
         for spec, group, latest, updated in zip(
-            self.shape_groups, cache.groups, frontiers, updates, strict=True
+            self.shape_groups, groups, frontiers, updates, strict=True
         ):
             if self.config.update_stream == "v":
                 values = _split_merged_values(
@@ -443,7 +469,12 @@ class GlobalCacheProcessor(CacheProcessorBase):
                     spec.head_dim,
                 )
                 _scatter_latest(group, latest, keys, values)
-        return (cache.to_cache_state() if return_list else cache), selected
+            if isinstance(cache, CacheState):
+                for local, layer_idx in enumerate(spec.layers):
+                    cache.keys[layer_idx], cache.values[layer_idx] = (
+                        group.layer(local)
+                    )
+        return cache, selected
 
     def _select_combined_heads(
         self,

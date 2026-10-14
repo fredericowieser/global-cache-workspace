@@ -187,12 +187,35 @@ def gather_per_cache_head_kv(
         raise ValueError(
             f"unsupported per-head cache movement backend: {backend}"
         )
-    keys, values = _cache_tensors(cache)
-    keys = _flatten_cache_heads(keys)
-    values = _flatten_cache_heads(values)
-    index = indices[..., None].expand(-1, -1, -1, keys.shape[-1])
-    keys = torch.gather(keys, dim=2, index=index)
-    values = torch.gather(values, dim=2, index=index)
+    if (
+        isinstance(cache, WindowedCache)
+        and cache.keys.is_contiguous()
+        and cache.values.is_contiguous()
+        and cache.keys.dtype == cache.values.dtype
+    ):
+        from gcw.performance.longshot_cache import (
+            gather_windowed_per_cache_head_kv,
+        )
+
+        keys, values = gather_windowed_per_cache_head_kv(
+            cache.keys, cache.values, indices
+        )
+    else:
+        selected_keys, selected_values = [], []
+        offset = 0
+        for layer_idx in range(cache.num_layers):
+            key, value = cache.layer(layer_idx)
+            heads = key.shape[1]
+            index = indices[:, offset : offset + heads, :, None].expand(
+                -1, -1, -1, key.shape[-1]
+            )
+            selected_keys.append(torch.gather(key, 2, index))
+            selected_values.append(torch.gather(value, 2, index))
+            offset += heads
+        if offset != indices.shape[1]:
+            raise ValueError("cache indices do not match the cache head count")
+        keys = torch.cat(selected_keys, dim=1)
+        values = torch.cat(selected_values, dim=1)
     if unrope_keys:
         keys = rotate_cache_keys(
             keys,
@@ -353,11 +376,6 @@ def _cache_tensors(cache: CacheLike) -> tuple[torch.Tensor, torch.Tensor]:
         ]
         return torch.stack(keys, dim=0), torch.stack(values, dim=0)
     return torch.stack(cache.keys, dim=0), torch.stack(cache.values, dim=0)
-
-
-def _flatten_cache_heads(x: torch.Tensor) -> torch.Tensor:
-    layers, batch, heads, seq, dim = x.shape
-    return x.permute(1, 0, 2, 3, 4).reshape(batch, layers * heads, seq, dim)
 
 
 def _selected_kv_norm_scores(
@@ -557,9 +575,7 @@ def scatter_latest_values(cache, indices: torch.Tensor, values: torch.Tensor):
         return cache
     if isinstance(cache, StaticCacheState):
         for layer_idx in range(cache.num_layers):
-            target = cache.values[layer_idx][:, :, : cache.length, :]
-            index = indices[:, None, :, None].expand_as(values[layer_idx])
-            target.scatter_(2, index, values[layer_idx].to(target.dtype))
+            cache.scatter_layer(layer_idx, indices, None, values[layer_idx])
         return cache
     for layer_idx in range(cache.num_layers):
         index = indices[:, None, :, None].expand_as(values[layer_idx])

@@ -48,6 +48,11 @@ class CacheProcessorBase(nn.Module, ABC):
         self._calls = 0
         return calls
 
+    @property
+    def recurrent_cache_format(self) -> str:
+        """Storage requested from the backbone at training window boundaries."""
+        return "windowed"
+
     def prepare_forward_execution(
         self,
     ) -> AbstractContextManager[Callable[..., Any]]:
