@@ -42,6 +42,13 @@ def cache_processor_metrics(model: torch.nn.Module) -> dict[str, float]:
         or ([block] if block is not None else [])
         if (gate := getattr(candidate, "_gate_value", None)) is not None
     ]
+    projections = getattr(block, "projections", None)
+    if projections is not None:
+        gates.extend(
+            projection._gate_value.float().mean()
+            for projection in projections.values()
+            if projection._gate_value is not None
+        )
     if gates:
         metrics["cache_processor/gate"] = float(
             torch.stack(gates).float().mean().cpu()

@@ -844,6 +844,79 @@ def test_gemma4_hf_text_config_uses_shared_default_layer_types():
     assert cfg.layer_types == gemma4_default_layer_types(7)
 
 
+@pytest.fixture
+def heterogeneous_gemma4_config():
+    payload = {
+        "num_attention_heads": 4,
+        "hidden_size": 16,
+        "intermediate_size": 32,
+        "vocab_size": 128,
+        "num_hidden_layers": 2,
+        "layer_types": ["sliding_attention", "full_attention"],
+        "attention_k_eq_v": True,
+        "hidden_size_per_layer_input": 0,
+    }
+    hf = SimpleNamespace(
+        **payload,
+        is_heterogeneous=True,
+        per_layer_attributes=["head_dim", "num_key_value_heads"],
+        per_layer_config=[
+            SimpleNamespace(num_key_value_heads=2, head_dim=4),
+            SimpleNamespace(num_key_value_heads=1, head_dim=8),
+        ],
+    )
+    hf.to_dict = lambda: {key: getattr(hf, key) for key in payload}
+    return hf
+
+
+@pytest.mark.parametrize("layout", ["mixed", "full_only", "separate_kv"])
+def test_gemma4_heterogeneous_config_preserves_shapes(
+    heterogeneous_gemma4_config, layout
+):
+    hf = heterogeneous_gemma4_config
+    if layout == "full_only":
+        hf.layer_types[:] = ["full_attention"] * 2
+        hf.per_layer_config[0] = copy.deepcopy(hf.per_layer_config[1])
+    elif layout == "separate_kv":
+        hf.attention_k_eq_v = False
+        hf.per_layer_config[1].num_key_value_heads = 2
+    cfg = config_from_hf(hf, family="gemma4")
+    expected = [
+        (layer.num_key_value_heads, layer.head_dim)
+        for layer in hf.per_layer_config
+    ]
+    assert cfg.stored_cache_shapes == expected
+    model = build_model(cfg)
+    for layer, (heads, dim) in zip(model.layers, expected, strict=True):
+        assert layer.self_attn.k_proj.weight.shape == (heads * dim, 16)
+
+
+@pytest.mark.parametrize(
+    "case,message",
+    [
+        ("separate_kv_heads", "attention_k_eq_v=False"),
+        ("missing_full", "requires a full_attention layer"),
+        ("multiple_shapes", "one KV shape per attention type"),
+        ("unsupported_attribute", "only KV heads and head dimensions"),
+    ],
+)
+def test_gemma4_heterogeneous_config_rejects_unsupported_layouts(
+    heterogeneous_gemma4_config, case, message
+):
+    hf = heterogeneous_gemma4_config
+    if case == "separate_kv_heads":
+        hf.attention_k_eq_v = False
+    elif case == "missing_full":
+        hf.layer_types[:] = ["sliding_attention"] * 2
+        hf.per_layer_config[1] = copy.deepcopy(hf.per_layer_config[0])
+    elif case == "multiple_shapes":
+        hf.layer_types[:] = ["full_attention"] * 2
+    else:
+        hf.per_layer_attributes.append("intermediate_size")
+    with pytest.raises(NotImplementedError, match=message):
+        config_from_hf(hf, family="gemma4")
+
+
 def test_gemma4_hf_config_rejects_moe():
     text = SimpleNamespace(
         enable_moe_block=True,

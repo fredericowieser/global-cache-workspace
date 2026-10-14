@@ -71,13 +71,26 @@ class UpdateBatch:
 
     @contextmanager
     def application(
-        self, processor: Any, cache: Any, specs: list, original: torch.Tensor
+        self,
+        processor: Any,
+        cache: Any,
+        specs: list,
+        original: torch.Tensor | tuple[torch.Tensor, ...],
     ) -> Iterator[None]:
         active = self.active
         if self.lengths is not None:
             active = active & (cache.seq_len < self.lengths)
         observer = DiffusionUpdateObservation(
-            self, processor, cache, specs, active, original.detach()
+            self,
+            processor,
+            cache,
+            specs,
+            active,
+            (
+                tuple(value.detach() for value in original)
+                if isinstance(original, tuple)
+                else original.detach()
+            ),
         )
         token = UPDATE_OBSERVER.set(observer)
         try:
@@ -202,7 +215,7 @@ class DiffusionUpdateObservation:
         cache: Any,
         specs: list,
         active: torch.Tensor,
-        original: torch.Tensor | None = None,
+        original: torch.Tensor | tuple[torch.Tensor, ...] | None = None,
     ) -> None:
         self.batch = batch
         self.processor = processor
@@ -264,14 +277,54 @@ class DiffusionUpdateObservation:
         self.record("latent_linear", change[:, kv_heads:].norm(dim=-1))
         if not final:
             displacement = after - initial
-            projected = self.block.out_proj(displacement[:, :kv_heads])
-            self.kv(projected[..., : self.block.output_dim])
+            if getattr(self.block, "shape_groups", ()):
+                projected = tuple(
+                    self.block.projections[group.name].out_proj(
+                        displacement.index_select(
+                            1, getattr(self.block, group.name + "_heads")
+                        )
+                    )[..., : self.block.projections[group.name].output_dim]
+                    for group in self.block.shape_groups
+                )
+                self.kv(projected)
+            else:
+                projected = self.block.out_proj(displacement[:, :kv_heads])
+                self.kv(projected[..., : self.block.output_dim])
             adapter = self.block.linear_state_adapter
             if adapter is not None and self.specs:
                 projected = adapter.output_proj(displacement[:, kv_heads:])
                 self.linear(projected[..., : adapter.output_dim])
 
-    def kv(self, raw: torch.Tensor) -> None:
+    def _canonical_channels(
+        self, values: tuple[torch.Tensor, ...]
+    ) -> torch.Tensor:
+        width = max(group.head_dim for group in self.block.shape_groups)
+        padded = []
+        for group, value in zip(self.block.shape_groups, values, strict=True):
+            value = value.detach().float()
+            if self.processor.config.update_stream == "v":
+                value = value[..., -group.head_dim :]
+                padded.append(F.pad(value, (0, width - group.head_dim)))
+            else:
+                key, val = value.split(group.head_dim, dim=-1)
+                padded.append(
+                    torch.cat(
+                        [
+                            F.pad(key, (0, width - group.head_dim)),
+                            F.pad(val, (0, width - group.head_dim)),
+                        ],
+                        dim=-1,
+                    )
+                )
+        return torch.cat(padded, dim=1).index_select(
+            1, self.block.canonical_order
+        )
+
+    def kv(self, raw: torch.Tensor | tuple[torch.Tensor, ...]) -> None:
+        if isinstance(raw, tuple):
+            raw = self._canonical_channels(raw)
+            if isinstance(self.original, tuple):
+                self.original = self._canonical_channels(self.original)
         raw = raw.detach().float()
         change = raw if self.previous_kv is None else raw - self.previous_kv
         if self.processor.config.update_stream == "v":

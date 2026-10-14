@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from gcw.models.cache_processors.state import CacheState, select_l2_indices
+from gcw.models.cache_processors.layout import cache_shape_groups
 
 if TYPE_CHECKING:
     from gcw.performance.kv_score_sidecar import KVScoreSidecarState
@@ -20,6 +21,7 @@ class WindowedCache:
         dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None
     ) = None
     kv_score_sidecar: KVScoreSidecarState | None = None
+    attention_states: dict[int, tuple[torch.Tensor, torch.Tensor]] | None = None
 
     @classmethod
     def from_lists(
@@ -31,6 +33,9 @@ class WindowedCache:
             dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None
         ) = None,
         kv_score_sidecar: KVScoreSidecarState | None = None,
+        attention_states: (
+            dict[int, tuple[torch.Tensor, torch.Tensor]] | None
+        ) = None,
     ) -> "WindowedCache":
         return cls(
             torch.stack(keys, dim=0),
@@ -38,6 +43,7 @@ class WindowedCache:
             scores,
             linear_states,
             kv_score_sidecar,
+            attention_states,
         )
 
     @classmethod
@@ -48,6 +54,7 @@ class WindowedCache:
             cache.scores,
             cache.linear_states,
             cache.kv_score_sidecar,
+            cache.attention_states,
         )
 
     @property
@@ -92,6 +99,14 @@ class WindowedCache:
             scores=self.scores.detach(),
             linear_states=linear_states,
             kv_score_sidecar=sidecar,
+            attention_states=(
+                None
+                if self.attention_states is None
+                else {
+                    layer_idx: (key.detach(), value.detach())
+                    for layer_idx, (key, value) in self.attention_states.items()
+                }
+            ),
         )
 
     def select_indices(
@@ -160,4 +175,88 @@ class WindowedCache:
             self.scores,
             self.linear_states,
             self.kv_score_sidecar,
+            self.attention_states,
+        )
+
+
+@dataclass
+class GroupedWindowedCache:
+    groups: tuple[WindowedCache, ...]
+    layer_groups: tuple[tuple[int, ...], ...]
+    scores: torch.Tensor
+    attention_states: dict[int, tuple[torch.Tensor, torch.Tensor]] | None = None
+
+    @classmethod
+    def from_cache_state(cls, cache: CacheState) -> "GroupedWindowedCache":
+        if cache.linear_states or cache.kv_score_sidecar is not None:
+            raise ValueError(
+                "grouped caches do not support linear or sidecar state"
+            )
+        layout = cache_shape_groups(
+            [(key.shape[1], key.shape[3]) for key in cache.keys]
+        )
+        return cls(
+            tuple(
+                WindowedCache.from_lists(
+                    [cache.keys[i] for i in group.layers],
+                    [cache.values[i] for i in group.layers],
+                    cache.scores,
+                )
+                for group in layout
+            ),
+            tuple(group.layers for group in layout),
+            cache.scores,
+            cache.attention_states,
+        )
+
+    @property
+    def batch_size(self) -> int:
+        return self.scores.shape[0]
+
+    @property
+    def seq_len(self) -> int:
+        return self.scores.shape[1]
+
+    @property
+    def num_layers(self) -> int:
+        return sum(len(layers) for layers in self.layer_groups)
+
+    def layer(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        for group, layers in zip(self.groups, self.layer_groups, strict=True):
+            if idx in layers:
+                return group.layer(layers.index(idx))
+        raise IndexError(idx)
+
+    def to_cache_state(self) -> CacheState:
+        pairs = [self.layer(i) for i in range(self.num_layers)]
+        return CacheState(
+            [key for key, _ in pairs],
+            [value for _, value in pairs],
+            self.scores,
+            attention_states=self.attention_states,
+        )
+
+    def detach(self) -> "GroupedWindowedCache":
+        return replace(
+            self,
+            groups=tuple(group.detach() for group in self.groups),
+            scores=self.scores.detach(),
+            attention_states=(
+                None
+                if self.attention_states is None
+                else {
+                    layer: (key.detach(), value.detach())
+                    for layer, (key, value) in self.attention_states.items()
+                }
+            ),
+        )
+
+    def select_indices(
+        self, process_every: int = 64, topk: int = 32
+    ) -> torch.Tensor:
+        return select_l2_indices(self.scores, process_every, topk)
+
+    def all_indices(self) -> torch.Tensor:
+        return torch.arange(self.seq_len, device=self.scores.device).expand(
+            self.batch_size, -1
         )

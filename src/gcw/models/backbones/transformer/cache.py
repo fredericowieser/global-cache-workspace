@@ -7,12 +7,15 @@ import torch
 
 from gcw.models.cache_processors.base import cache_processor_recomputation
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
-from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.models.cache_processors.windowed import (
+    GroupedWindowedCache,
+    WindowedCache,
+)
 
 if TYPE_CHECKING:
     from gcw.performance.kv_score_sidecar import KVScoreSidecarSpec
 
-CacheLike = CacheState | WindowedCache
+CacheLike = CacheState | WindowedCache | GroupedWindowedCache
 ProcessorFn = Callable[..., CacheLike | StaticCacheState]
 ProcessorExecutionFactory = Callable[[], AbstractContextManager[ProcessorFn]]
 LinearStateLayout = tuple[tuple[int, bool], ...]
@@ -21,9 +24,7 @@ LinearStateLayout = tuple[tuple[int, bool], ...]
 def detach_cache(cache: CacheLike) -> CacheLike:
     """Cut autograd history at a recurrent cache boundary.
 
-    Cache processors remain unaware of this training policy: every maintained
-    windowed processor consumes either ``CacheState`` or ``WindowedCache``, and
-    both cache representations implement the same detached-boundary contract.
+    List, uniform, and grouped caches share the detached-boundary contract.
     """
     return cache.detach()
 
@@ -32,13 +33,26 @@ def detach_cache(cache: CacheLike) -> CacheLike:
 class WindowedCacheLayout:
     sidecar_spec: KVScoreSidecarSpec | None = None
     linear_states: LinearStateLayout = ()
+    attention_layers: tuple[int, ...] = ()
+    grouped_layers: tuple[tuple[int, ...], ...] = ()
 
 
 def _flatten_windowed_cache(
-    cache: WindowedCache | None,
+    cache: WindowedCache | GroupedWindowedCache | None,
 ) -> tuple[tuple[torch.Tensor, ...], WindowedCacheLayout]:
     if cache is None:
         return (), WindowedCacheLayout()
+    if isinstance(cache, GroupedWindowedCache):
+        tensors = [cache.scores]
+        for group in cache.groups:
+            tensors.extend((group.keys, group.values))
+        attention = cache.attention_states or {}
+        for layer in sorted(attention):
+            tensors.extend(attention[layer])
+        return tuple(tensors), WindowedCacheLayout(
+            attention_layers=tuple(sorted(attention)),
+            grouped_layers=cache.layer_groups,
+        )
     tensors = [cache.keys, cache.values, cache.scores]
     sidecar_spec = None
     if cache.kv_score_sidecar is not None:
@@ -52,14 +66,36 @@ def _flatten_windowed_cache(
         tensors.append(recurrent)
         if convolution is not None:
             tensors.append(convolution)
+    attention_states = cache.attention_states or {}
+    attention_layers = tuple(sorted(attention_states))
+    for layer_idx in attention_layers:
+        tensors.extend(attention_states[layer_idx])
     return tuple(tensors), WindowedCacheLayout(
-        sidecar_spec, tuple(linear_layout)
+        sidecar_spec, tuple(linear_layout), attention_layers
     )
 
 
 def _unflatten_windowed_cache(
     tensors: tuple[torch.Tensor, ...], layout: WindowedCacheLayout
-) -> WindowedCache:
+) -> WindowedCache | GroupedWindowedCache:
+    if layout.grouped_layers:
+        expected = 1 + 2 * (
+            len(layout.grouped_layers) + len(layout.attention_layers)
+        )
+        if len(tensors) != expected:
+            raise ValueError("invalid grouped cache tensor boundary")
+        groups = tuple(
+            WindowedCache(tensors[1 + 2 * i], tensors[2 + 2 * i], tensors[0])
+            for i in range(len(layout.grouped_layers))
+        )
+        offset = 1 + 2 * len(groups)
+        attention = {
+            layer: (tensors[offset + 2 * i], tensors[offset + 2 * i + 1])
+            for i, layer in enumerate(layout.attention_layers)
+        }
+        return GroupedWindowedCache(
+            groups, layout.grouped_layers, tensors[0], attention or None
+        )
     if len(tensors) < 3:
         raise ValueError(
             "a flattened WindowedCache boundary requires keys, values, and scores"
@@ -88,12 +124,25 @@ def _unflatten_windowed_cache(
         convolution = tensors[position] if has_convolution else None
         position += int(has_convolution)
         linear_states[layer_idx] = (recurrent, convolution)
+    attention_states = {}
+    for layer_idx in layout.attention_layers:
+        if position + 1 >= len(tensors):
+            raise ValueError(
+                "flattened WindowedCache is missing attention state tensors"
+            )
+        attention_states[layer_idx] = (tensors[position], tensors[position + 1])
+        position += 2
     if position != len(tensors):
         raise ValueError(
             "flattened WindowedCache contains unexpected state tensors"
         )
     return WindowedCache(
-        tensors[0], tensors[1], tensors[2], linear_states or None, sidecar
+        tensors[0],
+        tensors[1],
+        tensors[2],
+        linear_states or None,
+        sidecar,
+        attention_states or None,
     )
 
 

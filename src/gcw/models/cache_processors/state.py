@@ -18,6 +18,7 @@ class CacheState:
         dict[int, tuple[torch.Tensor, torch.Tensor | None]] | None
     ) = None
     kv_score_sidecar: KVScoreSidecarState | None = None
+    attention_states: dict[int, tuple[torch.Tensor, torch.Tensor]] | None = None
 
     @property
     def batch_size(self) -> int:
@@ -65,6 +66,14 @@ class CacheState:
             scores=self.scores.detach(),
             linear_states=linear_states,
             kv_score_sidecar=sidecar,
+            attention_states=(
+                None
+                if self.attention_states is None
+                else {
+                    layer_idx: (key.detach(), value.detach())
+                    for layer_idx, (key, value) in self.attention_states.items()
+                }
+            ),
         )
 
     def select_indices(
@@ -83,7 +92,7 @@ class CacheState:
         )
 
     def all_heads(self) -> torch.Tensor:
-        heads = self.num_layers * self.keys[0].shape[1]
+        heads = sum(key.shape[1] for key in self.keys)
         return (
             torch.arange(heads, dtype=torch.long, device=self.scores.device)
             .unsqueeze(0)
@@ -249,7 +258,7 @@ class StaticCacheState:
         )
 
     def all_heads(self) -> torch.Tensor:
-        heads = self.num_layers * self.keys[0].shape[1]
+        heads = sum(key.shape[1] for key in self.keys)
         return (
             torch.arange(
                 heads, dtype=torch.long, device=self.score_storage.device

@@ -13,6 +13,7 @@ from gcw.config import (
     ModelConfig,
 )
 from gcw.models.backbones.transformer import RMSNorm
+from gcw.models.cache_processors.layout import CacheShapeGroup
 from gcw.models.cache_processors.base import cache_processor_recomputation_id
 from gcw.models.cache_processors.diffusion import TaskDirectedDiffusion
 from gcw.models.cache_processors.flow import LatentFlow
@@ -40,7 +41,7 @@ from gcw.models.cache_processors.longshot_selection import (
 )
 
 
-class CacheProcessor(nn.Module):
+class CacheHeadProjection(nn.Module):
     def __init__(
         self,
         input_dim: int,
@@ -50,12 +51,8 @@ class CacheProcessor(nn.Module):
         encoder_method: EncoderMethod = "linear",
         encoder_seq_len: int | None = None,
         output_dim: int | None = None,
-        flow_config: FlowProcessorConfig | None = None,
         diffusion_config: DiffusionProcessorConfig | None = None,
-        kv_cache_heads: int | None = None,
-        model_config: ModelConfig | None = None,
-        linear_state_specs: list[LinearStateSpec] | None = None,
-    ):
+    ) -> None:
         super().__init__()
         self.config = config
         self.input_dim = input_dim
@@ -67,7 +64,7 @@ class CacheProcessor(nn.Module):
             or config.encoder_seq_len
             or config.process_every + max(config.topk, 0)
         )
-        self.kv_cache_heads = kv_cache_heads or num_cache_heads
+        self.kv_cache_heads = num_cache_heads
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
         if encoder_method == "linear":
             in_features = self.encoder_seq_len * input_dim
@@ -85,10 +82,6 @@ class CacheProcessor(nn.Module):
             )
         else:
             self.in_proj = nn.Linear(in_features, config.hidden_size)
-        self.layers = nn.ModuleList(
-            ProcessorLayer(config) for _ in range(config.num_layers)
-        )
-        self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
         scheduled_diffusion = (
             diffusion_config is not None
             and diffusion_config.training_method == "scheduled"
@@ -130,6 +123,124 @@ class CacheProcessor(nn.Module):
         else:
             self.register_parameter("gate", None)
         self._gate_value: torch.Tensor | None = None
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.in_norm(x)
+        if self.encoder_method == "linear":
+            x = _fit_time_length(x, self.encoder_seq_len)
+            return self.in_proj(x.flatten(start_dim=2))
+        if self.encoder_method == "query_attention":
+            return self.in_proj(self.time_encoder(x))
+        raise ValueError(f"unknown encoder_method: {self.encoder_method}")
+
+    def _project_primary_update(
+        self, hidden: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        projected = self.out_proj(hidden)
+        if self.gate_dim == 0:
+            return projected, self._gate_scale(output_dtype=projected.dtype)
+        delta, gate_logits = projected.split(
+            [self.output_dim, self.gate_dim], dim=-1
+        )
+        return delta, self._gate_scale(gate_logits, output_dtype=delta.dtype)
+
+    def _gate_scale(
+        self,
+        gate_logits: torch.Tensor | None = None,
+        *,
+        output_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        logits = self.gate if gate_logits is None else gate_logits
+        if logits is None:
+            scale = torch.ones(
+                (),
+                dtype=output_dtype,
+                device=next(self.out_proj.parameters()).device,
+            )
+        else:
+            scale = _activate_update_gate(
+                logits, self.config.gate_mode, output_dtype
+            )
+        self._gate_value = scale.detach()
+        return scale
+
+
+class CacheProcessor(CacheHeadProjection):
+    def __init__(
+        self,
+        input_dim: int,
+        num_cache_heads: int,
+        config: CacheProcessorConfig,
+        *,
+        encoder_method: EncoderMethod = "linear",
+        encoder_seq_len: int | None = None,
+        output_dim: int | None = None,
+        flow_config: FlowProcessorConfig | None = None,
+        diffusion_config: DiffusionProcessorConfig | None = None,
+        kv_cache_heads: int | None = None,
+        model_config: ModelConfig | None = None,
+        linear_state_specs: list[LinearStateSpec] | None = None,
+        shape_groups: tuple[CacheShapeGroup, ...] = (),
+    ):
+        nn.Module.__init__(self)
+        self.shape_groups = shape_groups
+        if shape_groups:
+            self.config = config
+            self.kv_cache_heads = kv_cache_heads or num_cache_heads
+            self.projections = nn.ModuleDict(
+                {
+                    group.name: CacheHeadProjection(
+                        2 * group.head_dim,
+                        len(group.head_indices),
+                        config,
+                        encoder_method=encoder_method,
+                        encoder_seq_len=encoder_seq_len,
+                        output_dim=(
+                            group.head_dim
+                            if config.update_stream == "v"
+                            else 2 * group.head_dim
+                        ),
+                        diffusion_config=diffusion_config,
+                    )
+                    for group in shape_groups
+                }
+            )
+            grouped_order = [
+                head for group in shape_groups for head in group.head_indices
+            ]
+            self.register_buffer(
+                "canonical_order",
+                torch.tensor(
+                    [
+                        grouped_order.index(i)
+                        for i in range(self.kv_cache_heads)
+                    ],
+                    dtype=torch.long,
+                    device="cpu",
+                ),
+                persistent=False,
+            )
+            for group in shape_groups:
+                self.register_buffer(
+                    group.name + "_heads",
+                    torch.tensor(group.head_indices, device="cpu"),
+                    persistent=False,
+                )
+        else:
+            CacheHeadProjection.__init__(
+                self,
+                input_dim,
+                kv_cache_heads or num_cache_heads,
+                config,
+                encoder_method=encoder_method,
+                encoder_seq_len=encoder_seq_len,
+                output_dim=output_dim,
+                diffusion_config=diffusion_config,
+            )
+        self.layers = nn.ModuleList(
+            ProcessorLayer(config) for _ in range(config.num_layers)
+        )
+        self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
         self.flow = (
             LatentFlow(config.hidden_size, flow_config)
             if flow_config is not None
@@ -184,24 +295,19 @@ class CacheProcessor(nn.Module):
                 module, "query"
             ):
                 nn.init.normal_(module.query, mean=0.0, std=std)
-        if self.gate_dim:
-            _initialize_contextual_output_projection(
-                self.out_proj, self.output_dim, self.config, std
-            )
-        else:
-            if self.gate is not None:
-                nn.init.constant_(self.gate, self.config.gate_init)
-            if self.config.out_proj_init == "zero":
-                _zero_projection(self.out_proj)
-
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.in_norm(x)
-        if self.encoder_method == "linear":
-            x = _fit_time_length(x, self.encoder_seq_len)
-            return self.in_proj(x.flatten(start_dim=2))
-        if self.encoder_method == "query_attention":
-            return self.in_proj(self.time_encoder(x))
-        raise ValueError(f"unknown encoder_method: {self.encoder_method}")
+        projections = (
+            self.projections.values() if self.shape_groups else (self,)
+        )
+        for projection in projections:
+            if projection.gate_dim:
+                _initialize_contextual_output_projection(
+                    projection.out_proj, projection.output_dim, self.config, std
+                )
+            else:
+                if projection.gate is not None:
+                    nn.init.constant_(projection.gate, self.config.gate_init)
+                if self.config.out_proj_init == "zero":
+                    _zero_projection(projection.out_proj)
 
     def select_heads(
         self, hidden: torch.Tensor, topk_heads: int
@@ -216,19 +322,36 @@ class CacheProcessor(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,
+        x: torch.Tensor | tuple[torch.Tensor, ...],
         selected_heads: torch.Tensor | None = None,
         *,
         kv_hidden: torch.Tensor | None = None,
         linear_features: torch.Tensor | None = None,
         topk_heads: int | None = None,
         select_all: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
-        if x.shape[2] == 0:
+    ) -> tuple[
+        torch.Tensor | tuple[torch.Tensor, ...],
+        torch.Tensor | None,
+        torch.Tensor,
+    ]:
+        grouped = isinstance(x, tuple)
+        if (x[0] if grouped else x).shape[2] == 0:
             raise ValueError(
                 "Longshot cache processor requires at least one selected time position"
             )
-        kv_hidden = self.encode(x) if kv_hidden is None else kv_hidden
+        if kv_hidden is None:
+            if grouped:
+                kv_hidden = torch.cat(
+                    [
+                        self.projections[group.name].encode(values)
+                        for group, values in zip(
+                            self.shape_groups, x, strict=True
+                        )
+                    ],
+                    dim=1,
+                ).index_select(1, self.canonical_order)
+            else:
+                kv_hidden = self.encode(x)
         hidden = kv_hidden
         linear_adapter = self.linear_state_adapter
         if linear_features is not None:
@@ -263,14 +386,30 @@ class CacheProcessor(nn.Module):
             routing_gates,
             select_all=select_all,
         )
-        primary_delta, gate = self._project_primary_update(
-            processed[:, : x.shape[1]]
-        )
         observer = UPDATE_OBSERVER.get() if not self.training else None
-        if observer is not None:
-            observer.kv(primary_delta)
-        primary_delta = primary_delta * gate
-        updated = x[:, :, -1, -self.output_dim :] + primary_delta
+        if grouped:
+            updates, raw_deltas = [], []
+            for group, values in zip(self.shape_groups, x, strict=True):
+                projection = self.projections[group.name]
+                group_hidden = processed.index_select(
+                    1, getattr(self, group.name + "_heads")
+                )
+                delta, gate = projection._project_primary_update(group_hidden)
+                raw_deltas.append(delta)
+                updates.append(
+                    values[:, :, -1, -projection.output_dim :] + delta * gate
+                )
+            if observer is not None:
+                observer.kv(tuple(raw_deltas))
+            updated = tuple(updates)
+        else:
+            primary_delta, gate = self._project_primary_update(
+                processed[:, : x.shape[1]]
+            )
+            if observer is not None:
+                observer.kv(primary_delta)
+            primary_delta = primary_delta * gate
+            updated = x[:, :, -1, -self.output_dim :] + primary_delta
         linear_delta = None
         if linear_features is not None:
             assert linear_adapter is not None
@@ -518,34 +657,3 @@ class CacheProcessor(nn.Module):
         else:
             self._selected_head_overlap_totals[iteration] = overlap
             self._selected_head_overlap_counts[iteration] = 1
-
-    def _project_primary_update(
-        self, hidden: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        projected = self.out_proj(hidden)
-        if self.gate_dim == 0:
-            return projected, self._gate_scale(output_dtype=projected.dtype)
-        delta, gate_logits = projected.split(
-            [self.output_dim, self.gate_dim], dim=-1
-        )
-        return delta, self._gate_scale(gate_logits, output_dtype=delta.dtype)
-
-    def _gate_scale(
-        self,
-        gate_logits: torch.Tensor | None = None,
-        *,
-        output_dtype: torch.dtype,
-    ) -> torch.Tensor:
-        logits = self.gate if gate_logits is None else gate_logits
-        if logits is None:
-            scale = torch.ones(
-                (),
-                dtype=output_dtype,
-                device=next(self.out_proj.parameters()).device,
-            )
-        else:
-            scale = _activate_update_gate(
-                logits, self.config.gate_mode, output_dtype
-            )
-        self._gate_value = scale.detach()
-        return scale

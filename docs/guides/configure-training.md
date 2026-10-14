@@ -175,6 +175,12 @@ trainable: cache_processor
 
 Only cache processor parameters receive gradients. Use `trainable: backbone` to freeze the cache processor instead.
 
+Prepare tokenizer-matched data and a native backbone checkpoint before launching training. For Hugging Face initialization, [convert a pinned snapshot](../integrations/hugging-face.md) with the matching backbone family and `--variant tf`; tokenizer preparation does not create model weights. `trainable: cache_processor` selects a frozen backbone with a trainable processor across supported families, including hybrid backbones.
+
+Choose processor inputs according to the backbone's cache layout. `model.processor_layer_indices` selects eligible KV layers where subset processing is supported; linear-attention recurrent states use the separate Longshot `linear_state_cache` option. For mixed KV widths, Longshot's `head_score_normalization: rms` makes magnitude selection comparable across widths. See [cache layout and layer selection](../concepts/cache-processing.md#cache-layout-and-layer-selection) for supported layouts and exceptions, including Gemma4's `unrope_keys: false` requirement. Mixed-shape execution uses reference cache movement. Probe the batch size for the chosen backbone, processor, precision, and sequence length before a full training run.
+
+Choose training context length deliberately for backbones with sliding attention. When training `sequence_len` is no larger than `model.sliding_window`, the sliding mask excludes no positions beyond the causal mask. A 1,024-token run with a 1,024-token sliding window is therefore a short-context pilot, even if the backbone configuration allows much longer inputs. Record that policy in experiment metadata; it does not establish readiness for longer-context evaluation. To train the processor under sliding-window exclusion, use sequences longer than the window and probe memory again. Validate the intended evaluation context separately and budget for the [retained KV history](../concepts/cache-processing.md#cache-layout-and-layer-selection).
+
 Under FSDP with the reference loss and untied embeddings, a frozen backbone's vocabulary embedding and output projection receive separate wrappers in addition to its layer-level wrappers. This keeps those large frozen weights out of the trainable processor's gradient buffer. Tied embeddings, loss backends that access output weights directly, and Longshot's shared `gated_delta` dynamics retain the existing wrapper layout. Longshot's `outer_product` configuration uses the separate vocabulary wrappers.
 
 ### Qwen3 frozen-backbone regional compilation
@@ -218,7 +224,7 @@ activation_checkpointing: standard_processor_layers
 
 The default, `none`, preserves eager processor layers. The layer boundary includes BT's batched parameter-stack path. Backward recomputes attention and MLP intermediates while cache selection, writeback, backbone windows, and loss remain eager.
 
-Qwen3 recurrent variants can instead, or additionally, checkpoint groups of backbone windows:
+Qwen3 recurrent variants and Gemma4 Longshot can instead, or additionally, checkpoint groups of backbone windows:
 
 ```yaml
 activation_checkpoint_windows: 2  # zero disables; positive values are windows per segment
@@ -229,7 +235,7 @@ The minimum-length threshold uses the physical microbatch's padded width (`input
 
 Each segment exports only hidden output and its tensor-only cache boundary. Backward replays the segment with RNG preservation. BT creates a new prepared-stack owner for every original segment invocation and every replay; closed owners remain unusable, and graph-derived stacks never cross segment or forward lifetimes. Replay suppresses processor call counts and Longshot overlap metrics. Per-step metrics report checkpointed and eager microbatch counts plus an active flag without adding distributed collectives.
 
-Segment checkpointing runs only in training with gradients enabled. Evaluation accepts the resolved policy but executes eagerly. It supports both regional backends: `GCW_BT_PROCESSOR_BACKEND=compile` for BT and `GCW_CACHE_PROCESSOR_BACKEND=compile` for BGT, Flow-BGT, and noiseless Diffusion-BGT. Both compose with `standard_processor_layers`; segment replay keeps selection, gather, and writeback eager around the compiled tensor region. FSDP layer checkpointing and Qwen3.5 MoE router-loss execution reject this policy explicitly.
+Segment checkpointing runs only in training with gradients enabled. Evaluation accepts the resolved policy but executes eagerly. Gemma4 Longshot supports selected-layer and mixed-shape caches with eager execution. Qwen3 supports both regional backends: `GCW_BT_PROCESSOR_BACKEND=compile` for BT and `GCW_CACHE_PROCESSOR_BACKEND=compile` for BGT, Flow-BGT, and noiseless Diffusion-BGT. Both compose with `standard_processor_layers`; segment replay keeps selection, gather, and writeback eager around the compiled tensor region. Window segment checkpointing is unavailable with FSDP or other backbone/processor combinations, including Qwen3.5.
 
 Icarus has a rejected benchmark-only post-selection region. It is not a training configuration: ordinary `GCW_ICARUS_PROCESSOR_BACKEND=compile` fails before allocation because fixed batch-2 H200 Adam parameter parity did not meet the formal tolerance. Isolated diagnostic reproduction additionally requires `GCW_ALLOW_REJECTED_ICARUS_COMPILE=1`; provenance records that override and `campaign_admitted: false`. Campaign Icarus remains eager.
 

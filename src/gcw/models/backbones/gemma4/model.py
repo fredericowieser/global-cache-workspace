@@ -11,7 +11,10 @@ from gcw.models.cache_processors.update_metrics import (
     UPDATE_BATCH,
     generation_update_metrics,
 )
-from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.models.cache_processors.windowed import (
+    GroupedWindowedCache,
+    WindowedCache,
+)
 from gcw.models.backbones.transformer import (
     Linear,
     TF,
@@ -185,15 +188,11 @@ class Gemma4TF(TF):
         self,
         input_ids: torch.Tensor,
         start_pos: int,
-        cache: CacheState | WindowedCache | None = None,
+        cache: CacheState | WindowedCache | GroupedWindowedCache | None = None,
         *,
         logits: bool = True,
         cache_format: str = "list",
-    ) -> tuple[torch.Tensor, CacheState | WindowedCache]:
-        if isinstance(cache, WindowedCache) and not self._uniform_cache_shape():
-            raise ValueError(
-                "Gemma4 WindowedCache requires uniform stored KV shapes"
-            )
+    ) -> tuple[torch.Tensor, CacheState | WindowedCache | GroupedWindowedCache]:
         x = self.embed_tokens(input_ids)
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
         position_embeddings = self._position_embeddings(
@@ -212,7 +211,7 @@ class Gemma4TF(TF):
         )
         has_cache = cache is not None and cache.scores.numel() > 0
         shared_kv_states: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
-        cache_idx = 0
+        attention_states = {}
         for i, module in enumerate(self.layers):
             layer = cast(Gemma4Block, module)
             per_layer_input = (
@@ -235,7 +234,12 @@ class Gemma4TF(TF):
                         raise RuntimeError(
                             "cache state disappeared during cached attention"
                         )
-                    past = cache.layer(cache_idx)
+                    cache_idx = layer.self_attn.cache_idx
+                    past = (
+                        cache.layer(cache_idx)
+                        if cache_idx is not None
+                        else (cache.attention_states or {}).get(i)
+                    )
                 else:
                     past = None
                 x, k, v, scores = layer(
@@ -246,9 +250,11 @@ class Gemma4TF(TF):
                     shared_kv_states,
                     start_pos,
                 )
-                keys.append(k)
-                values.append(v)
-                cache_idx += 1
+                if layer.self_attn.cache_idx is None:
+                    attention_states[i] = (k, v)
+                else:
+                    keys.append(k)
+                    values.append(v)
             layer_scores.append(scores)
         x = self.norm(x)
         out = self.logits_from_hidden(x) if logits else x
@@ -258,13 +264,27 @@ class Gemma4TF(TF):
             if old_scores.numel() == 0
             else torch.cat([old_scores, chunk_scores], dim=1)
         )
-        if cache_format == "windowed" or isinstance(cache, WindowedCache):
+        if cache_format == "windowed" or isinstance(
+            cache, (WindowedCache, GroupedWindowedCache)
+        ):
             if not self._uniform_cache_shape():
-                raise ValueError(
-                    "Gemma4 WindowedCache requires uniform stored KV shapes"
+                return out, GroupedWindowedCache.from_cache_state(
+                    CacheState(
+                        keys,
+                        values,
+                        new_scores,
+                        attention_states=attention_states or None,
+                    )
                 )
-            return out, WindowedCache.from_lists(keys, values, new_scores)
-        return out, CacheState(keys, values, new_scores)
+            return out, WindowedCache.from_lists(
+                keys,
+                values,
+                new_scores,
+                attention_states=attention_states or None,
+            )
+        return out, CacheState(
+            keys, values, new_scores, attention_states=attention_states or None
+        )
 
     def forward_chunk_static(
         self,
@@ -277,6 +297,12 @@ class Gemma4TF(TF):
         if not self._uniform_cache_shape():
             raise ValueError(
                 "Gemma4 static cache requires uniform stored KV shapes"
+            )
+        if self.config.cache_num_layers != (
+            self.config.num_layers - self.config.num_kv_shared_layers
+        ):
+            raise ValueError(
+                "Gemma4 static cache requires all non-shared attention layers"
             )
         x = self.embed_tokens(input_ids)
         per_layer_inputs = self._per_layer_inputs(input_ids, x)
@@ -325,7 +351,9 @@ class Gemma4TF(TF):
         stop_sequences: list[list[int]] | None = None,
         pad_token_id: int | None = None,
     ) -> torch.Tensor:
-        if self._uniform_cache_shape():
+        if self._uniform_cache_shape() and self.config.cache_num_layers == (
+            self.config.num_layers - self.config.num_kv_shared_layers
+        ):
             return super().generate_fast(
                 input_ids,
                 max_new_tokens,
@@ -342,7 +370,7 @@ class Gemma4TF(TF):
         out = input_ids[:, -self.config.sequence_len :]
         if out.shape[1] == 0:
             raise ValueError("generate requires at least one input token")
-        cache: CacheState | WindowedCache = CacheState(
+        cache: CacheState | WindowedCache | GroupedWindowedCache = CacheState(
             [],
             [],
             input_ids.new_empty(input_ids.shape[0], 0, dtype=torch.float32),

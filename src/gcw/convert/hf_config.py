@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from types import SimpleNamespace
 from gcw.config import Family, ModelConfig, Variant, gemma4_default_layer_types
 
 ALIASES = {
@@ -185,6 +186,43 @@ def _qwen35_moe_config_from_hf_text(hf_cfg, variant: Variant) -> ModelConfig:
 
 
 def _gemma4_config_from_hf_text(hf_cfg, variant: Variant) -> ModelConfig:
+    if getattr(hf_cfg, "is_heterogeneous", False):
+        attributes = set(hf_cfg.per_layer_attributes or ())
+        if attributes - {"head_dim", "num_key_value_heads"}:
+            raise NotImplementedError(
+                "Gemma4 per-layer overrides support only KV heads and head dimensions"
+            )
+        layers = list(hf_cfg.per_layer_config)
+        by_type = {}
+        for kind, layer in zip(hf_cfg.layer_types, layers, strict=True):
+            shape = (int(layer.num_key_value_heads), int(layer.head_dim))
+            if kind in by_type and by_type[kind] != shape:
+                raise NotImplementedError(
+                    "Gemma4 requires one KV shape per attention type"
+                )
+            by_type[kind] = shape
+        if "full_attention" not in by_type:
+            raise NotImplementedError(
+                "Gemma4 per-layer configuration requires a full_attention layer"
+            )
+        global_heads, global_dim = by_type["full_attention"]
+        local_heads, local_dim = by_type.get(
+            "sliding_attention", (global_heads, global_dim)
+        )
+        if local_heads != global_heads and not bool(
+            getattr(hf_cfg, "attention_k_eq_v", False)
+        ):
+            raise NotImplementedError(
+                "Gemma4 per-layer KV head counts must match when attention_k_eq_v=False"
+            )
+        payload = hf_cfg.to_dict()
+        payload.update(
+            head_dim=local_dim,
+            num_key_value_heads=local_heads,
+            global_head_dim=global_dim,
+            num_global_key_value_heads=global_heads,
+        )
+        hf_cfg = SimpleNamespace(**payload)
     if bool(getattr(hf_cfg, "enable_moe_block", False)):
         raise NotImplementedError(
             "Gemma4 MoE blocks are not implemented in gcw yet."

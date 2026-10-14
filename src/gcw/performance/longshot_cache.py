@@ -36,6 +36,10 @@ def configure_longshot_full_history_execution(
         raise ValueError(
             "Longshot full-history execution found no Longshot cache processor"
         )
+    if processor.shape_groups:
+        raise ValueError(
+            "Longshot full-history execution requires uniform cache shapes"
+        )
     processor_config = processor.config
     if processor_config.score != "kv_norm":
         raise ValueError(

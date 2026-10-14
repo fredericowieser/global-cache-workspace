@@ -46,6 +46,7 @@ def resolve_execution_plan(config: "TrainConfig") -> ExecutionPlan:
     Runs every cross-feature admission check and raises ``ValueError`` on the
     first violation, matching the historical inline ``__post_init__`` order.
     """
+    _validate_mixed_cache_execution(config)
     _validate_backbone_chunk_backend(config)
     _validate_logical_pair_grouping(config)
     _validate_longshot_full_history(config)
@@ -73,6 +74,23 @@ def _select_strategy(config: "TrainConfig") -> ExecutionStrategy:
     if performance.noisy_diffusion.recurrence_backend == "compile":
         return "noisy_diffusion_compile"
     return "eager_reference"
+
+
+def _validate_mixed_cache_execution(config: "TrainConfig") -> None:
+    if (
+        config.model.family != "gemma4"
+        or len(set(config.model.stored_cache_shapes)) <= 1
+    ):
+        return
+    performance = config.performance
+    if (
+        performance.longshot_full_history.enabled
+        or performance.kv_score_sidecar.enabled
+        or performance.triton_cache_movement.enabled
+    ):
+        raise ValueError(
+            "mixed-shape Gemma4 caches require reference cache movement without full-history or score-sidecar optimizations"
+        )
 
 
 def _validate_backbone_chunk_backend(config: "TrainConfig") -> None:

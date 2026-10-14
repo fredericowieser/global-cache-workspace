@@ -9,7 +9,7 @@ incompatible variant/family/dimension combinations before any model is built.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from gcw.config.types import (
     CacheEncoderMethod,
@@ -54,6 +54,7 @@ class CacheProcessorConfig:
     topk_linear_heads: int | None = None
     score: str = "attn_l2"
     head_selection_method: CacheHeadSelectionMethod = "magnitude"
+    head_score_normalization: Literal["none", "rms"] = "none"
     head_selector_hidden_size: int = 64
     head_selector_use_identity_bias: bool = False
     hidden_size: int = 512
@@ -100,6 +101,10 @@ class CacheProcessorConfig:
         ):
             raise ValueError(
                 "cache_processor.generation_process_every must be a positive integer when set"
+            )
+        if self.head_score_normalization not in {"none", "rms"}:
+            raise ValueError(
+                "cache_processor.head_score_normalization must be 'none' or 'rms'"
             )
         if self.score not in {"attn_l2", "kv_norm"}:
             raise ValueError(

@@ -376,9 +376,15 @@ class TrainConfig:
             raise ValueError(
                 "activation_checkpoint_windows requires a recurrent cache-processor variant"
             )
-        if self.activation_checkpoint_windows and self.model.family != "qwen3":
+        if self.activation_checkpoint_windows and not (
+            self.model.family == "qwen3"
+            or (
+                self.model.family == "gemma4"
+                and self.model.variant == "longshot"
+            )
+        ):
             raise ValueError(
-                "activation_checkpoint_windows currently supports only the qwen3 backbone family"
+                "activation_checkpoint_windows supports qwen3 and Gemma4 Longshot backbones"
             )
         if self.activation_checkpoint_windows and self.distributed == "fsdp":
             raise ValueError(

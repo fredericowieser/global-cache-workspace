@@ -364,30 +364,44 @@ def _longshot_processor_block_flops_per_call(
     encoder_len = config.encoder_seq_len or config.process_every + max(
         config.topk, 0
     )
-    encoder_in = (
-        input_dim
-        if config.encoder_method == "query_attention"
-        else input_dim * encoder_len
-    )
-    output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
-    gate_dim = config.update_gate_dim(output_dim)
-    kv_in_out = encoder_in * config.hidden_size + config.hidden_size * (
-        output_dim + gate_dim
-    )
+    shapes = [(cache_heads, input_dim)]
+    if model_config is not None and model_config.family == "gemma4":
+        from gcw.models.cache_processors.layout import cache_shape_groups
+
+        shapes = [
+            (len(group.head_indices), 2 * group.head_dim)
+            for group in cache_shape_groups(model_config.stored_cache_shapes)
+        ]
     fixed_output_scale = config.output_scale_mode == "fixed_one" or (
         model_config is not None
         and model_config.diffusion_processor is not None
         and model_config.diffusion_processor.training_method == "scheduled"
         and config.update_gate_type == "static_scalar"
     )
-    update_gate_ops = cache_heads * output_dim
-    if config.gate_mode == "sigmoid" and not fixed_output_scale:
-        update_gate_ops += cache_heads * gate_dim if gate_dim else 1
+    kv_in_out = 0
     encode_extra = 0
-    if config.encoder_method == "query_attention":
-        encode_extra = 4 * cache_heads * selected * input_dim
-        if config.encoder_query_source == "final_token":
-            encode_extra += 2 * cache_heads * input_dim * input_dim
+    update_gate_ops = 0
+    for heads, dimension in shapes:
+        encoder_in = (
+            dimension
+            if config.encoder_method == "query_attention"
+            else dimension * encoder_len
+        )
+        output_dim = (
+            dimension // 2 if config.update_stream == "v" else dimension
+        )
+        gate_dim = config.update_gate_dim(output_dim)
+        kv_in_out += heads * (
+            encoder_in * config.hidden_size
+            + config.hidden_size * (output_dim + gate_dim)
+        )
+        update_gate_ops += heads * output_dim
+        if config.gate_mode == "sigmoid" and not fixed_output_scale:
+            update_gate_ops += heads * gate_dim if gate_dim else 1
+        if config.encoder_method == "query_attention":
+            encode_extra += 4 * heads * selected * dimension
+            if config.encoder_query_source == "final_token":
+                encode_extra += 2 * heads * dimension * dimension
     linear_in_out = 0
     if model_config is not None and linear_heads > 0:
         layer_pairs = linear_attention_following_cache_indices(model_config)
@@ -434,9 +448,7 @@ def _longshot_processor_block_flops_per_call(
         encode_extra += 2 * query_count * context_dim * query_out
         encode_extra += 4 * linear_heads * linear_key_dim * linear_value_dim
     encode_decode = (
-        2 * (cache_heads * kv_in_out + linear_in_out)
-        + encode_extra
-        + update_gate_ops
+        2 * (kv_in_out + linear_in_out) + encode_extra + update_gate_ops
     )
     layer_matmul = (
         2
@@ -561,7 +573,13 @@ def _longshot_initial_head_selection_flops(
     if config.score == "kv_norm":
         kv_score = cache_heads * selected_positions
     else:
-        kv_score = 2 * cache_heads * selected_positions * input_dim
+        features = cache_heads * input_dim
+        if model_config is not None and model_config.family == "gemma4":
+            features = sum(
+                2 * heads * dim
+                for heads, dim in model_config.stored_cache_shapes
+            )
+        kv_score = 2 * selected_positions * features
     linear_score = 0
     if model_config is not None and linear_heads > 0:
         linear_value_dim = int(

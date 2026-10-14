@@ -2,7 +2,7 @@
 
 GCW tests whether small learned processors can improve a causal language model by selecting, transforming, and rewriting its internal cache.
 
-Supported backbones: SmolLM, Llama 3/3.1/3.2, Qwen3, Qwen3.5 dense and MoE, and Gemma4.
+Supported backbones: SmolLM, Llama 3/3.1/3.2, Qwen3, Qwen3.5 dense and MoE, and Gemma4. Gemma4 Longshot supports both sliding and full-attention KV shapes; see [cache processing](docs/concepts/cache-processing.md) for configuration and execution limits.
 
 Implemented model compositions:
 

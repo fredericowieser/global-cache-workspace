@@ -16,6 +16,7 @@ from gcw.config import (
 )
 from gcw.models.backbones.transformer import estimate_non_embedding_params
 from gcw.models.lora import LoRALinear
+from gcw.models.cache_processors.layout import cache_shape_groups
 
 
 def trainable_adapter_params(model: Module) -> int:
@@ -107,6 +108,7 @@ def estimate_processor_params(config: ModelConfig) -> int:
             _longshot_processor_params(config)
             + flow_params
             + write_gate_adjustment
+            * len(cache_shape_groups(config.stored_cache_shapes))
         )
     return 0
 
@@ -179,29 +181,43 @@ def _longshot_processor_params(config: ModelConfig) -> int:
     cp = config.cache_processor
     if cp is None:
         return 0
-    input_dim = 2 * _head_dim(config)
-    cache_heads = config.cache_num_heads
-    projection_count = cache_heads if cp.per_cache_head_projections else 1
-    in_proj_dim = (
-        input_dim
-        if cp.encoder_method == "query_attention"
-        else input_dim * _longshot_encoder_seq_len(cp)
+    groups = cache_shape_groups(config.stored_cache_shapes)
+    shared = _processor_block_params_with_dims(
+        input_norm_dim=0,
+        in_proj_dim=0,
+        out_proj_dim=0,
+        config=cp,
+        projection_count=0,
+        gate_params=0,
     )
-    out_proj_dim = _head_dim(config) if cp.update_stream == "v" else input_dim
-    gate_dim = cp.update_gate_dim(out_proj_dim)
-    query = _longshot_query_params(input_dim, cache_heads, cp)
-    linear_heads = _longshot_linear_state_heads(config)
+    total = shared
+    for group in groups:
+        input_dim = 2 * group.head_dim
+        heads = len(group.head_indices)
+        in_proj_dim = (
+            input_dim
+            if cp.encoder_method == "query_attention"
+            else input_dim * _longshot_encoder_seq_len(cp)
+        )
+        out_proj_dim = group.head_dim if cp.update_stream == "v" else input_dim
+        gate_dim = cp.update_gate_dim(out_proj_dim)
+        total += _longshot_query_params(input_dim, heads, cp)
+        total += (
+            _processor_block_params_with_dims(
+                input_norm_dim=input_dim,
+                in_proj_dim=in_proj_dim,
+                out_proj_dim=out_proj_dim + gate_dim,
+                config=cp,
+                projection_count=heads if cp.per_cache_head_projections else 1,
+                gate_params=int(gate_dim == 0),
+            )
+            - shared
+        )
     return (
-        query
+        total
         + _longshot_linear_state_params(config)
-        + _longshot_head_selector_params(cp, cache_heads + linear_heads)
-        + _processor_block_params_with_dims(
-            input_norm_dim=input_dim,
-            in_proj_dim=in_proj_dim,
-            out_proj_dim=out_proj_dim + gate_dim,
-            config=cp,
-            projection_count=projection_count,
-            gate_params=int(gate_dim == 0),
+        + _longshot_head_selector_params(
+            cp, config.cache_num_heads + _longshot_linear_state_heads(config)
         )
     )
 

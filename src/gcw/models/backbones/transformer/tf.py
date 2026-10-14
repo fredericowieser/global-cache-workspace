@@ -11,7 +11,10 @@ from gcw.config import LossBackend, ModelConfig
 from gcw.models.backbones.base import Backbone
 from gcw.models.cache_processors.base import cache_processor_recomputation_id
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
-from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.models.cache_processors.windowed import (
+    GroupedWindowedCache,
+    WindowedCache,
+)
 from gcw.models.backbones.transformer.block import Block
 from gcw.models.backbones.transformer.cache import (
     CacheLike,
@@ -332,8 +335,12 @@ class TF(Backbone):
         processor_execution_factory: ProcessorExecutionFactory,
         process_every: int,
         truncated_bptt_windows: int,
-    ) -> tuple[torch.Tensor, WindowedCache]:
-        boundary_cache = cache if isinstance(cache, WindowedCache) else None
+    ) -> tuple[torch.Tensor, WindowedCache | GroupedWindowedCache]:
+        boundary_cache = (
+            cache
+            if isinstance(cache, (WindowedCache, GroupedWindowedCache))
+            else None
+        )
         input_tensors, input_layout = _flatten_windowed_cache(boundary_cache)
         output_layout: list[WindowedCacheLayout] = []
 
@@ -359,9 +366,7 @@ class TF(Backbone):
                             and window_index % truncated_bptt_windows == 0
                         ):
                             current = detach_cache(current)
-                        current = cast(
-                            CacheLike, segment_processor(current)
-                        )
+                        current = cast(CacheLike, segment_processor(current))
                     hidden, current = self.forward_chunk(
                         ids[:, relative_start : relative_start + process_every],
                         start,
@@ -370,7 +375,7 @@ class TF(Backbone):
                         cache_format="windowed",
                     )
                     segment_hidden.append(hidden)
-            if not isinstance(current, WindowedCache):
+            if not isinstance(current, (WindowedCache, GroupedWindowedCache)):
                 raise TypeError(
                     "checkpointed window segment requires WindowedCache output"
                 )

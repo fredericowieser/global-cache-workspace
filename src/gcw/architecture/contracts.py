@@ -50,6 +50,8 @@ def _config_payload(value: object) -> object:
             payload.pop("live_rank1_linear_writer")
         if value.output_scale_mode == "learned":
             payload.pop("output_scale_mode")
+        if value.head_score_normalization == "none":
+            payload.pop("head_score_normalization")
         if value.generation_process_every is None:
             payload.pop("generation_process_every")
         if value.update_gate_type == "static_scalar":

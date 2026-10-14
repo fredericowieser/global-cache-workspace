@@ -60,6 +60,8 @@ def to_dict(value: Any) -> Any:
             payload.pop("live_rank1_linear_writer")
         if value.output_scale_mode == "learned":
             payload.pop("output_scale_mode")
+        if value.head_score_normalization == "none":
+            payload.pop("head_score_normalization")
         return payload
     if isinstance(value, DiffusionProcessorConfig):
         payload = {

@@ -251,13 +251,33 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                 "model.cache_processor.linear_state_update_mode",
             )
 
-    if config.variant != "tf" and config.family == "gemma4":
+    if config.variant not in {"tf", "longshot"} and config.family == "gemma4":
         try:
             config.ensure_uniform_stored_cache_shape(
                 config.variant.capitalize()
             )
         except ValueError as error:
             add("uniform_cache_shape", str(error), "model.layer_types")
+    if config.family == "gemma4" and config.variant == "longshot":
+        if (
+            config.cache_processor is not None
+            and config.cache_processor.unrope_keys
+        ):
+            add(
+                "gemma4_inverse_rope",
+                "Gemma4 Longshot requires unrope_keys=false for layer-specific RoPE",
+                "model.cache_processor.unrope_keys",
+            )
+    if (
+        config.cache_processor is not None
+        and config.cache_processor.head_score_normalization != "none"
+        and config.variant != "longshot"
+    ):
+        add(
+            "head_score_normalization",
+            "head_score_normalization requires Longshot",
+            "model.cache_processor.head_score_normalization",
+        )
     return _unique_issues(issues)
 
 

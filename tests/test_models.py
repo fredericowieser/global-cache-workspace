@@ -646,6 +646,120 @@ def test_gemma4_processors_build_for_uniform_cache_shapes():
         assert model.config.cache_num_layers == 4
 
 
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize("cache_format", ["list", "windowed"])
+def test_gemma4_selected_cache_layers_preserve_chunked_attention(
+    shared, cache_format
+):
+    cfg = replace(
+        tiny_gemma4_config(shared=shared, global_head_dim=16),
+        processor_layer_indices=[1] if shared else [1, 3],
+        num_kv_heads=2,
+        num_global_key_value_heads=1,
+        attention_k_eq_v=True,
+    )
+    model = build_model(cfg).eval()
+    model.init_weights()
+    tokens = torch.randint(1, 128, (2, 11))
+    cache = None
+    chunks = []
+    with torch.no_grad():
+        expected = model(tokens)
+        for start in range(0, tokens.shape[1], 3):
+            logits, cache = model.forward_chunk(
+                tokens[:, start : start + 3],
+                start,
+                cache,
+                cache_format=cache_format,
+            )
+            chunks.append(logits)
+    torch.testing.assert_close(torch.cat(chunks, dim=1), expected)
+    assert cache.num_layers == (1 if shared else 2)
+    assert set(cache.attention_states) == ({0} if shared else {0, 2})
+    assert cache.attention_states[0][0].shape == (2, 2, 11, 8)
+
+
+@pytest.mark.parametrize("checkpoint_windows", [0, 2])
+def test_gemma4_longshot_selected_layers_train_with_frozen_backbone(
+    checkpoint_windows,
+):
+    from gcw.models.backbones.transformer.cache import (
+        _flatten_windowed_cache,
+        _unflatten_windowed_cache,
+    )
+    from gcw.models.cache_processors.windowed import WindowedCache
+
+    torch.manual_seed(23)
+    cfg = replace(
+        tiny_gemma4_config(
+            "longshot",
+            global_head_dim=16,
+            unrope_keys=False,
+            encoder_method="query_attention",
+            encoder_query_source="final_token",
+            out_proj_init="zero",
+        ),
+        processor_layer_indices=[1, 3],
+        num_kv_heads=2,
+        num_global_key_value_heads=1,
+        attention_k_eq_v=True,
+        rope_parameters={
+            "full_attention": {
+                "rope_type": "proportional",
+                "rope_theta": 1000000.0,
+                "partial_rotary_factor": 0.25,
+            },
+            "sliding_attention": {
+                "rope_type": "default",
+                "rope_theta": 10000.0,
+            },
+        },
+    )
+    model = build_model(cfg)
+    model.init_weights()
+    model.backbone.requires_grad_(False)
+    tokens = torch.randint(1, 128, (2, 13))
+    loss = model(
+        tokens[:, :-1],
+        tokens[:, 1:],
+        activation_checkpoint_windows=checkpoint_windows,
+    )
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert all(p.grad is None for p in model.backbone.parameters())
+    gradients = [
+        p.grad for p in model.cache_processor.parameters() if p.grad is not None
+    ]
+    assert gradients and all(torch.isfinite(g).all() for g in gradients)
+    assert any(g.count_nonzero() for g in gradients)
+
+    _, cache = model.backbone.forward_chunk(
+        tokens[:, :4], 0, cache_format="windowed"
+    )
+    _, cache = model.backbone.forward_chunk(
+        tokens[:, 4:8], 4, model.cache_processor(cache)
+    )
+    assert any(k.requires_grad for k, _ in cache.attention_states.values())
+    tensors, layout = _flatten_windowed_cache(cache)
+    restored = _unflatten_windowed_cache(tensors, layout)
+    restored = WindowedCache.from_cache_state(restored.to_cache_state())
+    for i, (key, value) in cache.attention_states.items():
+        torch.testing.assert_close(restored.attention_states[i][0], key)
+        torch.testing.assert_close(restored.attention_states[i][1], value)
+    for boundary in (restored, restored.to_cache_state()):
+        detached = boundary.detach()
+        assert all(
+            not tensor.requires_grad
+            for state in detached.attention_states.values()
+            for tensor in state
+        )
+    with torch.no_grad():
+        generated = model.generate(tokens[:, :5], max_new_tokens=3)
+        fast = model.generate_fast(tokens[:, :5], max_new_tokens=3)
+    assert generated.shape == (2, 8)
+    torch.testing.assert_close(fast, generated)
+
+
 def test_gemma4_final_logit_softcapping_bounds_logits():
     model = build_model(tiny_gemma4_config()).eval()
     hidden = torch.full((1, 1, model.config.hidden_size), 100.0)
@@ -826,9 +940,7 @@ def test_qwen35_longshot_linear_state_head_selection_is_split_from_kv_heads():
     linear_values = torch.zeros(1, 4, value_dim)
     linear_values[:, :, 0] = torch.tensor([0.0, 2.0, 5.0, 3.0])
     linear_inputs = longshot_module.LinearStateInputs(
-        features=torch.cat(
-            [torch.zeros(1, 4, key_dim), linear_values], dim=-1
-        ),
+        features=torch.cat([torch.zeros(1, 4, key_dim), linear_values], dim=-1),
         specs=[],
     )
 

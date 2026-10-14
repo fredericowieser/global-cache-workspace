@@ -16,6 +16,7 @@ from gcw.models.cache_processors.ops import (
     expand_cache_head_indices,
     gather_per_cache_head_kv,
     gather_per_cache_head_scores,
+    select_per_cache_head_kv_norm_indices_from_scores,
     latest_shared_indices,
     rotate_cache_keys,
     scatter_latest as _scatter_latest,
@@ -24,7 +25,11 @@ from gcw.models.cache_processors.ops import (
     split_merged_cache_values as _split_merged_values,
 )
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
-from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.models.cache_processors.windowed import (
+    GroupedWindowedCache,
+    WindowedCache,
+)
+from gcw.models.cache_processors.layout import cache_shape_groups
 from gcw.models.cache_processors.longshot_selection import (
     _select_heads_from_head_scores,
     cache_movement_backend,
@@ -43,10 +48,12 @@ from gcw.models.cache_processors.longshot_linear_state import (
 )
 from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
+    chunked_fp32_concatenated_kv_squared_l2,
 )
 from gcw.performance.kv_score_sidecar import kv_score_sidecar_execution
+from gcw.performance.longshot_cache import longshot_full_history_execution
 
-CacheLike = CacheState | StaticCacheState | WindowedCache
+CacheLike = CacheState | StaticCacheState | WindowedCache | GroupedWindowedCache
 
 
 class GlobalCacheProcessor(CacheProcessorBase):
@@ -60,7 +67,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
     ):
         super().__init__()
         self.linear_state_dynamics = linear_state_dynamics or {}
-        model_config.ensure_uniform_stored_cache_shape("Longshot")
+        groups = cache_shape_groups(model_config.stored_cache_shapes)
+        self.shape_groups = groups if len(groups) > 1 else ()
         if model_config.cache_processor is None:
             raise ValueError("Longshot requires cache_processor config")
         self.config = model_config.cache_processor
@@ -84,13 +92,15 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
         encoder_method = encoder_method or self.config.encoder_method
         self.num_layers = model_config.cache_num_layers
-        self.num_kv_heads, self.head_dim = model_config.stored_cache_shape
+        self.num_kv_heads, self.head_dim = (
+            (0, 0) if self.shape_groups else model_config.stored_cache_shape
+        )
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
         self.rotary_dim = int(
             self.head_dim * model_config.partial_rotary_factor
         )
-        self.num_kv_cache_heads = self.num_layers * self.num_kv_heads
+        self.num_kv_cache_heads = model_config.cache_num_heads
         self.linear_state_specs = self._build_linear_state_specs(model_config)
         if (
             self.config.linear_state_update_mode == "gated_delta"
@@ -129,6 +139,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             kv_cache_heads=self.num_kv_cache_heads,
             model_config=model_config,
             linear_state_specs=self.linear_state_specs,
+            shape_groups=self.shape_groups,
         )
 
     def _build_linear_state_specs(
@@ -180,6 +191,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
     def _forward_once(
         self, cache: CacheLike, *, select_all: bool = False
     ) -> tuple[CacheLike, torch.Tensor | None]:
+        if self.shape_groups:
+            return self._forward_grouped(cache, select_all=select_all)
         if kv_score_sidecar_execution(self).enabled:
             if isinstance(cache, CacheState):
                 cache = WindowedCache.from_cache_state(cache)
@@ -228,8 +241,18 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
             kv_head_scores = (
                 None
-                if routed_initial_selection
+                if routed_initial_selection or select_all
                 else chunked_fp32_l2_norm(merged)
+            )
+        if (
+            kv_head_scores is not None
+            and self.config.head_score_normalization == "rms"
+        ):
+            divisor = 2 * self.head_dim
+            kv_head_scores = kv_head_scores / (
+                divisor
+                if self.config.score == "kv_norm" and not select_all
+                else divisor**0.5
             )
         latest = latest_shared_indices(indices)
         kv_hidden = (
@@ -239,7 +262,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             else None
         )
         linear_inputs = self._linear_state_inputs(cache, kv_hidden)
-        if routed_initial_selection:
+        if routed_initial_selection or select_all:
             selected_heads = None
         else:
             if kv_head_scores is None:
@@ -309,6 +332,118 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
         cache = _scatter_latest(cache, latest, keys, values)
         return refresh_sidecar(self, cache, latest), selected_heads
+
+    def _forward_grouped(
+        self, cache: CacheLike, *, select_all: bool
+    ) -> tuple[CacheLike, torch.Tensor | None]:
+        if (
+            kv_score_sidecar_execution(self).enabled
+            or longshot_full_history_execution(self).enabled
+            or cache_movement_backend(self) != "eager"
+        ):
+            raise ValueError(
+                "mixed-shape Longshot requires reference cache movement"
+            )
+        return_list = isinstance(cache, CacheState)
+        if return_list:
+            cache = GroupedWindowedCache.from_cache_state(cache)
+        if not isinstance(cache, GroupedWindowedCache):
+            raise TypeError(
+                "mixed-shape Longshot requires a grouped or list cache"
+            )
+        if cache.layer_groups != tuple(
+            group.layers for group in self.shape_groups
+        ):
+            raise ValueError(
+                "cache groups do not match the processor layer layout"
+            )
+        if cache.seq_len == 0:
+            return cache, None
+        magnitude_selection = (
+            self.config.head_selection_method == "magnitude" and not select_all
+        )
+        histories, head_scores, frontiers = [], [], []
+        for spec, group in zip(self.shape_groups, cache.groups, strict=True):
+            magnitude = None
+            if self.config.score == "kv_norm" and not select_all:
+                scores = chunked_fp32_concatenated_kv_squared_l2(
+                    group.keys, group.values
+                )
+                indices = select_per_cache_head_kv_norm_indices_from_scores(
+                    scores, self.config.process_every, self.config.topk
+                )
+                if magnitude_selection:
+                    magnitude = (
+                        gather_per_cache_head_scores(scores, indices)
+                        .float()
+                        .sum(-1)
+                    )
+                divisor = 2 * spec.head_dim
+            else:
+                indices = expand_cache_head_indices(
+                    (
+                        cache.all_indices()
+                        if select_all
+                        else cache.select_indices(
+                            self.config.process_every, self.config.topk
+                        )
+                    ),
+                    len(spec.head_indices),
+                )
+                divisor = (2 * spec.head_dim) ** 0.5
+            merged = gather_per_cache_head_kv(group, indices, unrope_keys=False)
+            if magnitude_selection:
+                if magnitude is None:
+                    magnitude = chunked_fp32_l2_norm(merged)
+                if self.config.head_score_normalization == "rms":
+                    magnitude = magnitude / divisor
+                head_scores.append(magnitude)
+            histories.append(merged)
+            frontiers.append(latest_shared_indices(indices))
+        selected = None
+        if magnitude_selection:
+            scores = torch.cat(head_scores, dim=1).index_select(
+                1, self.block.canonical_order
+            )
+            selected = self._select_combined_heads(
+                batch=cache.batch_size,
+                kv_head_scores=scores,
+                linear_inputs=None,
+                select_all=select_all,
+                device=scores.device,
+            )
+        metrics = UPDATE_BATCH.get() if not self.training else None
+        observation = (
+            metrics.application(
+                self, cache, [], tuple(values[:, :, -1] for values in histories)
+            )
+            if metrics is not None
+            else nullcontext()
+        )
+        with observation:
+            updates, _, selected = self.block(
+                tuple(histories), selected, select_all=select_all
+            )
+        for spec, group, latest, updated in zip(
+            self.shape_groups, cache.groups, frontiers, updates, strict=True
+        ):
+            if self.config.update_stream == "v":
+                values = _split_merged_values(
+                    updated[:, :, None],
+                    len(spec.layers),
+                    spec.num_heads,
+                    spec.head_dim,
+                )
+                _scatter_latest_values(group, latest, values)
+            else:
+                keys, values = _split_merged(
+                    updated[:, :, None],
+                    len(spec.layers),
+                    spec.num_heads,
+                    spec.head_dim,
+                )
+                _scatter_latest(group, latest, keys, values)
+        return (cache.to_cache_state() if return_list else cache), selected
 
     def _select_combined_heads(
         self,
