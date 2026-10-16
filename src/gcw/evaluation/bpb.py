@@ -33,7 +33,14 @@ def run_fineweb(
     batch_size = config.fixed_batch_size
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, cfg, state = load_checkpoint(checkpoint, device=device, dtype=dtype)
-    sequence_len = cfg.sequence_len if sequence_len is None else sequence_len
+    prefix_tokens = tuple(
+        state.get("fineweb_data_identity", {}).get("prefix_tokens", ())
+    )
+    sequence_len = (
+        cfg.sequence_len - len(prefix_tokens)
+        if sequence_len is None
+        else sequence_len
+    )
     if sequence_len <= 0 or sequence_len > cfg.sequence_len or eval_tokens <= 0:
         raise ValueError(
             "FineWeb evaluation requires positive token budgets and a sequence length within model limits"
@@ -76,6 +83,10 @@ def run_fineweb(
                 "Checkpoint does not identify a tokenizer; cannot establish FineWeb compatibility"
             )
         dataset.validate_tokenizer(tokenizer_name, cfg.vocab_size)
+    if sequence_len + len(prefix_tokens) > cfg.sequence_len:
+        raise ValueError(
+            "FineWeb sequence plus prefix exceeds model.sequence_len"
+        )
     steps = max(1, eval_tokens // (batch_size * sequence_len))
     batches = data_loader(
         batch_size,
@@ -84,6 +95,7 @@ def run_fineweb(
         device=device,
         data_dir=data_dir,
         infinite=True,
+        prefix_tokens=prefix_tokens,
     )
     loss_backend = checkpoint_loss_backend(state, torch.device(device))
     update_metrics = CacheUpdateMetrics(model, config.cache_update_metrics_path)

@@ -6,6 +6,8 @@
 
 The preparation pipeline streams `HuggingFaceFW/fineweb-edu`, subset `sample-10BT`, in source order. It reserves the first 10,000 documents for validation by default and appends EOS to each plain-text document. Training memory-maps packed token shards rather than loading the corpus into RAM. Sequences can cross document boundaries; EOS separates documents but does not reset attention. Every next-token target contributes to loss, including EOS. Incomplete global microbatches at shard tails are skipped.
 
+For instruction-tuned checkpoints that need an assistant prefix, set `data.fineweb_prefix` explicitly. The loader tokenizes this string once per stream and prepends it to every sampled row in training and validation, without modifying saved shards or inserting it at internal document boundaries. `sequence_len` still counts corpus input tokens; the actual input length grows by the prefix length and must fit `model.sequence_len`. Prefix positions receive ignored targets (`-100`), preserving the original next-token targets, supervised-token budget, rank partitioning, and cursor coverage. Resumable checkpoints record prefix token IDs in the data identity, and standalone FineWeb evaluation inherits them. The Gemma4-31B FineWeb configs use `<bos><|turn>model\n<|channel>thought\n<channel|>`; this is an assistant prefix with an empty thought block, not a full conversation.
+
 Cosmo2 remains the default tokenizer. For a pretrained backbone, prepare a separate dataset using its matching fast Hugging Face tokenizer:
 
 ```bash

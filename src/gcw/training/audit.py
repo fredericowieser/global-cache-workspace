@@ -9,7 +9,11 @@ import torch
 from gcw.architecture import admission_receipt_metadata
 from gcw.checkpoint import initialization_backbone_checkpoint
 from gcw.config import TrainConfig, to_dict
-from gcw.data.training import TrainingBatchStream, training_data_identity
+from gcw.data.training import (
+    TrainingBatchStream,
+    training_data_identity,
+    fineweb_prefix_tokens,
+)
 from gcw.performance.adjacent_pairs import adaptive_batching_metadata
 from gcw.performance.backends.cache_processors import (
     bt_processor_backend_metadata,
@@ -318,9 +322,10 @@ def _validate_train_batch(
         raise ValueError(
             f"loader batch size {x.shape[0]} does not match config.batch_size {config.batch_size}"
         )
-    if x.shape[1] > config.sequence_len:
+    sequence_limit = config.sequence_len + len(fineweb_prefix_tokens(config))
+    if x.shape[1] > sequence_limit:
         raise ValueError(
-            f"loader sequence length {x.shape[1]} exceeds config.sequence_len {config.sequence_len}"
+            f"loader sequence length {x.shape[1]} exceeds configured input length {sequence_limit}"
         )
 
 

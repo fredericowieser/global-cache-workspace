@@ -305,8 +305,9 @@ def test_fineweb_gradients_and_parameter_ownership(prepared, factory, arm):
         assert all("lora_" in name for name in changed)
 
 
+@pytest.mark.parametrize("prefix", ["", "AB"])
 def test_training_resume_and_standalone_evaluation(
-    prepared, tmp_path, monkeypatch
+    prepared, tmp_path, monkeypatch, prefix
 ):
     from gcw.checkpoint import load_checkpoint
     from gcw.training.checkpoint import CheckpointCompatibilityError
@@ -317,7 +318,10 @@ def test_training_resume_and_standalone_evaluation(
     path, _, _ = prepared()
     config = TrainConfig(
         model=tiny_config(),
-        data=DataConfig(kind="fineweb", data_dir=str(path), tokenizer="int"),
+        data=DataConfig(
+            kind="fineweb", data_dir=str(path), tokenizer="int",
+            fineweb_prefix=prefix,
+        ),
         output_dir=str(tmp_path / "run"),
         sequence_len=8,
         max_steps=2,
@@ -608,3 +612,68 @@ def test_invalid_shuffle_seed(tmp_path, seed):
     with pytest.raises(ValueError, match="shuffle_seed"):
         fineweb.prepare_fineweb(tmp_path / "data", shuffle_seed=seed)
     assert not (tmp_path / "data").exists()
+
+
+@pytest.mark.parametrize("rank", [0, 1])
+def test_live_prefix_preserves_targets_partition_and_resume(
+    prepared, monkeypatch, rank
+):
+    path, _, _ = prepared()
+    kwargs = dict(
+        batch_size=2, sequence_len=3, device="cpu", rank=rank, world_size=2
+    )
+    plain = FineWebBatchStream(path, **kwargs)
+    prefixed = FineWebBatchStream(path, prefix_tokens=(7, 8, 9), **kwargs)
+    raw = next(plain)
+    batch = next(prefixed)
+    assert batch.x[:, :3].tolist() == [[7, 8, 9]] * 2
+    assert torch.equal(batch.x[:, 3:], raw.x)
+    assert torch.equal(batch.y[:, 3:], raw.y)
+    assert (batch.y[:, :3] == -100).all()
+    assert (batch.y >= 0).sum() == raw.y.numel()
+    assert prefixed.cursor == plain.cursor
+    resumed = FineWebBatchStream(
+        path, prefix_tokens=(7, 8, 9), cursor=prefixed.cursor, **kwargs
+    )
+    for _ in range(3):
+        expected, actual = next(prefixed), next(resumed)
+        assert torch.equal(expected.x, actual.x)
+        assert torch.equal(expected.y, actual.y)
+    monkeypatch.setattr(
+        "gcw.data.shards.dist_info", lambda: (True, rank, rank, 2)
+    )
+    x, y, _ = next(data_loader(2, 3, data_dir=path, prefix_tokens=(7, 8, 9)))
+    assert torch.equal(x, batch.x)
+    assert torch.equal(y, batch.y)
+
+
+def test_fineweb_prefix_config_identity_and_validation(prepared):
+    from gcw.data.training import build_training_stream, fineweb_prefix_tokens
+    from gcw.training.audit import _validate_train_batch
+
+    path, _, _ = prepared()
+    cfg = TrainConfig(
+        model=tiny_config("tf"),
+        batch_size=1,
+        sequence_len=3,
+        data=DataConfig(
+            kind="fineweb",
+            data_dir=str(path),
+            tokenizer="int",
+            fineweb_prefix="AB",
+        ),
+    )
+    assert fineweb_prefix_tokens(cfg) == (65, 66)
+    identity = training_data_identity(cfg)
+    assert identity["prefix_tokens"] == [65, 66]
+    batch = next(
+        build_training_stream(cfg, torch.device("cpu"), rank=0, world_size=1)
+    )
+    assert batch.x.shape == (1, 5)
+    _validate_train_batch(batch.x, batch.y, cfg)
+    cfg.data.fineweb_prefix = ""
+    assert "prefix_tokens" not in training_data_identity(cfg)
+    cfg.data.fineweb_prefix = "AB"
+    cfg.sequence_len = cfg.model.sequence_len
+    with pytest.raises(ValueError, match="prefix exceeds"):
+        fineweb_prefix_tokens(cfg)

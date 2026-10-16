@@ -15,6 +15,7 @@ from gcw.data.shards import (
     ShardDataset,
     default_data_dir,
     list_shards,
+    prepend_row_prefix,
     read_shard,
 )
 from gcw.data.tokenizers import get_tokenizer
@@ -114,8 +115,12 @@ class FineWebBatchStream:
         rank: int,
         world_size: int,
         cursor: FineWebCursor | None = None,
+        prefix_tokens: tuple[int, ...] = (),
     ) -> None:
         self.data_dir = Path(data_dir).expanduser()
+        self.prefix = torch.tensor(
+            prefix_tokens, dtype=torch.long, device=device
+        )
         self.dataset = ShardDataset(self.data_dir)
         self.shards = self.dataset.shards(
             "train", batch_size * sequence_len * world_size
@@ -170,6 +175,7 @@ class FineWebBatchStream:
                 .view(self.batch_size, self.sequence_len)
                 .to(self.device)
             )
+            x, y = prepend_row_prefix(x, y, self.prefix)
             self._cursor = FineWebCursor(
                 epoch=self._cursor.epoch,
                 shard_index=self._cursor.shard_index,
@@ -347,6 +353,34 @@ class SFTBatchStream:
         return TrainingBatch(x=x, y=y, attention_mask=attention_mask)
 
 
+def fineweb_prefix_tokens(config: TrainConfig) -> tuple[int, ...]:
+    if not config.data.fineweb_prefix:
+        return ()
+    if config.mode != "pretrain" or config.data.kind != "fineweb":
+        raise ValueError("data.fineweb_prefix requires FineWeb pretraining")
+    tokenizer_name = config.data.tokenizer
+    if tokenizer_name == "hf":
+        if not config.data.tokenizer_source:
+            raise ValueError(
+                "data.tokenizer_source is required for HF FineWeb data"
+            )
+        tokenizer_name = f"hf:{config.data.tokenizer_source}"
+    tokens = tuple(
+        get_tokenizer(tokenizer_name).encode(config.data.fineweb_prefix)
+    )
+    if not tokens or any(
+        token < 0 or token >= config.model.vocab_size for token in tokens
+    ):
+        raise ValueError(
+            "FineWeb prefix must encode to nonempty in-vocabulary tokens"
+        )
+    if config.sequence_len + len(tokens) > config.model.sequence_len:
+        raise ValueError(
+            "FineWeb sequence plus prefix exceeds model.sequence_len"
+        )
+    return tokens
+
+
 def build_training_stream(
     config: TrainConfig,
     device: torch.device,
@@ -428,6 +462,7 @@ def build_training_stream(
         rank=rank,
         world_size=world_size,
         cursor=fineweb_cursor,
+        prefix_tokens=fineweb_prefix_tokens(config),
     )
 
 
@@ -493,6 +528,11 @@ def training_data_identity(config: TrainConfig) -> dict[str, Any]:
     return {
         "kind": "fineweb",
         "path": str(data_dir),
+        **(
+            {"prefix_tokens": list(fineweb_prefix_tokens(config))}
+            if config.data.fineweb_prefix
+            else {}
+        ),
         "shards": [
             {"name": path.name, "size": path.stat().st_size} for path in shards
         ],

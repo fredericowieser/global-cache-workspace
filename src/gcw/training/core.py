@@ -25,7 +25,12 @@ from gcw.runtime import (
 )
 from gcw.config import TrainConfig, load_train_config
 from gcw.data.shards import data_loader
-from gcw.data.training import TrainingBatch, TrainingBatchStream, build_training_stream
+from gcw.data.training import (
+    TrainingBatch,
+    TrainingBatchStream,
+    build_training_stream,
+    fineweb_prefix_tokens,
+)
 from gcw.performance.adjacent_pairs import (
     PAIRS_PER_STEP,
     build_adaptive_pair_step,
@@ -561,6 +566,7 @@ def _eval_loss(
             device=device,
             data_dir=config.data.data_dir,
             infinite=True,
+            prefix_tokens=fineweb_prefix_tokens(config),
         )
     was_training = model.training
     model.eval()

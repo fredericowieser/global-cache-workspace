@@ -234,6 +234,16 @@ class ShardWriter:
         self._buf_len = rest.size
 
 
+def prepend_row_prefix(
+    x: torch.Tensor, y: torch.Tensor, prefix: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if prefix.numel() == 0:
+        return x, y
+    expanded = prefix.unsqueeze(0).expand(x.shape[0], -1)
+    masked = y.new_full(expanded.shape, -100)
+    return torch.cat((expanded, x), dim=1), torch.cat((masked, y), dim=1)
+
+
 def data_loader(
     batch_size: int,
     sequence_len: int,
@@ -241,6 +251,7 @@ def data_loader(
     device: torch.device | str = "cpu",
     data_dir: str | Path | None = None,
     infinite: bool = True,
+    prefix_tokens: tuple[int, ...] = (),
 ):
     data_dir = (
         Path(data_dir).expanduser()
@@ -248,6 +259,7 @@ def data_loader(
         else default_data_dir()
     )
     dataset = ShardDataset(data_dir)
+    prefix = torch.tensor(prefix_tokens, dtype=torch.long, device=device)
     _, rank, _, world = dist_info()
     step_tokens = batch_size * sequence_len * world
     shards = dataset.shards(split, step_tokens)
@@ -266,11 +278,16 @@ def data_loader(
                 )
                 x = buf[:-1].view(batch_size, sequence_len).to(device)
                 y = buf[1:].view(batch_size, sequence_len).to(device)
-                yield x, y, {
-                    "epoch": epoch,
-                    "shard": shard_file,
-                    "step_in_shard": step + 1,
-                }
+                x, y = prepend_row_prefix(x, y, prefix)
+                yield (
+                    x,
+                    y,
+                    {
+                        "epoch": epoch,
+                        "shard": shard_file,
+                        "step_in_shard": step + 1,
+                    },
+                )
         epoch += 1
         if not infinite:
             return

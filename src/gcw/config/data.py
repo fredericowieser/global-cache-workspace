@@ -14,6 +14,7 @@ class DataConfig:
     validation_dataset: str | None = None
     tokenizer: str = "cosmo2"
     tokenizer_source: str | None = None
+    fineweb_prefix: str = ""
     text_field: str = "text"
     max_length: int = 2048
     sft_skip_rows: int = 0
@@ -29,6 +30,10 @@ class DataConfig:
     experiment_manifest: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.fineweb_prefix, str):
+            raise ValueError("data.fineweb_prefix must be a string")
+        if self.fineweb_prefix and self.kind != "fineweb":
+            raise ValueError("data.fineweb_prefix requires FineWeb data")
         if not isinstance(self.sft_chat_template, bool) or not isinstance(
             self.sft_enable_thinking, bool
         ):

@@ -258,6 +258,10 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
             )
         except ValueError as error:
             add("uniform_cache_shape", str(error), "model.layer_types")
+    # TODO: Support Gemma4 unrope_keys with per-layer head dimensions, RoPE
+    # frequencies, and cache positions for inverse rotation and writeback;
+    # preserve unrotated coordinates in proportional RoPE and the value path.
+    # This restriction is an implementation limitation, not non-invertible RoPE.
     if config.family == "gemma4" and config.variant == "longshot":
         if (
             config.cache_processor is not None
