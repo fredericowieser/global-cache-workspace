@@ -1,0 +1,15 @@
+{
+  "model": "gcw-qwen3_5-longshot-random-seed0-diagnostic",
+  "device": "cuda:0",
+  "checkpoint": {
+    "kind": "random",
+    "family": "qwen3_5",
+    "variant": "longshot",
+    "sequence_len": 32768
+  },
+  "seed": 0,
+  "host": "127.0.0.1",
+  "port": 8000,
+  "max_body_bytes": 1048576,
+  "max_output_tokens": 128
+}

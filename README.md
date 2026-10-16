@@ -153,6 +153,14 @@ uv run --extra eval python scripts/extract_paper_table.py \
   --csv results/<run>_paper7.csv
 ```
 
+## Local native generation service
+
+Run `python -m gcw.serving --config /absolute/backend.json` in the GCW CPU
+runtime. The loopback-only service provides health, model discovery, and
+non-streaming OpenAI-style text chat completions using native greedy generation.
+Random tiny fixtures are diagnostic only; native checkpoints require a verified
+local tokenizer. See the [configuration and HTTP contract](docs/guides/native-serving.md).
+
 ## Documentation
 
 The [documentation index](docs/index.md) is the human knowledge layer.
