@@ -5,7 +5,7 @@ import subprocess
 import sys
 import threading
 import warnings
-from http.client import HTTPConnection
+from http.client import HTTPConnection, RemoteDisconnected
 from pathlib import Path
 from typing import get_args
 
@@ -61,14 +61,16 @@ def server(service):
     with ServiceHTTPServer(service) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        yield server
-        server.shutdown()
-        thread.join(timeout=5)
-        assert not thread.is_alive()
+        try:
+            yield server
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
 
 
-def http(server, method, path, payload=None, body=None):
-    connection = HTTPConnection(*server.server_address, timeout=10)
+def http(server, method, path, payload=None, body=None, timeout=10):
+    connection = HTTPConnection(*server.server_address, timeout=timeout)
     if payload is not None:
         body = json.dumps(payload).encode()
     try:
@@ -138,6 +140,210 @@ def test_http_lifecycle_and_native_generation(server):
         "completion_tokens": 3,
         "total_tokens": prompt_tokens + 3,
     }
+
+
+def test_discovery_during_generation_and_serial_native_calls(
+    server, monkeypatch
+):
+    service = server.service
+    entered = threading.Event()
+    release = threading.Event()
+    second_waiting = threading.Event()
+    second_entered = threading.Event()
+    original_lock = service.lock
+    calls = []
+    results, errors = [], []
+
+    class ObservedLock:
+        def __enter__(self):
+            if entered.is_set():
+                second_waiting.set()
+            return original_lock.__enter__()
+
+        def __exit__(self, *args):
+            return original_lock.__exit__(*args)
+
+    def generate(input_ids, max_tokens, **kwargs):
+        calls.append(input_ids.tolist())
+        assert original_lock.locked()
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(timeout=10), "held generation was not released"
+        else:
+            second_entered.set()
+        return torch.cat(
+            (input_ids, input_ids.new_full((1, max_tokens), ord("A"))), dim=1
+        )
+
+    def complete(text):
+        try:
+            results.append(
+                http(server, "POST", "/v1/chat/completions", request(text))
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(service, "lock", ObservedLock())
+    monkeypatch.setattr(service.model, "generate", generate)
+    clients = [
+        threading.Thread(target=complete, args=(text,), daemon=True)
+        for text in ("first", "second")
+    ]
+    try:
+        clients[0].start()
+        assert entered.wait(timeout=5)
+        clients[1].start()
+        assert second_waiting.wait(
+            timeout=5
+        ), "second handler never reached lock"
+        for path in ("/health", "/v1/models"):
+            status, payload = http(server, "GET", path, timeout=1)
+            assert status == 200
+            if path == "/health":
+                assert payload["status"] == "ok"
+            else:
+                assert payload["data"][0]["id"] == service.config.model
+        assert not release.is_set()
+        assert not second_entered.is_set()
+        assert len(calls) == 1
+    finally:
+        release.set()
+        for client in clients:
+            if client.ident is not None:
+                client.join(timeout=15)
+                assert not client.is_alive()
+    assert not errors
+    assert second_entered.is_set()
+    assert calls == [
+        [service.tokenizer.encode(request(text)["messages"])]
+        for text in ("first", "second")
+    ]
+    assert len(results) == 2
+    assert all(status == 200 for status, _ in results)
+    assert all(
+        result["choices"][0]["message"]["content"] == "AAA"
+        and result["usage"]["completion_tokens"] == 3
+        for _, result in results
+    )
+
+
+def test_http_requests_keep_native_calls_and_fresh_caches(server, monkeypatch):
+    service = server.service
+    original_generate = service.model.generate
+    original_forward = service.model.forward_chunk
+    calls, caches = [], []
+
+    def generate(input_ids, max_tokens, **kwargs):
+        calls.append((input_ids.tolist(), max_tokens, kwargs))
+        return original_generate(input_ids, max_tokens, **kwargs)
+
+    def forward(input_ids, start_pos, cache, **kwargs):
+        if start_pos == 0:
+            assert not cache.keys
+            caches.append(cache)
+        return original_forward(input_ids, start_pos, cache, **kwargs)
+
+    monkeypatch.setattr(service.model, "generate", generate)
+    monkeypatch.setattr(service.model, "forward_chunk", forward)
+    results = []
+    for text in ("hi", "different", "hi"):
+        status, result = http(
+            server, "POST", "/v1/chat/completions", request(text)
+        )
+        assert status == 200
+        results.append(result)
+    assert calls == [
+        (
+            [service.tokenizer.encode(request(text)["messages"])],
+            3,
+            {"eos_token_id": None},
+        )
+        for text in ("hi", "different", "hi")
+    ]
+    assert len(caches) == len({id(cache) for cache in caches}) == 3
+    assert results[0]["choices"] == results[2]["choices"]
+    assert results[0]["usage"] == results[2]["usage"]
+
+
+def test_handler_bound_and_close_joins_owned_daemon_threads(
+    service, monkeypatch
+):
+    server = ServiceHTTPServer(service)
+    release = threading.Event()
+    all_entered = threading.Event()
+    joining = threading.Event()
+    closed = threading.Event()
+    owned = []
+    guard = threading.Lock()
+    original = server.finish_request
+
+    def held_handler(*args):
+        with guard:
+            owned.append(threading.current_thread())
+            if len(owned) == server.max_workers:
+                all_entered.set()
+        assert release.wait(timeout=10), "held handlers were not released"
+        original(*args)
+
+    def close():
+        try:
+            server.server_close()
+        finally:
+            closed.set()
+
+    monkeypatch.setattr(server, "finish_request", held_handler)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    closer = threading.Thread(target=close, daemon=True)
+    connections = []
+    serving.start()
+    try:
+        for _ in range(server.max_workers):
+            connection = HTTPConnection(*server.server_address, timeout=5)
+            connections.append(connection)
+            connection.request("GET", "/health")
+        assert all_entered.wait(timeout=5)
+        assert len(owned) == len(server._workers) == server.max_workers == 4
+        assert all(worker.daemon for worker in owned)
+        with pytest.raises(
+            (RemoteDisconnected, ConnectionResetError, BrokenPipeError)
+        ):
+            http(server, "GET", "/health", timeout=1)
+        assert len(owned) == server.max_workers
+
+        worker = owned[0]
+        original_join = worker.join
+
+        def observe_join(*args, **kwargs):
+            joining.set()
+            return original_join(*args, **kwargs)
+
+        monkeypatch.setattr(worker, "join", observe_join)
+        server.shutdown()
+        serving.join(timeout=5)
+        assert not serving.is_alive()
+        closer.start()
+        assert joining.wait(timeout=5), "server_close did not join its handlers"
+        assert not closed.is_set()
+    finally:
+        release.set()
+        server.shutdown()
+        serving.join(timeout=5)
+        if closer.ident is not None:
+            closer.join(timeout=15)
+            assert not closer.is_alive()
+        else:
+            server.server_close()
+        for connection in connections:
+            try:
+                response = connection.getresponse()
+                assert response.status == 200
+                response.read()
+            finally:
+                connection.close()
+    assert closed.is_set()
+    assert not server._workers
+    assert all(not worker.is_alive() for worker in owned)
+    server.server_close()
 
 
 @pytest.mark.parametrize("family", get_args(Family))
@@ -241,9 +447,10 @@ def test_native_failure_is_json_and_service_survives(server, monkeypatch):
         raise RuntimeError("internal checkpoint detail")
 
     monkeypatch.setattr(server.service.model, "generate", broken)
-    status, result = http(server, "POST", "/v1/chat/completions", request())
-    assert status == 500
-    assert result["error"]["message"] == "native generation failed"
+    for _ in range(server.max_workers + 1):
+        status, result = http(server, "POST", "/v1/chat/completions", request())
+        assert status == 500
+        assert result["error"]["message"] == "native generation failed"
     assert http(server, "GET", "/health")[0] == 200
 
 

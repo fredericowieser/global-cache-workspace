@@ -1,4 +1,4 @@
-"""Local, serial HTTP adapter for native GCW greedy generation."""
+"""Local HTTP adapter with serialized native GCW greedy generation."""
 
 from __future__ import annotations
 
@@ -516,12 +516,53 @@ class NativeService:
 
 class ServiceHTTPServer(HTTPServer):
     allow_reuse_address = True
+    max_workers = 4
 
     def __init__(self, service: NativeService):
         self.service = service
+        self._slots = threading.BoundedSemaphore(self.max_workers)
+        self._workers: list[threading.Thread] = []
         super().__init__(
             (service.config.host, service.config.port), ServiceHandler
         )
+
+    def process_request(self, request, client_address) -> None:
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        self._workers = [
+            worker for worker in self._workers if worker.is_alive()
+        ]
+        worker = threading.Thread(
+            target=self._handle_request,
+            args=(request, client_address),
+            daemon=True,
+        )
+        self._workers.append(worker)
+        try:
+            worker.start()
+        except BaseException:
+            self._workers.remove(worker)
+            self._slots.release()
+            raise
+
+    def _handle_request(self, request, client_address) -> None:
+        try:
+            self.finish_request(request, client_address)
+        except Exception:
+            self.handle_error(request, client_address)
+        finally:
+            try:
+                self.shutdown_request(request)
+            finally:
+                self._slots.release()
+
+    def server_close(self) -> None:
+        super().server_close()
+        # As with HTTPServer, stop serve_forever before closing from another thread.
+        for worker in self._workers:
+            worker.join()
+        self._workers.clear()
 
 
 class ServiceHandler(BaseHTTPRequestHandler):

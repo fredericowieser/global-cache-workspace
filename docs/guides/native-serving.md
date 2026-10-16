@@ -1,8 +1,9 @@
 # Native generation service
 
-`python -m gcw.serving` runs one native GCW model behind a serial, loopback-only
-HTTP adapter. It uses `build_model` or `load_checkpoint`, then native `generate`:
-no HF generation fallback, weight conversion, training, downloads, or paid APIs.
+`python -m gcw.serving` runs one native GCW model behind a loopback-only HTTP
+adapter with concurrent metadata requests and serialized native generation.
+It uses `build_model` or `load_checkpoint`, then native `generate`: no HF
+generation fallback, weight conversion, training, downloads, or paid APIs.
 This is a local research adapter, not a production server.
 
 ## Diagnostic fixture
@@ -24,8 +25,9 @@ config, then run `python -m gcw.serving --config /absolute/backend.json`:
 ```
 
 Startup prints JSON `status: ready` after loading and binding. Port zero chooses
-an ephemeral port, reported there; Ctrl-C closes the server. Nothing installs,
-schedules, or restarts a service.
+an ephemeral port, reported there; Ctrl-C closes the listener and joins owned
+request threads, waiting for in-flight work. Nothing installs, schedules, or
+restarts a service.
 
 Random fixtures have 256 byte tokens, two layers, hidden size 32, intermediate
 size 64, four attention heads, two KV heads, and head dimension eight. Processors
@@ -187,8 +189,19 @@ Errors use `{"error":{"message":"...","type":"invalid_request_error",
 body too large 413, content type 415, missing length 411, read timeout 408.
 Unexpected native failures return 500 (`type: server_error`); unsupported HTTP
 methods return JSON 501. No authentication, TLS, CORS, streaming, cancellation,
-or execution deadlines. Health waits behind generation. Use a trusted local
-machine, never an external proxy.
+or execution deadlines. Use a trusted local machine, never an external proxy.
+
+The server owns at most four active daemon request handlers. Health and model
+discovery can complete while generation runs; the existing model lock still
+serializes tokenization, RNG access, native generation, and decoding. There is no
+parallel native generation, batching, or inference retry. When all four handlers
+are occupied (including requests waiting for the model lock or reading bodies),
+new connections close without an HTTP response. Metadata availability is not
+guaranteed under saturation. This small bound assumes trusted private loopback
+clients, not a public-service security boundary or parallel-generation
+qualification. Socket-read timeouts do not cancel native work. Server cleanup
+joins owned handlers; embedding callers must stop `serve_forever` with `shutdown`
+before calling `server_close` from another thread.
 
 ## CPU validation and limits
 
@@ -199,8 +212,10 @@ PYTHONPATH=src OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m pytest -q tests/tes
 Use the existing `convert`/`eval` extra for the full suite. Generic optional-family
 checks may skip missing imports; explicit Qwen3.5 Longshot regressions require
 the Transformers fallback. Tests cover tiny native families/variants, HTTP/JSON
-admission and lifecycle, exact-fit/overflow context gates, fresh caches, RNG and
-weight preservation/recovery after failed generation, CPU copies of CUDA configs
+admission and lifecycle, metadata during held generation, serialized generation,
+bounded handlers and joined cleanup, exact-fit/overflow context gates, fresh
+caches and unchanged native call arguments over HTTP, RNG and weight
+preservation/recovery after failed generation, CPU copies of CUDA configs
 with native warnings, mocked device selection and allocation rejection before
 CUDA access, and full/processor-only reloads using a locally created tokenizer.
 They download nothing. Full-length CPU performance, real trained checkpoint/
