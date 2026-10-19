@@ -34,6 +34,32 @@ A FineWeb cursor records `(epoch, shard_index, step_in_shard)`, where the step i
 
 The random stream exists for deterministic tests and smoke runs. Each rank derives a different reproducible generator seed from the configured seed and rank. Targets use a one-position roll, including a circular final target; this makes a convenient synthetic contract, not a realistic language distribution.
 
+## Historical OpenMathInstruct-2 dataset
+
+The historical million-row `OpenMathInstruct-2/train.jsonl` was independently reconstructed and verified byte-for-byte against the uploaded cluster copy on 2026-10-16. Use Hugging Face dataset `nvidia/OpenMathInstruct-2`, configuration `default`, split **`train_1M`**, revision `469216e3f46f4dacf476b382e192485ea51a143e`. Preserve upstream row order without shuffling. The first million rows of the full `train` split do **not** reproduce this file. Earlier audit notes describe the split identity as unproven; this reconstruction resolves that uncertainty.
+
+Download that pinned split with `datasets.load_dataset`, save it with `Dataset.save_to_disk`, then convert it using the existing command:
+
+```python
+from datasets import load_dataset
+
+dataset = load_dataset(
+    "nvidia/OpenMathInstruct-2",
+    name="default",
+    split="train_1M",
+    revision="469216e3f46f4dacf476b382e192485ea51a143e",
+)
+dataset.save_to_disk("/path/to/openmath-source")
+```
+
+```bash
+gcw prepare openmath --source /path/to/openmath-source --out /path/to/train.jsonl
+```
+
+The converter maps `problem` to `prompt` and `generated_solution` to `answer`, strips leading/trailing whitespace, skips empty pairs, and writes UTF-8 JSONL with `ensure_ascii=False`. Do not substitute `expected_answer` for the worked solution. No rows were skipped in the verified million-row reconstruction. For a streaming download, write upstream rows to JSONL in iteration order and pass that file to the same converter; this was the route used for verification.
+
+Expected output: **1,000,000 rows**, **1,392,578,835 bytes**, SHA-256 `576f26f134bb20d326c7812a44347a81699c4698dfaeacca1bea3a352abc696a`. The existing maths Longshot recipes select zero-based nonblank rows **128000 through 255999** (`sft_skip_rows: 128000`, `sft_take_rows: 128000`); concatenating those original JSONL lines gives SHA-256 `df62346bf8689c1e08055157354fd41bbc1f44116511b07859ec5f8fe13a4c44`. These hashes agree with the historical evidence in `data/analysis/dataset_truncation/math-truncation-512/report.json`.
+
 ## Supervised fine-tuning
 
 OpenMath preparation normalizes each row to `{"prompt": ..., "answer": ...}`. Batching tokenizes prompt and answer, appends end-of-text, shifts labels for next-token prediction, and masks prompt and padding positions with `-100`. Each DDP rank receives a disjoint slice of a logical global row batch.
