@@ -46,6 +46,8 @@ $$
 
 The module writes only the latest selected cache position, not every gathered position. That choice turns selected history into an update for the current memory frontier. Per-cache-head projections give each head independent parameters; shared projections trade expressivity for a smaller and more regular processor. When `unrope` is active, the module processes position-neutral keys and reapplies RoPE before storage.
 
+Icarus uses the same bounded FP32 magnitude reductions as Longshot for per-position KV scores and flattened cache-head norms. Each cast or square allocation is capped at 32 MiB unless one complete reduction row exceeds that size; rows are never split, preserving the eager accumulation order. This bounds scoring temporaries without changing token/head selection, full-history gathering, or frontier writeback. For a flattened head norm, one reduction row spans that head's selected time positions and features.
+
 ## Longshot: time compression before head mixing
 
 Longshot also treats `(layer, KV head)` as the cache-head axis, but it first compresses each head's selected time sequence into one vector. It supports:

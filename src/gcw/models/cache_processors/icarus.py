@@ -32,6 +32,10 @@ from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.backbones.transformer import RMSNorm, apply_rotary, flash_sdpa
 from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.performance.longshot_scores import (
+    chunked_fp32_l2_norm,
+    chunked_fp32_squared_l2,
+)
 from gcw.performance.triton.execution import triton_cache_movement_enabled
 
 CacheLike = CacheState | StaticCacheState | WindowedCache
@@ -547,7 +551,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 raise ValueError(
                     "merged cache is required for kv_norm selection"
                 )
-            scores = merged.float().pow(2).sum(dim=-1)
+            scores = chunked_fp32_squared_l2(merged)
             indices = select_per_cache_head_kv_norm_indices_from_scores(
                 scores, self.config.process_every, self.config.topk
             )
@@ -597,7 +601,7 @@ def _gather_cache_head_positions(
 
 def _select_heads_from_merged(x: torch.Tensor, topk: int) -> torch.Tensor:
     assert topk > 0, "topk must select at least one cache head"
-    scores = x.float().flatten(start_dim=2).norm(dim=-1)
+    scores = chunked_fp32_l2_norm(x)
     k = min(topk, scores.shape[-1])
     _, indices = torch.topk(scores, k=k, dim=-1)
     return indices.sort(dim=-1).values
