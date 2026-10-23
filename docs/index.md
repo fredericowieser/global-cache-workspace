@@ -95,6 +95,7 @@ development/documentation
 development/invariants
 development/longshot-update-gating
 development/longshot-selector-training
+development/icarus-feature-parity
 development/refactor-plan
 development/future
 development/migration-history
