@@ -24,7 +24,7 @@ JOB_NAME="${JOB_NAME:-gcw-train-eval-array}"
 BACKEND="${BACKEND:-auto}"
 PARTITION="${PARTITION:-}"
 ARRAY_WORKERS="${ARRAY_WORKERS:-1}"
-ARRAY_TIME="${ARRAY_TIME:-}"
+ARRAY_TIME="${ARRAY_TIME:-5-00:00:00}"
 EXCLUDE="${EXCLUDE:-}"
 DEPENDENCY="${DEPENDENCY:-}"
 GPUS="${GPUS:-1}"
@@ -92,7 +92,7 @@ Options:
 
 Common environment overrides:
   BACKEND, JOB_NAME, PARTITION, ARRAY_TIME, GPUS, CPUS_PER_TASK, MEM, WANDB_MODE
-  Slurm chooses partition, time, CPUs, and memory when their overrides are unset.
+  Time defaults to 5 days; Slurm chooses partition, CPUs, and memory when unset.
   EXCLUDE, TRAIN_UV_EXTRAS, EVAL_UV_EXTRAS
   EVAL_AFTER_TRAIN, EVAL_ONLY, EVAL_SUITE, EVAL_GPUS, EVAL_BATCH_SIZE, EVAL_MAX_BATCH_SIZE, OUT_DIR
   EVAL_THINKING_MODES (comma-separated true/false values)
