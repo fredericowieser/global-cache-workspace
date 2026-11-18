@@ -1216,7 +1216,7 @@ def plot_campaign_heatmap(
         for suite, benchmark in zip(suites, ("Maths", "KOR-Bench")):
             modes = (
                 ("off", "on")
-                if adaptation == "mathematical" and thinking_view != "off"
+                if thinking_view != "off"
                 else ("off",)
             )
             if thinking_view == "split":
@@ -1280,7 +1280,7 @@ def plot_campaign_heatmap(
         figure=figure,
         footer={
             "off": "Thinking off · Mean ± SD across available backbones (equal weight)",
-            "pooled": "Mathematical: thinking off and on pooled · Other settings: thinking off · Mean ± SD across evaluations",
+            "pooled": "Available thinking off and on pooled · Mean ± SD across evaluations",
             "split": "Mean ± SD across available backbones · Off/on = thinking disabled/enabled",
         }[thinking_view],
     )
@@ -1563,7 +1563,7 @@ def main() -> None:
         "--thinking-view",
         choices=("off", "pooled", "split"),
         default="off",
-        help="Campaign heatmaps: off only, pooled maths off/on, or separate maths off/on columns",
+        help="Campaign heatmaps: off only, pooled available off/on, or separate off/on columns",
     )
     parser.add_argument("--columns", type=int, default=3)
     parser.add_argument("--suite", choices=tuple(TABLES), action="append")
@@ -1770,7 +1770,7 @@ def main() -> None:
         manifest["thinking_modes_by_adaptation"] = {
             adaptation: (
                 ["off", "on"]
-                if adaptation == "mathematical" and args.thinking_view != "off"
+                if args.thinking_view != "off"
                 else ["off"]
             )
             for adaptation in ADAPTATIONS
