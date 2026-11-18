@@ -1216,7 +1216,8 @@ def plot_campaign_heatmap(
         for suite, benchmark in zip(suites, ("Maths", "KOR-Bench")):
             modes = (
                 ("off", "on")
-                if thinking_view != "off"
+                if thinking_view == "split"
+                or (thinking_view == "pooled" and adaptation == "mathematical")
                 else ("off",)
             )
             if thinking_view == "split":
@@ -1770,7 +1771,8 @@ def main() -> None:
         manifest["thinking_modes_by_adaptation"] = {
             adaptation: (
                 ["off", "on"]
-                if args.thinking_view != "off"
+                if args.thinking_view == "split"
+                or (args.thinking_view == "pooled" and adaptation == "mathematical")
                 else ["off"]
             )
             for adaptation in ADAPTATIONS

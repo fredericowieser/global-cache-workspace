@@ -1,14 +1,12 @@
 {
-  "source": "/mnt/jfs-00/team-agent/home/m84366023/global-cache-workspace/src/Global-Cache-Workspace-Theory-ICLR-2027-/appendices/D_Extended_Results.tex",
-  "source_sha256": "28da427008dafceeb7e3e4aa48b11d0466d3081b254921aa42dcdac9c2cb093b",
+  "source": "C:\\Users\\marti\\Documents\\GitHub\\global-cache-workspace\\src\\Global-Cache-Workspace-Theory-ICLR-2027-\\appendices\\C_Extended_Results.tex",
+  "source_sha256": "14a566d10a8176b7d7820fd424656f01e1a9d86fedc7ab3b0edf572eb584551e",
   "options": [
     "relative"
   ],
   "suites": [
-    "math_after_math",
-    "korbench_after_math",
-    "korbench_after_reasoning",
     "math_after_reasoning",
+    "korbench_after_reasoning",
     "math_after_sequential",
     "korbench_after_sequential"
   ],
