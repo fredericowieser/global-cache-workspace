@@ -65,6 +65,10 @@ def resolve_icarus_processor_backend(
         raise RuntimeError(
             f"{_ICARUS_BACKEND_ENV}=compile requires Icarus processor_mode='standard'"
         )
+    if processor.linear_state_cache:
+        raise RuntimeError(
+            "Icarus linear states require eager processor execution"
+        )
     if processor.attention_dropout != 0.0:
         raise RuntimeError(
             f"{_ICARUS_BACKEND_ENV}=compile requires attention_dropout=0"

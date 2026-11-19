@@ -211,10 +211,10 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                 "model.cache_processor.iterations",
             )
         if processor.linear_state_cache:
-            if config.variant != "longshot":
+            if config.variant not in {"longshot", "icarus"}:
                 add(
                     "linear_state_variant",
-                    "cache_processor.linear_state_cache is supported only for variant='longshot'",
+                    "cache_processor.linear_state_cache requires variant='longshot' or 'icarus'",
                     "model.cache_processor.linear_state_cache",
                 )
             if config.family not in {"qwen3_5", "qwen3_5_moe"}:
@@ -223,13 +223,19 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                     "cache_processor.linear_state_cache requires family='qwen3_5' or 'qwen3_5_moe'",
                     "model.family",
                 )
-            if processor.encoder_method != "query_attention":
+            if (
+                config.variant == "longshot"
+                and processor.encoder_method != "query_attention"
+            ):
                 add(
                     "linear_state_encoder",
                     "cache_processor.linear_state_cache requires encoder_method='query_attention'",
                     "model.cache_processor.encoder_method",
                 )
-            if processor.encoder_query_source != "final_token":
+            if (
+                config.variant == "longshot"
+                and processor.encoder_query_source != "final_token"
+            ):
                 add(
                     "linear_state_query",
                     "cache_processor.linear_state_cache requires encoder_query_source='final_token'",

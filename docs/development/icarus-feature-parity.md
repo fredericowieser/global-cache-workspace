@@ -1,6 +1,6 @@
 # Icarus feature parity with Longshot
 
-**Status:** Groups 1?5 complete; linear-state design pending
+**Status:** Groups 1-6 complete
 
 **Initial inventory:** 2026-10-23
 
@@ -44,8 +44,8 @@ Sources: [diffusion documentation](../concepts/task-directed-diffusion.md), [dif
 
 | # | Feature Longshot has | Applicability | Status |
 |---|---|---|---|
-| 13 | Qwen3.5 recurrent linear-state processing | Reads linear-attention state into the processor alongside KV heads, with `per_linear_state`, `shared`, and `global` query projections and a separate linear-head budget. Design needed: choose the temporal KV context used to query recurrent state, how each read enters Icarus's temporal attention, and its position/RoPE treatment, without compressing the KV history. Use magnitude selection with separate budgets; contextual ranking remains on hold under #4. Design jointly with #14. | Group 6: Linear state; Design needed |
-| 14 | Linear-state writer alternatives | Outer-product updates or gated-delta updates using backbone dynamics, optional outer gating, and `live_rank1_linear_writer` initialization that preserves an initial zero update while allowing gradients. Design needed: decide which temporal processor outputs produce the recurrent-state update, consistently with #13. First implement the complete read/process/write path with the outer-product writer and live initialization; then add gated-delta writing and shared-backbone/FSDP integration. Contextual outer gates remain on hold under #7. | Group 6: Linear state; Design needed |
+| 13 | Qwen3.5 recurrent linear-state processing | Icarus supports dense/MoE recurrent states, all three query-sharing modes, and separate magnitude head budgets. `icarus_linear_read_mode: single` defaults to one latest-position read; `multiple` matches the retained KV position count and selects shared positions by following-layer mean KV magnitude, always retaining the latest position. Every query pools all following KV heads at its actual position; KV and linear entries form one flattened workspace-token sequence without padding. See [linear-state tests](../../tests/test_icarus_linear_state.py). | Group 6: Linear state; Complete |
+| 14 | Linear-state writer alternatives | Shared Longshot/Icarus writers implement chronological outer-product and gated-delta updates, optional scalar outer gating, live zero-update initialization, and shared backbone dynamics with distributed refresh. CPU tests cover references, gradients, checkpoint replay, Flow, generation, and dense/MoE checkpoint roundtrips. CUDA/FSDP hardware validation remains unavailable. | Group 6: Linear state; Complete |
 | 15 | Mixed KV shapes across layers | Shape-specific normalization, encoders, and projections around a shared processor. Icarus uses per-shape input/output adapters and scalar write gates around shared temporal attention, preserving canonical head identities and per-head token positions. Uniform-layout checkpoint keys remain unchanged. | Group 3: Cache layouts; Complete |
 | 16 | Width-normalized head scores | `head_score_normalization: rms` makes magnitude scores comparable across different head widths. Primarily useful with #15. | Group 3: Cache layouts; Complete |
 | 17 | Native Gemma4 static generation | Gemma4 Icarus now uses the native static `generate_fast` path for mixed shapes and selected-layer subsets, retaining full selected archives and bounded ring buffers for unselected sliding layers. Reuses the existing allocation, attention and cache-write machinery. [Static-generation tests](../../tests/test_gemma4_icarus_generation.py) and shared storage tests verify FP32/BF16 logits and token parity, stable allocations, ring wraparound, shared-KV layers, cadence, stopping, and checkpoint reloads. Validation: 507 checks passed, 2 skipped. CUDA validation and throughput measurements were not performed. | Group 5: Static generation; Complete |
@@ -77,7 +77,7 @@ Sources: [variant definitions](../concepts/model-variants.md), [Longshot encoder
 
 ## Already present in Icarus
 
-Icarus writes back all gathered positions, including historical positions selected separately per head. This corrects the earlier frontier-only implementation; weights remain loadable but previous outputs and training trajectories are not preserved. [Writeback tests](../../tests/test_icarus_writeback.py) cover exact per-head writes, untouched positions, static allocation stability, inverse RoPE and historical gradients. Group 6 remains pending.
+Icarus writes back all gathered positions, including historical positions selected separately per head. This corrects the earlier frontier-only implementation; weights remain loadable but previous outputs and training trajectories are not preserved. [Writeback tests](../../tests/test_icarus_writeback.py) cover exact per-head writes, untouched positions, static allocation stability, inverse RoPE and historical gradients. Group 6 builds on this all-position writeback.
 
 These are not missing-feature candidates:
 

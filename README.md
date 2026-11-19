@@ -9,7 +9,7 @@ Implemented model compositions:
 - **TF**: causal-transformer baseline.
 - **BT**: one cache processor per backbone layer.
 - **BGT**: one processor across selected state from all layers.
-- **Icarus**: cache-head selection with writeback to every gathered position.
+- **Icarus**: cache-head selection with writeback to every gathered position, plus optional Qwen3.5 recurrent-state reads and writes.
 - **Longshot**: time compression, cross-head processing, frontier writeback, and recurrence.
 - **Flow**: deterministic, time-conditioned latent refinement inside BGT, Icarus, or Longshot.
 

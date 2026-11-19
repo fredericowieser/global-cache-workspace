@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from gcw.models.cache_processors.state import CacheState, StaticCacheState
+from gcw.models.cache_processors.windowed import (
+    WindowedCache,
+    GroupedWindowedCache,
+)
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,6 +19,9 @@ from gcw.models.cache_processors.longshot_layers import (
     _initialize_contextual_output_projection,
     _zero_projection,
 )
+
+
+CacheLike = CacheState | StaticCacheState | WindowedCache | GroupedWindowedCache
 
 
 @dataclass(frozen=True)
@@ -171,3 +180,94 @@ class LinearStateAdapter(nn.Module):
         gate = _activate_update_gate(gate_logits, self.gate_mode, delta.dtype)
         self._gate_value = gate.detach()
         return delta * gate
+
+
+class LinearStateWriterMixin:
+    def _scatter_linear_state_updates(
+        self,
+        cache: CacheLike,
+        linear_delta: torch.Tensor,
+        specs: list[LinearStateSpec],
+    ) -> CacheLike:
+        if self.block.linear_state_adapter is None or not specs:
+            return cache
+        states = (
+            {} if cache.linear_states is None else dict(cache.linear_states)
+        )
+        offset = 0
+        key_dim, value_dim = (
+            self.block.linear_state_adapter.linear_key_dim,
+            self.block.linear_state_adapter.linear_value_dim,
+        )
+        for spec in specs:
+            update = linear_delta[:, offset : offset + spec.head_count]
+            offset += spec.head_count
+            if spec.layer_idx not in states:
+                continue
+            recurrent_state, conv_state = states[spec.layer_idx]
+            if recurrent_state is None:
+                continue
+            if self.config.linear_state_update_mode == "gated_delta":
+                new_recurrent = self._gated_delta_linear_state_update(
+                    spec.layer_idx,
+                    update,
+                    recurrent_state,
+                )
+                states[spec.layer_idx] = (new_recurrent, conv_state)
+                continue
+            delta_key, delta_value = torch.split(
+                update, [key_dim, value_dim], dim=-1
+            )
+            delta_key = F.normalize(delta_key.float(), p=2, dim=-1).to(
+                delta_value.dtype
+            )
+            delta_state = torch.einsum(
+                "bhk,bhv->bhkv", delta_key.float(), delta_value.float()
+            )
+            states[spec.layer_idx] = (
+                recurrent_state + delta_state.to(recurrent_state.dtype),
+                conv_state,
+            )
+        cache.linear_states = states
+        return cache
+
+    def _gated_delta_linear_state_update(
+        self,
+        layer_idx: int,
+        update: torch.Tensor,
+        recurrent_state: torch.Tensor,
+    ) -> torch.Tensor:
+        from gcw.models.backbones.qwen3 import qwen35_gated_delta_rule
+
+        dynamics = self.linear_state_dynamics.get(layer_idx)
+        if dynamics is None:
+            raise ValueError(
+                f"missing Qwen3.5 linear-state dynamics for layer {layer_idx}"
+            )
+        key_dim, value_dim = (
+            self.block.linear_state_adapter.linear_key_dim,
+            self.block.linear_state_adapter.linear_value_dim,
+        )
+        synthetic_key, synthetic_value, beta_logit, decay_input = torch.split(
+            update, [key_dim, value_dim, 1, 1], dim=-1
+        )
+        batch, heads, _ = synthetic_key.shape
+        if heads != dynamics.num_heads:
+            raise ValueError(
+                f"linear state head count {heads} does not match layer {layer_idx} "
+                f"value heads {dynamics.num_heads}"
+            )
+        query = synthetic_key.reshape(batch, 1, heads, key_dim)
+        key = query
+        value = synthetic_value.reshape(batch, 1, heads, value_dim)
+        beta = torch.sigmoid(beta_logit.squeeze(-1)).unsqueeze(1)
+        g = dynamics(decay_input.squeeze(-1)).unsqueeze(1)
+        _, final_state = qwen35_gated_delta_rule(
+            query,
+            key,
+            value,
+            g=g,
+            beta=beta,
+            initial_state=recurrent_state,
+        )
+        return final_state.to(recurrent_state.dtype)

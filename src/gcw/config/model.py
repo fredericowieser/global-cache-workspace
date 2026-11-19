@@ -85,6 +85,7 @@ class CacheProcessorConfig:
     iterations: int = 1
     iteration_mode: CacheProcessorIterationMode = "internal"
     internal_iteration_score: CacheProcessorInternalIterationScore = "attn_l2"
+    icarus_linear_read_mode: Literal["single", "multiple"] = "single"
     linear_state_cache: bool = False
     linear_state_query_mode: CacheLinearStateQueryMode = "global"
     linear_state_update_mode: CacheLinearStateUpdateMode = "outer_product"
@@ -94,6 +95,10 @@ class CacheProcessorConfig:
     output_scale_mode: CacheOutputScaleMode = "learned"
 
     def __post_init__(self) -> None:
+        if self.icarus_linear_read_mode not in {"single", "multiple"}:
+            raise ValueError(
+                "icarus_linear_read_mode must be 'single' or 'multiple'"
+            )
         if self.generation_process_every is not None and (
             isinstance(self.generation_process_every, bool)
             or not isinstance(self.generation_process_every, int)

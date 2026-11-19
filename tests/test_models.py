@@ -44,7 +44,6 @@ from gcw.models.cache_processors.icarus import (
     GlobalCacheProcessor as IcarusGlobalCacheProcessor,
 )
 from gcw.models.cache_processors.icarus import (
-    _gather_cache_heads,
     _select_heads_from_merged,
 )
 from gcw.models.cache_processors.icarus import (
@@ -1952,16 +1951,6 @@ def test_icarus_selects_top_heads_from_gathered_kv_norms():
     assert _select_heads_from_merged(merged, topk=2).tolist() == [[2, 4]]
 
 
-def test_icarus_gathers_cache_heads_per_batch():
-    x = torch.arange(2 * 4 * 3 * 8).view(2, 4, 3, 8)
-    selected = torch.tensor([[1, 3], [0, 2]])
-
-    gathered = _gather_cache_heads(x, selected)
-
-    assert torch.equal(gathered[0], x[0, [1, 3]])
-    assert torch.equal(gathered[1], x[1, [0, 2]])
-
-
 def test_per_cache_head_kv_norm_indices_select_independent_history():
     keys = [torch.zeros(1, 2, 6, 3)]
     values = [torch.zeros(1, 2, 6, 3)]
@@ -2490,18 +2479,8 @@ def test_self_head_kv_attention_is_config_gated_at_init():
         default_attn = attention_cls(default_config)
         enabled_attn = attention_cls(enabled_config)
 
-        if isinstance(default_attn, LongshotProcessorAttention):
-            assert default_attn.include_self_head_kv is False
-            assert enabled_attn.include_self_head_kv is True
-        else:
-            assert (
-                default_attn.forward.__func__
-                is default_attn.forward_selected_head_kv.__func__
-            )
-            assert (
-                enabled_attn.forward.__func__
-                is enabled_attn.forward_with_self_head_kv.__func__
-            )
+        assert default_attn.include_self_head_kv is False
+        assert enabled_attn.include_self_head_kv is True
 
 
 def test_longshot_cache_head_attention_score_forward_is_config_gated_at_init():

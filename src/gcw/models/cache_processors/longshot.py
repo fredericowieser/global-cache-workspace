@@ -4,7 +4,6 @@ from typing import Any
 from contextlib import nullcontext
 
 import torch
-import torch.nn.functional as F
 
 from gcw.config import (
     ModelConfig,
@@ -48,6 +47,7 @@ from gcw.models.cache_processors.longshot_linear_state import (
     LinearStateInputs,
     LinearStateSpec,
     _topk_linear_heads,
+    LinearStateWriterMixin,
 )
 from gcw.performance.longshot_scores import (
     chunked_fp32_l2_norm,
@@ -59,7 +59,7 @@ from gcw.performance.longshot_cache import longshot_full_history_execution
 CacheLike = CacheState | StaticCacheState | WindowedCache | GroupedWindowedCache
 
 
-class GlobalCacheProcessor(CacheProcessorBase):
+class GlobalCacheProcessor(LinearStateWriterMixin, CacheProcessorBase):
     def __init__(
         self,
         model_config: ModelConfig,
@@ -542,86 +542,3 @@ class GlobalCacheProcessor(CacheProcessorBase):
         start = cache_idx * self.num_kv_heads
         end = start + self.num_kv_heads
         return kv_hidden[:, start:end].mean(dim=1)
-
-    def _scatter_linear_state_updates(
-        self,
-        cache: CacheLike,
-        linear_delta: torch.Tensor,
-        specs: list[LinearStateSpec],
-    ) -> CacheLike:
-        if self.block.linear_state_adapter is None or not specs:
-            return cache
-        states = (
-            {} if cache.linear_states is None else dict(cache.linear_states)
-        )
-        offset = 0
-        key_dim, value_dim = self.block.linear_state_update_dims()
-        for spec in specs:
-            update = linear_delta[:, offset : offset + spec.head_count]
-            offset += spec.head_count
-            if spec.layer_idx not in states:
-                continue
-            recurrent_state, conv_state = states[spec.layer_idx]
-            if recurrent_state is None:
-                continue
-            if self.config.linear_state_update_mode == "gated_delta":
-                new_recurrent = self._gated_delta_linear_state_update(
-                    spec.layer_idx,
-                    update,
-                    recurrent_state,
-                )
-                states[spec.layer_idx] = (new_recurrent, conv_state)
-                continue
-            delta_key, delta_value = torch.split(
-                update, [key_dim, value_dim], dim=-1
-            )
-            delta_key = F.normalize(delta_key.float(), p=2, dim=-1).to(
-                delta_value.dtype
-            )
-            delta_state = torch.einsum(
-                "bhk,bhv->bhkv", delta_key.float(), delta_value.float()
-            )
-            states[spec.layer_idx] = (
-                recurrent_state + delta_state.to(recurrent_state.dtype),
-                conv_state,
-            )
-        cache.linear_states = states
-        return cache
-
-    def _gated_delta_linear_state_update(
-        self,
-        layer_idx: int,
-        update: torch.Tensor,
-        recurrent_state: torch.Tensor,
-    ) -> torch.Tensor:
-        from gcw.models.backbones.qwen3 import qwen35_gated_delta_rule
-
-        dynamics = self.linear_state_dynamics.get(layer_idx)
-        if dynamics is None:
-            raise ValueError(
-                f"missing Qwen3.5 linear-state dynamics for layer {layer_idx}"
-            )
-        key_dim, value_dim = self.block.linear_state_update_dims()
-        synthetic_key, synthetic_value, beta_logit, decay_input = torch.split(
-            update, [key_dim, value_dim, 1, 1], dim=-1
-        )
-        batch, heads, _ = synthetic_key.shape
-        if heads != dynamics.num_heads:
-            raise ValueError(
-                f"linear state head count {heads} does not match layer {layer_idx} "
-                f"value heads {dynamics.num_heads}"
-            )
-        query = synthetic_key.reshape(batch, 1, heads, key_dim)
-        key = query
-        value = synthetic_value.reshape(batch, 1, heads, value_dim)
-        beta = torch.sigmoid(beta_logit.squeeze(-1)).unsqueeze(1)
-        g = dynamics(decay_input.squeeze(-1)).unsqueeze(1)
-        _, final_state = qwen35_gated_delta_rule(
-            query,
-            key,
-            value,
-            g=g,
-            beta=beta,
-            initial_state=recurrent_state,
-        )
-        return final_state.to(recurrent_state.dtype)

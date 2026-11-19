@@ -40,7 +40,7 @@ class LanguageModel(nn.Module):
         """Re-resolve Qwen3.5 gated-delta dynamics after FSDP wrapping.
 
         ``build_language_model`` resolves the backbone's ``Qwen35GatedDeltaDynamics``
-        modules and hands them to the Longshot processor at build time. FSDP wraps
+        modules and hands them to the cache processor at build time. FSDP wraps
         those modules, so the processor must re-resolve them from the wrapped
         backbone to keep sharding and gradient flow correct.
         """
@@ -223,7 +223,7 @@ def build_language_model(config: ModelConfig) -> Backbone | LanguageModel:
     backbone = build_backbone(backbone_config)
     linear_state_dynamics = None
     if (
-        config.variant == "longshot"
+        config.variant in {"longshot", "icarus"}
         and config.cache_processor
         and config.cache_processor.linear_state_cache
     ):
@@ -264,7 +264,9 @@ def build_cache_processor(
             GlobalCacheProcessor as IcarusProcessor,
         )
 
-        return IcarusProcessor(config)
+        return IcarusProcessor(
+            config, linear_state_dynamics=linear_state_dynamics
+        )
     if config.variant == "longshot":
         from gcw.models.cache_processors.longshot import (
             GlobalCacheProcessor as LongshotProcessor,
