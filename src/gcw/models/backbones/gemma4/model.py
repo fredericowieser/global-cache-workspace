@@ -33,7 +33,11 @@ class Gemma4TF(TF):
     def __init__(self, config: ModelConfig, pad_vocab_size_to: int = 128):
         nn.Module.__init__(self)
         self.config = replace(config, variant="tf", cache_processor=None)
-        self._native_static_generation = config.variant in {"tf", "longshot"}
+        self._native_static_generation = config.variant in {
+            "tf",
+            "longshot",
+            "icarus",
+        }
         vocab = (
             (config.vocab_size + pad_vocab_size_to - 1) // pad_vocab_size_to
         ) * pad_vocab_size_to

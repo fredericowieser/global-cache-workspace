@@ -75,17 +75,19 @@ def test_native_gather_gradient_parity(storage):
     torch.testing.assert_close(source.grad, reference.grad, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("variant", ["longshot", "icarus"])
 @pytest.mark.parametrize("subset", [None, [1, 3], [0, 2], [0, 3]])
 @pytest.mark.parametrize("shared", [False, True])
 @pytest.mark.parametrize("chunks", [[1] * 13, [3, 2, 6, 1, 5]])
 @torch.no_grad()
 def test_static_native_caches_match_full_history_attention(
-    subset, shared, chunks
+    subset, shared, chunks, variant
 ):
     torch.manual_seed(83)
     cfg = replace(
         mixed_config(out_proj_init="normal"),
         processor_layer_indices=subset,
+        variant=variant,
         num_layers=6 if shared else 4,
         num_kv_shared_layers=2 if shared else 0,
         layer_types=["sliding_attention", "full_attention"]
@@ -240,9 +242,10 @@ def test_list_checkpoint_boundary_preserves_native_storage_and_optional_state():
     assert source.grad is not None
 
 
-def test_static_capacity_and_append_validation():
+@pytest.mark.parametrize("variant", ["longshot", "icarus"])
+def test_static_capacity_and_append_validation(variant):
     backbone = build_model(
-        replace(mixed_config(), processor_layer_indices=[1, 3])
+        replace(mixed_config(), variant=variant, processor_layer_indices=[1, 3])
     ).backbone
     cache = backbone.allocate_generation_cache(2, 3, torch.device("cpu"))
     assert all(
@@ -328,8 +331,11 @@ def test_native_scores_bound_feature_tiles(monkeypatch):
 
 
 @torch.no_grad()
-def test_selected_sliding_archive_remains_retrievable_after_wraps():
-    cfg = replace(mixed_config(), processor_layer_indices=[0, 2])
+@pytest.mark.parametrize("variant", ["longshot", "icarus"])
+def test_selected_sliding_archive_remains_retrievable_after_wraps(variant):
+    cfg = replace(
+        mixed_config(), variant=variant, processor_layer_indices=[0, 2]
+    )
     model = build_model(cfg).eval()
     cache = model.backbone.allocate_generation_cache(2, 19, torch.device("cpu"))
     tokens = torch.randint(1, 128, (2, 18))
