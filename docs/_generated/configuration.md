@@ -188,7 +188,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `activation_checkpointing` | `Literal['none', 'standard_processor_layers']` | `'none'` |
 | `backbone_chunk_backend` | `Literal['eager', 'compile', 'compile_full_windows', 'cuda_graph']` | `'eager'` |
 | `loss_backend` | `Literal['reference', 'target_only', 'liger']` | `'reference'` |
-| `longshot_gradient_checkpointing_seq_len_threshold` | `int \| None` | `None` |
+| `processor_gradient_checkpointing_seq_len_threshold` | `int \| None` | `None` |
 | `backbone_checkpoint` | `str \| None` | `None` |
 | `init_checkpoint` | `str \| None` | `None` |
 | `resume` | `gcw.config.training.ResumeConfig \| None` | `None` |

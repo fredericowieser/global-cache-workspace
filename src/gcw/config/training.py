@@ -148,7 +148,7 @@ class TrainConfig:
     activation_checkpointing: ActivationCheckpointingPolicy = "none"
     backbone_chunk_backend: BackboneChunkBackend = "eager"
     loss_backend: LossBackend = "reference"
-    longshot_gradient_checkpointing_seq_len_threshold: int | None = None
+    processor_gradient_checkpointing_seq_len_threshold: int | None = None
     backbone_checkpoint: str | None = None
     init_checkpoint: str | None = None
     resume: ResumeConfig | None = None
@@ -299,25 +299,26 @@ class TrainConfig:
             raise ValueError(
                 "backbone_chunk_backend must be 'eager', 'compile', 'compile_full_windows', or 'cuda_graph'"
             )
-        # Optional Longshot segmented activation-checkpointing threshold.
-        threshold = self.longshot_gradient_checkpointing_seq_len_threshold
+        field = "processor_gradient_checkpointing_seq_len_threshold"
+        threshold = self.processor_gradient_checkpointing_seq_len_threshold
         if threshold is not None:
             if (
                 isinstance(threshold, bool)
                 or not isinstance(threshold, int)
                 or threshold <= 0
             ):
-                raise ValueError(
-                    "longshot_gradient_checkpointing_seq_len_threshold must be a positive integer or null"
-                )
+                raise ValueError(f"{field} must be a positive integer or null")
             processor = self.model.cache_processor
-            if self.model.variant != "longshot" or processor is None:
+            if (
+                self.model.variant not in {"longshot", "icarus"}
+                or processor is None
+            ):
                 raise ValueError(
-                    "longshot_gradient_checkpointing_seq_len_threshold requires a Longshot cache processor"
+                    f"{field} requires a Longshot or Icarus cache processor"
                 )
             if not processor.gradient_checkpointing:
                 raise ValueError(
-                    "longshot_gradient_checkpointing_seq_len_threshold requires "
+                    f"{field} requires "
                     "model.cache_processor.gradient_checkpointing=true"
                 )
         if self.trainable in {"lora", "lora_and_cache_processor"}:

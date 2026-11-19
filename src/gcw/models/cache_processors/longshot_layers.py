@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,26 +15,6 @@ from gcw.models.cache_processors.ops import zero_projection
 
 EncoderMethod = CacheEncoderMethod
 EncoderQuerySource = CacheEncoderQuerySource
-
-_GRADIENT_CHECKPOINTING_OVERRIDE: ContextVar[bool | None] = ContextVar(
-    "gcw_longshot_gradient_checkpointing_override",
-    default=None,
-)
-
-
-@contextmanager
-def longshot_gradient_checkpointing_override(enabled: bool) -> Iterator[None]:
-    """Override Longshot processor-layer checkpointing for one forward context."""
-    token = _GRADIENT_CHECKPOINTING_OVERRIDE.set(enabled)
-    try:
-        yield
-    finally:
-        _GRADIENT_CHECKPOINTING_OVERRIDE.reset(token)
-
-
-def _gradient_checkpointing_enabled(configured: bool) -> bool:
-    override = _GRADIENT_CHECKPOINTING_OVERRIDE.get()
-    return configured if override is None else override
 
 
 def _gather_cache_heads(

@@ -117,7 +117,7 @@ loss_backend: liger
 activation_checkpointing: none
 activation_checkpoint_windows: 0
 backbone_chunk_backend: eager
-longshot_gradient_checkpointing_seq_len_threshold: null
+processor_gradient_checkpointing_seq_len_threshold: null
 truncated_bptt_windows: 0
 checkpoint_format: native_safetensors
 save_cache_processor_only: false

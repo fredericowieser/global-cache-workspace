@@ -11,6 +11,35 @@ from gcw.config.training import TrainConfig
 from gcw.performance.config import PerformanceConfig
 
 
+def migrate_processor_checkpointing_threshold(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize legacy threshold keys in saved configs and fingerprints."""
+    migrated = dict(payload)
+    field = "processor_gradient_checkpointing_seq_len_threshold"
+    model = migrated.get("model", {})
+    for variant in ("longshot", "icarus"):
+        legacy = f"{variant}_gradient_checkpointing_seq_len_threshold"
+        threshold = migrated.pop(legacy, None)
+        if threshold is None:
+            continue
+        if not isinstance(model, dict) or model.get("variant") != variant:
+            raise ValueError(f"{legacy} requires model.variant={variant}")
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, int)
+            or threshold <= 0
+        ):
+            raise ValueError(f"{legacy} must be a positive integer or null")
+        if field in migrated and (
+            type(migrated[field]) is not type(threshold)
+            or migrated[field] != threshold
+        ):
+            raise ValueError(f"{legacy} conflicts with {field}")
+        migrated[field] = threshold
+    return migrated
+
+
 def load_train_config_bytes(payload: bytes) -> TrainConfig:
     try:
         decoded = payload.decode("utf-8")
@@ -19,7 +48,7 @@ def load_train_config_bytes(payload: bytes) -> TrainConfig:
     data = yaml.safe_load(decoded)
     if not isinstance(data, dict):
         raise ValueError("training config must decode to a mapping")
-    return TrainConfig(**data)
+    return TrainConfig(**migrate_processor_checkpointing_threshold(data))
 
 
 def load_train_config(path: str | Path) -> TrainConfig:
@@ -50,6 +79,8 @@ def to_dict(value: Any) -> Any:
         # retaining the field in serialized provenance when the policy is used.
         if not value.truncated_bptt_windows:
             payload.pop("truncated_bptt_windows")
+        if value.processor_gradient_checkpointing_seq_len_threshold is None:
+            payload.pop("processor_gradient_checkpointing_seq_len_threshold")
         return payload
     if isinstance(value, CacheProcessorConfig):
         payload = {

@@ -8,7 +8,7 @@ import torch
 
 from gcw.config import LossBackend
 from gcw.performance.checkpointing import (
-    longshot_gradient_checkpointing_context,
+    processor_gradient_checkpointing_context,
 )
 
 
@@ -24,6 +24,7 @@ def model_loss(
     activation_checkpoint_min_padded_sequence_length: int = 0,
     truncated_bptt_windows: int = 0,
     longshot_gradient_checkpointing: bool | None = None,
+    icarus_gradient_checkpointing: bool | None = None,
 ) -> torch.Tensor:
     """Invoke one model loss while preserving all explicit execution controls."""
     kwargs: dict[str, Any] = {
@@ -39,8 +40,13 @@ def model_loss(
         )
     if truncated_bptt_windows:
         kwargs["truncated_bptt_windows"] = truncated_bptt_windows
-    with longshot_gradient_checkpointing_context(
-        longshot_gradient_checkpointing
+    with (
+        processor_gradient_checkpointing_context(
+            longshot_gradient_checkpointing
+        ),
+        processor_gradient_checkpointing_context(
+            icarus_gradient_checkpointing, variant="icarus"
+        ),
     ):
         return model(input_ids, targets, **kwargs)
 
@@ -56,6 +62,7 @@ def row_loss_sums_and_counts(
     activation_checkpoint_min_padded_sequence_length: int = 0,
     truncated_bptt_windows: int = 0,
     longshot_gradient_checkpointing: bool | None = None,
+    icarus_gradient_checkpointing: bool | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return one answer-token CE sum and supervised-token count per row."""
     row_sums = model_loss(
@@ -69,6 +76,7 @@ def row_loss_sums_and_counts(
         activation_checkpoint_min_padded_sequence_length=activation_checkpoint_min_padded_sequence_length,
         truncated_bptt_windows=truncated_bptt_windows,
         longshot_gradient_checkpointing=longshot_gradient_checkpointing,
+        icarus_gradient_checkpointing=icarus_gradient_checkpointing,
     )
     if row_sums.shape != (targets.shape[0],):
         raise RuntimeError(
@@ -110,6 +118,7 @@ def adjacent_pair_loss_sum(
     activation_checkpoint_min_padded_sequence_length: int = 0,
     truncated_bptt_windows: int = 0,
     longshot_gradient_checkpointing: bool | None = None,
+    icarus_gradient_checkpointing: bool | None = None,
 ) -> torch.Tensor:
     """Return the sum of original adjacent-pair token-mean losses."""
     row_sums, row_counts = row_loss_sums_and_counts(
@@ -122,6 +131,7 @@ def adjacent_pair_loss_sum(
         activation_checkpoint_min_padded_sequence_length=activation_checkpoint_min_padded_sequence_length,
         truncated_bptt_windows=truncated_bptt_windows,
         longshot_gradient_checkpointing=longshot_gradient_checkpointing,
+        icarus_gradient_checkpointing=icarus_gradient_checkpointing,
     )
     return adjacent_pair_loss_sum_from_rows(row_sums, row_counts)
 
@@ -137,6 +147,7 @@ def logical_pair_grouped_loss(
     activation_checkpoint_min_padded_sequence_length: int = 0,
     truncated_bptt_windows: int = 0,
     longshot_gradient_checkpointing: bool | None = None,
+    icarus_gradient_checkpointing: bool | None = None,
 ) -> torch.Tensor:
     """Average adjacent two-row token-mean losses within one physical group."""
     row_sums, row_counts = row_loss_sums_and_counts(
@@ -149,6 +160,7 @@ def logical_pair_grouped_loss(
         activation_checkpoint_min_padded_sequence_length=activation_checkpoint_min_padded_sequence_length,
         truncated_bptt_windows=truncated_bptt_windows,
         longshot_gradient_checkpointing=longshot_gradient_checkpointing,
+        icarus_gradient_checkpointing=icarus_gradient_checkpointing,
     )
     pair_sums = row_sums.reshape(-1, 2).sum(dim=1)
     pair_counts = row_counts.reshape(-1, 2).sum(dim=1)

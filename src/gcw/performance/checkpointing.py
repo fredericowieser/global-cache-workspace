@@ -14,8 +14,8 @@ import torch
 
 from gcw.config import TrainConfig
 from gcw.models.backbones.transformer import Block
-from gcw.models.cache_processors.longshot_layers import (
-    longshot_gradient_checkpointing_override,
+from gcw.models.cache_processors.base import (
+    processor_gradient_checkpointing_override,
 )
 
 
@@ -52,38 +52,42 @@ def configure_native_activation_checkpointing(
     }
 
 
-def longshot_gradient_checkpointing_decision(
+def processor_gradient_checkpointing_decision(
     config: TrainConfig,
     input_ids: torch.Tensor,
 ) -> bool | None:
-    """Choose the Longshot processor-layer path from the physical padded width."""
-    threshold = config.longshot_gradient_checkpointing_seq_len_threshold
+    """Choose the processor-layer path from the physical padded width."""
+    threshold = config.processor_gradient_checkpointing_seq_len_threshold
     if threshold is None:
         return None
     return input_ids.shape[1] >= threshold
 
 
-def longshot_gradient_checkpointing_context(
+def processor_gradient_checkpointing_context(
     decision: bool | None,
+    *,
+    variant: str = "longshot",
 ) -> AbstractContextManager[Any]:
-    """Apply one physical forward's explicit Longshot checkpoint override."""
+    """Apply one physical forward's variant-specific checkpoint override."""
     if decision is None:
         return nullcontext()
-    return longshot_gradient_checkpointing_override(decision)
+    return processor_gradient_checkpointing_override(decision, variant=variant)
 
 
-def longshot_gradient_checkpointing_metadata(
+def processor_gradient_checkpointing_metadata(
     config: TrainConfig,
+    *,
+    variant: str = "longshot",
 ) -> dict[str, Any] | None:
-    """Describe the configured Longshot processor-layer checkpoint policy."""
-    if config.model.variant != "longshot":
+    """Describe the configured processor-layer checkpoint policy."""
+    if config.model.variant != variant:
         return None
     processor = config.model.cache_processor
     if processor is None:
         raise RuntimeError(
-            "Longshot runtime metadata requires a cache processor"
+            f"{variant.capitalize()} runtime metadata requires a cache processor"
         )
-    threshold = config.longshot_gradient_checkpointing_seq_len_threshold
+    threshold = config.processor_gradient_checkpointing_seq_len_threshold
     adaptive = threshold is not None
     return {
         "policy": (
@@ -103,7 +107,7 @@ def longshot_gradient_checkpointing_metadata(
             if adaptive or processor.gradient_checkpointing
             else "eager"
         ),
-        "boundary": "longshot_processor_layer",
+        "boundary": f"{variant}_processor_layer",
         "use_reentrant": False,
         "preserve_rng_state": True,
         "scope": "physical_train_and_eval_forward",
@@ -112,28 +116,30 @@ def longshot_gradient_checkpointing_metadata(
     }
 
 
-def longshot_gradient_checkpointing_step_metrics(
+def processor_gradient_checkpointing_step_metrics(
     decisions: list[bool],
     padded_sequence_lengths: list[int],
+    *,
+    variant: str = "longshot",
 ) -> dict[str, float]:
-    """Summarize physical Longshot checkpoint choices for one optimizer step."""
+    """Summarize physical processor checkpoint choices for one optimizer step."""
     if not decisions:
         return {}
     checkpointed = sum(decisions)
     total = len(decisions)
     return {
-        "cache_processor/longshot_checkpointed_microbatches": float(
+        f"cache_processor/{variant}_checkpointed_microbatches": float(
             checkpointed
         ),
-        "cache_processor/longshot_eager_microbatches": float(
+        f"cache_processor/{variant}_eager_microbatches": float(
             total - checkpointed
         ),
-        "cache_processor/longshot_checkpointed_microbatch_fraction": checkpointed
+        f"cache_processor/{variant}_checkpointed_microbatch_fraction": checkpointed
         / total,
-        "cache_processor/longshot_padded_sequence_length_min": float(
+        f"cache_processor/{variant}_padded_sequence_length_min": float(
             min(padded_sequence_lengths)
         ),
-        "cache_processor/longshot_padded_sequence_length_max": float(
+        f"cache_processor/{variant}_padded_sequence_length_max": float(
             max(padded_sequence_lengths)
         ),
     }

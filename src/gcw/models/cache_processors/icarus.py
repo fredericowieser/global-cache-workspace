@@ -6,7 +6,10 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from gcw.config import CacheProcessorConfig, FlowProcessorConfig, ModelConfig
-from gcw.models.cache_processors.base import CacheProcessorBase
+from gcw.models.cache_processors.base import (
+    CacheProcessorBase,
+    processor_gradient_checkpointing_enabled,
+)
 from gcw.models.cache_processors.ops import (
     scatter_latest as _scatter_latest,
     scatter_latest_values as _scatter_latest_values,
@@ -346,18 +349,32 @@ class CacheProcessor(nn.Module):
         x: torch.Tensor,
         positions: torch.Tensor,
         selected_heads: torch.Tensor,
+        *,
+        gradient_checkpointing: bool | None = None,
     ) -> torch.Tensor:
         initial = self.in_proj(self.in_norm(x))
         if self.flow is not None:
             displacement = self.flow(
                 initial,
                 lambda state, _time: self.out_norm(
-                    self._run_layers(state, positions, selected_heads)
+                    self._run_layers(
+                        state,
+                        positions,
+                        selected_heads,
+                        gradient_checkpointing=gradient_checkpointing,
+                    )
                 ),
             )
             return self.out_proj(displacement)
         return self.out_proj(
-            self.out_norm(self._run_layers(initial, positions, selected_heads))
+            self.out_norm(
+                self._run_layers(
+                    initial,
+                    positions,
+                    selected_heads,
+                    gradient_checkpointing=gradient_checkpointing,
+                )
+            )
         )
 
     def _run_layers(
@@ -365,10 +382,16 @@ class CacheProcessor(nn.Module):
         state: torch.Tensor,
         positions: torch.Tensor,
         selected_heads: torch.Tensor,
+        *,
+        gradient_checkpointing: bool | None = None,
     ) -> torch.Tensor:
+        if gradient_checkpointing is None:
+            gradient_checkpointing = processor_gradient_checkpointing_enabled(
+                self.config.gradient_checkpointing, variant="icarus"
+            )
         for layer in self.layers:
             if (
-                self.config.gradient_checkpointing
+                gradient_checkpointing
                 and self.training
                 and torch.is_grad_enabled()
             ):
@@ -384,8 +407,15 @@ class CacheProcessor(nn.Module):
         x: torch.Tensor,
         positions: torch.Tensor,
         selected_heads: torch.Tensor,
+        *,
+        gradient_checkpointing: bool | None = None,
     ) -> torch.Tensor:
-        delta = self.compute_update(x, positions, selected_heads)
+        delta = self.compute_update(
+            x,
+            positions,
+            selected_heads,
+            gradient_checkpointing=gradient_checkpointing,
+        )
         return delta * self._gate_scale(delta.dtype)
 
     def forward(
@@ -393,9 +423,16 @@ class CacheProcessor(nn.Module):
         x: torch.Tensor,
         positions: torch.Tensor,
         selected_heads: torch.Tensor,
+        *,
+        gradient_checkpointing: bool | None = None,
     ) -> torch.Tensor:
         residual = x[..., -self.output_dim :]
-        return residual + self.scaled_update(x, positions, selected_heads)
+        return residual + self.scaled_update(
+            x,
+            positions,
+            selected_heads,
+            gradient_checkpointing=gradient_checkpointing,
+        )
 
     def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
         if self.config.gate_mode == "sigmoid":

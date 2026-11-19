@@ -37,8 +37,8 @@ from gcw.performance.adjacent_pairs import (
     collate_pair_group,
 )
 from gcw.performance.checkpointing import (
-    longshot_gradient_checkpointing_decision as _longshot_gradient_checkpointing_decision,
-    longshot_gradient_checkpointing_step_metrics as _longshot_gradient_checkpointing_step_metrics,
+    processor_gradient_checkpointing_decision as _processor_gradient_checkpointing_decision,
+    processor_gradient_checkpointing_step_metrics as _processor_gradient_checkpointing_step_metrics,
 )
 from gcw.performance.telemetry import (
     cache_processor_metrics as _cache_processor_metrics,
@@ -223,11 +223,18 @@ def run_training_loop(plan: TrainingPlan) -> None:
                 config.activation_checkpoint_windows > 0
                 and checkpoint_length_eligible
             )
-            longshot_checkpointing = _longshot_gradient_checkpointing_decision(
-                config, batch.x
+            processor_checkpointing = (
+                _processor_gradient_checkpointing_decision(config, batch.x)
             )
-            if longshot_checkpointing is not None:
-                adaptive_checkpointing_decisions.append(longshot_checkpointing)
+            checkpointing_kwargs = (
+                {
+                    f"{config.model.variant}_gradient_checkpointing": processor_checkpointing
+                }
+                if processor_checkpointing is not None
+                else {}
+            )
+            if processor_checkpointing is not None:
+                adaptive_checkpointing_decisions.append(processor_checkpointing)
                 adaptive_padded_sequence_lengths.append(batch.x.shape[1])
             sync_context = _no_sync(
                 model,
@@ -248,7 +255,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
                                 config.activation_checkpoint_min_padded_sequence_length
                             ),
                             truncated_bptt_windows=config.truncated_bptt_windows,
-                            longshot_gradient_checkpointing=longshot_checkpointing,
+                            **checkpointing_kwargs,
                         )
                     elif config.logical_pair_grouping:
                         loss = _logical_pair_grouped_loss(
@@ -262,7 +269,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
                                 config.activation_checkpoint_min_padded_sequence_length
                             ),
                             truncated_bptt_windows=config.truncated_bptt_windows,
-                            longshot_gradient_checkpointing=longshot_checkpointing,
+                            **checkpointing_kwargs,
                         )
                     else:
                         loss = _model_loss(
@@ -276,7 +283,7 @@ def run_training_loop(plan: TrainingPlan) -> None:
                                 config.activation_checkpoint_min_padded_sequence_length
                             ),
                             truncated_bptt_windows=config.truncated_bptt_windows,
-                            longshot_gradient_checkpointing=longshot_checkpointing,
+                            **checkpointing_kwargs,
                         )
                 normalized_loss = (
                     loss / PAIRS_PER_STEP
@@ -408,9 +415,10 @@ def run_training_loop(plan: TrainingPlan) -> None:
             )
         train_metrics.update(_cache_processor_metrics(model))
         train_metrics.update(
-            _longshot_gradient_checkpointing_step_metrics(
+            _processor_gradient_checkpointing_step_metrics(
                 adaptive_checkpointing_decisions,
                 adaptive_padded_sequence_lengths,
+                variant=config.model.variant,
             )
         )
         if (
@@ -579,8 +587,15 @@ def _eval_loss(
         if use_fsdp:
             batch = _align_fsdp_batch(TrainingBatch(x, y, attention_mask))
             x, y, attention_mask = batch.x, batch.y, batch.attention_mask
-        longshot_checkpointing = _longshot_gradient_checkpointing_decision(
+        processor_checkpointing = _processor_gradient_checkpointing_decision(
             config, x
+        )
+        checkpointing_kwargs = (
+            {
+                f"{config.model.variant}_gradient_checkpointing": processor_checkpointing
+            }
+            if processor_checkpointing is not None
+            else {}
         )
         with torch.autocast(**_autocast_kwargs(config, device)):
             grouped_attention_mask = (
@@ -599,7 +614,7 @@ def _eval_loss(
                     activation_checkpoint_min_padded_sequence_length=(
                         config.activation_checkpoint_min_padded_sequence_length
                     ),
-                    longshot_gradient_checkpointing=longshot_checkpointing,
+                    **checkpointing_kwargs,
                 )
                 pair_counts = row_counts.reshape(-1, 2).sum(dim=1)
                 loss = (
@@ -619,7 +634,7 @@ def _eval_loss(
                     activation_checkpoint_min_padded_sequence_length=(
                         config.activation_checkpoint_min_padded_sequence_length
                     ),
-                    longshot_gradient_checkpointing=longshot_checkpointing,
+                    **checkpointing_kwargs,
                 )
                 weight = (y >= 0).sum()
         total_loss += loss.detach().float()

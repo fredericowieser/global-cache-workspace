@@ -19,16 +19,19 @@ from gcw.config import (
 )
 from gcw.models import build_model
 from gcw.models.cache_processors import longshot_processor
-from gcw.models.cache_processors.longshot_layers import (
-    _gradient_checkpointing_enabled,
-    longshot_gradient_checkpointing_override,
+from gcw.models.cache_processors.base import (
+    processor_gradient_checkpointing_enabled,
+    processor_gradient_checkpointing_override,
 )
 from gcw.performance.checkpointing import (
-    longshot_gradient_checkpointing_decision as _longshot_gradient_checkpointing_decision,
-    longshot_gradient_checkpointing_metadata as _longshot_gradient_checkpointing_runtime,
+    processor_gradient_checkpointing_decision,
+    processor_gradient_checkpointing_metadata,
 )
 from gcw.training.objectives import model_loss as _model_loss
-from gcw.training.checkpoint import CheckpointCompatibilityError
+from gcw.training.checkpoint import (
+    CheckpointCompatibilityError,
+    TrainingCheckpoint,
+)
 from gcw.training.audit import _training_fingerprint
 from gcw.training.core import (
     _eval_loss,
@@ -74,7 +77,7 @@ def _train_config(
         model=_model_config(iterations=iterations),
         data=DataConfig(kind="random"),
         trainable="cache_processor",
-        longshot_gradient_checkpointing_seq_len_threshold=threshold,
+        processor_gradient_checkpointing_seq_len_threshold=threshold,
         output_dir=str(tmp_path / "run"),
         batch_size=1,
         sequence_len=8,
@@ -112,24 +115,24 @@ def test_threshold_boundary_controls_all_longshot_recurrence(
     model.init_weights()
 
     short = torch.randint(0, 32, (1, 7))
-    assert _longshot_gradient_checkpointing_decision(config, short) is False
+    assert processor_gradient_checkpointing_decision(config, short) is False
     _model_loss(
         model,
         short,
         short,
-        longshot_gradient_checkpointing=_longshot_gradient_checkpointing_decision(
+        longshot_gradient_checkpointing=processor_gradient_checkpointing_decision(
             config, short
         ),
     )
     assert calls == []
 
     boundary = torch.randint(0, 32, (1, 8))
-    assert _longshot_gradient_checkpointing_decision(config, boundary) is True
+    assert processor_gradient_checkpointing_decision(config, boundary) is True
     _model_loss(
         model,
         boundary,
         boundary,
-        longshot_gradient_checkpointing=_longshot_gradient_checkpointing_decision(
+        longshot_gradient_checkpointing=processor_gradient_checkpointing_decision(
             config, boundary
         ),
     )
@@ -210,23 +213,23 @@ def test_adaptive_longshot_repeated_optimizer_steps_match_eager(
 
 
 def test_override_is_exception_safe_and_thread_local() -> None:
-    assert _gradient_checkpointing_enabled(True) is True
+    assert processor_gradient_checkpointing_enabled(True) is True
     with pytest.raises(RuntimeError, match="forward failed"):
-        with longshot_gradient_checkpointing_override(False):
-            assert _gradient_checkpointing_enabled(True) is False
+        with processor_gradient_checkpointing_override(False):
+            assert processor_gradient_checkpointing_enabled(True) is False
             raise RuntimeError("forward failed")
-    assert _gradient_checkpointing_enabled(True) is True
+    assert processor_gradient_checkpointing_enabled(True) is True
 
     barrier = Barrier(2)
 
     def scoped(enabled: bool) -> bool:
-        with longshot_gradient_checkpointing_override(enabled):
+        with processor_gradient_checkpointing_override(enabled):
             barrier.wait()
-            return _gradient_checkpointing_enabled(not enabled)
+            return processor_gradient_checkpointing_enabled(not enabled)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert list(executor.map(scoped, (False, True))) == [False, True]
-    assert _gradient_checkpointing_enabled(True) is True
+    assert processor_gradient_checkpointing_enabled(True) is True
 
 
 def test_eval_restores_training_mode_and_runtime_override(tmp_path) -> None:
@@ -239,7 +242,7 @@ def test_eval_restores_training_mode_and_runtime_override(tmp_path) -> None:
 
     assert model.training
     assert metrics["val/tokens"] == 8.0
-    assert _gradient_checkpointing_enabled(True) is True
+    assert processor_gradient_checkpointing_enabled(True) is True
 
 
 def test_adaptive_policy_is_state_dict_and_model_config_neutral(
@@ -273,16 +276,16 @@ def test_longshot_adaptive_config_defaults_to_fixed_model_policy_and_validates()
     None
 ):
     fixed = TrainConfig(model=_model_config(), data=DataConfig(kind="random"))
-    assert fixed.longshot_gradient_checkpointing_seq_len_threshold is None
+    assert fixed.processor_gradient_checkpointing_seq_len_threshold is None
     assert (
-        _longshot_gradient_checkpointing_decision(fixed, torch.zeros(1, 8))
+        processor_gradient_checkpointing_decision(fixed, torch.zeros(1, 8))
         is None
     )
     assert (
-        "longshot_gradient_checkpointing_seq_len_threshold"
+        "processor_gradient_checkpointing_seq_len_threshold"
         not in _training_fingerprint(fixed, 1, 8, 8, 1)
     )
-    assert _longshot_gradient_checkpointing_runtime(fixed) == {
+    assert processor_gradient_checkpointing_metadata(fixed) == {
         "policy": "model_config",
         "model_config_gradient_checkpointing": True,
         "padded_sequence_length_threshold": None,
@@ -302,10 +305,10 @@ def test_longshot_adaptive_config_defaults_to_fixed_model_policy_and_validates()
         TrainConfig(
             model=_model_config(),
             data=DataConfig(kind="random"),
-            longshot_gradient_checkpointing_seq_len_threshold=0,
+            processor_gradient_checkpointing_seq_len_threshold=0,
         )
-    with pytest.raises(ValueError, match="requires a Longshot"):
-        TrainConfig(longshot_gradient_checkpointing_seq_len_threshold=8)
+    with pytest.raises(ValueError, match="requires a Longshot or Icarus"):
+        TrainConfig(processor_gradient_checkpointing_seq_len_threshold=8)
     model_config = _model_config()
     assert model_config.cache_processor is not None
     model_config.cache_processor.gradient_checkpointing = False
@@ -313,12 +316,13 @@ def test_longshot_adaptive_config_defaults_to_fixed_model_policy_and_validates()
         TrainConfig(
             model=model_config,
             data=DataConfig(kind="random"),
-            longshot_gradient_checkpointing_seq_len_threshold=8,
+            processor_gradient_checkpointing_seq_len_threshold=8,
         )
 
 
+@pytest.mark.parametrize("legacy", [False, True])
 def test_adaptive_policy_is_provenance_visible_and_exact_resume_checked(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, legacy
 ) -> None:
     monkeypatch.setenv("GCW_DATA_ROOT", str(tmp_path / "records"))
     monkeypatch.setenv("GCW_EXECUTION_ID", "adaptive-initial")
@@ -347,25 +351,53 @@ def test_adaptive_policy_is_provenance_visible_and_exact_resume_checked(
     assert metrics["cache_processor/longshot_eager_microbatches"] == 0.0
     assert (
         manifest["training_fingerprint"][
-            "longshot_gradient_checkpointing_seq_len_threshold"
+            "processor_gradient_checkpointing_seq_len_threshold"
         ]
         == 8
     )
 
     fingerprint = _training_fingerprint(config, 1, 8, 8, 1)
     changed = replace(
-        config, longshot_gradient_checkpointing_seq_len_threshold=9
+        config, processor_gradient_checkpointing_seq_len_threshold=9
     )
     changed_fingerprint = _training_fingerprint(changed, 1, 8, 8, 1)
     assert (
-        fingerprint | {"longshot_gradient_checkpointing_seq_len_threshold": 9}
+        fingerprint | {"processor_gradient_checkpointing_seq_len_threshold": 9}
         == changed_fingerprint
     )
 
+    if legacy:
+        saved = manifest["training_fingerprint"]
+        saved["longshot_gradient_checkpointing_seq_len_threshold"] = saved.pop(
+            "processor_gradient_checkpointing_seq_len_threshold"
+        )
+        (checkpoint / "manifest.json").write_text(json.dumps(manifest))
+    TrainingCheckpoint.open(
+        checkpoint,
+        expected_fingerprint=fingerprint,
+        topology="same",
+        current_world_size=1,
+    )
+    with pytest.raises(CheckpointCompatibilityError, match="seq_len_threshold"):
+        TrainingCheckpoint.open(
+            checkpoint,
+            expected_fingerprint=_training_fingerprint(
+                replace(
+                    config,
+                    processor_gradient_checkpointing_seq_len_threshold=None,
+                ),
+                1,
+                8,
+                8,
+                1,
+            ),
+            topology="same",
+            current_world_size=1,
+        )
     monkeypatch.setenv("GCW_EXECUTION_ID", "adaptive-resume")
     resumed = replace(changed, resume=ResumeConfig(checkpoint=str(checkpoint)))
     with pytest.raises(
         CheckpointCompatibilityError,
-        match="longshot_gradient_checkpointing_seq_len_threshold",
+        match="processor_gradient_checkpointing_seq_len_threshold",
     ):
         train(resumed)

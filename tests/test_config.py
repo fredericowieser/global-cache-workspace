@@ -1,4 +1,7 @@
+import json
+
 import pytest
+import yaml
 
 from gcw.config import (
     DataConfig,
@@ -10,7 +13,76 @@ from gcw.config import (
     TrainConfig,
     WandbConfig,
     load_train_config,
+    load_train_config_bytes,
+    to_dict,
 )
+
+
+@pytest.mark.parametrize("variant", ["longshot", "icarus"])
+@pytest.mark.parametrize("threshold", [None, 8])
+def test_processor_checkpointing_threshold_config_migration(variant, threshold):
+    field = "processor_gradient_checkpointing_seq_len_threshold"
+    legacy = f"{variant}_gradient_checkpointing_seq_len_threshold"
+    payload = {
+        "model": {
+            "variant": variant,
+            "cache_processor": {"gradient_checkpointing": True},
+        },
+        field: threshold,
+    }
+    current = load_train_config_bytes(json.dumps(payload).encode())
+    legacy_payload = {"longshot_gradient_checkpointing_seq_len_threshold": None}
+    legacy_payload.update(payload)
+    legacy_payload[legacy] = legacy_payload.pop(field)
+    migrated = load_train_config_bytes(json.dumps(legacy_payload).encode())
+    assert migrated == current
+    assert (
+        current.processor_gradient_checkpointing_seq_len_threshold == threshold
+    )
+    serialized = to_dict(migrated)
+    assert serialized.get(field) == threshold
+    for old_variant in ("longshot", "icarus"):
+        old_field = f"{old_variant}_gradient_checkpointing_seq_len_threshold"
+        assert old_field not in serialized
+        assert not hasattr(migrated, old_field)
+    assert (
+        load_train_config_bytes(yaml.safe_dump(serialized).encode()) == current
+    )
+    legacy_payload[field] = threshold
+    assert (
+        load_train_config_bytes(json.dumps(legacy_payload).encode()) == current
+    )
+
+
+@pytest.mark.parametrize("variant", ["longshot", "icarus"])
+@pytest.mark.parametrize("shared", [None, 9, True, 8.0])
+def test_processor_checkpointing_threshold_rejects_conflicting_keys(
+    variant, shared
+):
+    payload = {
+        "model": {"variant": variant},
+        f"{variant}_gradient_checkpointing_seq_len_threshold": 8,
+        "processor_gradient_checkpointing_seq_len_threshold": shared,
+    }
+    with pytest.raises(ValueError, match="conflicts"):
+        load_train_config_bytes(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize("variant", ["longshot", "icarus"])
+def test_processor_checkpointing_threshold_legacy_variant_validation(variant):
+    legacy = f"{variant}_gradient_checkpointing_seq_len_threshold"
+    payload = {"model": {"variant": "tf"}, legacy: 8}
+    with pytest.raises(ValueError, match="requires model.variant"):
+        load_train_config_bytes(json.dumps(payload).encode())
+    payload[legacy] = None
+    assert (
+        load_train_config_bytes(json.dumps(payload).encode()) == TrainConfig()
+    )
+    payload["model"]["variant"] = variant
+    for invalid in (0, -1, True, 8.5, "8"):
+        payload[legacy] = invalid
+        with pytest.raises(ValueError, match="positive integer"):
+            load_train_config_bytes(json.dumps(payload).encode())
 
 
 def test_eval_config_defaults_to_plain_thinking_disabled() -> None:
@@ -105,7 +177,7 @@ def test_qwen35_h50_k4_recipe_preserves_frozen_training_protocol() -> None:
         config.weight_decay == config.warmup_steps == config.warmdown_ratio == 0
     )
     assert config.truncated_bptt_windows == 0
-    assert config.longshot_gradient_checkpointing_seq_len_threshold == 513
+    assert config.processor_gradient_checkpointing_seq_len_threshold == 513
     assert config.performance.noisy_diffusion.recurrence_backend == "eager"
     assert not config.performance.adaptive_batching.enabled
 

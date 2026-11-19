@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import Any, Callable
@@ -10,16 +11,46 @@ import torch.nn as nn
 _RECOMPUTATION_ID: ContextVar[object | None] = ContextVar(
     "gcw_cache_processor_recomputation_id", default=None
 )
+_GRADIENT_CHECKPOINTING_OVERRIDES: ContextVar[dict[str, bool]] = ContextVar(
+    "gcw_processor_gradient_checkpointing_overrides", default={}
+)
 
 
 @contextmanager
-def cache_processor_recomputation():
-    """Suppress observable processor bookkeeping while checkpoint backward replays a segment."""
-    token = _RECOMPUTATION_ID.set(object())
+def processor_gradient_checkpointing_override(
+    enabled: bool, *, variant: str = "longshot"
+) -> Iterator[None]:
+    """Scope a variant's processor-layer checkpoint policy to one forward."""
+    token = _GRADIENT_CHECKPOINTING_OVERRIDES.set(
+        {**_GRADIENT_CHECKPOINTING_OVERRIDES.get(), variant: enabled}
+    )
     try:
         yield
     finally:
-        _RECOMPUTATION_ID.reset(token)
+        _GRADIENT_CHECKPOINTING_OVERRIDES.reset(token)
+
+
+def processor_gradient_checkpointing_enabled(
+    configured: bool, *, variant: str = "longshot"
+) -> bool:
+    return _GRADIENT_CHECKPOINTING_OVERRIDES.get().get(variant, configured)
+
+
+def cache_processor_recomputation():
+    """Capture forward checkpoint policy and suppress bookkeeping during replay."""
+    overrides = _GRADIENT_CHECKPOINTING_OVERRIDES.get()
+
+    @contextmanager
+    def replay():
+        token = _RECOMPUTATION_ID.set(object())
+        policy_token = _GRADIENT_CHECKPOINTING_OVERRIDES.set(overrides)
+        try:
+            yield
+        finally:
+            _GRADIENT_CHECKPOINTING_OVERRIDES.reset(policy_token)
+            _RECOMPUTATION_ID.reset(token)
+
+    return replay()
 
 
 def cache_processor_recomputation_id() -> object | None:

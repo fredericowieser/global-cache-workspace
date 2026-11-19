@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from safetensors.torch import load as load_safetensors
 
+from gcw.config.serialization import migrate_processor_checkpointing_threshold
 from gcw.data.training import FineWebCursor, LoaderCursor, cursor_from_dict
 from gcw.training.checkpoint.safetensors import (
     _capture_verified_payloads,
@@ -134,6 +135,14 @@ class TrainingCheckpoint:
         payloads = _capture_verified_payloads(resolved, manifest)
         saved_fingerprint = manifest.get("training_fingerprint")
         if isinstance(saved_fingerprint, dict):
+            try:
+                saved_fingerprint = migrate_processor_checkpointing_threshold(
+                    saved_fingerprint
+                )
+            except ValueError as exc:
+                raise CheckpointCompatibilityError(
+                    f"checkpoint processor checkpointing policy is incompatible: {exc}"
+                ) from exc
             saved_fingerprint = _fingerprint_with_current_model_defaults(
                 saved_fingerprint
             )

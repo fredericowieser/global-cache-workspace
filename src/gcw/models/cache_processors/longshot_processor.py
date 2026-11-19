@@ -14,7 +14,10 @@ from gcw.config import (
 )
 from gcw.models.backbones.transformer import RMSNorm
 from gcw.models.cache_processors.layout import CacheShapeGroup
-from gcw.models.cache_processors.base import cache_processor_recomputation_id
+from gcw.models.cache_processors.base import (
+    cache_processor_recomputation_id,
+    processor_gradient_checkpointing_enabled,
+)
 from gcw.models.cache_processors.diffusion import TaskDirectedDiffusion
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.cache_processors.update_metrics import UPDATE_OBSERVER
@@ -24,7 +27,6 @@ from gcw.models.cache_processors.longshot_layers import (
     ProcessorLayer,
     QueryAttentionTimeEncoder,
     _fit_time_length,
-    _gradient_checkpointing_enabled,
     _activate_update_gate,
     _initialize_contextual_output_projection,
     _zero_projection,
@@ -591,7 +593,9 @@ class CacheProcessor(CacheHeadProjection):
         routing_gates: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if (
-            _gradient_checkpointing_enabled(self.config.gradient_checkpointing)
+            processor_gradient_checkpointing_enabled(
+                self.config.gradient_checkpointing, variant="longshot"
+            )
             and self.training
             and torch.is_grad_enabled()
         ):

@@ -45,7 +45,7 @@ from gcw.performance.backends.qwen3 import (
 from gcw.performance.checkpointing import (
     apply_fsdp_activation_checkpointing as _apply_fsdp_activation_checkpointing,
     configure_native_activation_checkpointing as _configure_native_activation_checkpointing,
-    longshot_gradient_checkpointing_metadata as _longshot_gradient_checkpointing_runtime,
+    processor_gradient_checkpointing_metadata,
 )
 from gcw.performance.backends.cache_processors import (
     bt_processor_backend_metadata,
@@ -621,8 +621,19 @@ def assemble_training_execution(
         "activation_checkpoint_min_padded_sequence_length": (
             config.activation_checkpoint_min_padded_sequence_length
         ),
-        "longshot_gradient_checkpointing": _longshot_gradient_checkpointing_runtime(
-            config
+        "longshot_gradient_checkpointing": processor_gradient_checkpointing_metadata(
+            config, variant="longshot"
+        ),
+        **(
+            {
+                "icarus_gradient_checkpointing": processor_gradient_checkpointing_metadata(
+                    config, variant="icarus"
+                )
+            }
+            if config.model.variant == "icarus"
+            and config.processor_gradient_checkpointing_seq_len_threshold
+            is not None
+            else {}
         ),
         "loss_backend": loss_backend_metadata(config.loss_backend),
         **(

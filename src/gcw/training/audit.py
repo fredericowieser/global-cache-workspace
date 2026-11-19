@@ -230,11 +230,11 @@ def _training_fingerprint(
         ),
         **(
             {
-                "longshot_gradient_checkpointing_seq_len_threshold": (
-                    config.longshot_gradient_checkpointing_seq_len_threshold
+                "processor_gradient_checkpointing_seq_len_threshold": (
+                    config.processor_gradient_checkpointing_seq_len_threshold
                 )
             }
-            if config.longshot_gradient_checkpointing_seq_len_threshold
+            if config.processor_gradient_checkpointing_seq_len_threshold
             is not None
             else {}
         ),

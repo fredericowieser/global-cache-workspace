@@ -40,6 +40,8 @@ def _config_payload(value: object) -> object:
         }
         if not value.truncated_bptt_windows:
             payload.pop("truncated_bptt_windows")
+        if value.processor_gradient_checkpointing_seq_len_threshold is None:
+            payload.pop("processor_gradient_checkpointing_seq_len_threshold")
         return payload
     if isinstance(value, CacheProcessorConfig):
         payload = {

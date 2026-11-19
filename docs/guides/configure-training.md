@@ -251,17 +251,19 @@ truncated_bptt_windows: 1  # zero is full BPTT; positive values are the gradient
 
 The value counts `process_every` windows retained in one autograd horizon. A value of `1` prevents gradients from crossing a cache-processing boundary; larger values retain longer credit assignment. This policy is implemented at the shared windowed-cache boundary, so BT, BGT, Icarus, Longshot, and compatible backbone families use the same behavior. It is training-only in effect and does not alter evaluation losses. `train/training_method`, `train/truncated_bptt_windows`, and the corresponding W&B run metadata identify the method. The setting is part of the training fingerprint and must match for exact resume. It does not modify run names or user-supplied W&B tags.
 
-Longshot keeps its model-level switch as the fixed default. Set an adaptive training threshold only when `model.cache_processor.gradient_checkpointing` remains `true`:
+Longshot and Icarus share one adaptive training threshold. Leave it unset to use the fixed `model.cache_processor.gradient_checkpointing` switch, or set a positive integer while that switch remains `true`:
 
 ```yaml
 model:
-  variant: longshot
+  variant: icarus  # also supports longshot
   cache_processor:
     gradient_checkpointing: true
-longshot_gradient_checkpointing_seq_len_threshold: 2048
+processor_gradient_checkpointing_seq_len_threshold: 2048
 ```
 
-The adaptive policy runs Longshot processor layers eagerly when the physical microbatch's padded `input_ids.shape[1]` is below the threshold. It checkpoints them at or above the threshold. The override covers one forward, including internal and external recurrence; evaluation remains eager because it disables gradients. The policy does not mutate model state or affect other processors. Runtime metadata records the threshold and boundary. Per-step metrics report checkpointed and eager microbatch counts, checkpointed fraction, and minimum/maximum padded lengths. The threshold is part of the exact-resume fingerprint.
+The adaptive policy runs processor layers eagerly below the physical microbatch's padded `input_ids.shape[1]` threshold and uses non-reentrant checkpointing at or above it. It applies to grouped objectives, Flow-Icarus, and Longshot's internal and external recurrence. Window-segment backward replay retains the forward decision after the original context exits. Evaluation and generation remain eager. Runtime metadata and `cache_processor/<variant>_*` metrics retain their variant-specific names and report the threshold, checkpointed/eager microbatch counts, checkpointed fraction, and padded lengths.
+
+The threshold is part of the exact-resume fingerprint; changing or removing an enabled threshold requires a new training run. Saved YAML configs and checkpoint fingerprints using `longshot_gradient_checkpointing_seq_len_threshold` or `icarus_gradient_checkpointing_seq_len_threshold` are migrated on read, with conflicting values rejected. New serialized configs and fingerprints use only `processor_gradient_checkpointing_seq_len_threshold`. The Python `TrainConfig` constructor accepts only the shared field.
 
 ## Joint Finetuning
 

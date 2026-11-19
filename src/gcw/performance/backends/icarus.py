@@ -12,6 +12,9 @@ from weakref import WeakKeyDictionary
 import torch
 import torch.nn as nn
 
+from gcw.models.cache_processors.base import (
+    processor_gradient_checkpointing_enabled,
+)
 from gcw.performance._compile import require_torch_compile
 from gcw.provenance import canonical_json_sha256
 
@@ -21,7 +24,7 @@ if TYPE_CHECKING:
 
 IcarusProcessorBackend = Literal["eager", "compile"]
 IcarusProcessorRunner = Callable[
-    [nn.Module, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+    [nn.Module, torch.Tensor, torch.Tensor, torch.Tensor, bool], torch.Tensor
 ]
 
 _ICARUS_BACKEND_ENV = "GCW_ICARUS_PROCESSOR_BACKEND"
@@ -354,7 +357,15 @@ def run_icarus_post_selection_region(
         )
     runner = _get_compiled_icarus_runner(block)
     try:
-        return runner(block, x, positions, selected_heads)
+        return runner(
+            block,
+            x,
+            positions,
+            selected_heads,
+            processor_gradient_checkpointing_enabled(
+                block.config.gradient_checkpointing, variant="icarus"
+            ),
+        )
     except Exception as error:
         if _is_non_reentrant_checkpoint_early_stop(error):
             raise
@@ -371,8 +382,16 @@ def _run_icarus_post_selection(
     x: torch.Tensor,
     positions: torch.Tensor,
     selected_heads: torch.Tensor,
+    gradient_checkpointing: bool | None = None,
 ) -> torch.Tensor:
-    return block(x, positions, selected_heads)
+    if gradient_checkpointing is None:
+        return block(x, positions, selected_heads)
+    return block(
+        x,
+        positions,
+        selected_heads,
+        gradient_checkpointing=gradient_checkpointing,
+    )
 
 
 def _get_compiled_icarus_runner(block: nn.Module) -> IcarusProcessorRunner:
