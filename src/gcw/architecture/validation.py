@@ -251,7 +251,10 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
                 "model.cache_processor.linear_state_update_mode",
             )
 
-    if config.variant not in {"tf", "longshot"} and config.family == "gemma4":
+    if (
+        config.variant not in {"tf", "longshot", "icarus"}
+        and config.family == "gemma4"
+    ):
         try:
             config.ensure_uniform_stored_cache_shape(
                 config.variant.capitalize()
@@ -262,24 +265,24 @@ def _model_issues(config: ModelConfig) -> list[CompatibilityIssue]:
     # frequencies, and cache positions for inverse rotation and writeback;
     # preserve unrotated coordinates in proportional RoPE and the value path.
     # This restriction is an implementation limitation, not non-invertible RoPE.
-    if config.family == "gemma4" and config.variant == "longshot":
+    if config.family == "gemma4" and config.variant in {"longshot", "icarus"}:
         if (
             config.cache_processor is not None
             and config.cache_processor.unrope_keys
         ):
             add(
                 "gemma4_inverse_rope",
-                "Gemma4 Longshot requires unrope_keys=false for layer-specific RoPE",
+                "Gemma4 cache processing requires unrope_keys=false for layer-specific RoPE",
                 "model.cache_processor.unrope_keys",
             )
     if (
         config.cache_processor is not None
         and config.cache_processor.head_score_normalization != "none"
-        and config.variant != "longshot"
+        and config.variant not in {"longshot", "icarus"}
     ):
         add(
             "head_score_normalization",
-            "head_score_normalization requires Longshot",
+            "head_score_normalization requires Longshot or Icarus",
             "model.cache_processor.head_score_normalization",
         )
     return _unique_issues(issues)

@@ -403,7 +403,7 @@ def test_mixed_admission_and_legacy_defaults():
     assert "head_score_normalization" not in to_dict(CacheProcessorConfig())
     cfg = mixed_config()
     assert resolve_model(cfg).report.compatible
-    for variant in ("bt", "bgt", "icarus"):
+    for variant in ("bt", "bgt"):
         with pytest.raises(ValueError, match="uniform stored KV"):
             build_model(
                 replace(

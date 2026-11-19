@@ -82,27 +82,33 @@ def estimate_processor_params(config: ModelConfig) -> int:
             + write_gate_adjustment
         )
     if config.variant == "icarus":
-        projection_count = (
-            config.cache_num_heads
-            if config.cache_processor.per_cache_head_projections
-            else 1
+        cp = config.cache_processor
+        shared = _processor_block_params_with_dims(
+            input_norm_dim=0,
+            in_proj_dim=0,
+            out_proj_dim=0,
+            config=cp,
+            projection_count=0,
+            gate_params=0,
         )
-        input_dim = 2 * head_dim
-        out_proj_dim = (
-            head_dim
-            if config.cache_processor.update_stream == "v"
-            else input_dim
-        )
-        return (
-            _processor_block_params_with_dims(
-                input_norm_dim=input_dim,
-                in_proj_dim=input_dim,
-                out_proj_dim=out_proj_dim,
-                config=config.cache_processor,
-                projection_count=projection_count,
+        total = shared + flow_params
+        for group in cache_shape_groups(config.stored_cache_shapes):
+            width = 2 * group.head_dim
+            total += (
+                _processor_block_params_with_dims(
+                    input_norm_dim=width,
+                    in_proj_dim=width,
+                    out_proj_dim=group.head_dim
+                    if cp.update_stream == "v"
+                    else width,
+                    config=cp,
+                    projection_count=len(group.head_indices)
+                    if cp.per_cache_head_projections
+                    else 1,
+                )
+                - shared
             )
-            + flow_params
-        )
+        return total
     if config.variant == "longshot":
         return (
             _longshot_processor_params(config)

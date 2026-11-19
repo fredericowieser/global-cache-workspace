@@ -29,7 +29,10 @@ from gcw.models.cache_processors.windowed import (
     GroupedWindowedCache,
     WindowedCache,
 )
-from gcw.models.cache_processors.layout import cache_shape_groups
+from gcw.models.cache_processors.layout import (
+    cache_shape_groups,
+    cache_group_views,
+)
 from gcw.models.cache_processors.longshot_selection import (
     _select_heads_from_head_scores,
     cache_movement_backend,
@@ -355,36 +358,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             raise ValueError(
                 "mixed-shape Longshot requires reference cache movement"
             )
-        if isinstance(cache, GroupedWindowedCache):
-            if cache.layer_groups != tuple(
-                group.layers for group in self.shape_groups
-            ):
-                raise ValueError(
-                    "cache groups do not match the processor layer layout"
-                )
-            groups = cache.groups
-        elif isinstance(cache, (CacheState, StaticCacheState)):
-            groups = tuple(
-                (
-                    StaticCacheState(
-                        [cache.keys[i] for i in spec.layers],
-                        [cache.values[i] for i in spec.layers],
-                        cache.score_storage,
-                        cache.length,
-                    )
-                    if isinstance(cache, StaticCacheState)
-                    else CacheState(
-                        [cache.keys[i] for i in spec.layers],
-                        [cache.values[i] for i in spec.layers],
-                        cache.scores,
-                    )
-                )
-                for spec in self.shape_groups
-            )
-        else:
-            raise TypeError(
-                "mixed-shape Longshot requires a grouped, list, or static cache"
-            )
+        groups = cache_group_views(cache, self.shape_groups)
         if cache.seq_len == 0:
             return cache, None
         magnitude_selection = (

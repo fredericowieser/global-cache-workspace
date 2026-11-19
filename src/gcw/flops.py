@@ -269,7 +269,9 @@ def processor_forward_flops_per_sequence(
             if cp.include_self_head_kv:
                 selected_heads += 1
             total += _icarus_processor_block_flops_per_call(
-                2 * head_dim,
+                2
+                * sum(h * d for h, d in config.stored_cache_shapes)
+                / cache_heads,
                 cp,
                 selected,
                 cache_heads,
@@ -310,7 +312,7 @@ def processor_forward_flops_per_sequence(
 
 
 def _icarus_processor_block_flops_per_call(
-    input_dim: int,
+    input_dim: float,
     config: CacheProcessorConfig,
     selected: int,
     cache_heads: int,
@@ -318,7 +320,7 @@ def _icarus_processor_block_flops_per_call(
     *,
     field_evaluations: float = 1,
 ) -> float:
-    output_dim = input_dim // 2 if config.update_stream == "v" else input_dim
+    output_dim = input_dim / 2 if config.update_stream == "v" else input_dim
     in_out = (
         2
         * selected

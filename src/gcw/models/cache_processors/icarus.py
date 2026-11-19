@@ -34,14 +34,23 @@ from gcw.performance.backends.icarus import (
 from gcw.models.cache_processors.state import CacheState, StaticCacheState
 from gcw.models.cache_processors.flow import LatentFlow
 from gcw.models.backbones.transformer import RMSNorm, apply_rotary, flash_sdpa
-from gcw.models.cache_processors.windowed import WindowedCache
+from gcw.models.cache_processors.windowed import (
+    WindowedCache,
+    GroupedWindowedCache,
+)
+from gcw.models.cache_processors.layout import (
+    CacheShapeGroup,
+    cache_shape_groups,
+    cache_group_views,
+)
 from gcw.performance.longshot_scores import (
+    native_cache_squared_l2,
     chunked_fp32_l2_norm,
     chunked_fp32_squared_l2,
 )
 from gcw.performance.triton.execution import triton_cache_movement_enabled
 
-CacheLike = CacheState | StaticCacheState | WindowedCache
+CacheLike = CacheState | StaticCacheState | WindowedCache | GroupedWindowedCache
 
 
 class ProcessorAttention(nn.Module):
@@ -84,9 +93,9 @@ class ProcessorAttention(nn.Module):
         selected_heads: torch.Tensor,
     ) -> torch.Tensor:
         batch, cache_heads, seq, _ = x.shape
-        assert (
-            selected_heads.shape[-1] > 0
-        ), "selected_heads must include at least one cache head"
+        assert selected_heads.shape[-1] > 0, (
+            "selected_heads must include at least one cache head"
+        )
         q = self.q_proj(x).view(
             batch, cache_heads, seq, self.num_heads, self.head_dim
         )
@@ -153,9 +162,9 @@ class ProcessorAttention(nn.Module):
     ) -> torch.Tensor:
         batch, cache_heads, seq, _ = x.shape
         selected_count = selected_heads.shape[-1]
-        assert (
-            selected_count > 0
-        ), "selected_heads must include at least one cache head"
+        assert selected_count > 0, (
+            "selected_heads must include at least one cache head"
+        )
         groups = self.num_heads // self.num_kv_heads
 
         q = self.q_proj(x).view(
@@ -286,6 +295,39 @@ class PerCacheHeadLinear(nn.Module):
         return y
 
 
+class CacheHeadProjection(nn.Module):
+    def __init__(self, group: CacheShapeGroup, config: CacheProcessorConfig):
+        super().__init__()
+        self.config = config
+        width = 2 * group.head_dim
+        self.output_dim = (
+            group.head_dim if config.update_stream == "v" else width
+        )
+        self.in_norm = RMSNorm(width, config.norm_eps)
+        if config.per_cache_head_projections:
+            self.in_proj = PerCacheHeadLinear(
+                len(group.head_indices), width, config.hidden_size
+            )
+            self.out_proj = PerCacheHeadLinear(
+                len(group.head_indices), config.hidden_size, self.output_dim
+            )
+        else:
+            self.in_proj = nn.Linear(width, config.hidden_size)
+            self.out_proj = nn.Linear(config.hidden_size, self.output_dim)
+        self.gate = nn.Parameter(torch.full((1,), config.gate_init))
+        self._gate_value = None
+
+    def apply_update(self, original, hidden):
+        delta = self.out_proj(hidden)
+        scale = (
+            torch.sigmoid(self.gate)
+            if self.config.gate_mode == "sigmoid"
+            else self.gate
+        )
+        self._gate_value = scale.detach()
+        return original[..., -self.output_dim :] + delta * scale.to(delta.dtype)
+
+
 class CacheProcessor(nn.Module):
     def __init__(
         self,
@@ -295,9 +337,41 @@ class CacheProcessor(nn.Module):
         *,
         output_dim: int | None = None,
         flow_config: FlowProcessorConfig | None = None,
+        shape_groups: tuple[CacheShapeGroup, ...] = (),
     ):
         super().__init__()
         self.config = config
+        self.shape_groups = shape_groups
+        if shape_groups:
+            self.projections = nn.ModuleDict(
+                {g.name: CacheHeadProjection(g, config) for g in shape_groups}
+            )
+            order = [h for g in shape_groups for h in g.head_indices]
+            self.register_buffer(
+                "canonical_order",
+                torch.tensor(
+                    [order.index(h) for h in range(num_cache_heads)],
+                    device="cpu",
+                ),
+                persistent=False,
+            )
+            for g in shape_groups:
+                self.register_buffer(
+                    g.name + "_heads",
+                    torch.tensor(g.head_indices, device="cpu"),
+                    persistent=False,
+                )
+            self.layers = nn.ModuleList(
+                ProcessorLayer(config) for _ in range(config.num_layers)
+            )
+            self.out_norm = RMSNorm(config.hidden_size, config.norm_eps)
+            self.flow = (
+                LatentFlow(config.hidden_size, flow_config)
+                if flow_config is not None
+                else None
+            )
+            self.init_weights()
+            return
         self.input_dim = input_dim
         self.output_dim = output_dim or input_dim
         self.in_norm = RMSNorm(input_dim, config.norm_eps)
@@ -340,9 +414,13 @@ class CacheProcessor(nn.Module):
                     nn.init.zeros_(module.bias)
             elif isinstance(module, RMSNorm):
                 nn.init.ones_(module.weight)
-        nn.init.constant_(self.gate, self.config.gate_init)
-        if self.config.out_proj_init == "zero":
-            _zero_projection(self.out_proj)
+        projections = (
+            self.projections.values() if self.shape_groups else (self,)
+        )
+        for projection in projections:
+            nn.init.constant_(projection.gate, self.config.gate_init)
+            if self.config.out_proj_init == "zero":
+                _zero_projection(projection.out_proj)
 
     def compute_update(
         self,
@@ -375,6 +453,37 @@ class CacheProcessor(nn.Module):
                     gradient_checkpointing=gradient_checkpointing,
                 )
             )
+        )
+
+    def forward_grouped(self, histories, positions, selected_heads):
+        initial = torch.cat(
+            [
+                self.projections[g.name].in_proj(
+                    self.projections[g.name].in_norm(x)
+                )
+                for g, x in zip(self.shape_groups, histories, strict=True)
+            ],
+            dim=1,
+        ).index_select(1, self.canonical_order)
+        positions = torch.cat(positions, dim=1).index_select(
+            1, self.canonical_order
+        )
+
+        def field(state, _time=None):
+            return self.out_norm(
+                self._run_layers(state, positions, selected_heads)
+            )
+
+        hidden = (
+            self.flow(initial, field)
+            if self.flow is not None
+            else field(initial)
+        )
+        return tuple(
+            self.projections[g.name].apply_update(
+                x, hidden.index_select(1, getattr(self, g.name + "_heads"))
+            )
+            for g, x in zip(self.shape_groups, histories, strict=True)
         )
 
     def _run_layers(
@@ -450,7 +559,8 @@ class CacheProcessor(nn.Module):
 class GlobalCacheProcessor(CacheProcessorBase):
     def __init__(self, model_config: ModelConfig):
         super().__init__()
-        model_config.ensure_uniform_stored_cache_shape("Icarus")
+        self.shape_groups = cache_shape_groups(model_config.stored_cache_shapes)
+        self.mixed_shapes = len(self.shape_groups) > 1
         if model_config.cache_processor is None:
             raise ValueError("Icarus requires cache_processor config")
         self.config = model_config.cache_processor
@@ -468,13 +578,13 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 "Icarus supports only cache_processor.score='attn_l2' or 'kv_norm'"
             )
         self.num_layers = model_config.cache_num_layers
-        self.num_kv_heads, self.head_dim = model_config.stored_cache_shape
+        self.num_kv_heads, self.head_dim = model_config.stored_cache_shapes[0]
         self.rope_theta = model_config.rope_theta
         self.rotary_style = model_config.rotary_style
         self.rotary_dim = int(
             self.head_dim * model_config.partial_rotary_factor
         )
-        self.num_cache_heads = self.num_layers * self.num_kv_heads
+        self.num_cache_heads = model_config.cache_num_heads
         output_dim = (
             self.head_dim
             if self.config.update_stream == "v"
@@ -486,6 +596,7 @@ class GlobalCacheProcessor(CacheProcessorBase):
             self.config,
             output_dim=output_dim,
             flow_config=model_config.flow_processor,
+            shape_groups=self.shape_groups if self.mixed_shapes else (),
         )
         self.execution_backend: IcarusProcessorBackend = (
             resolve_icarus_processor_backend(model_config)
@@ -499,6 +610,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
     def forward(
         self, cache: CacheLike, *, select_all: bool = False
     ) -> CacheLike:
+        if self.mixed_shapes or self._model_config.family == "gemma4":
+            return self._forward_native(cache, select_all=select_all)
         if self.config.score == "kv_norm" and not select_all:
             all_indices = expand_cache_head_indices(
                 cache.all_indices(), self.num_cache_heads
@@ -567,6 +680,101 @@ class GlobalCacheProcessor(CacheProcessorBase):
             )
         return _scatter_latest(cache, latest, keys, values)
 
+    @property
+    def recurrent_cache_format(self) -> str:
+        return "list" if self._model_config.family == "gemma4" else "windowed"
+
+    def _forward_native(
+        self, cache: CacheLike, *, select_all: bool
+    ) -> CacheLike:
+        if cache.seq_len == 0:
+            return cache
+        groups = cache_group_views(cache, self.shape_groups)
+        histories, positions, magnitudes = [], [], []
+        for spec, group in zip(self.shape_groups, groups, strict=True):
+            if self.config.score == "kv_norm" and not select_all:
+                scores = native_cache_squared_l2(group)
+                indices = select_per_cache_head_kv_norm_indices_from_scores(
+                    scores, self.config.process_every, self.config.topk
+                )
+                magnitude = (
+                    gather_per_cache_head_scores(scores, indices)
+                    .float()
+                    .sum(-1)
+                )
+                divisor = 2 * spec.head_dim
+            else:
+                indices = expand_cache_head_indices(
+                    cache.all_indices()
+                    if select_all
+                    else cache.select_indices(
+                        self.config.process_every, self.config.topk
+                    ),
+                    len(spec.head_indices),
+                )
+                magnitude = None
+                divisor = (2 * spec.head_dim) ** 0.5
+            merged = gather_per_cache_head_kv(group, indices, unrope_keys=False)
+            if magnitude is None:
+                magnitude = chunked_fp32_l2_norm(merged)
+            if self.config.head_score_normalization == "rms":
+                magnitude = magnitude / divisor
+            histories.append(merged)
+            positions.append(indices)
+            magnitudes.append(magnitude)
+        scores = torch.cat(magnitudes, dim=1)
+        if self.mixed_shapes:
+            scores = scores.index_select(1, self.block.canonical_order)
+        selected = (
+            torch.arange(self.num_cache_heads, device=scores.device).expand(
+                cache.batch_size, -1
+            )
+            if select_all
+            else scores.topk(
+                min(self.config.topk_heads, self.num_cache_heads), dim=-1
+            )
+            .indices.sort(dim=-1)
+            .values
+        )
+        updates = (
+            self.block.forward_grouped(histories, positions, selected)
+            if self.mixed_shapes
+            else (
+                run_icarus_post_selection_region(
+                    self.execution_backend,
+                    self.block,
+                    histories[0],
+                    positions[0],
+                    selected,
+                ),
+            )
+        )
+        for spec, group, indices, updated in zip(
+            self.shape_groups, groups, positions, updates, strict=True
+        ):
+            latest = latest_shared_indices(indices)
+            frontier = updated[:, :, -1:].contiguous()
+            if self.config.update_stream == "v":
+                _scatter_latest_values(
+                    group,
+                    latest,
+                    _split_merged_values(
+                        frontier,
+                        len(spec.layers),
+                        spec.num_heads,
+                        spec.head_dim,
+                    ),
+                )
+            else:
+                keys, values = _split_merged(
+                    frontier, len(spec.layers), spec.num_heads, spec.head_dim
+                )
+                _scatter_latest(group, latest, keys, values)
+            if isinstance(cache, CacheState):
+                for local, layer in enumerate(spec.layers):
+                    cache.keys[layer], cache.values[layer] = group.layer(local)
+        return cache
+
     def _cache_movement_backend(self) -> str:
         return "triton" if triton_cache_movement_enabled(self) else "eager"
 
@@ -593,6 +801,8 @@ class GlobalCacheProcessor(CacheProcessorBase):
                 scores, self.config.process_every, self.config.topk
             )
             selected_scores = gather_per_cache_head_scores(scores, indices)
+            if self.config.head_score_normalization == "rms":
+                selected_scores = selected_scores / (2 * self.head_dim)
             selected_heads = select_heads_from_per_cache_head_scores(
                 selected_scores, self.config.topk_heads
             )

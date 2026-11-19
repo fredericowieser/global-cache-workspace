@@ -56,6 +56,10 @@ def resolve_icarus_processor_backend(
             f"{_ICARUS_BACKEND_ENV}=compile supports deterministic Icarus only; "
             f"{model_config.variant} is explicitly unsupported"
         )
+    if len(set(model_config.stored_cache_shapes)) > 1:
+        raise RuntimeError(
+            "mixed-shape Icarus requires eager processor execution"
+        )
     processor = model_config.cache_processor
     if processor is None or processor.processor_mode != "standard":
         raise RuntimeError(

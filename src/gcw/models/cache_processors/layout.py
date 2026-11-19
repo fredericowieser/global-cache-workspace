@@ -29,3 +29,37 @@ def cache_shape_groups(
         CacheShapeGroup(*shape, tuple(layers[shape]), tuple(heads[shape]))
         for shape in sorted(layers)
     )
+
+
+def cache_group_views(cache, shape_groups):
+    from gcw.models.cache_processors.state import CacheState, StaticCacheState
+    from gcw.models.cache_processors.windowed import (
+        GroupedWindowedCache,
+        WindowedCache,
+    )
+
+    if isinstance(cache, GroupedWindowedCache):
+        if cache.layer_groups != tuple(group.layers for group in shape_groups):
+            raise ValueError(
+                "cache groups do not match the processor layer layout"
+            )
+        return cache.groups
+    if isinstance(cache, (CacheState, StaticCacheState)):
+        return tuple(
+            StaticCacheState(
+                [cache.keys[i] for i in spec.layers],
+                [cache.values[i] for i in spec.layers],
+                cache.score_storage,
+                cache.length,
+            )
+            if isinstance(cache, StaticCacheState)
+            else CacheState(
+                [cache.keys[i] for i in spec.layers],
+                [cache.values[i] for i in spec.layers],
+                cache.scores,
+            )
+            for spec in shape_groups
+        )
+    if isinstance(cache, WindowedCache) and len(shape_groups) == 1:
+        return (cache,)
+    raise TypeError("mixed-shape processing requires a grouped or list cache")
