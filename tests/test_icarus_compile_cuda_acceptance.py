@@ -21,7 +21,6 @@ from scripts.benchmarks.parity import (
 )
 from gcw.models import build_model
 from gcw.models.cache_processors import icarus as processor_module
-from gcw.models.cache_processors.ops import latest_shared_indices
 from gcw.models.model import LanguageModel
 from gcw.performance.backends.icarus import (
     IcarusProcessorBackend,
@@ -64,7 +63,7 @@ def _install_exact_trace(
     eager: LanguageModel,
     compiled: LanguageModel,
 ) -> dict[str, list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]]:
-    """Record selected positions/heads and the exact latest write destinations."""
+    """Record selected positions/heads and all per-head write destinations."""
     eager_block = eager.cache_processor.block
     compiled_block = compiled.cache_processor.block
     original = processor_module.run_icarus_post_selection_region
@@ -83,14 +82,16 @@ def _install_exact_trace(
         label = (
             "eager"
             if block is eager_block
-            else "compile" if block is compiled_block else None
+            else "compile"
+            if block is compiled_block
+            else None
         )
         if label is not None:
             traces[label].append(
                 (
                     positions.detach().cpu().clone(),
                     selected_heads.detach().cpu().clone(),
-                    latest_shared_indices(positions).detach().cpu().clone(),
+                    positions.detach().cpu().clone(),
                 )
             )
         return original(backend, block, x, positions, selected_heads)

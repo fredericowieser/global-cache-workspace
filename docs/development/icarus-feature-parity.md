@@ -1,6 +1,6 @@
 # Icarus feature parity with Longshot
 
-**Status:** Implementation groups ordered; linear-state design pending
+**Status:** Groups 1?5 complete; linear-state design pending
 
 **Initial inventory:** 2026-10-23
 
@@ -48,7 +48,7 @@ Sources: [diffusion documentation](../concepts/task-directed-diffusion.md), [dif
 | 14 | Linear-state writer alternatives | Outer-product updates or gated-delta updates using backbone dynamics, optional outer gating, and `live_rank1_linear_writer` initialization that preserves an initial zero update while allowing gradients. Design needed: decide which temporal processor outputs produce the recurrent-state update, consistently with #13. First implement the complete read/process/write path with the outer-product writer and live initialization; then add gated-delta writing and shared-backbone/FSDP integration. Contextual outer gates remain on hold under #7. | Group 6: Linear state; Design needed |
 | 15 | Mixed KV shapes across layers | Shape-specific normalization, encoders, and projections around a shared processor. Icarus uses per-shape input/output adapters and scalar write gates around shared temporal attention, preserving canonical head identities and per-head token positions. Uniform-layout checkpoint keys remain unchanged. | Group 3: Cache layouts; Complete |
 | 16 | Width-normalized head scores | `head_score_normalization: rms` makes magnitude scores comparable across different head widths. Primarily useful with #15. | Group 3: Cache layouts; Complete |
-| 17 | Native Gemma4 static generation | Gemma4 Icarus now uses the native static `generate_fast` path for mixed shapes and selected-layer subsets, retaining full selected archives and bounded ring buffers for unselected sliding layers. Reuses the existing allocation, attention and frontier-write machinery. [Static-generation tests](../../tests/test_gemma4_icarus_generation.py) and shared storage tests verify FP32/BF16 logits and token parity, stable allocations, ring wraparound, shared-KV layers, cadence, stopping, and checkpoint reloads. Validation: 507 checks passed, 2 skipped. CUDA validation and throughput measurements were not performed. | Group 5: Static generation; Complete |
+| 17 | Native Gemma4 static generation | Gemma4 Icarus now uses the native static `generate_fast` path for mixed shapes and selected-layer subsets, retaining full selected archives and bounded ring buffers for unselected sliding layers. Reuses the existing allocation, attention and cache-write machinery. [Static-generation tests](../../tests/test_gemma4_icarus_generation.py) and shared storage tests verify FP32/BF16 logits and token parity, stable allocations, ring wraparound, shared-KV layers, cadence, stopping, and checkpoint reloads. Validation: 507 checks passed, 2 skipped. CUDA validation and throughput measurements were not performed. | Group 5: Static generation; Complete |
 | 18 | Gemma4 window-segment checkpointing | Gemma4 Icarus now admits `activation_checkpoint_windows` through the shared segment runner. Native-list and grouped boundaries preserve selected caches and excluded attention state; replay retains processor-layer checkpoint decisions, RNG, and truncated-BPTT boundaries. [Window-checkpointing tests](../../tests/test_gemma4_icarus_checkpointing.py) cover FP32/BF16 loss, gradient and optimizer parity, Flow, dropout, adaptive thresholds, call counts, and reduced saved activations. Validation: 246 relevant checks passed; 13 existing training-record/resume checks were excluded because of the known Windows directory-fsync limitation. CUDA validation was unavailable. | Group 4: Window checkpointing; Complete |
 
 Sources: [linear-state adapter](../../src/gcw/models/cache_processors/longshot_linear_state.py), [linear-state writeback](../../src/gcw/models/cache_processors/longshot.py), [cache-layout support](../concepts/cache-processing.md), [Gemma4 model](../../src/gcw/models/backbones/gemma4/model.py), and [checkpointing support](../guides/configure-training.md#native-activation-checkpointing).
@@ -76,6 +76,8 @@ Sources: [bounded scoring](../../src/gcw/performance/longshot_scores.py), [nativ
 Sources: [variant definitions](../concepts/model-variants.md), [Longshot encoders](../../src/gcw/models/cache_processors/longshot_layers.py), and [Icarus implementation](../../src/gcw/models/cache_processors/icarus.py).
 
 ## Already present in Icarus
+
+Icarus writes back all gathered positions, including historical positions selected separately per head. This corrects the earlier frontier-only implementation; weights remain loadable but previous outputs and training trajectories are not preserved. [Writeback tests](../../tests/test_icarus_writeback.py) cover exact per-head writes, untouched positions, static allocation stability, inverse RoPE and historical gradients. Group 6 remains pending.
 
 These are not missing-feature candidates:
 

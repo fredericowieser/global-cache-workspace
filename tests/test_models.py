@@ -72,10 +72,8 @@ from gcw.models.backbones.transformer import (
 from gcw.models.cache_processors.windowed import WindowedCache
 
 
-def test_icarus_and_longshot_share_exact_tensor_operations_without_changing_symbols():
+def test_icarus_and_longshot_share_cache_splitting_operations():
     for name in (
-        "_scatter_latest",
-        "_scatter_latest_values",
         "_split_merged",
         "_split_merged_values",
     ):
@@ -2071,7 +2069,7 @@ def test_icarus_and_longshot_default_attn_l2_uses_shared_token_positions():
             assert torch.equal(calls[0][0], expected_merged)
 
 
-def test_icarus_cache_processor_matches_windowed_cache_path_and_updates_latest_only():
+def test_icarus_cache_processor_matches_windowed_cache_path_and_updates_selected_positions():
     model = build_model(tiny_config("icarus"))
     model.init_weights()
     cache = _random_cache(model.config)
@@ -2085,10 +2083,15 @@ def test_icarus_cache_processor_matches_windowed_cache_path_and_updates_latest_o
     actual_state = actual.to_cache_state()
     _assert_cache_close(actual_state, expected)
     _assert_cache_positions_unchanged(
-        cache, actual_state, _not_latest_mask(cache, selected)
+        cache,
+        actual_state,
+        torch.ones_like(cache.scores, dtype=torch.bool).scatter_(
+            1, selected, False
+        ),
     )
 
 
+@torch.no_grad()
 def test_icarus_cache_processor_matches_static_cache_path():
     model = build_model(tiny_config("icarus"))
     model.init_weights()
@@ -2102,7 +2105,7 @@ def test_icarus_cache_processor_matches_static_cache_path():
     _assert_cache_close(_cache_state_from_static(static), expected)
 
 
-def test_icarus_value_only_updates_only_latest_values():
+def test_icarus_value_only_updates_selected_values():
     model = build_model(
         tiny_config(
             "icarus", update_stream="v", gate_mode="direct", gate_init=1.0
@@ -2117,7 +2120,11 @@ def test_icarus_value_only_updates_only_latest_values():
 
     _assert_keys_unchanged(cache, actual)
     _assert_cache_positions_unchanged(
-        cache, actual, _not_latest_mask(cache, indices)
+        cache,
+        actual,
+        torch.ones_like(cache.scores, dtype=torch.bool).scatter_(
+            1, indices, False
+        ),
     )
     value_delta = sum(
         (new_value - old_value).abs().sum()
@@ -2145,6 +2152,7 @@ def test_icarus_value_only_matches_windowed_cache_path():
     _assert_keys_unchanged(cache, actual_state)
 
 
+@torch.no_grad()
 def test_icarus_value_only_matches_static_cache_path():
     model = build_model(
         tiny_config(

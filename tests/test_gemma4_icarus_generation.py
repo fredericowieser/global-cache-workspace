@@ -61,12 +61,6 @@ def test_static_logits_updates_and_native_routing(
             assert returned is static and static.length == old_length
             for i, (old_k, old_v) in enumerate(before):
                 k, v = static.layer(i)
-                torch.testing.assert_close(
-                    k[:, :, :-1], old_k[:, :, :-1], atol=0, rtol=0
-                )
-                torch.testing.assert_close(
-                    v[:, :, :-1], old_v[:, :, :-1], atol=0, rtol=0
-                )
                 if stream == "v":
                     torch.testing.assert_close(k, old_k, atol=0, rtol=0)
         a, dynamic = reference.backbone.forward_chunk(

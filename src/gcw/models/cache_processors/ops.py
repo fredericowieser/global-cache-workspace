@@ -320,45 +320,81 @@ def workspace_writer_kv(
     )
 
 
+def _scatter_cache_stream(
+    cache: CacheLike,
+    indices: torch.Tensor,
+    updates: torch.Tensor,
+    *,
+    stream: str,
+) -> None:
+    if updates.ndim != 5 or updates.shape[:2] != (
+        cache.num_layers,
+        cache.batch_size,
+    ):
+        raise ValueError(
+            "updates must have shape (layers, batch, heads, positions, width)"
+        )
+    layers, batch, heads, positions, _ = updates.shape
+    if indices.ndim == 2 and indices.shape == (batch, positions):
+        index = indices[None, :, None, :, None].expand_as(updates)
+    elif indices.ndim == 3 and indices.shape == (
+        batch,
+        layers * heads,
+        positions,
+    ):
+        index = (
+            indices.reshape(batch, layers, heads, positions)
+            .permute(1, 0, 2, 3)[..., None]
+            .expand_as(updates)
+        )
+    else:
+        raise ValueError(
+            "indices must match shared or per-head update positions"
+        )
+    storage = getattr(cache, stream)
+    if isinstance(cache, WindowedCache):
+        setattr(
+            cache, stream, storage.scatter(3, index, updates.to(storage.dtype))
+        )
+    elif isinstance(cache, StaticCacheState):
+        if torch.is_grad_enabled():
+            raise RuntimeError(
+                "static cache writeback requires inference without gradients"
+            )
+        for layer, tensor in enumerate(storage):
+            tensor[:, :, : cache.length].scatter_(
+                2, index[layer], updates[layer].to(tensor.dtype)
+            )
+    else:
+        for layer, tensor in enumerate(storage):
+            storage[layer] = tensor.scatter(
+                2, index[layer], updates[layer].to(tensor.dtype)
+            )
+
+
 def scatter_cache_layers(
-    cache: CacheState | WindowedCache,
+    cache: CacheLike,
     indices: torch.Tensor,
     keys: torch.Tensor,
     values: torch.Tensor,
-) -> CacheState | WindowedCache:
-    if isinstance(cache, WindowedCache):
-        old_keys, old_values = cache.keys, cache.values
-    else:
-        old_keys = torch.stack(cache.keys, dim=0)
-        old_values = torch.stack(cache.values, dim=0)
-    index = indices[None, :, None, :, None].expand_as(keys)
-    new_keys = old_keys.scatter(3, index, keys.to(old_keys.dtype))
-    new_values = old_values.scatter(3, index, values.to(old_values.dtype))
-    if isinstance(cache, WindowedCache):
-        cache.keys = new_keys
-        cache.values = new_values
-    else:
-        cache.keys = list(new_keys.unbind(0))
-        cache.values = list(new_values.unbind(0))
+) -> CacheLike:
+    if keys.shape != values.shape:
+        raise ValueError("key and value updates must have matching shapes")
+    _scatter_cache_stream(cache, indices, keys, stream="keys")
+    _scatter_cache_stream(cache, indices, values, stream="values")
+    if not isinstance(cache, StaticCacheState):
+        cache.kv_score_sidecar = None
     return cache
 
 
 def scatter_cache_values(
-    cache: CacheState | WindowedCache,
+    cache: CacheLike,
     indices: torch.Tensor,
     values: torch.Tensor,
-) -> CacheState | WindowedCache:
-    old_values = (
-        cache.values
-        if isinstance(cache, WindowedCache)
-        else torch.stack(cache.values, dim=0)
-    )
-    index = indices[None, :, None, :, None].expand_as(values)
-    new_values = old_values.scatter(3, index, values.to(old_values.dtype))
-    if isinstance(cache, WindowedCache):
-        cache.values = new_values
-    else:
-        cache.values = list(new_values.unbind(0))
+) -> CacheLike:
+    _scatter_cache_stream(cache, indices, values, stream="values")
+    if not isinstance(cache, StaticCacheState):
+        cache.kv_score_sidecar = None
     return cache
 
 

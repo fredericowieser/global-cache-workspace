@@ -54,6 +54,8 @@ $$
 
 Processor self-attention is bidirectional across the selected cache positions. This does not leak future tokens: the model invokes the processor only on memory from windows it has already consumed, before predicting tokens in the next window.
 
+Icarus writes each processed output back to its gathered per-head position, including historical positions. Longshot writes only the latest selected position. Dynamic cache writes preserve autograd; static writes update existing allocations without changing logical length.
+
 The meaning of the feature axis depends on the variant. BT mixes within one backbone layer. BGT concatenates all backbone layers. Icarus and Longshot treat every `(layer, KV head)` pair as a cache head.
 
 ## Cache layout and layer selection

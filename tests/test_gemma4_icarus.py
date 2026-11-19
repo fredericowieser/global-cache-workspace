@@ -50,8 +50,6 @@ def test_native_grouped_parity(per_head, stream, score, select_all):
         bk, bv = b.layer(i)
         torch.testing.assert_close(ak, bk)
         torch.testing.assert_close(av, bv)
-        torch.testing.assert_close(ak[:, :, :-1], old_k[:, :, :-1])
-        torch.testing.assert_close(av[:, :, :-1], old_v[:, :, :-1])
         if stream == "v":
             torch.testing.assert_close(ak, old_k)
         loss_a = loss_a + ak.square().sum() + av.square().sum()

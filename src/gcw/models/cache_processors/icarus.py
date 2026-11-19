@@ -11,15 +11,14 @@ from gcw.models.cache_processors.base import (
     processor_gradient_checkpointing_enabled,
 )
 from gcw.models.cache_processors.ops import (
-    scatter_latest as _scatter_latest,
-    scatter_latest_values as _scatter_latest_values,
+    scatter_cache_layers,
+    scatter_cache_values,
     split_merged_cache as _split_merged,
     split_merged_cache_values as _split_merged_values,
     zero_projection,
     expand_cache_head_indices,
     gather_per_cache_head_scores,
     gather_per_cache_head_kv,
-    latest_shared_indices,
     rotary_for_indices,
     rotate_cache_keys,
     select_heads_from_per_cache_head_scores,
@@ -660,25 +659,33 @@ class GlobalCacheProcessor(CacheProcessorBase):
             indices,
             selected_heads,
         )
-        latest = latest_shared_indices(indices)
-        latest_update = updated[:, :, -1:].contiguous()
         if self.config.update_stream == "v":
-            values = _split_merged_values(
-                latest_update, self.num_layers, self.num_kv_heads, self.head_dim
+            return scatter_cache_values(
+                cache,
+                indices,
+                _split_merged_values(
+                    updated, self.num_layers, self.num_kv_heads, self.head_dim
+                ),
             )
-            return _scatter_latest_values(cache, latest, values)
-        keys, values = _split_merged(
-            latest_update, self.num_layers, self.num_kv_heads, self.head_dim
-        )
+        keys, values = updated.split(self.head_dim, dim=-1)
         if self.config.unrope_keys:
             keys = rotate_cache_keys(
                 keys,
-                latest,
+                indices,
                 theta=self.rope_theta,
                 rotary_style=self.rotary_style,
                 rotary_dim=self.rotary_dim,
             )
-        return _scatter_latest(cache, latest, keys, values)
+        return scatter_cache_layers(
+            cache,
+            indices,
+            _split_merged_values(
+                keys, self.num_layers, self.num_kv_heads, self.head_dim
+            ),
+            _split_merged_values(
+                values, self.num_layers, self.num_kv_heads, self.head_dim
+            ),
+        )
 
     @property
     def recurrent_cache_format(self) -> str:
@@ -752,24 +759,19 @@ class GlobalCacheProcessor(CacheProcessorBase):
         for spec, group, indices, updated in zip(
             self.shape_groups, groups, positions, updates, strict=True
         ):
-            latest = latest_shared_indices(indices)
-            frontier = updated[:, :, -1:].contiguous()
             if self.config.update_stream == "v":
-                _scatter_latest_values(
+                scatter_cache_values(
                     group,
-                    latest,
+                    indices,
                     _split_merged_values(
-                        frontier,
-                        len(spec.layers),
-                        spec.num_heads,
-                        spec.head_dim,
+                        updated, len(spec.layers), spec.num_heads, spec.head_dim
                     ),
                 )
             else:
                 keys, values = _split_merged(
-                    frontier, len(spec.layers), spec.num_heads, spec.head_dim
+                    updated, len(spec.layers), spec.num_heads, spec.head_dim
                 )
-                _scatter_latest(group, latest, keys, values)
+                scatter_cache_layers(group, indices, keys, values)
             if isinstance(cache, CacheState):
                 for local, layer in enumerate(spec.layers):
                     cache.keys[layer], cache.values[layer] = group.layer(local)

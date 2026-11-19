@@ -44,9 +44,11 @@ $$
 \left(X_{c,:},\operatorname{TopHeads}(X)\right).
 $$
 
-The module writes only the latest selected cache position, not every gathered position. That choice turns selected history into an update for the current memory frontier. Per-cache-head projections give each head independent parameters; shared projections trade expressivity for a smaller and more regular processor. When `unrope` is active, the module processes position-neutral keys and reapplies RoPE before storage.
+The module writes every processed position back to the position from which it was gathered, independently for each batch item and cache head. Head selection determines attention contributors; all recipient heads receive updates at their gathered positions. Ungathered positions are unchanged. Per-cache-head projections give each head independent parameters; shared projections trade expressivity for a smaller and more regular processor. When `unrope` is active, the module processes position-neutral keys and reapplies RoPE at each head's gathered absolute positions before storage.
 
-Icarus uses the same bounded FP32 magnitude reductions as Longshot for per-position KV scores and flattened cache-head norms. Each cast or square allocation is capped at 32 MiB unless one complete reduction row exceeds that size; rows are never split, preserving the eager accumulation order. This bounds scoring temporaries without changing token/head selection, full-history gathering, or frontier writeback. For a flattened head norm, one reduction row spans that head's selected time positions and features.
+This corrects earlier Icarus behavior that discarded all but the final processed position before writeback. Parameter shapes and checkpoint loading are unchanged, but loading old weights now uses all-position writeback; previous outputs and training trajectories are not preserved.
+
+Icarus uses the same bounded FP32 magnitude reductions as Longshot for per-position KV scores and flattened cache-head norms. Each cast or square allocation is capped at 32 MiB unless one complete reduction row exceeds that size; rows are never split, preserving the eager accumulation order. This bounds scoring temporaries without changing token/head selection, full-history gathering, or writeback positions. For a flattened head norm, one reduction row spans that head's selected time positions and features.
 
 ## Longshot: time compression before head mixing
 
@@ -69,5 +71,5 @@ For Qwen3.5 linear-attention states, `live_rank1_linear_writer: true` initialize
 | TF | normal attention | through backbone only | through attention/output projections | append-only cache | causal-transformer baseline |
 | BT | yes | no | inside one layer vector | selected states in each layer | layer-local processor |
 | BGT | yes | yes | through concatenated feature | selected states across layers | global depth workspace |
-| Icarus | selected positions | yes | yes | latest selected position | cross-head memory routing |
+| Icarus | selected positions | yes | yes | all gathered positions | cross-head memory routing |
 | Longshot | compressed selected history | yes | yes | latest selected position | recurrent compressed memory |
