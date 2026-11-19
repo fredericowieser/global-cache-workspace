@@ -309,9 +309,9 @@ campaign overview; the default is accuracy.
 
 ### Thinking-enabled cross-campaign overviews
 
-Use `--thinking-view pooled` to average the available thinking-off and thinking-on observations into the two existing Maths-training cells. Each backbone/mode observation contributes equal weight after normalisation to the backbone baseline for that same suite, backbone, and thinking mode. Thus, a backbone with both modes contributes twice, and a backbone with only one reported mode contributes once. The cell SD is the population SD across these observations, not a standard error or a standard deviation of backbone means. Reasoning Gym and sequential cells still use thinking off.
+Use `--thinking-view pooled` to average thinking-off and thinking-on observations after mathematical adaptation and thinking-off observations only after broad and sequential adaptation. Each backbone/mode observation contributes equal weight after normalisation to the backbone baseline for that same suite, backbone, and thinking mode. Thus, a backbone with both modes contributes twice, and a backbone with only one reported mode contributes once. The cell SD is the population SD across these observations, not a standard error or a standard deviation of backbone means. Reasoning Gym and sequential cells include all five backbones with thinking disabled. The paper tables and per-backbone figures likewise report thinking-off results only in these settings.
 
-Use `--thinking-view split` to show eight columns: Maths off, Maths on, KOR-Bench off, and KOR-Bench on under Maths training, followed by the existing two thinking-off columns for each other campaign. Each cell shows mean ± population SD across the available backbones for its mode. Both views retain all available backbones, omit diffusion, and preserve the thinking-off-only figures.
+Use `--thinking-view split` to show twelve columns: Maths off, Maths on, KOR-Bench off, and KOR-Bench on for each adaptation setting. Each cell shows mean ± population SD across the available backbones for its mode. Both views retain all available backbones, omit diffusion, and preserve the thinking-off-only figures.
 
 ```bash
 for metric in accuracy tokens; do
@@ -328,7 +328,7 @@ The new SVG/PDF filenames append `_thinking_pooled` or `_thinking_split` to the 
 
 ### Side-by-side performance and token overview
 
-The preferred cross-campaign summary pools the maths-training thinking modes. To place performance and token usage side by side in a single figure, use `--metric both`:
+The preferred cross-campaign summary pools thinking modes after mathematical adaptation and uses thinking-off results only after broad and sequential adaptation. To place performance and token usage side by side in a single figure, use `--metric both`:
 
 ```bash
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLCONFIGDIR=/tmp/gcw-matplotlib \

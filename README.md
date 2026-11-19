@@ -85,7 +85,7 @@ Intermediate numbered checkpoints remain independent; a later save replaces
 the symlink without modifying its retained target.
 
 For Slurm worker arrays, set `GPUS` to the number of GPUs per worker when
-needed. `scripts/cluster/submit_array.sh` otherwise leaves partition, time,
+needed. `scripts/cluster/submit_array.sh` defaults to a five-day time limit and otherwise leaves partition,
 CPU count, and memory to Slurm defaults. Set `PARTITION`, `ARRAY_TIME`,
 `CPUS_PER_TASK`, or `MEM` to override them explicitly. 
 If you are on alpha (89.124.38.93) you should set MEM=180G, CPUS_PER_TASK=8, 

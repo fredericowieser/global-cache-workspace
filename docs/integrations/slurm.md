@@ -75,6 +75,8 @@ Slurm's per-GPU memory defaults rather than the former fixed 180 GiB limit.
 
 ## Shared worker queues
 
+Worker arrays default to a five-day Slurm time limit (`ARRAY_TIME=5-00:00:00`). Set `EVAL_AFTER_TRAIN=0` for training-only runs; otherwise the worker also runs its configured evaluation before completing.
+
 `scripts/cluster/submit_array.sh --workers N --tasks-file tasks.tsv` accepts mixed
 training and evaluation tasks in one queue. Each tab-separated row has six fields:
 `ACTION`, `CONFIG`, `CHECKPOINT`, `OUTPUT_BASE`, `THINKING_MODES`, `SKIP_TASKS`.
