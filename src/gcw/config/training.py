@@ -381,11 +381,11 @@ class TrainConfig:
             self.model.family == "qwen3"
             or (
                 self.model.family == "gemma4"
-                and self.model.variant == "longshot"
+                and self.model.variant in {"longshot", "icarus"}
             )
         ):
             raise ValueError(
-                "activation_checkpoint_windows supports qwen3 and Gemma4 Longshot backbones"
+                "activation_checkpoint_windows supports qwen3 and Gemma4 Longshot/Icarus backbones"
             )
         if self.activation_checkpoint_windows and self.distributed == "fsdp":
             raise ValueError(

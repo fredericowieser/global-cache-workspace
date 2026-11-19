@@ -49,7 +49,7 @@ Sources: [diffusion documentation](../concepts/task-directed-diffusion.md), [dif
 | 15 | Mixed KV shapes across layers | Shape-specific normalization, encoders, and projections around a shared processor. Icarus uses per-shape input/output adapters and scalar write gates around shared temporal attention, preserving canonical head identities and per-head token positions. Uniform-layout checkpoint keys remain unchanged. | Group 3: Cache layouts; Complete |
 | 16 | Width-normalized head scores | `head_score_normalization: rms` makes magnitude scores comparable across different head widths. Primarily useful with #15. | Group 3: Cache layouts; Complete |
 | 17 | Native Gemma4 static generation | The optimized `generate_fast` path supports mixed shapes and selected-layer subsets, retaining full selected archives and bounded ring buffers for unselected sliding layers. Gemma4 enables this path for TF and Longshot. Implement after the dynamic cache path is validated; compare static writes, ring-buffer behavior, and absolute positions against dynamic generation. | Group 5: Static generation; Not started |
-| 18 | Gemma4 window-segment checkpointing | Checkpointing across recurrent windows with mixed-shape or selected-layer caches. Icarus already shares Qwen3 window checkpointing, but this Gemma4 integration is Longshot-specific. Build on group 3 and verify eager/checkpointed output and gradient parity across window boundaries. | Group 4: Window checkpointing; Not started |
+| 18 | Gemma4 window-segment checkpointing | Gemma4 Icarus now admits `activation_checkpoint_windows` through the shared segment runner. Native-list and grouped boundaries preserve selected caches and excluded attention state; replay retains processor-layer checkpoint decisions, RNG, and truncated-BPTT boundaries. [Window-checkpointing tests](../../tests/test_gemma4_icarus_checkpointing.py) cover FP32/BF16 loss, gradient and optimizer parity, Flow, dropout, adaptive thresholds, call counts, and reduced saved activations. Validation: 246 relevant checks passed; 13 existing training-record/resume checks were excluded because of the known Windows directory-fsync limitation. CUDA validation was unavailable. | Group 4: Window checkpointing; Complete |
 
 Sources: [linear-state adapter](../../src/gcw/models/cache_processors/longshot_linear_state.py), [linear-state writeback](../../src/gcw/models/cache_processors/longshot.py), [cache-layout support](../concepts/cache-processing.md), [Gemma4 model](../../src/gcw/models/backbones/gemma4/model.py), and [checkpointing support](../guides/configure-training.md#native-activation-checkpointing).
 
@@ -87,7 +87,7 @@ These are not missing-feature candidates:
 - Self-head KV inclusion.
 - Flow.
 - Basic processor checkpointing.
-- Shared Qwen3 window-segment checkpointing and truncated BPTT.
+- Shared Qwen3 and Gemma4 window-segment checkpointing and truncated BPTT.
 - Separate generation cadence.
 
 Sources: [Icarus implementation](../../src/gcw/models/cache_processors/icarus.py), [training configuration](../guides/configure-training.md), and [shared generation](../../src/gcw/models/backbones/transformer/generation.py).
