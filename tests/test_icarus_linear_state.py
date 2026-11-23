@@ -255,9 +255,12 @@ def test_workspace_attention_matches_reference(self_kv):
 
 
 @pytest.mark.parametrize("writer", ["outer_product", "gated_delta"])
-def test_writer_sequence_matches_reference(writer):
+@pytest.mark.parametrize("reads", [1, 3, 65])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_writer_sequence_matches_reference(monkeypatch, writer, reads, dtype):
     from gcw.models.backbones.qwen3 import qwen35_gated_delta_rule
 
+    torch.manual_seed(93)
     cfg = tiny_qwen35_config(
         "icarus", linear_state_cache=True, linear_state_update_mode=writer
     )
@@ -265,9 +268,15 @@ def test_writer_sequence_matches_reference(writer):
     model.init_weights()
     proc = model.cache_processor
     cache = make_cache()
+    initial_states = [v[0] for v in cache.linear_states.values()]
+    conv_states = [v[1] for v in cache.linear_states.values()]
     expected = {k: v[0].clone() for k, v in cache.linear_states.items()}
-    delta = torch.randn(2, 4, 3, 10 if writer == "gated_delta" else 8) * 0.1
-    for t in range(3):
+    delta = (
+        (torch.randn(2, 4, reads, 10 if writer == "gated_delta" else 8) * 0.1)
+        .to(dtype)
+        .requires_grad_()
+    )
+    for t in range(reads):
         for i, spec in enumerate(proc.linear_state_specs):
             update = delta[:, i * 2 : (i + 1) * 2, t]
             k, v = update[..., :4], update[..., 4:8]
@@ -275,7 +284,11 @@ def test_writer_sequence_matches_reference(writer):
                 expected[spec.layer_idx] = expected[
                     spec.layer_idx
                 ] + torch.einsum(
-                    "bhk,bhv->bhkv", torch.nn.functional.normalize(k, dim=-1), v
+                    "bhk,bhv->bhkv",
+                    torch.nn.functional.normalize(k.float(), dim=-1)
+                    .to(dtype)
+                    .float(),
+                    v.float(),
                 )
             else:
                 _, expected[spec.layer_idx] = qwen35_gated_delta_rule(
@@ -288,11 +301,45 @@ def test_writer_sequence_matches_reference(writer):
                     beta=update[..., 8].sigmoid()[:, None],
                     initial_state=expected[spec.layer_idx],
                 )
-        proc._scatter_linear_state_updates(
-            cache, delta[:, :, t], proc.linear_state_specs
-        )
+    calls = []
+
+    def record_rule(query, *args, **kwargs):
+        calls.append(query.shape[1])
+        return qwen35_gated_delta_rule(query, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "gcw.models.backbones.qwen3.qwen35_gated_delta_rule", record_rule
+    )
+    proc._scatter_linear_state_updates(cache, delta, proc.linear_state_specs)
+    assert calls == ([reads, reads] if writer == "gated_delta" else [])
+    tolerance = (
+        dict(rtol=3e-4, atol=3e-5)
+        if dtype == torch.float32
+        else dict(rtol=5e-2, atol=3e-3)
+    )
     for k, v in cache.linear_states.items():
-        torch.testing.assert_close(v[0], expected[k])
+        torch.testing.assert_close(v[0], expected[k], **tolerance)
+    assert all(
+        state[1] is conv
+        for state, conv in zip(cache.linear_states.values(), conv_states)
+    )
+    inputs = [delta, *initial_states]
+    if writer == "gated_delta":
+        inputs += [
+            parameter
+            for dynamics in proc.linear_state_dynamics.values()
+            for parameter in dynamics.parameters()
+        ]
+    actual_grad = torch.autograd.grad(
+        sum(v[0].square().sum() for v in cache.linear_states.values()),
+        inputs,
+        retain_graph=True,
+    )
+    expected_grad = torch.autograd.grad(
+        sum(v.square().sum() for v in expected.values()), inputs
+    )
+    for actual, reference in zip(actual_grad, expected_grad):
+        torch.testing.assert_close(actual, reference, **tolerance)
 
 
 @pytest.mark.parametrize("mode", ["global", "shared", "per_linear_state"])
@@ -506,7 +553,9 @@ def test_shared_query_readouts_and_gradients_match_independent_reads(
     states = [torch.randn(2, 2, 4, 4, requires_grad=True) for _ in range(3)]
     reference_states = [s.detach().clone().requires_grad_() for s in states]
     positions = torch.tensor([[[0, 2, 7]]]).expand(2, -1, -1)
-    features, _ = block.read_linear_states(query_kv, states, positions)
+    features, _ = block.read_linear_states(
+        block.in_proj(block.in_norm(query_kv)), states, positions
+    )
     adapter = reference.linear_state_adapter
     context = (
         reference.in_proj(reference.in_norm(reference_kv))
@@ -542,3 +591,104 @@ def test_shared_query_readouts_and_gradients_match_independent_reads(
             torch.testing.assert_close(
                 actual.grad, oracle.grad, rtol=2e-5, atol=2e-6
             )
+
+
+@pytest.mark.parametrize("per_head", [False, True])
+@pytest.mark.parametrize("layout", ["single", "full", "partial"])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_reuses_overlapping_kv_encodings(per_head, layout, dtype):
+    from gcw.models.cache_processors.icarus import CacheProcessor
+
+    torch.manual_seed(83)
+    cfg = tiny_qwen35_config(
+        "icarus", per_cache_head_projections=per_head
+    ).cache_processor
+    block = CacheProcessor(16, 4, cfg).to(dtype)
+    reference = deepcopy(block)
+    source = torch.randn(2, 4, 9, 16, dtype=dtype, requires_grad=True)
+    ref_source = source.detach().clone().requires_grad_()
+    indices = torch.tensor(
+        [[0, 3, 5, 8], [1, 3, 6, 8], [0, 2, 4, 8], [2, 3, 7, 8]]
+    )[None].expand(2, -1, -1)
+    reads = torch.tensor([1, 3, 6, 8])[None, None].expand(2, 4, -1)
+    if layout == "single":
+        reads = reads[..., -1:]
+    elif layout == "full":
+        indices = reads = torch.arange(9)[None, None].expand(2, 4, -1)
+    merged = source.gather(2, indices[..., None].expand(-1, -1, -1, 16))
+    query = source.gather(2, reads[..., None].expand(-1, -1, -1, 16))
+    rows = []
+    handle = block.in_norm.register_forward_pre_hook(
+        lambda module, args: rows.append(args[0].numel() // 16)
+    )
+    actual = block.encode_linear_kv(
+        merged, indices, reads, query if layout == "partial" else None
+    )
+    handle.remove()
+    expected = tuple(
+        reference.in_proj(
+            reference.in_norm(
+                ref_source.gather(
+                    2, positions[..., None].expand(-1, -1, -1, 16)
+                )
+            )
+        )
+        for positions in (indices, reads)
+    )
+    unique_rows = sum(
+        len(set(kept.tolist()) | set(queried.tolist()))
+        for kept, queried in zip(indices.flatten(0, 1), reads.flatten(0, 1))
+    )
+    assert sum(rows) == unique_rows
+    tolerance = (
+        dict(rtol=2e-5, atol=2e-6)
+        if dtype == torch.float32
+        else dict(rtol=2e-2, atol=2e-3)
+    )
+    for a, b in zip(actual, expected):
+        torch.testing.assert_close(a, b, **tolerance)
+    sum(x.float().square().sum() for x in actual).backward()
+    sum(x.float().square().sum() for x in expected).backward()
+    for a, b in [
+        (source, ref_source),
+        *zip(block.parameters(), reference.parameters()),
+    ]:
+        if a.grad is None:
+            assert b.grad is None
+        else:
+            torch.testing.assert_close(a.grad, b.grad, **tolerance)
+
+
+@pytest.mark.parametrize("unrope", [False, True])
+def test_multiple_attn_reads_score_native_cache_without_history_gather(
+    monkeypatch, unrope
+):
+    import gcw.models.cache_processors.icarus as icarus
+
+    cfg = tiny_qwen35_config(
+        "icarus",
+        linear_state_cache=True,
+        icarus_linear_read_mode="multiple",
+        unrope_keys=unrope,
+        score="attn_l2",
+    )
+    processor = build_model(cfg).cache_processor
+    cache = make_cache(length=11)
+    gather = icarus.gather_per_cache_head_kv
+    score = icarus.native_cache_squared_l2
+    gathers, scores = [], []
+
+    def record_gather(cache, indices, **kwargs):
+        assert kwargs["backend"] == processor._cache_movement_backend()
+        gathers.append(indices.shape[-1])
+        return gather(cache, indices, **kwargs)
+
+    def record_score(cache):
+        scores.append(cache.seq_len)
+        return score(cache, max_temp_bytes=128)
+
+    monkeypatch.setattr(icarus, "gather_per_cache_head_kv", record_gather)
+    monkeypatch.setattr(icarus, "native_cache_squared_l2", record_score)
+    processor(cache)
+    assert gathers == [6, 6]
+    assert scores == [11]

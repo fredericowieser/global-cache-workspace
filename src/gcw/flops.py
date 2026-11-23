@@ -276,6 +276,7 @@ def processor_forward_flops_per_sequence(
                 selected_heads,
                 field_evaluations=field_evaluations,
                 model_config=config,
+                history_length=start,
             )
         elif config.variant == "longshot":
             linear_heads = _linear_state_heads(config)
@@ -319,6 +320,7 @@ def _icarus_processor_block_flops_per_call(
     *,
     field_evaluations: float = 1,
     model_config: ModelConfig | None = None,
+    history_length: int | None = None,
 ) -> float:
     output_dim = input_dim / 2 if config.update_stream == "v" else input_dim
     in_out = (
@@ -336,9 +338,15 @@ def _icarus_processor_block_flops_per_call(
         tokens += linear_heads * reads
         source_tokens += min(_topk_linear_heads(config), linear_heads) * reads
         self_pairs += linear_heads * reads**2
-        in_out += reads * (
-            2 * cache_heads * input_dim * config.hidden_size
-            + _linear_state_flops_per_read(model_config)
+        extra_reads = min(
+            reads - 1,
+            max(0, history_length - selected)
+            if history_length is not None
+            else reads - 1,
+        )
+        in_out += (
+            2 * cache_heads * extra_reads * input_dim * config.hidden_size
+            + reads * _linear_state_flops_per_read(model_config)
         )
     layer_matmul = (
         2 * tokens * config.num_layers * _processor_layer_matmul_params(config)

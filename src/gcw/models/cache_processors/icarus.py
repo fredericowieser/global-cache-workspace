@@ -263,7 +263,15 @@ class PerCacheHeadLinear(nn.Module):
             else None
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, *, head_index: int | None = None
+    ) -> torch.Tensor:
+        if head_index is not None:
+            return F.linear(
+                x,
+                self.weight[head_index].T,
+                None if self.bias is None else self.bias[head_index],
+            )
         y = torch.einsum("bcsi,cio->bcso", x, self.weight)
         if self.bias is not None:
             y = y + self.bias[None, :, None, :]
@@ -492,17 +500,45 @@ class CacheProcessor(ScalarGateMixin, nn.Module):
             for g, x in zip(self.shape_groups, histories, strict=True)
         )
 
+    def encode_linear_kv(self, merged, indices, read_indices, query_kv=None):
+        kv_hidden = self.in_proj(self.in_norm(merged))
+        if read_indices.shape[-1] == 1:
+            return kv_hidden, kv_hidden[:, :, -1:]
+        if query_kv is None:
+            return kv_hidden, kv_hidden
+        offsets = torch.searchsorted(
+            indices.contiguous(), read_indices.contiguous()
+        ).clamp_max(indices.shape[-1] - 1)
+        missing = indices.gather(2, offsets) != read_indices
+        query_hidden = kv_hidden.gather(
+            2, offsets[..., None].expand(-1, -1, -1, kv_hidden.shape[-1])
+        )
+        head, batch, read = missing.transpose(0, 1).nonzero(as_tuple=True)
+        packed = self.in_norm(query_kv[batch, head, read])
+        if isinstance(self.in_proj, PerCacheHeadLinear):
+            counts = torch.bincount(head, minlength=merged.shape[1]).tolist()
+            encoded = torch.cat(
+                [
+                    self.in_proj(rows, head_index=index)
+                    for index, rows in enumerate(packed.split(counts))
+                ],
+                dim=0,
+            )
+        else:
+            encoded = self.in_proj(packed)
+        query_hidden = query_hidden.index_put((batch, head, read), encoded)
+        return kv_hidden, query_hidden
+
     def read_linear_states(
         self,
-        query_kv: torch.Tensor,
+        encoded: torch.Tensor,
         recurrent_states: list[torch.Tensor],
         read_positions: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         adapter = self.linear_state_adapter
         batch, layers, reads = read_positions.shape
-        encoded = self.in_proj(self.in_norm(query_kv))
         contexts = encoded.reshape(
-            batch, layers, query_kv.shape[1] // layers, reads, -1
+            batch, layers, encoded.shape[1] // layers, reads, -1
         ).mean(2)
         features = []
         queries = {}
@@ -538,6 +574,7 @@ class CacheProcessor(ScalarGateMixin, nn.Module):
     def forward_linear(
         self,
         merged: torch.Tensor,
+        kv_hidden: torch.Tensor,
         indices: torch.Tensor,
         selected_heads: torch.Tensor,
         features: torch.Tensor,
@@ -547,7 +584,6 @@ class CacheProcessor(ScalarGateMixin, nn.Module):
         adapter = self.linear_state_adapter
         batch, cache_heads = merged.shape[:2]
         reads = features.shape[2]
-        kv_hidden = self.in_proj(self.in_norm(merged))
         linear_hidden = adapter.encode(features)
         kv_length = merged.shape[2]
         kv_tokens = cache_heads * kv_length
@@ -839,18 +875,7 @@ class GlobalCacheProcessor(LinearStateWriterMixin, CacheProcessorBase):
                 -1, self.num_layers, -1
             )
         if scores is None:
-            all_indices = expand_cache_head_indices(
-                cache.all_indices(), self.num_cache_heads
-            )
-            history = gather_per_cache_head_kv(
-                cache,
-                all_indices,
-                unrope_keys=self.config.unrope_keys,
-                rope_theta=self.rope_theta,
-                rotary_style=self.rotary_style,
-                rotary_dim=self.rotary_dim,
-            )
-            scores = chunked_fp32_squared_l2(history)
+            scores = native_cache_squared_l2(cache)
         scores = scores.reshape(
             cache.batch_size,
             self.num_layers,
@@ -882,13 +907,19 @@ class GlobalCacheProcessor(LinearStateWriterMixin, CacheProcessorBase):
         read_indices = read_positions.repeat_interleave(
             self.num_kv_heads, dim=1
         )
-        query_kv = gather_per_cache_head_kv(
-            cache,
-            read_indices,
-            unrope_keys=self.config.unrope_keys,
-            rope_theta=self.rope_theta,
-            rotary_style=self.rotary_style,
-            rotary_dim=self.rotary_dim,
+        query_kv = None
+        if read_indices.shape[-1] > 1 and merged.shape[2] < cache.seq_len:
+            query_kv = gather_per_cache_head_kv(
+                cache,
+                read_indices,
+                unrope_keys=self.config.unrope_keys,
+                rope_theta=self.rope_theta,
+                rotary_style=self.rotary_style,
+                rotary_dim=self.rotary_dim,
+                backend=self._cache_movement_backend(),
+            )
+        kv_hidden, query_hidden = self.block.encode_linear_kv(
+            merged, indices, read_indices, query_kv
         )
         recurrent_states, positions = [], []
         for spec in self.linear_state_specs:
@@ -908,7 +939,7 @@ class GlobalCacheProcessor(LinearStateWriterMixin, CacheProcessorBase):
                 "Icarus linear states require at least one recurrent layer"
             )
         features, scores = self.block.read_linear_states(
-            query_kv, recurrent_states, read_positions
+            query_hidden, recurrent_states, read_positions
         )
         linear_positions = torch.cat(positions, 1)
         budget = (
@@ -919,16 +950,16 @@ class GlobalCacheProcessor(LinearStateWriterMixin, CacheProcessorBase):
         linear_heads = scores.topk(budget, dim=1).indices + self.num_cache_heads
         updated, delta = self.block.forward_linear(
             merged,
+            kv_hidden,
             indices,
             selected_heads,
             features,
             linear_positions,
             linear_heads,
         )
-        for position in range(delta.shape[2]):
-            self._scatter_linear_state_updates(
-                cache, delta[:, :, position], self.linear_state_specs
-            )
+        self._scatter_linear_state_updates(
+            cache, delta, self.linear_state_specs
+        )
         return updated
 
     @property

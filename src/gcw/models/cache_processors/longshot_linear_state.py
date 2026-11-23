@@ -191,6 +191,8 @@ class LinearStateWriterMixin:
     ) -> CacheLike:
         if self.block.linear_state_adapter is None or not specs:
             return cache
+        if linear_delta.ndim == 3:
+            linear_delta = linear_delta.unsqueeze(2)
         states = (
             {} if cache.linear_states is None else dict(cache.linear_states)
         )
@@ -222,7 +224,7 @@ class LinearStateWriterMixin:
                 delta_value.dtype
             )
             delta_state = torch.einsum(
-                "bhk,bhv->bhkv", delta_key.float(), delta_value.float()
+                "bhrk,bhrv->bhkv", delta_key.float(), delta_value.float()
             )
             states[spec.layer_idx] = (
                 recurrent_state + delta_state.to(recurrent_state.dtype),
@@ -248,20 +250,22 @@ class LinearStateWriterMixin:
             self.block.linear_state_adapter.linear_key_dim,
             self.block.linear_state_adapter.linear_value_dim,
         )
+        if update.ndim == 3:
+            update = update.unsqueeze(2)
         synthetic_key, synthetic_value, beta_logit, decay_input = torch.split(
             update, [key_dim, value_dim, 1, 1], dim=-1
         )
-        batch, heads, _ = synthetic_key.shape
+        heads = synthetic_key.shape[1]
         if heads != dynamics.num_heads:
             raise ValueError(
                 f"linear state head count {heads} does not match layer {layer_idx} "
                 f"value heads {dynamics.num_heads}"
             )
-        query = synthetic_key.reshape(batch, 1, heads, key_dim)
+        query = synthetic_key.transpose(1, 2).contiguous()
         key = query
-        value = synthetic_value.reshape(batch, 1, heads, value_dim)
-        beta = torch.sigmoid(beta_logit.squeeze(-1)).unsqueeze(1)
-        g = dynamics(decay_input.squeeze(-1)).unsqueeze(1)
+        value = synthetic_value.transpose(1, 2).contiguous()
+        beta = torch.sigmoid(beta_logit.squeeze(-1).transpose(1, 2))
+        g = dynamics(decay_input.squeeze(-1).transpose(1, 2))
         _, final_state = qwen35_gated_delta_rule(
             query,
             key,

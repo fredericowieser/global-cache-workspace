@@ -39,7 +39,6 @@ def test_icarus_linear_flops_match_workspace_matrix_sizes(
     tokens = 8 + 4 * read_count
     sources = 8 + read_count
     kv_projections = 2 * 8 * (16 * 8 + 8 * 16)
-    context_projections = 2 * 2 * read_count * 16 * 8
     queries = 2 * 2 * read_count * 8 * 4
     linear_projections = 2 * 4 * read_count * (8 * 8 + 8 * 8)
     state_reads_and_writes = 4 * 4 * read_count * 4 * 4
@@ -51,7 +50,6 @@ def test_icarus_linear_flops_match_workspace_matrix_sizes(
     )
     expected = (
         kv_projections
-        + context_projections
         + queries
         + linear_projections
         + state_reads_and_writes
@@ -123,6 +121,34 @@ def test_icarus_linear_flops_account_for_shared_queries_and_read_counts(
     assert processor_forward_flops_per_sequence(gated, 13) - base == sum(
         read_counts
     ) * 6 * (2 * 8 * 2 - 8 + 5 * 4 * 4 + 2 * 4)
+
+
+@pytest.mark.parametrize("reads", ["single", "multiple"])
+def test_icarus_query_encoding_flops_bound_partial_overlap(reads):
+    from gcw.flops import _icarus_processor_block_flops_per_call
+
+    cfg = tiny_qwen35_config(
+        "icarus", linear_state_cache=True, icarus_linear_read_mode=reads
+    )
+    totals = [
+        _icarus_processor_block_flops_per_call(
+            16,
+            cfg.cache_processor,
+            6,
+            2,
+            2,
+            model_config=cfg,
+            history_length=length,
+        )
+        for length in (6, 8, 30)
+    ]
+    projection_per_position = 2 * 2 * 16 * 8
+    assert totals[1] - totals[0] == (
+        2 * projection_per_position if reads == "multiple" else 0
+    )
+    assert totals[2] - totals[0] == (
+        5 * projection_per_position if reads == "multiple" else 0
+    )
 
 
 def test_training_flops_include_processor_work():
