@@ -477,6 +477,29 @@ def test_random_longshot_routing_has_no_scoring_flops():
     assert random_flops < processor_forward_flops_per_sequence(magnitude, 128)
 
 
+@pytest.mark.parametrize(
+    "query_mode,legacy_flops",
+    [("global", 39363), ("shared", 39363), ("per_linear_state", 39747)],
+)
+def test_longshot_gated_delta_historical_flop_correction(
+    query_mode, legacy_flops
+):
+    cfg = tiny_qwen35_config(
+        "longshot",
+        linear_state_cache=True,
+        linear_state_update_mode="gated_delta",
+        linear_state_query_mode=query_mode,
+        encoder_method="query_attention",
+        encoder_query_source="final_token",
+    )
+    # Baselines from 4e5fb6f, before shared writer accounting in d38448d.
+    # Three invocations, four linear heads, key/value widths of four.
+    omitted_state_ops = 3 * 4 * (5 * 4 * 4 + 2 * 4)
+    assert processor_forward_flops_per_sequence(cfg, 13) == (
+        legacy_flops + omitted_state_ops
+    )
+
+
 def test_qwen35_longshot_linear_state_flops_are_counted():
     cp = CacheProcessorConfig(
         process_every=4,

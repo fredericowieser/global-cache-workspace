@@ -54,6 +54,8 @@ def _config_payload(value: object) -> object:
             payload.pop("output_scale_mode")
         if value.head_score_normalization == "none":
             payload.pop("head_score_normalization")
+        if value.icarus_linear_read_mode == "single":
+            payload.pop("icarus_linear_read_mode")
         if value.generation_process_every is None:
             payload.pop("generation_process_every")
         if value.update_gate_type == "static_scalar":

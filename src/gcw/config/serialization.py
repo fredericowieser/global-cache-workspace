@@ -93,6 +93,8 @@ def to_dict(value: Any) -> Any:
             payload.pop("output_scale_mode")
         if value.head_score_normalization == "none":
             payload.pop("head_score_normalization")
+        if value.icarus_linear_read_mode == "single":
+            payload.pop("icarus_linear_read_mode")
         return payload
     if isinstance(value, DiffusionProcessorConfig):
         payload = {

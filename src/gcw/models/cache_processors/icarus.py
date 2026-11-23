@@ -270,7 +270,21 @@ class PerCacheHeadLinear(nn.Module):
         return y
 
 
-class CacheHeadProjection(nn.Module):
+class ScalarGateMixin:
+    def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
+        if self.config.gate_mode == "sigmoid":
+            scale = torch.sigmoid(self.gate).to(dtype)
+        elif self.config.gate_mode == "direct":
+            scale = self.gate.to(dtype)
+        else:
+            raise ValueError(
+                f"unsupported cache processor gate_mode: {self.config.gate_mode}"
+            )
+        self._gate_value = scale.detach()
+        return scale
+
+
+class CacheHeadProjection(ScalarGateMixin, nn.Module):
     def __init__(self, group: CacheShapeGroup, config: CacheProcessorConfig):
         super().__init__()
         self.config = config
@@ -294,16 +308,12 @@ class CacheHeadProjection(nn.Module):
 
     def apply_update(self, original, hidden):
         delta = self.out_proj(hidden)
-        scale = (
-            torch.sigmoid(self.gate)
-            if self.config.gate_mode == "sigmoid"
-            else self.gate
+        return original[..., -self.output_dim :] + delta * self._gate_scale(
+            delta.dtype
         )
-        self._gate_value = scale.detach()
-        return original[..., -self.output_dim :] + delta * scale.to(delta.dtype)
 
 
-class CacheProcessor(nn.Module):
+class CacheProcessor(ScalarGateMixin, nn.Module):
     def __init__(
         self,
         input_dim: int,
@@ -523,8 +533,6 @@ class CacheProcessor(nn.Module):
         scores = chunked_fp32_squared_l2(
             features[..., adapter.linear_key_dim :].contiguous()
         ).sum(-1)
-        if self.config.head_score_normalization == "rms":
-            scores = scores / adapter.linear_value_dim
         return features, scores
 
     def forward_linear(
@@ -655,18 +663,6 @@ class CacheProcessor(nn.Module):
             selected_heads,
             gradient_checkpointing=gradient_checkpointing,
         )
-
-    def _gate_scale(self, dtype: torch.dtype) -> torch.Tensor:
-        if self.config.gate_mode == "sigmoid":
-            scale = torch.sigmoid(self.gate).to(dtype)
-        elif self.config.gate_mode == "direct":
-            scale = self.gate.to(dtype)
-        else:
-            raise ValueError(
-                f"unsupported cache processor gate_mode: {self.config.gate_mode}"
-            )
-        self._gate_value = scale.detach()
-        return scale
 
 
 class GlobalCacheProcessor(LinearStateWriterMixin, CacheProcessorBase):
@@ -861,8 +857,6 @@ class GlobalCacheProcessor(LinearStateWriterMixin, CacheProcessorBase):
             self.num_kv_heads,
             cache.seq_len,
         ).mean(2)
-        if self.config.head_score_normalization == "rms":
-            scores = scores / (2 * self.head_dim)
         count = retained_count
         earlier = torch.argsort(
             scores[..., :-1], dim=-1, descending=True, stable=True

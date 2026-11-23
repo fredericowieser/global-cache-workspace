@@ -15,13 +15,15 @@ from gcw.models.cache_processors.windowed import GroupedWindowedCache
 @pytest.mark.parametrize("stream", ["kv", "v"])
 @pytest.mark.parametrize("score", ["kv_norm", "attn_l2"])
 @pytest.mark.parametrize("select_all", [False, True])
-def test_native_grouped_parity(per_head, stream, score, select_all):
+@pytest.mark.parametrize("gate_mode", ["sigmoid", "direct"])
+def test_native_grouped_parity(per_head, stream, score, select_all, gate_mode):
     cfg = replace(
         mixed_config(
             per_cache_head_projections=per_head,
             update_stream=stream,
             score=score,
             out_proj_init="normal",
+            gate_mode=gate_mode,
         ),
         variant="icarus",
         processor_layer_indices=[0, 1, 3],

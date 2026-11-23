@@ -99,3 +99,5 @@ Sources: [Icarus implementation](../../src/gcw/models/cache_processors/icarus.py
 Shared configuration fields do not guarantee implementation support. In particular, Icarus currently does not consume the recurrence or alternative head-selection settings, even though those fields exist in `CacheProcessorConfig`. Review both execution and admission when porting a feature, so unsupported settings cannot be mistaken for working functionality.
 
 Sources: [processor configuration](../../src/gcw/config/model.py), [architecture validation](../../src/gcw/architecture/validation.py), and [Icarus implementation](../../src/gcw/models/cache_processors/icarus.py).
+
+The default `icarus_linear_read_mode: single` is omitted from saved configuration and identity payloads, preserving identities from before Group 6 across processor variants. The nondefault `multiple` mode is serialized and changes the configuration identity. This restores the pre-feature convention; identities produced while the default field was explicitly included are not retained.

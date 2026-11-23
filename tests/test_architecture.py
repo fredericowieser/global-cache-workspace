@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,10 @@ from gcw.config import (
     ModelConfig,
     TrainConfig,
     load_train_config,
+    load_train_config_bytes,
+    to_dict,
 )
+from gcw.architecture.contracts import _config_payload
 from gcw.models import build_model
 from gcw.provenance import canonical_json_sha256
 
@@ -79,6 +83,63 @@ def test_model_receipt_is_deterministic_canonical_and_self_authenticating() -> (
     assert "receipt_sha256" not in first.payload()
     assert "class" not in str(first.payload()).lower()
     assert "gcw.models" not in str(first.payload())
+
+
+@pytest.mark.parametrize("variant", ["bt", "bgt", "icarus", "longshot"])
+def test_default_linear_read_mode_preserves_config_identities(variant):
+    config = TrainConfig(model=_tiny_model(variant))
+    field = "icarus_linear_read_mode"
+    legacy = _config_payload(config)
+    legacy["model"]["cache_processor"].pop(field, None)
+    for serialize in (to_dict, _config_payload):
+        assert field not in serialize(config)["model"]["cache_processor"]
+    _, model_receipt = resolve_model(config.model).require()
+    _, train_receipt = resolve_experiment(config, model_receipt).require()
+    assert model_receipt.model_config_sha256 == canonical_json_sha256(
+        legacy["model"]
+    )
+    assert model_receipt.processor_config_sha256 == canonical_json_sha256(
+        legacy["model"]["cache_processor"]
+    )
+    assert train_receipt.train_config_sha256 == canonical_json_sha256(legacy)
+    loaded = load_train_config_bytes(json.dumps(to_dict(config)).encode())
+    assert loaded.model.cache_processor.icarus_linear_read_mode == "single"
+
+
+def test_multiple_linear_reads_round_trip_and_have_distinct_identities():
+    single = TrainConfig(model=_tiny_model("icarus"))
+    multiple = replace(
+        single,
+        model=replace(
+            single.model,
+            cache_processor=replace(
+                single.model.cache_processor, icarus_linear_read_mode="multiple"
+            ),
+        ),
+    )
+    for serialize in (to_dict, _config_payload):
+        assert (
+            serialize(multiple)["model"]["cache_processor"][
+                "icarus_linear_read_mode"
+            ]
+            == "multiple"
+        )
+    loaded = load_train_config_bytes(json.dumps(to_dict(multiple)).encode())
+    assert loaded.model.cache_processor.icarus_linear_read_mode == "multiple"
+    _, single_model = resolve_model(single.model).require()
+    _, multiple_model = resolve_model(loaded.model).require()
+    _, single_train = resolve_experiment(single, single_model).require()
+    _, multiple_train = resolve_experiment(loaded, multiple_model).require()
+    assert (
+        single_model.model_config_sha256 != multiple_model.model_config_sha256
+    )
+    assert (
+        single_model.processor_config_sha256
+        != multiple_model.processor_config_sha256
+    )
+    assert (
+        single_train.train_config_sha256 != multiple_train.train_config_sha256
+    )
 
 
 def test_processor_free_causal_lm_is_first_class() -> None:
