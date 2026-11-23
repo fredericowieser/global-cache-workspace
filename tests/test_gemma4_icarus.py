@@ -216,7 +216,7 @@ def test_canonical_temporal_positions_and_features(monkeypatch):
             expected_features[head] = encoded[:, local]
             expected_positions[head] = pos[:, local]
 
-    def check(state, pos, selected):
+    def check(state, pos, selected, **kwargs):
         for head in expected_features:
             torch.testing.assert_close(state[:, head], expected_features[head])
             torch.testing.assert_close(pos[:, head], expected_positions[head])

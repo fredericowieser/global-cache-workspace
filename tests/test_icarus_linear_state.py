@@ -391,8 +391,8 @@ def test_workspace_contains_exactly_retained_tokens(
     observed = {}
     original = processor._linear_read_positions
 
-    def positions(data, retained_count):
-        result = original(data, retained_count)
+    def positions(data, retained_count, **kwargs):
+        result = original(data, retained_count, **kwargs)
         observed["retained"] = retained_count
         observed["reads"] = result.shape[-1]
         assert result.shape[-1] == (1 if mode == "single" else retained_count)
@@ -414,3 +414,131 @@ def test_workspace_contains_exactly_retained_tokens(
     processor(cache, select_all=select_all)
     handle.remove()
     assert observed["layer"]
+
+
+@pytest.mark.parametrize(
+    "query_mode,queries_per_call",
+    [("global", 1), ("shared", 1), ("per_linear_state", 3)],
+)
+@pytest.mark.parametrize("unrope", [False, True])
+def test_reuses_history_scores_and_query_projections(
+    monkeypatch, query_mode, queries_per_call, unrope
+):
+    import gcw.models.cache_processors.icarus as icarus
+
+    cfg = replace(
+        tiny_qwen35_config(
+            "icarus",
+            linear_state_cache=True,
+            icarus_linear_read_mode="multiple",
+            linear_state_query_mode=query_mode,
+            score="kv_norm",
+            unrope_keys=unrope,
+        ),
+        layer_types=["linear_attention"] * 3 + ["full_attention"],
+        processor_layer_indices=[3],
+    )
+    model = build_model(cfg)
+    model.init_weights()
+    with torch.no_grad():
+        _, initial = model.backbone.forward_chunk(
+            torch.randint(0, 128, (2, 8)), 0
+        )
+    processor = model.cache_processor
+    adapter = processor.block.linear_state_adapter
+    gathered, scored, queries = [], [], []
+    original_gather = icarus.gather_per_cache_head_kv
+    original_score = icarus.chunked_fp32_squared_l2
+    original_query = adapter.query
+
+    def gather(cache, indices, **kwargs):
+        gathered.append(indices.shape[-1])
+        return original_gather(cache, indices, **kwargs)
+
+    def score(features, **kwargs):
+        scored.append(tuple(features.shape))
+        return original_score(features, **kwargs)
+
+    def query(layer, following, context):
+        queries.append((layer, following))
+        return original_query(layer, following, context)
+
+    monkeypatch.setattr(icarus, "gather_per_cache_head_kv", gather)
+    monkeypatch.setattr(icarus, "chunked_fp32_squared_l2", score)
+    monkeypatch.setattr(adapter, "query", query)
+    losses = []
+    for _ in range(2):
+        result = processor(deepcopy(initial))
+        losses.append(
+            sum(
+                state.square().sum()
+                for state, _ in result.linear_states.values()
+            )
+        )
+    assert gathered == [8, 6, 8, 6]
+    assert scored.count((2, 1, 8, 16)) == 2
+    assert len(queries) == 2 * queries_per_call
+    sum(losses).backward()
+    for projection in adapter.query_projs.values():
+        assert projection.weight.grad is not None
+        assert torch.isfinite(projection.weight.grad).all()
+
+
+@pytest.mark.parametrize("query_mode", ["global", "shared", "per_linear_state"])
+def test_shared_query_readouts_and_gradients_match_independent_reads(
+    query_mode,
+):
+    torch.manual_seed(53)
+    cfg = replace(
+        tiny_qwen35_config(
+            "icarus",
+            linear_state_cache=True,
+            icarus_linear_read_mode="multiple",
+            linear_state_query_mode=query_mode,
+        ),
+        layer_types=["linear_attention"] * 3 + ["full_attention"],
+        processor_layer_indices=[3],
+    )
+    block = build_model(cfg).cache_processor.block
+    reference = deepcopy(block)
+    query_kv = torch.randn(2, 1, 3, 16, requires_grad=True)
+    reference_kv = query_kv.detach().clone().requires_grad_()
+    states = [torch.randn(2, 2, 4, 4, requires_grad=True) for _ in range(3)]
+    reference_states = [s.detach().clone().requires_grad_() for s in states]
+    positions = torch.tensor([[[0, 2, 7]]]).expand(2, -1, -1)
+    features, _ = block.read_linear_states(query_kv, states, positions)
+    adapter = reference.linear_state_adapter
+    context = (
+        reference.in_proj(reference.in_norm(reference_kv))
+        .mean(1)
+        .reshape(6, -1)
+    )
+    expected = []
+    for spec, state in zip(
+        reference.linear_state_specs, reference_states, strict=True
+    ):
+        query = (
+            adapter.query(spec.layer_idx, spec.following_cache_idx, context)
+            .reshape(2, 3, 2, 4)
+            .transpose(1, 2)
+        )
+        expected.append(
+            torch.cat(
+                [query, torch.einsum("bhrk,bhkv->bhrv", query, state)], -1
+            )
+        )
+    expected = torch.cat(expected, 1)
+    torch.testing.assert_close(features, expected, rtol=0, atol=0)
+    features.square().mean().backward()
+    expected.square().mean().backward()
+    for actual, oracle in [
+        (query_kv, reference_kv),
+        *zip(states, reference_states),
+        *zip(block.parameters(), reference.parameters()),
+    ]:
+        if actual.grad is None:
+            assert oracle.grad is None
+        else:
+            torch.testing.assert_close(
+                actual.grad, oracle.grad, rtol=2e-5, atol=2e-6
+            )
