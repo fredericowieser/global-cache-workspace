@@ -380,12 +380,22 @@ class TrainConfig:
         if self.activation_checkpoint_windows and not (
             self.model.family == "qwen3"
             or (
-                self.model.family == "gemma4"
+                self.model.family in {"gemma4", "qwen3_5", "qwen3_5_moe"}
                 and self.model.variant in {"longshot", "icarus"}
             )
         ):
             raise ValueError(
-                "activation_checkpoint_windows supports qwen3 and Gemma4 Longshot/Icarus backbones"
+                "activation_checkpoint_windows supports qwen3 recurrent variants "
+                "and Gemma4/Qwen3.5 dense/MoE Longshot/Icarus backbones"
+            )
+        if (
+            self.activation_checkpoint_windows
+            and self.model.family == "qwen3_5_moe"
+            and self.model.router_aux_loss_coef
+        ):
+            raise ValueError(
+                "activation_checkpoint_windows requires router_aux_loss_coef=0 "
+                "for qwen3_5_moe"
             )
         if self.activation_checkpoint_windows and self.distributed == "fsdp":
             raise ValueError(

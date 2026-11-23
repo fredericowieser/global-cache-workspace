@@ -414,6 +414,7 @@ usage: gcw prepare fineweb [-h] --out OUT [--shard-tokens SHARD_TOKENS]
                            [--limit LIMIT] [--tokenizer TOKENIZER]
                            [--val-docs VAL_DOCS] [--train-tokens TRAIN_TOKENS]
                            [--dataset-revision DATASET_REVISION]
+                           [--shuffle-seed SHUFFLE_SEED]
 ```
 
 | Argument | Contract |
@@ -425,6 +426,7 @@ usage: gcw prepare fineweb [-h] --out OUT [--shard-tokens SHARD_TOKENS]
 | `--val-docs` | default: `10000`; type: `int` |
 | `--train-tokens` | type: `_positive_int` |
 | `--dataset-revision` | flag |
+| `--shuffle-seed` | type: `int` |
 
 ## `gcw prepare openmath`
 

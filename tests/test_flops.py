@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from gcw.config import (
     CacheProcessorConfig,
     LongshotSelectorTrainingConfig,
@@ -12,6 +14,115 @@ from gcw.flops import (
     training_flops_per_token,
 )
 from gcw.params import fit_processor_config, smollm360m_backbone
+from test_models import tiny_qwen35_config
+
+
+@pytest.mark.parametrize("reads,read_count", [("single", 1), ("multiple", 4)])
+@pytest.mark.parametrize("self_kv", [False, True])
+@pytest.mark.parametrize("steps", [1, 3])
+def test_icarus_linear_flops_match_workspace_matrix_sizes(
+    reads, read_count, self_kv, steps
+):
+    from gcw.config import FlowProcessorConfig
+
+    cfg = tiny_qwen35_config(
+        "icarus",
+        linear_state_cache=True,
+        icarus_linear_read_mode=reads,
+        topk_linear_heads=1,
+        gate_linear_state_delta=False,
+        include_self_head_kv=self_kv,
+    )
+    if steps > 1:
+        cfg = replace(cfg, flow_processor=FlowProcessorConfig(num_steps=steps))
+    # One invocation: two KV heads with four positions, four recurrent heads.
+    tokens = 8 + 4 * read_count
+    sources = 8 + read_count
+    kv_projections = 2 * 8 * (16 * 8 + 8 * 16)
+    context_projections = 2 * 2 * read_count * 16 * 8
+    queries = 2 * 2 * read_count * 8 * 4
+    linear_projections = 2 * 4 * read_count * (8 * 8 + 8 * 8)
+    state_reads_and_writes = 4 * 4 * read_count * 4 * 4
+    layer_projections = 2 * tokens * (4 * 8 * 8 + 3 * 8 * 16)
+    attention = (
+        4
+        * 8
+        * (tokens * sources + (2 * 4**2 + 4 * read_count**2 if self_kv else 0))
+    )
+    expected = (
+        kv_projections
+        + context_projections
+        + queries
+        + linear_projections
+        + state_reads_and_writes
+        + steps * (layer_projections + attention)
+    )
+    assert processor_forward_flops_per_sequence(cfg, 5) == expected
+
+
+@pytest.mark.parametrize(
+    "reads,read_counts", [("single", [1, 1, 1]), ("multiple", [4, 6, 6])]
+)
+def test_icarus_linear_flops_account_for_shared_queries_and_read_counts(
+    reads, read_counts
+):
+    cfg = replace(
+        tiny_qwen35_config(
+            "icarus", linear_state_cache=True, icarus_linear_read_mode=reads
+        ),
+        layer_types=["linear_attention"] * 3 + ["full_attention"],
+        processor_layer_indices=[3],
+    )
+    shared = replace(
+        cfg,
+        cache_processor=replace(
+            cfg.cache_processor, linear_state_query_mode="shared"
+        ),
+    )
+    independent = replace(
+        cfg,
+        cache_processor=replace(
+            cfg.cache_processor, linear_state_query_mode="per_linear_state"
+        ),
+    )
+    base = processor_forward_flops_per_sequence(cfg, 13)
+    assert processor_forward_flops_per_sequence(shared, 13) == base
+    assert processor_forward_flops_per_sequence(independent, 13) - base == sum(
+        read_counts
+    ) * 2 * 8 * (3 * 2 * 4 - 4)
+    kv_only = replace(
+        cfg,
+        cache_processor=replace(cfg.cache_processor, linear_state_cache=False),
+    )
+    assert processor_forward_flops_per_sequence(kv_only, 13) < base
+    zero_budget = replace(
+        cfg, cache_processor=replace(cfg.cache_processor, topk_linear_heads=0)
+    )
+    assert (
+        processor_forward_flops_per_sequence(kv_only, 13)
+        < processor_forward_flops_per_sequence(zero_budget, 13)
+        < base
+    )
+    ungated = replace(
+        cfg,
+        cache_processor=replace(
+            cfg.cache_processor, gate_linear_state_delta=False
+        ),
+    )
+    assert (
+        base - processor_forward_flops_per_sequence(ungated, 13)
+        == sum(read_counts) * 6 * 8
+    )
+    gated = replace(
+        cfg,
+        cache_processor=replace(
+            cfg.cache_processor, linear_state_update_mode="gated_delta"
+        ),
+    )
+    # Delta-rule writing adds two channels and replaces the outer-product gate.
+    assert processor_forward_flops_per_sequence(gated, 13) - base == sum(
+        read_counts
+    ) * 6 * (2 * 8 * 2 - 8 + 5 * 4 * 4 + 2 * 4)
 
 
 def test_training_flops_include_processor_work():

@@ -266,8 +266,6 @@ def processor_forward_flops_per_sequence(
                 if cp.topk_heads <= 0
                 else min(cp.topk_heads, cache_heads)
             )
-            if cp.include_self_head_kv:
-                selected_heads += 1
             total += _icarus_processor_block_flops_per_call(
                 2
                 * sum(h * d for h, d in config.stored_cache_shapes)
@@ -277,9 +275,10 @@ def processor_forward_flops_per_sequence(
                 cache_heads,
                 selected_heads,
                 field_evaluations=field_evaluations,
+                model_config=config,
             )
         elif config.variant == "longshot":
-            linear_heads = _longshot_linear_state_heads(config)
+            linear_heads = _linear_state_heads(config)
             routing_phase = "hard"
             if selector_training is not None and training_progress is not None:
                 if training_progress < getattr(selector_training, "warmup_end"):
@@ -290,12 +289,12 @@ def processor_forward_flops_per_sequence(
                     routing_phase = "soft"
             if cp.head_selection_method == "learned_contextual":
                 head_budget = cp.topk_heads + (
-                    _longshot_topk_linear_heads(cp) if linear_heads > 0 else 0
+                    _topk_linear_heads(cp) if linear_heads > 0 else 0
                 )
                 selected_heads = min(head_budget, cache_heads + linear_heads)
             else:
                 selected_heads = min(cp.topk_heads, cache_heads) + min(
-                    _longshot_topk_linear_heads(cp),
+                    _topk_linear_heads(cp),
                     linear_heads,
                 )
             total += _longshot_processor_block_flops_per_call(
@@ -319,6 +318,7 @@ def _icarus_processor_block_flops_per_call(
     selected_heads: int,
     *,
     field_evaluations: float = 1,
+    model_config: ModelConfig | None = None,
 ) -> float:
     output_dim = input_dim / 2 if config.update_stream == "v" else input_dim
     in_out = (
@@ -327,23 +327,83 @@ def _icarus_processor_block_flops_per_call(
         * cache_heads
         * (input_dim * config.hidden_size + config.hidden_size * output_dim)
     )
+    tokens = cache_heads * selected
+    source_tokens = selected_heads * selected
+    self_pairs = cache_heads * selected**2
+    if model_config is not None and config.linear_state_cache:
+        linear_heads = _linear_state_heads(model_config)
+        reads = 1 if config.icarus_linear_read_mode == "single" else selected
+        tokens += linear_heads * reads
+        source_tokens += min(_topk_linear_heads(config), linear_heads) * reads
+        self_pairs += linear_heads * reads**2
+        in_out += reads * (
+            2 * cache_heads * input_dim * config.hidden_size
+            + _linear_state_flops_per_read(model_config)
+        )
     layer_matmul = (
-        2
-        * selected
-        * cache_heads
-        * config.num_layers
-        * _processor_layer_matmul_params(config)
+        2 * tokens * config.num_layers * _processor_layer_matmul_params(config)
     )
-    head_dim = config.hidden_size // config.num_heads
-    attention = (
-        config.num_layers
-        * 4
-        * config.num_heads
-        * head_dim
-        * (cache_heads * selected)
-        * (selected_heads * selected)
-    )
+    attention_pairs = tokens * source_tokens
+    if config.include_self_head_kv:
+        attention_pairs += self_pairs
+    attention = config.num_layers * 4 * config.hidden_size * attention_pairs
     return float(in_out + field_evaluations * (layer_matmul + attention))
+
+
+def _linear_state_flops_per_read(model_config: ModelConfig) -> int:
+    config = model_config.cache_processor
+    linear_heads = _linear_state_heads(model_config)
+    if config is None or not linear_heads:
+        return 0
+    update_gate_ops = 0
+    layer_pairs = linear_attention_following_cache_indices(model_config)
+    linear_key_dim = int(
+        model_config.linear_key_head_dim or _head_dim(model_config)
+    )
+    linear_value_dim = int(model_config.linear_value_head_dim or linear_key_dim)
+    linear_value_heads = int(
+        model_config.linear_num_value_heads or model_config.num_heads
+    )
+    linear_layer_count = linear_heads // linear_value_heads
+    context_dim = config.hidden_size
+    if config.linear_state_query_mode == "per_linear_state":
+        query_count = linear_layer_count
+        query_out = linear_value_heads * linear_key_dim
+    elif config.linear_state_query_mode in {"shared", "global"}:
+        query_count = len(
+            {following_cache_idx for _, following_cache_idx in layer_pairs}
+        )
+        query_out = linear_key_dim
+    else:
+        raise ValueError(
+            f"unsupported cache_processor.linear_state_query_mode: {config.linear_state_query_mode}"
+        )
+    feature_dim = linear_key_dim + linear_value_dim
+    linear_output_dim = feature_dim + (
+        2 if config.linear_state_update_mode == "gated_delta" else 0
+    )
+    linear_gate_dim = (
+        config.update_gate_dim(linear_output_dim)
+        if config.gate_linear_state_delta
+        else 0
+    )
+    linear_in_out = linear_heads * (
+        feature_dim * config.hidden_size
+        + config.hidden_size * (linear_output_dim + linear_gate_dim)
+    )
+    if config.gate_linear_state_delta:
+        update_gate_ops += linear_heads * linear_output_dim
+        if linear_gate_dim and config.gate_mode == "sigmoid":
+            update_gate_ops += linear_heads * linear_gate_dim
+    query_flops = 2 * query_count * context_dim * query_out
+    state_flops = 4 * linear_heads * linear_key_dim * linear_value_dim
+    if config.linear_state_update_mode == "gated_delta":
+        # Decay, residual prediction and the kernel's output read accompany
+        # the outer-product update, even though the output read is discarded.
+        state_flops += linear_heads * (
+            5 * linear_key_dim * linear_value_dim + 2 * linear_value_dim
+        )
+    return 2 * linear_in_out + query_flops + state_flops + update_gate_ops
 
 
 def _longshot_processor_block_flops_per_call(
@@ -358,9 +418,7 @@ def _longshot_processor_block_flops_per_call(
     routing_phase: str = "hard",
 ) -> float:
     linear_heads = (
-        0
-        if model_config is None
-        else _longshot_linear_state_heads(model_config)
+        0 if model_config is None else _linear_state_heads(model_config)
     )
     total_heads = cache_heads + linear_heads
     encoder_len = config.encoder_seq_len or config.process_every + max(
@@ -404,54 +462,9 @@ def _longshot_processor_block_flops_per_call(
             encode_extra += 4 * heads * selected * dimension
             if config.encoder_query_source == "final_token":
                 encode_extra += 2 * heads * dimension * dimension
-    linear_in_out = 0
-    if model_config is not None and linear_heads > 0:
-        layer_pairs = linear_attention_following_cache_indices(model_config)
-        linear_key_dim = int(
-            model_config.linear_key_head_dim or _head_dim(model_config)
-        )
-        linear_value_dim = int(
-            model_config.linear_value_head_dim or linear_key_dim
-        )
-        linear_value_heads = int(
-            model_config.linear_num_value_heads or model_config.num_heads
-        )
-        linear_layer_count = linear_heads // linear_value_heads
-        context_dim = config.hidden_size
-        if config.linear_state_query_mode == "per_linear_state":
-            query_count = linear_layer_count
-            query_out = linear_value_heads * linear_key_dim
-        elif config.linear_state_query_mode in {"shared", "global"}:
-            query_count = len(
-                {following_cache_idx for _, following_cache_idx in layer_pairs}
-            )
-            query_out = linear_key_dim
-        else:
-            raise ValueError(
-                f"unsupported cache_processor.linear_state_query_mode: {config.linear_state_query_mode}"
-            )
-        feature_dim = linear_key_dim + linear_value_dim
-        linear_output_dim = feature_dim + (
-            2 if config.linear_state_update_mode == "gated_delta" else 0
-        )
-        linear_gate_dim = (
-            config.update_gate_dim(linear_output_dim)
-            if config.gate_linear_state_delta
-            else 0
-        )
-        linear_in_out = linear_heads * (
-            feature_dim * config.hidden_size
-            + config.hidden_size * (linear_output_dim + linear_gate_dim)
-        )
-        if config.gate_linear_state_delta:
-            update_gate_ops += linear_heads * linear_output_dim
-            if linear_gate_dim and config.gate_mode == "sigmoid":
-                update_gate_ops += linear_heads * linear_gate_dim
-        encode_extra += 2 * query_count * context_dim * query_out
-        encode_extra += 4 * linear_heads * linear_key_dim * linear_value_dim
-    encode_decode = (
-        2 * (kv_in_out + linear_in_out) + encode_extra + update_gate_ops
-    )
+    encode_decode = 2 * kv_in_out + encode_extra + update_gate_ops
+    if model_config is not None:
+        encode_decode += _linear_state_flops_per_read(model_config)
     layer_matmul = (
         2
         * total_heads
@@ -625,7 +638,7 @@ def _longshot_iteration_head_selection_flops(
     raise ValueError(f"unsupported internal_iteration_score: {method}")
 
 
-def _longshot_linear_state_heads(config: ModelConfig) -> int:
+def _linear_state_heads(config: ModelConfig) -> int:
     cp = config.cache_processor
     if cp is None or not cp.linear_state_cache:
         return 0
@@ -634,7 +647,7 @@ def _longshot_linear_state_heads(config: ModelConfig) -> int:
     )
 
 
-def _longshot_topk_linear_heads(config: CacheProcessorConfig) -> int:
+def _topk_linear_heads(config: CacheProcessorConfig) -> int:
     return (
         config.topk_heads
         if config.topk_linear_heads is None

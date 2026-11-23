@@ -66,6 +66,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `topk_linear_heads` | `int \| None` | `None` |
 | `score` | `str` | `'attn_l2'` |
 | `head_selection_method` | `Literal['magnitude', 'learned_contextual', 'random']` | `'magnitude'` |
+| `head_score_normalization` | `Literal['none', 'rms']` | `'none'` |
 | `head_selector_hidden_size` | `int` | `64` |
 | `head_selector_use_identity_bias` | `bool` | `False` |
 | `hidden_size` | `int` | `512` |
@@ -96,6 +97,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `iterations` | `int` | `1` |
 | `iteration_mode` | `Literal['internal', 'external']` | `'internal'` |
 | `internal_iteration_score` | `Literal['attn_l2', 'cache_head_attention', 'kv_norm', 'learned_contextual', 'random']` | `'attn_l2'` |
+| `icarus_linear_read_mode` | `Literal['single', 'multiple']` | `'single'` |
 | `linear_state_cache` | `bool` | `False` |
 | `linear_state_query_mode` | `Literal['per_linear_state', 'shared', 'global']` | `'global'` |
 | `linear_state_update_mode` | `Literal['outer_product', 'gated_delta']` | `'outer_product'` |
@@ -123,6 +125,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | `validation_dataset` | `str \| None` | `None` |
 | `tokenizer` | `str` | `'cosmo2'` |
 | `tokenizer_source` | `str \| None` | `None` |
+| `fineweb_prefix` | `str` | `''` |
 | `text_field` | `str` | `'text'` |
 | `max_length` | `int` | `2048` |
 | `sft_skip_rows` | `int` | `0` |
@@ -181,7 +184,7 @@ Unknown fields fail during config loading. Defaults below come from the typed da
 | Field | Type | Default |
 |---|---|---|
 | `model` | `gcw.config.model.ModelConfig` | `ModelConfig(variant='tf', family='smollm', sequence_len=2048, vocab_size=49152, hidden_size=960, intermediate_size=2560, num_layers=32, num_heads=15, num_kv_heads=5, head_dim=64, rope_theta=10000.0, norm_eps=1e-05, tie_embeddings=True, qk_norm=False, rotary_style='ppt', cache_processor=None, lora=None, flow_processor=None, diffusion_processor=None, processor_generation_mode='windowed', layer_types=None, processor_layer_indices=None, partial_rotary_factor=1.0, linear_conv_kernel_dim=4, linear_key_head_dim=None, linear_value_head_dim=None, linear_num_key_heads=None, linear_num_value_heads=None, moe_intermediate_size=None, num_experts=0, num_experts_per_tok=0, shared_expert_intermediate_size=None, hidden_act='silu', moe_experts_implementation='grouped_mm', router_aux_loss_coef=0.0, output_router_logits=False, sliding_window=None, num_global_key_value_heads=None, global_head_dim=None, attention_k_eq_v=False, num_kv_shared_layers=0, hidden_size_per_layer_input=0, vocab_size_per_layer_input=None, final_logit_softcapping=None, rope_parameters=None, use_double_wide_mlp=False, legacy_bottleneck_generate=None)` |
-| `data` | `gcw.config.data.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, validation_dataset=None, tokenizer='cosmo2', tokenizer_source=None, text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None, experiment_manifest=None)` |
+| `data` | `gcw.config.data.DataConfig` | `DataConfig(kind='fineweb', data_dir=None, dataset=None, validation_dataset=None, tokenizer='cosmo2', tokenizer_source=None, fineweb_prefix='', text_field='text', max_length=2048, sft_skip_rows=0, sft_take_rows=None, response_prefix='', prompt_suffix='', sft_chat_template=False, sft_enable_thinking=False, sft_loss_scope='answer_only', canonical_execution=False, expected_artifact_sha256=None, expected_source_ids_sha256=None, experiment_manifest=None)` |
 | `mode` | `Literal['pretrain', 'sft']` | `'pretrain'` |
 | `distributed` | `Literal['none', 'ddp', 'fsdp']` | `'none'` |
 | `trainable` | `Literal['all', 'backbone', 'lora', 'cache_processor', 'lora_and_cache_processor']` | `'all'` |

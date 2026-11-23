@@ -108,7 +108,7 @@ def estimate_processor_params(config: ModelConfig) -> int:
                 )
                 - shared
             )
-        return total
+        return total + _linear_state_params(config)
     if config.variant == "longshot":
         return (
             _longshot_processor_params(config)
@@ -221,7 +221,7 @@ def _longshot_processor_params(config: ModelConfig) -> int:
         )
     return (
         total
-        + _longshot_linear_state_params(config)
+        + _linear_state_params(config)
         + _longshot_head_selector_params(
             cp, config.cache_num_heads + _longshot_linear_state_heads(config)
         )
@@ -273,7 +273,7 @@ def _longshot_linear_state_heads(config: ModelConfig) -> int:
     )
 
 
-def _longshot_linear_state_params(config: ModelConfig) -> int:
+def _linear_state_params(config: ModelConfig) -> int:
     cp = config.cache_processor
     if cp is None or not cp.linear_state_cache:
         return 0

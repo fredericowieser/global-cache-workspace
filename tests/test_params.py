@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from gcw.config import CacheProcessorConfig, ModelConfig
 from gcw.models import build_model
 from gcw.models.backbones.transformer import estimate_non_embedding_params
@@ -11,6 +13,63 @@ from gcw.params import (
     total_non_embedding_params,
     write_family_configs,
 )
+from test_models import tiny_qwen35_config, tiny_qwen35_moe_config
+
+
+@pytest.mark.parametrize(
+    "factory", [tiny_qwen35_config, tiny_qwen35_moe_config]
+)
+@pytest.mark.parametrize("query", ["global", "shared", "per_linear_state"])
+@pytest.mark.parametrize("writer", ["outer_product", "gated_delta"])
+@pytest.mark.parametrize("reads", ["single", "multiple"])
+def test_icarus_linear_state_params_match_allocated_model(
+    factory, query, writer, reads
+):
+    from gcw.config import FlowProcessorConfig
+
+    cfg = factory(
+        "icarus",
+        linear_state_cache=True,
+        linear_state_query_mode=query,
+        linear_state_update_mode=writer,
+        icarus_linear_read_mode=reads,
+        gate_linear_state_delta=query != "global",
+        per_cache_head_projections=reads == "multiple",
+    )
+    if reads == "multiple":
+        cfg = replace(cfg, flow_processor=FlowProcessorConfig(num_steps=2))
+    actual = sum(
+        p.numel() for p in build_model(cfg).cache_processor.parameters()
+    )
+    assert processor_params(cfg) == actual
+    assert (
+        processor_params(
+            replace(
+                cfg,
+                cache_processor=replace(
+                    cfg.cache_processor, icarus_linear_read_mode="single"
+                ),
+            )
+        )
+        == actual
+    )
+
+
+def test_icarus_linear_state_fitter_respects_actual_parameter_budget():
+    backbone = replace(
+        tiny_qwen35_config(), hidden_size=128, intermediate_size=256
+    )
+    cfg, metadata = fit_processor_config(
+        backbone,
+        "icarus",
+        fraction=0.1,
+        cache_processor_overrides={"linear_state_cache": True},
+    )
+    actual = sum(
+        p.numel() for p in build_model(cfg).cache_processor.parameters()
+    )
+    assert metadata["processor_params"] == actual
+    assert actual <= metadata["target_processor_params"]
 
 
 def test_smol_bt_bgt_share_backbone_and_stay_under_five_percent():

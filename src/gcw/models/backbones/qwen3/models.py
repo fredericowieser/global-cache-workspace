@@ -257,11 +257,25 @@ class Qwen35MoeTF(Qwen35TF):
         truncated_bptt_windows: int = 0,
         loss_backend: LossBackend = "reference",
     ) -> torch.Tensor:
-        del processor_execution_factory
         if activation_checkpoint_windows:
-            raise ValueError(
-                "segmented window activation checkpointing does not yet support qwen3_5_moe router logits"
+            if self.config.router_aux_loss_coef:
+                raise ValueError(
+                    "segmented window activation checkpointing requires "
+                    "router_aux_loss_coef=0 for qwen3_5_moe"
+                )
+            return super().forward_windowed_loss(
+                input_ids,
+                targets,
+                processor=processor,
+                process_every=process_every,
+                loss_reduction=loss_reduction,
+                attention_mask=attention_mask,
+                activation_checkpoint_windows=activation_checkpoint_windows,
+                processor_execution_factory=processor_execution_factory,
+                truncated_bptt_windows=truncated_bptt_windows,
+                loss_backend=loss_backend,
             )
+        del processor_execution_factory
         if truncated_bptt_windows < 0:
             raise ValueError("truncated_bptt_windows must be non-negative")
         cache: CacheLike = CacheState(
